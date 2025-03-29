@@ -146,7 +146,14 @@ class NDVViewersManager(QObject):
 
     def _create_ndv_viewer(self, sequence: MDASequence) -> ndv.ArrayViewer:
         """Create a new ndv viewer with no data."""
-        ndv_viewer = _CustomViewer()
+        step = 1
+        if (z_plan := sequence.z_plan) is not None:
+            if isinstance(
+                z_plan, useq.ZTopBottom | useq.ZAboveBelow | useq.ZRangeAround
+            ):
+                step = z_plan.step
+
+        ndv_viewer = _CustomViewer(step=step)
         self._seq_viewers[str(sequence.uid)] = ndv_viewer
         self.viewerCreated.emit(ndv_viewer, sequence)
         return ndv_viewer
@@ -215,12 +222,14 @@ class _OME5DWrapper(DataWrapper["_5DWriterBase"]):
 
 
 class _CustomViewer(ndv.ArrayViewer):
-    def __init__(self, data=None, /, display_model=None, **kwargs):
+    def __init__(self, data=None, /, display_model=None, step: float = 1.0, **kwargs):
         super().__init__(data, display_model, **kwargs)
         self._super_add_volume = self._canvas.add_volume
         self._canvas.add_volume = self.add_volume
 
+        self._step = step
+
     def add_volume(self, data: np.ndarray | None = None) -> Any:
         h = self._super_add_volume(data)
-        h._visual.set_transform("st", scale=(0.406, 0.406, 1, 0))  # type: ignore
+        h._visual.set_transform("st", scale=(1, 1, 1/self._step, 0))  # type: ignore
         return h
