@@ -222,5 +222,5 @@ class _CustomViewer(ndv.ArrayViewer):
 
     def add_volume(self, data: np.ndarray | None = None) -> Any:
         h = self._super_add_volume(data)
-        h._visual.set_transform("st", scale=(0.1, 0.1, 10, 0))  # type: ignore
+        h._visual.set_transform("st", scale=(0.406, 0.406, 1, 0))  # type: ignore
         return h
