@@ -39,7 +39,7 @@ dependencies = [
     "ndv[vispy] @ git+https://github.com/pyapp-kit/ndv",
     "pydantic-settings>=2.7.1",
     "pymmcore-plus[cli]>=0.13.2",
-    "pymmcore-widgets>=0.9.0",
+    "pymmcore-widgets git+https://github.com/pymmcore-plus/pymmcore-widgets.git",
     "PyQt6==6.7.1",
     "pyqt6ads>=4.4.0.post1",
     "pyright>=1.1.393",
