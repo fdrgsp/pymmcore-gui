@@ -103,8 +103,8 @@ class MMConsole(QtConsole):
     def _banner_default(self) -> str:
         # Set the banner displayed at the top of the console
         lines = [
-            "Welcome to the pymmcore-plus console!",
-            "All top level pymmcore_plus and useq names are available.",
+            "Welcome to the pymmcore-gui console!",
+            "All top level pymmcore_plus, useq-schema and pymmcore-gui names are available.",  # noqa: E501
             "",
             "Use \033[1;33mmmc\033[0m (or \033[1;33mcore\033[0m) to interact with the CMMCorePlus instance.\n"  # noqa: E501
             "Use \033[1;33mmda\033[0m to access the pymmcore_plus.MDARunner.",
@@ -114,7 +114,9 @@ class MMConsole(QtConsole):
                 (
                     "Use \033[1;33mwindow\033[0m to interact with the MainWindow.",
                     "Use \033[1;33mwindow.get_widget(WidgetAction)\033[0m to get a widget "  # noqa: E501
-                    "(e.g. window.get_widget(WidgetAction.MDA_WIDGET) to get the MDAWidget)\n",  # noqa: E501
+                    "(e.g. window.get_widget(WidgetAction.MDA_WIDGET) to get the MDAWidget)",  # noqa: E501
+                    "Use \033[1;33mviewers_keys = list(window._viewers_manager._seq_viewers)\033[0m to get the list of viewers keys and then "  # noqa: E501
+                    "use \033[1;33mviewer = window._viewers_manager._seq_viewers[viewers_keys[i]]\033[0m to get the `i`th viewer.\n",  # noqa: E501
                 )
             )
         return "\n".join(lines)
