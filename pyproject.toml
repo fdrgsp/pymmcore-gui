@@ -50,7 +50,6 @@ dependencies = [
     "tifffile>=2024.12.12",
     "tqdm>=4.67.1",
     "zarr>=2.18.3,<3.0",
-    "pymmcore==11.2.1.71.0",
     "pydantic<2.11.0",
 ]
 
