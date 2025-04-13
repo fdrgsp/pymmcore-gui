@@ -13,8 +13,6 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ._kinesis_rotation_widget import KinesisRotationWidget
-
 if TYPE_CHECKING:
     from qtpy.QtGui import QWheelEvent
 
@@ -75,19 +73,11 @@ class StagesControlWidget(QWidget):
             self._mmc.getLoadedDevicesOfType(DeviceType.XYStage),  # pyright: ignore
             self._mmc.getLoadedDevicesOfType(DeviceType.Stage),  # pyright: ignore
         )
-
         for idx, stage_dev in enumerate(stages):
             bx = _Group(stage_dev, self)
             bx.setSizePolicy(sizepolicy)
-            if stage_dev == "KBD101_28252107":
-                cast("QHBoxLayout", bx.layout()).addWidget(
-                    KinesisRotationWidget("KBD101_28252107")
-                )
-            else:
-                cast("QHBoxLayout", bx.layout()).addWidget(Stage(device=stage_dev))
-
+            cast("QHBoxLayout", bx.layout()).addWidget(Stage(device=stage_dev))
             self._layout.addWidget(bx, idx // 2, idx % 2)
-
         self.resize(self.sizeHint())
 
     def _clear(self) -> None:

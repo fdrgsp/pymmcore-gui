@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from pymmcore_gui._main_window import MicroManagerGUI
     from pymmcore_gui.widgets._exception_log import ExceptionLog
     from pymmcore_gui.widgets._mm_console import MMConsole
-    from pymmcore_gui.widgets.stage_control import StagesControlWidget
+    from pymmcore_gui.widgets._stage_control import StagesControlWidget
 
 
 # ######################## Functions that create widgets #########################
@@ -204,7 +204,7 @@ def create_exception_log(parent: QWidget) -> ExceptionLog:
 
 def create_stage_widget(parent: QWidget) -> StagesControlWidget:
     """Create the Stage Control widget."""
-    from pymmcore_gui.widgets.stage_control import StagesControlWidget
+    from pymmcore_gui.widgets._stage_control import StagesControlWidget
 
     return StagesControlWidget(parent=parent, mmcore=_get_core(parent))
 
