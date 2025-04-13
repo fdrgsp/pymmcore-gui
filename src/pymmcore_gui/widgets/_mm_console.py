@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     # RichJupyterWidget has a very complex inheritance structure, and mypy/pyright
     # are unable to determine that it is a QWidget subclass. This is a workaround.
     class QtConsole(RichJupyterWidget, QWidget): ...  # pyright: ignore [reportIncompatibleMethodOverride]
+
 else:
     from qtconsole.rich_jupyter_widget import RichJupyterWidget as QtConsole
 
@@ -109,7 +110,13 @@ class MMConsole(QtConsole):
             "Use \033[1;33mmda\033[0m to access the pymmcore_plus.MDARunner.",
         ]
         if "window" in self.shell.user_ns:
-            lines.append("Use \033[1;33mwindow\033[0m to interact with the MainWindow.")
+            lines.extend(
+                (
+                    "Use \033[1;33mwindow\033[0m to interact with the MainWindow.",
+                    "Use \033[1;33mwindow.get_widget(WidgetAction)\033[0m to get a widget "  # noqa: E501
+                    "(e.g. window.get_widget(WidgetAction.MDA_WIDGET) to get the MDAWidget)\n",  # noqa: E501
+                )
+            )
         return "\n".join(lines)
 
     def push(self, variables: dict[str, Any]) -> None:
