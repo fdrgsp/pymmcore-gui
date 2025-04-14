@@ -9,7 +9,7 @@ import ndv
 import numpy as np
 import useq
 from ndv import DataWrapper
-from pymmcore_plus.mda.handlers import TensorStoreHandler, ImageSequenceWriter
+from pymmcore_plus.mda.handlers import ImageSequenceWriter, TensorStoreHandler
 from pymmcore_plus.mda.handlers._5d_writer_base import _5DWriterBase
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -21,7 +21,6 @@ if TYPE_CHECKING:
 
     from ndv.models._array_display_model import IndexMap
     from pymmcore_plus import CMMCorePlus
-    from pymmcore_plus.mda import SupportsFrameReady
     from pymmcore_plus.metadata import FrameMetaV1, SummaryMetaV1
     from PyQt6.QtWidgets import QWidget
     from useq import MDASequence
@@ -195,6 +194,14 @@ class _OME5DWrapper(DataWrapper["_5DWriterBase"]):
         coords.update({"y": range(ary.shape[-2]), "x": range(ary.shape[-1])})
         return coords
 
+    @property
+    def dtype(self) -> np.dtype:
+        """Return the dtype for the data."""
+        try:
+            return self.data.position_arrays['p0'].dtype
+        except Exception:
+            return super().dtype
+
     def isel(self, index: Mapping[int, int | slice]) -> np.ndarray:
         # oh lord look away.
         # this is a mess, partially caused by the ndv slice/model
@@ -224,6 +231,7 @@ class _CustomViewer(ndv.ArrayViewer):
         self._step = step
 
     def add_volume(self, data: np.ndarray | None = None) -> Any:
+        """Add a volume to the viewer with a scale transform."""
         h = self._super_add_volume(data)
-        h._visual.set_transform("st", scale=(1, 1, 1/self._step, 0))  # type: ignore
+        h._visual.set_transform("st", scale=(1, 1, 1 / self._step, 0))  # type: ignore
         return h
