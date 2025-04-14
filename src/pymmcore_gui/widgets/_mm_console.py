@@ -116,7 +116,7 @@ class MMConsole(QtConsole):
                     "Use \033[1;33mwindow.get_widget(WidgetAction)\033[0m to get a widget "  # noqa: E501
                     "(e.g. window.get_widget(WidgetAction.MDA_WIDGET) to get the MDAWidget)",  # noqa: E501
                     "Use \033[1;33mviewers_keys = list(window._viewers_manager._seq_viewers)\033[0m to get the list of viewers keys and then "  # noqa: E501
-                    "use \033[1;33mviewer = window._viewers_manager._seq_viewers[viewers_keys[i]]\033[0m to get the `i`th viewer.\n",  # noqa: E501
+                    "use \033[1;33mviewer = window._viewers_manager._seq_viewers[viewers_keys[key]]\033[0m to get the viewer.\n",  # noqa: E501
                 )
             )
         return "\n".join(lines)
