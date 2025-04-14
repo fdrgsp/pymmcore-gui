@@ -6,9 +6,7 @@ from typing import Any, cast
 
 from pyfirmata2 import Arduino, Pin
 from pymmcore_plus import CMMCorePlus
-from pymmcore_plus.mda.handlers import (
-    OMEZarrWriter,
-)
+from pymmcore_plus.mda.handlers import OMEZarrWriter
 from pymmcore_widgets import MDAWidget
 from pymmcore_widgets.useq_widgets._mda_sequence import PYMMCW_METADATA_KEY
 from qtpy.QtWidgets import QBoxLayout, QMessageBox, QWidget
