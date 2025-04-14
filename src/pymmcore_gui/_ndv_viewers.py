@@ -9,7 +9,7 @@ import ndv
 import numpy as np
 import useq
 from ndv import DataWrapper
-from pymmcore_plus.mda.handlers import TensorStoreHandler
+from pymmcore_plus.mda.handlers import TensorStoreHandler, ImageSequenceWriter
 from pymmcore_plus.mda.handlers._5d_writer_base import _5DWriterBase
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -53,10 +53,6 @@ class NDVViewersManager(QObject):
         # currently active viewer
         self._active_viewer: ndv.ArrayViewer | None = None
 
-        # We differentiate between handlers that were created by someone else, and
-        # gathered using mda.get_output_handlers(), vs handlers that were created by us.
-        # because we need to call frameReady/sequenceFinished manually on the latter.
-        self._handler: SupportsFrameReady | None = None
         self._own_handler: TensorStoreHandler | None = None
 
         # CONNECTIONS ---------------------------------------------------------
@@ -68,7 +64,6 @@ class NDVViewersManager(QObject):
 
     def _cleanup(self, obj: QObject | None = None) -> None:
         self._active_viewer = None
-        self._handler = None
         self._own_handler = None
 
     def _on_sequence_started(
@@ -79,14 +74,11 @@ class NDVViewersManager(QObject):
         We grab the first handler in the list of output handlers, or create a new
         TensorStoreHandler if none exist. Then we create a new ndv viewer and show it.
         """
-        self._own_handler = self._handler = None
+        self._own_handler = None
         if "hacky_handler" in sequence.metadata:
             h = cast("_5DWriterBase", sequence.metadata["hacky_handler"])
-            h.sequenceStarted(sequence)
+            h.sequenceStarted(sequence, meta)
             self._own_handler = h  # type: ignore
-        elif handlers := self._mmc.mda.get_output_handlers():
-            # someone else has created a handler for this sequence
-            self._handler = handlers[0]
         else:
             # if it does not exist, create a new TensorStoreHandler
             self._own_handler = TensorStoreHandler(driver="zarr", kvstore="memory://")
@@ -109,12 +101,14 @@ class NDVViewersManager(QObject):
         # if the viewer does not yet have data, it's likely the very first frame
         # so update the viewer's data source to the underlying handlers store
         if viewer.data_wrapper is None:
-            handler = self._handler or self._own_handler
+            handler = self._own_handler
             if isinstance(handler, TensorStoreHandler):
                 # TODO: temporary. maybe create the DataWrapper for the handlers
                 viewer.data = handler.store
             elif isinstance(handler, _5DWriterBase):
                 viewer.data = _OME5DWrapper(handler)
+            elif isinstance(handler, ImageSequenceWriter):
+                viewer.data = handler
             else:
                 warnings.warn(
                     f"don't know how to show data of type {type(handler)}",

@@ -40,6 +40,7 @@ from pymmcore_gui.actions.widget_actions import WidgetActionInfo
 from pymmcore_gui.widgets._toolbars import ShuttersToolbar
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
 
+from ._engine import ArduinoEngine
 from ._ndv_viewers import NDVViewersManager
 from ._notification_manager import NotificationManager
 from .actions import CoreAction, WidgetAction
@@ -185,7 +186,8 @@ class MicroManagerGUI(QMainWindow):
         # get global CMMCorePlus instance
         self._mmc = mmcore or CMMCorePlus.instance()
         self._mmc._mda_runner = _MDARunner()
-        self._mmc._mda_runner.set_engine(mda.MDAEngine(self._mmc))
+        # set our custom engine
+        self._mmc.mda.set_engine(ArduinoEngine(self._mmc, slackbot=None))
 
         self._is_mda_running = False
         mda_ev = self._mmc.mda.events

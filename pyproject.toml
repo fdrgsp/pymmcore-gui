@@ -51,6 +51,7 @@ dependencies = [
     "tqdm>=4.67.1",
     "zarr>=2.18.3,<3.0",
     "pydantic<2.11.0",
+    "pyfirmata2",
 ]
 
 # TO USE pymmcore-nano, you need to add pymmcore-nano to dependencies
