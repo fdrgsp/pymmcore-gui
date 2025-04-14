@@ -194,3 +194,55 @@ class PygfxImagePreview(_ImagePreviewBase):
     def _draw_function(self) -> None:
         self._renderer.render(self._scene, self._camera)
         self._renderer.request_draw()
+
+    def _on_exposure_changed(self, device: str, value: str) -> None:
+        # change timer interval
+        if self._timer_id is not None:
+            self.killTimer(self._timer_id)
+            self._timer_id = self.startTimer(int(value), Qt.TimerType.PreciseTimer)
+
+    def timerEvent(self, a0: QTimerEvent | None) -> None:
+        if (core := self._mmc) and core.getRemainingImageCount() > 0:
+            try:
+                img = core.getLastImage()
+            except IndexError:  # pragma: no cover
+                return
+            self.set_data(img)
+
+    def _on_image_snapped(self) -> None:
+        if (core := self._mmc) is None:
+            return  # pragma: no cover
+        if not self.use_with_mda and core.mda.is_running():
+            return  # pragma: no cover
+
+        last = core.getImage()
+        self.set_data(last)
+
+    def _on_streaming_start(self) -> None:
+        if (core := self._mmc) is not None:
+            wait = int(core.getExposure()) or _DEFAULT_WAIT
+            self._timer_id = self.startTimer(wait, Qt.TimerType.PreciseTimer)
+
+    def _on_streaming_stop(self) -> None:
+        if self._timer_id is not None:
+            self.killTimer(self._timer_id)
+            self._timer_id = None
+
+
+if __name__ == "__main__":  # pragma: no cover
+    from pymmcore_plus import CMMCorePlus
+    from pymmcore_widgets import SnapButton
+    from PyQt6.QtWidgets import QApplication
+
+    core = CMMCorePlus()
+    core.loadSystemConfiguration()
+
+    app = QApplication([])
+    widget = PygfxImagePreview(None, core)
+    widget.show()
+    snap = SnapButton(parent=None, mmcore=core)
+    snap.show()
+    live = LiveButton(parent=None, mmcore=core)
+    live.show()
+
+    app.exec()

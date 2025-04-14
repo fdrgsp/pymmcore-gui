@@ -20,8 +20,8 @@ if TYPE_CHECKING:
 class Stage(StageWidget):
     """Stage control widget with wheel event for z-axis control."""
 
-    def __init__(self, device: str) -> None:
-        super().__init__(device=device)
+    def __init__(self, device: str, parent: QWidget | None = None) -> None:
+        super().__init__(device=device, parent=parent)
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         # if self._dtype != DeviceType.Stage:
@@ -76,7 +76,8 @@ class StagesControlWidget(QWidget):
         for idx, stage_dev in enumerate(stages):
             bx = _Group(stage_dev, self)
             bx.setSizePolicy(sizepolicy)
-            cast("QHBoxLayout", bx.layout()).addWidget(Stage(device=stage_dev))
+            stage = Stage(device=stage_dev, parent=bx)
+            cast("QHBoxLayout", bx.layout()).addWidget(stage)
             self._layout.addWidget(bx, idx // 2, idx % 2)
         self.resize(self.sizeHint())
 
