@@ -7,9 +7,12 @@ provided.
 
 from __future__ import annotations
 
+from itertools import count
 from typing import TYPE_CHECKING, Any
 
 from pymmcore_plus.mda.handlers import ImageSequenceWriter
+from pymmcore_plus.mda.handlers._5d_writer_base import _NULL
+from pymmcore_plus.mda.handlers._util import get_full_sequence_axes
 from pymmcore_plus.metadata.serialize import json_dumps
 
 if TYPE_CHECKING:
@@ -20,7 +23,7 @@ if TYPE_CHECKING:
     import numpy as np
     import numpy.typing as npt
     import useq
-    from pymmcore_plus.metadata import FrameMetaV1
+    from pymmcore_plus.metadata import FrameMetaV1, SummaryMetaV1
 
     ImgWriter: TypeAlias = Callable[[str, npt.NDArray], Any]
 
@@ -88,6 +91,36 @@ class _TiffSequenceWriter(ImageSequenceWriter):
             imwrite_kwargs=imwrite_kwargs,
         )
 
+    # TODO: also override the sequenceStarted to set tghe correct args. this should be
+    # in pymmcore_plus
+    def sequenceStarted(
+        self, seq: useq.MDASequence, meta: SummaryMetaV1 | object = _NULL
+    ) -> None:
+        """Store the sequence metadata and reset the frame counter."""
+        self._counter = count()  # reset counter
+        self._frame_metadata = {}  # reset metadata
+        self._directory.mkdir(parents=True, exist_ok=True)
+
+        self._current_sequence = seq
+        axes = get_full_sequence_axes(seq)
+        self._first_index = dict.fromkeys(axes, 0)
+        if seq is not None:
+            self._name_template = self.fname_template(
+                axes,
+                prefix=self._prefix,
+                extension=self._ext,
+                delimiter=self._delimiter,
+                include_frame_count=self._include_frame_count,
+            )
+            # NOTE: we need to remove the "hacky_handler" key from the metadata
+            seq_meta = dict(seq.metadata)
+            seq_meta.pop("hacky_handler", None)
+            updated_seq = seq.model_copy(update={"metadata": seq_meta})
+            # make directory and write metadata
+            self._seq_meta_file.write_text(
+                updated_seq.model_dump_json(exclude_unset=True, indent=2)
+            )
+
     def frameReady(
         self, frame: np.ndarray, event: useq.MDAEvent, meta: FrameMetaV1
     ) -> None:
@@ -110,6 +143,15 @@ class _TiffSequenceWriter(ImageSequenceWriter):
 
         # WRITE DATA TO DISK
         self._imwrite(str(_dir / filename), frame, **self._imwrite_kwargs)
+
+        # NOTE: we need to remove the "hacky_handler" key from the metadata
+        meta_ev = meta.get("mda_event")
+        if meta_ev is not None and meta_ev.sequence is not None:
+            seq_meta = dict(meta_ev.sequence.metadata)
+            seq_meta.pop("hacky_handler", None)
+            new_ev_seq = meta_ev.sequence.model_copy(update={"metadata": seq_meta})
+            ev_clean = meta_ev.model_copy(update={"sequence": new_ev_seq})
+            meta["mda_event"] = ev_clean
 
         # store metadata
         self._frame_metadata[filename] = meta

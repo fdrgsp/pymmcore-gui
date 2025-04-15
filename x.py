@@ -4,7 +4,7 @@ from pymmcore_plus import CMMCorePlus
 from qtpy.QtWidgets import QApplication, QWidget
 
 from pymmcore_gui._ndv_viewers import NDVViewersManager
-from pymmcore_gui.widgets.mda_widget._writers import _TensorStoreHandler
+from pymmcore_gui.widgets.mda_widget._writers import _TensorStoreHandler, _TiffSequenceWriter, _OMETiffWriter
 
 
 def _on_viewer_created(ndv_viewer: ndv.ArrayViewer, sequence: useq.MDASequence) -> None:
@@ -25,7 +25,9 @@ m = NDVViewersManager(main_wdg, mmcore=mmc)
 m.viewerCreated.connect(_on_viewer_created)
 
 # h = _OMETiffWriter("/Users/fdrgsp/Desktop/test.ome.tiff")
-h = _TensorStoreHandler(path="/Users/fdrgsp/Desktop/test.zarr")
+# h = _TensorStoreHandler(path="/Users/fdrgsp/Desktop/test.zarr")
+
+h = _TiffSequenceWriter("/Users/fdrgsp/Desktop/test")
 
 seq = useq.MDASequence(
     axis_order="pc",
