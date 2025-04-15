@@ -47,7 +47,7 @@ class _OMETiffWriter(OMETiffWriter):
         """
         from tifffile import imwrite, memmap
 
-        dims, shape = zip(*sizes.items())
+        dims, shape = zip(*sizes.items(), strict=False)
 
         metadata: dict[str, Any] = self._sequence_metadata()
         metadata["axes"] = "".join(dims).upper()
@@ -101,11 +101,19 @@ class _OMETiffWriter(OMETiffWriter):
         meta: dict[str, Any] = {}
         for position_key in list(self.frame_metadatas.keys()):
             pos_name = self._get_current_pos_name(position_key)
-            meta[pos_name] = self.frame_metadatas[position_key]
-
-        from rich import print
-        print('-------------------META------------------')
-        print(meta)
+            frames_meta = []
+            # NOTE: we need to remopve the "hacky_handler" key from the metadata
+            # because it is not serializable
+            for p in self.frame_metadatas[position_key]:
+                ev = p.get("mda_event")
+                if ev and ev.sequence:
+                    seq_meta = dict(ev.sequence.metadata)
+                    seq_meta.pop("hacky_handler", None)
+                    new_ev_seq = ev.sequence.model_copy(update={"metadata": seq_meta})
+                    ev_clean = ev.model_copy(update={"sequence": new_ev_seq})
+                    p["mda_event"] = ev_clean
+                frames_meta.append(p)
+            meta[pos_name] = frames_meta
 
         # save metadata
         with open(self._folder / META, "w") as f:
@@ -115,6 +123,8 @@ class _OMETiffWriter(OMETiffWriter):
         # save sequence
         with open(self._folder / SEQ, "w") as f:
             if self.current_sequence is not None:
-                f.write(
-                    self.current_sequence.model_dump_json(exclude_unset=True, indent=4)
-                )
+                # NOTE: we need to remove the "hacky_handler" key from the metadata
+                seq_meta = dict(self.current_sequence.metadata)
+                seq_meta.pop("hacky_handler", None)
+                seq = self.current_sequence.model_copy(update={"metadata": seq_meta})
+                f.write(seq.model_dump_json(exclude_unset=True, indent=4))
