@@ -198,7 +198,7 @@ class _OME5DWrapper(DataWrapper["_5DWriterBase"]):
     def dtype(self) -> np.dtype:
         """Return the dtype for the data."""
         try:
-            return self.data.position_arrays['p0'].dtype
+            return self.data.position_arrays["p0"].dtype
         except Exception:
             return super().dtype
 
@@ -223,10 +223,17 @@ class _OME5DWrapper(DataWrapper["_5DWriterBase"]):
 
 
 class _CustomViewer(ndv.ArrayViewer):
-    def __init__(self, data=None, /, display_model=None, step: float = 1.0, **kwargs):
+    def __init__(
+        self,
+        data: Any = None,
+        /,
+        display_model: Any = None,
+        step: float = 1.0,
+        **kwargs: Any,
+    ):
         super().__init__(data, display_model, **kwargs)
         self._super_add_volume = self._canvas.add_volume
-        self._canvas.add_volume = self.add_volume
+        self._canvas.add_volume = self.add_volume  # type: ignore
 
         self._step = step
 

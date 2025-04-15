@@ -120,7 +120,7 @@ class CustomMDASequence(MDASequence):
         # Bypass Pydantic's frozen model restriction
         object.__setattr__(self, "events", [])
 
-    def __iter__(self) -> Iterator[MDAEvent]:  # type: ignore
+    def __iter__(self) -> Iterator[MDAEvent]:
         """Iterate over the events in the sequence.
 
         If the events attribute is empty, the parent __iter__ method is called.
@@ -391,7 +391,7 @@ class _MDAWidget(MDAWidget):
             return
 
     def _confirm_mag_factor_intentions(self) -> bool:
-        msg = "The Magnification Knob is set to 1.5x.\n" "Do you want to continue?"
+        msg = "The Magnification Knob is set to 1.5x.\nDo you want to continue?"
         response = QMessageBox.warning(
             self,
             "Confirm Magnification Factor",

@@ -8,8 +8,6 @@ from typing import (
     cast,
 )
 
-from pyfirmata2 import Arduino
-from pyfirmata2.pyfirmata2 import Pin
 from pymmcore_plus._logger import logger
 from pymmcore_plus.core._sequencing import SequencedEvent
 from pymmcore_plus.mda import MDAEngine
@@ -18,6 +16,8 @@ from useq import AcquireImage, CustomAction, HardwareAutofocus, MDAEvent, MDASeq
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from pyfirmata2 import Arduino
+    from pyfirmata2.pyfirmata2 import Pin
     from pymmcore_plus import CMMCorePlus
     from pymmcore_plus.mda._protocol import PImagePayload
     from pymmcore_plus.metadata import SummaryMetaV1
@@ -35,8 +35,9 @@ class ArduinoEngine(MDAEngine):
         use_hardware_sequencing: bool = True,
         arduino_board: Arduino | None = None,
         arduino_led_pin: Pin | None = None,
-        slackbot = None,  # slackbot: MMSlackBot | None = None,
+        slackbot: None = None,  # slackbot: MMSlackBot | None = None,
     ) -> None:
+        """Custom MDA engine that uses an Arduino board for LED stimulation."""
         super().__init__(mmc, use_hardware_sequencing)
 
         self._slackbot = slackbot
@@ -57,7 +58,7 @@ class ArduinoEngine(MDAEngine):
         """Setup the hardware for the entire sequence."""
         # Arduino LED Setup
         if self._arduino_board is not None and self._arduino_led_pin is not None:
-            self._arduino_led_pin = cast(Pin, self._arduino_led_pin)
+            self._arduino_led_pin = cast("Pin", self._arduino_led_pin)
             self._arduino_led_pin.write(0.0)
         return super().setup_sequence(sequence)
 
@@ -97,7 +98,7 @@ class ArduinoEngine(MDAEngine):
         # CustomAction, which is a user-defined action that the engine doesn't know how
         # to handle.  But may include other actions in the future, and this ensures
         # backwards compatibility.
-        if not isinstance(action, (AcquireImage, type(None))):
+        if not isinstance(action, AcquireImage | type(None)):
             if (
                 isinstance(action, CustomAction)
                 and action.type == "custom"
@@ -130,8 +131,8 @@ class ArduinoEngine(MDAEngine):
         """Execute LED stimulation."""
         led_power = data.get("led_power", 0)
         led_pulse_duration = data.get("led_pulse_duration", 0)
-        self._arduino_board = cast(Arduino, self._arduino_board)
-        self._arduino_led_pin = cast(Pin, self._arduino_led_pin)
+        self._arduino_board = cast("Arduino", self._arduino_board)
+        self._arduino_led_pin = cast("Pin", self._arduino_led_pin)
         led_pulse_duration = led_pulse_duration / 1000  # convert to sec
         # switch on the LED
         self._arduino_led_pin.write(led_power / 100)

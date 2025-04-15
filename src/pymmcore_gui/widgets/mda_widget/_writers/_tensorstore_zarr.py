@@ -41,7 +41,20 @@ class _TensorStoreHandler(TensorStoreHandler):
         if not (store := self._store) or not store.kvstore:
             return  # pragma: no cover
 
-        metadata = {"frame_metadatas": [m[1] for m in self.frame_metadatas]}
+        # NOTE: we need to remopve the "hacky_handler" key from the metadata
+        # because it is not serializable
+        frames_meta = []
+        for f in [m[1] for m in self.frame_metadatas]:
+            ev = f.get("mda_event")
+            if ev and ev.sequence:
+                seq_meta = dict(ev.sequence.metadata)
+                seq_meta.pop("hacky_handler", None)
+                new_ev_seq = ev.sequence.model_copy(update={"metadata": seq_meta})
+                ev_clean = ev.model_copy(update={"sequence": new_ev_seq})
+                f["mda_event"] = ev_clean
+            frames_meta.append(f)
+
+        metadata = {"frame_metadatas": frames_meta}
 
         if not self._nd_storage:
             metadata["frame_indices"] = [
