@@ -103,6 +103,10 @@ class _OMETiffWriter(OMETiffWriter):
             pos_name = self._get_current_pos_name(position_key)
             meta[pos_name] = self.frame_metadatas[position_key]
 
+        from rich import print
+        print('-------------------META------------------')
+        print(meta)
+
         # save metadata
         with open(self._folder / META, "w") as f:
             formatted = json.dumps(to_builtins(meta), indent=2)
