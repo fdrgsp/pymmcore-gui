@@ -106,8 +106,8 @@ class NDVViewersManager(QObject):
                 viewer.data = handler.store
             elif isinstance(handler, _5DWriterBase):
                 viewer.data = _OME5DWrapper(handler)
-            elif isinstance(handler, ImageSequenceWriter):
-                viewer.data = handler
+            # TODO: elif isinstance(handler, ImageSequenceWriter):
+            #     viewer.data = ...
             else:
                 warnings.warn(
                     f"don't know how to show data of type {type(handler)}",
