@@ -22,6 +22,8 @@ if TYPE_CHECKING:
     from pymmcore_plus.mda._protocol import PImagePayload
     from pymmcore_plus.metadata import SummaryMetaV1
 
+    from .slackbot import MMSlackBot
+
     # from micromanager_gui._slackbot._mm_slackbot import MMSlackBot
 
 WARNING_EMOJI = ":warning:"
@@ -35,7 +37,7 @@ class ArduinoEngine(MDAEngine):
         use_hardware_sequencing: bool = True,
         arduino_board: Arduino | None = None,
         arduino_led_pin: Pin | None = None,
-        slackbot: None = None,  # slackbot: MMSlackBot | None = None,
+        slackbot: MMSlackBot | None = None,  # slackbot: MMSlackBot | None = None,
     ) -> None:
         """Custom MDA engine that uses an Arduino board for LED stimulation."""
         super().__init__(mmc, use_hardware_sequencing)

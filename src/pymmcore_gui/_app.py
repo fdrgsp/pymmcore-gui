@@ -72,6 +72,14 @@ def parse_args(args: Sequence[str] = ()) -> argparse.Namespace:
         help="Config file to load",
         nargs="?",
     )
+    parser.add_argument(
+        "-s",
+        "--slack",
+        type=bool,
+        default=False,
+        help="Weather to enable the slack bot (type: bool).",
+        nargs="?",
+    )
     return parser.parse_args(args)
 
 
@@ -92,7 +100,7 @@ def main() -> QCoreApplication:
 
     _install_excepthook()
 
-    win = MicroManagerGUI()
+    win = MicroManagerGUI(slackbot=bool(args.slack))
     QTimer.singleShot(0, lambda: win._restore_state(True))
 
     # FIXME: be better...

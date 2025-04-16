@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import sys
 from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
@@ -47,6 +46,7 @@ from ._notification_manager import NotificationManager
 from .actions import CoreAction, WidgetAction
 from .actions._action_info import ActionKey
 from .settings import Settings
+from .slackbot import MMSlackBot, MMSlackbotCoreLink
 from .widgets._toolbars import OCToolBar
 
 if TYPE_CHECKING:
@@ -74,7 +74,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("pymmcore_gui")
 
 RESOURCES = Path(__file__).parent / "resources"
-ICON = RESOURCES / ("icon.ico" if sys.platform.startswith("win") else "logo.png")
+ICON = RESOURCES / ("wall_e_icon.png")
 
 SS_TOOLBUTTON = """
     QToolButton {
@@ -167,9 +167,11 @@ class MicroManagerGUI(QMainWindow):
         ],
     }
 
-    def __init__(self, *, mmcore: CMMCorePlus | None = None) -> None:
+    def __init__(
+        self, *, mmcore: CMMCorePlus | None = None, slackbot: bool = False
+    ) -> None:
         super().__init__()
-        self.setWindowTitle("Christina (A QI Special)")
+        self.setWindowTitle("WALL-E")
         self.setWindowIcon(QIcon(str(ICON)))
         self.setObjectName("MicroManagerGUI")
         self.setAcceptDrops(True)
@@ -187,8 +189,6 @@ class MicroManagerGUI(QMainWindow):
         # get global CMMCorePlus instance
         self._mmc = mmcore or CMMCorePlus.instance()
         self._mmc._mda_runner = _MDARunner()
-        # set our custom engine
-        self._mmc.mda.set_engine(ArduinoEngine(self._mmc, slackbot=None))
 
         self._is_mda_running = False
         mda_ev = self._mmc.mda.events
@@ -259,6 +259,18 @@ class MicroManagerGUI(QMainWindow):
 
         QTimer.singleShot(0, self._restore_state)
 
+        # SLACKBOT =================================
+        # slack bot to handle slack messages
+        self._slackbot = MMSlackBot() if slackbot else None
+        mda = self.get_widget(WidgetAction.MDA_WIDGET)
+        self._slackbot_core_link = MMSlackbotCoreLink(
+            mmcore=self._mmc, slackbot=self._slackbot, mda=mda
+        )
+
+        # CUSTOM ENGINE ==========================
+        # set our custom engine
+        self._mmc.mda.set_engine(ArduinoEngine(self._mmc, slackbot=self._slackbot))
+
     @property
     def nm(self) -> NotificationManager:
         """A callable that can be used to show a message in the status bar."""
@@ -319,6 +331,8 @@ class MicroManagerGUI(QMainWindow):
 
     def closeEvent(self, a0: QCloseEvent | None) -> None:
         self._save_state()
+        if self._slackbot is not None:
+            self._slackbot._slack_process.stop()
         return super().closeEvent(a0)
 
     def _restore_state(self, show: bool = False) -> None:
