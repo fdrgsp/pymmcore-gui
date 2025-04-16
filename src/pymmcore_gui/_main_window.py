@@ -141,11 +141,12 @@ class MicroManagerGUI(QMainWindow):
         Toolbar.OPTICAL_CONFIGS: OCToolBar,
         Toolbar.SHUTTERS: ShuttersToolbar,
         Toolbar.WIDGETS: [
-            WidgetAction.CONSOLE,
-            WidgetAction.MDA_WIDGET,
+            WidgetAction.PROP_BROWSER,
+            WidgetAction.CONFIG_GROUPS,
+            WidgetAction.ILLUM,
             WidgetAction.STAGE_CONTROL,
             WidgetAction.CAMERA_ROI,
-            WidgetAction.ILLUM,
+            WidgetAction.MDA_WIDGET,
         ],
     }
     # Menus are a mapping of strings to either a list of ActionKeys or a callable
@@ -153,17 +154,17 @@ class MicroManagerGUI(QMainWindow):
     MENUS: Mapping[str, MenuDictValue] = {
         Menu.PYMM_GUI: [WidgetAction.ABOUT],
         Menu.WINDOW: [
-            WidgetAction.CONSOLE,
-            WidgetAction.PROP_BROWSER,
             WidgetAction.INSTALL_DEVICES,
+            WidgetAction.CONFIG_WIZARD,
+            WidgetAction.PROP_BROWSER,
+            WidgetAction.CONFIG_GROUPS,
+            WidgetAction.PIXEL_CONFIG,
             WidgetAction.MDA_WIDGET,
             WidgetAction.STAGE_CONTROL,
             WidgetAction.CAMERA_ROI,
             WidgetAction.ILLUM,
-            WidgetAction.CONFIG_GROUPS,
+            WidgetAction.CONSOLE,
             WidgetAction.EXCEPTION_LOG,
-            WidgetAction.CONFIG_WIZARD,
-            WidgetAction.PIXEL_CONFIG,
         ],
     }
 
@@ -221,9 +222,10 @@ class MicroManagerGUI(QMainWindow):
 
         # MENUS ====================================
         # To add menus or menu items, add them to the MENUS dict above
-
         for name, entry in self.MENUS.items():
             self._add_menubar(name, entry)
+        mb = cast("QMenuBar", self.menuBar())
+        mb.actions()[1].setText("Widgets")
 
         # TOOLBARS =================================
         # To add toolbars or toolbar items, add them to the TOOLBARS dict above
