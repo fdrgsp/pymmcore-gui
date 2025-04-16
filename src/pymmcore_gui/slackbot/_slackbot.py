@@ -191,12 +191,15 @@ class SlackBot:
         )
         while True:
             if message := sys.stdin.readline().strip():
-                logging.info(f"SlackBot -> (listening) message received: {message}")
                 try:
                     parsed = json.loads(message)
                     if isinstance(parsed, dict) and parsed.get("type") == "image_array":
+                        logging.info("SlackBot -> (listening) message received: image")
                         self._handle_image_array(parsed)
                     else:
+                        logging.info(
+                            f"SlackBot -> (listening) message received: {message}"
+                        )
                         logging.info(
                             f"SlackBot -> (listening) forwarding message: {message}"
                         )
