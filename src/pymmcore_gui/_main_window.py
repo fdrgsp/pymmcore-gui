@@ -142,7 +142,6 @@ class MicroManagerGUI(QMainWindow):
         Toolbar.SHUTTERS: ShuttersToolbar,
         Toolbar.WIDGETS: [
             WidgetAction.CONSOLE,
-            WidgetAction.PROP_BROWSER,
             WidgetAction.MDA_WIDGET,
             WidgetAction.STAGE_CONTROL,
             WidgetAction.CAMERA_ROI,
@@ -164,6 +163,7 @@ class MicroManagerGUI(QMainWindow):
             WidgetAction.CONFIG_GROUPS,
             WidgetAction.EXCEPTION_LOG,
             WidgetAction.CONFIG_WIZARD,
+            WidgetAction.PIXEL_CONFIG,
         ],
     }
 

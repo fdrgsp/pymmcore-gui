@@ -175,9 +175,30 @@ def create_config_groups(parent: QWidget) -> pmmw.GroupPresetTableWidget:
 
 def create_pixel_config(parent: QWidget) -> pmmw.PixelConfigurationWidget:
     """Create the Pixel Configuration widget."""
+    from pymmcore_plus.model import PixelSizeGroup
     from pymmcore_widgets import PixelConfigurationWidget
 
-    return PixelConfigurationWidget(parent=parent, mmcore=_get_core(parent))
+    class _PixelConfigurationWidget(PixelConfigurationWidget):
+        def __init__(self, parent: QWidget, mmcore: CMMCorePlus) -> None:
+            super().__init__(parent=parent, mmcore=mmcore)
+
+            self.layout().itemAt(1).itemAt(2).widget().setText("Apply")
+
+        def _on_apply(self) -> None:
+            """Update the current pixel size configurations."""
+            # check if there are errors in the pixel configurations
+            if self._check_for_errors():
+                return
+
+            # delete all the pixel size configurations
+            for resolutionID in self._mmc.getAvailablePixelSizeConfigs():
+                self._mmc.deletePixelSizeConfig(resolutionID)
+
+            # create the new pixel size configurations
+            px_groups = PixelSizeGroup(presets=self._value_to_dict(self.value()))
+            px_groups.apply_to_core(self._mmc)
+
+    return _PixelConfigurationWidget(parent=parent, mmcore=_get_core(parent))
 
 
 def create_exception_log(parent: QWidget) -> ExceptionLog:
@@ -301,6 +322,7 @@ show_mda_widget = WidgetActionInfo(
     shortcut="Ctrl+Shift+M",
     icon="mdi:cube-outline",
     create_widget=create_mda_widget,
+    dock_area=DockWidgetArea.RightDockWidgetArea,
 )
 
 show_camera_roi = WidgetActionInfo(
@@ -333,6 +355,7 @@ show_pixel_config = WidgetActionInfo(
     shortcut="Ctrl+Shift+X",
     icon="mdi-light:grid",
     create_widget=create_pixel_config,
+    dock_area=SideBarLocation.SideBarLeft,
 )
 
 show_exception_log = WidgetActionInfo(
