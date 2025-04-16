@@ -53,7 +53,11 @@ def create_property_browser(parent: QWidget) -> pmmw.PropertyBrowser:
     """Create a Property Browser widget."""
     from pymmcore_widgets import PropertyBrowser
 
-    return PropertyBrowser(parent=parent, mmcore=_get_core(parent))
+    # chenge type of PropertyBrowser to QWidget instead of QDialog
+    # to be able to use it in a dock widget
+    pb = PropertyBrowser(parent=parent, mmcore=_get_core(parent))
+    pb.setWindowFlags(Qt.WindowType.Window)
+    return pb
 
 
 def create_about_widget(parent: QWidget) -> QWidget:
