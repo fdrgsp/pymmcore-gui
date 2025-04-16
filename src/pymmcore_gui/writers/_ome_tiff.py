@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     import numpy as np
 
 EXT = [".ome.tif", ".ome.tiff"]
-META = "_metadata.json"
+META = "_frame_metadata.json"
 SEQ = "_useq_MDASequence.json"
 
 
@@ -25,7 +25,7 @@ class OMETiffWriterMM(OMETiffWriter):
 
     Parameters
     ----------
-    filename : Path | str
+    path : Path | str
         The filename to write to.  Must end with '.ome.tiff' or '.ome.tif'.
     """
 

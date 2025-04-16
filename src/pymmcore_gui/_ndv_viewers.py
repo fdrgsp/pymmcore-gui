@@ -12,9 +12,9 @@ from ndv import DataWrapper
 from pymmcore_plus.mda.handlers import TensorStoreHandler
 from pymmcore_plus.mda.handlers._5d_writer_base import _5DWriterBase
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
-from PyQt6.QtWidgets import (
-    QWidget,
-)
+from PyQt6.QtWidgets import QWidget
+
+from pymmcore_gui.writers import TensorStoreWriterMM, TiffSequenceWriterMM
 
 if TYPE_CHECKING:
     from collections.abc import Hashable, Iterator, Mapping, Sequence
@@ -52,7 +52,8 @@ class NDVViewersManager(QObject):
         # currently active viewer
         self._active_viewer: ndv.ArrayViewer | None = None
 
-        self._own_handler: TensorStoreHandler | None = None
+        self._handler: TensorStoreHandler | None = None
+        self._tiff_seq_handler: TiffSequenceWriterMM | None = None
 
         # CONNECTIONS ---------------------------------------------------------
 
@@ -63,7 +64,8 @@ class NDVViewersManager(QObject):
 
     def _cleanup(self, obj: QObject | None = None) -> None:
         self._active_viewer = None
-        self._own_handler = None
+        self._handler = None
+        self._tiff_seq_handler = None
 
     def _on_sequence_started(
         self, sequence: useq.MDASequence, meta: SummaryMetaV1
@@ -73,15 +75,28 @@ class NDVViewersManager(QObject):
         We grab the first handler in the list of output handlers, or create a new
         TensorStoreHandler if none exist. Then we create a new ndv viewer and show it.
         """
-        self._own_handler = None
+        self._handler = None
+        self._tiff_seq_handler = None
+
         if "mm_handler" in sequence.metadata:
-            h = cast("_5DWriterBase", sequence.metadata["mm_handler"])
+            h = cast(
+                ("_5DWriterBase | TensorStoreWriterMM | TiffSequenceWriterMM"),
+                sequence.metadata["mm_handler"],
+            )
             h.sequenceStarted(sequence, meta)
-            self._own_handler = h  # type: ignore
+
+            # use TensorStoreWriterMM to display the data in the ndv viewer if writer
+            # is a TiffSequenceWriterMM
+            if isinstance(h, TiffSequenceWriterMM):
+                self._tiff_seq_handler = h
+                self._handler = TensorStoreWriterMM(driver="zarr", kvstore="memory://")
+                self._handler.reset(sequence)
+            else:
+                self._handler = h  # type: ignore
         else:
             # if it does not exist, create a new TensorStoreHandler
-            self._own_handler = TensorStoreHandler(driver="zarr", kvstore="memory://")
-            self._own_handler.reset(sequence)
+            self._handler = TensorStoreHandler(driver="zarr", kvstore="memory://")
+            self._handler.reset(sequence)
 
         # since the handler is empty at this point, create a ndv viewer with no data
         self._active_viewer = self._create_ndv_viewer(sequence)
@@ -91,8 +106,10 @@ class NDVViewersManager(QObject):
     ) -> None:
         """Create a viewer if it does not exist, otherwise update the current index."""
         # at this point the viewer should exist
-        if self._own_handler is not None:
-            self._own_handler.frameReady(frame, event, meta)
+        if self._handler is not None:
+            self._handler.frameReady(frame, event, meta)
+        if self._tiff_seq_handler is not None:
+            self._tiff_seq_handler.frameReady(frame, event, meta)
 
         if (viewer := self._active_viewer) is None:
             return  # pragma: no cover
@@ -100,14 +117,12 @@ class NDVViewersManager(QObject):
         # if the viewer does not yet have data, it's likely the very first frame
         # so update the viewer's data source to the underlying handlers store
         if viewer.data_wrapper is None:
-            handler = self._own_handler
+            handler = self._handler
             if isinstance(handler, TensorStoreHandler):
                 # TODO: temporary. maybe create the DataWrapper for the handlers
                 viewer.data = handler.store
             elif isinstance(handler, _5DWriterBase):
                 viewer.data = _OME5DWrapper(handler)
-            # TODO: elif isinstance(handler, ImageSequenceWriter):
-            #     viewer.data = ...
             else:
                 warnings.warn(
                     f"don't know how to show data of type {type(handler)}",
@@ -133,8 +148,8 @@ class NDVViewersManager(QObject):
 
     def _on_sequence_finished(self, sequence: useq.MDASequence) -> None:
         """Called when a sequence has finished."""
-        if self._own_handler is not None:
-            self._own_handler.sequenceFinished(sequence)
+        if self._handler is not None:
+            self._handler.sequenceFinished(sequence)
         # cleanup pointers somehow?
 
     def _create_ndv_viewer(self, sequence: MDASequence) -> ndv.ArrayViewer:

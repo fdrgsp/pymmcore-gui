@@ -48,7 +48,7 @@ class TiffSequenceWriterMM(ImageSequenceWriter):
 
     Parameters
     ----------
-    directory: Path | str
+    path: Path | str
         The directory to write the files to.
     extension: str
         The file extension to use.  By default, ".tif".
@@ -72,7 +72,7 @@ class TiffSequenceWriterMM(ImageSequenceWriter):
 
     def __init__(
         self,
-        directory: Path | str,
+        path: Path | str,
         extension: str = ".tif",
         prefix: str = "",
         *,
@@ -82,7 +82,7 @@ class TiffSequenceWriterMM(ImageSequenceWriter):
         imwrite_kwargs: dict | None = None,
     ) -> None:
         super().__init__(
-            directory,
+            path,
             extension,
             prefix,
             imwrite=imwrite,
