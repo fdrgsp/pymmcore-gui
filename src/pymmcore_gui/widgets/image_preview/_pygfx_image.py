@@ -12,7 +12,9 @@ from ._preview_base import _ImagePreviewBase
 
 if TYPE_CHECKING:
     import rendercanvas.qt
-    from cmap._colormap import ColorStopsLike
+    from cmap._colormap import (
+        ColorStopsLike,  # pyright: ignore [reportPrivateImportUsage]
+    )
     from pymmcore_plus import CMMCorePlus
 
     class QRenderWidget(rendercanvas.qt.QRenderWidget, QWidget): ...  # pyright: ignore [reportIncompatibleMethodOverride]

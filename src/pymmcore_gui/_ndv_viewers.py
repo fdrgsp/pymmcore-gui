@@ -19,7 +19,9 @@ from pymmcore_gui.writers import TensorStoreWriterMM, TiffSequenceWriterMM
 if TYPE_CHECKING:
     from collections.abc import Hashable, Iterator, Mapping, Sequence
 
-    from ndv.models._array_display_model import IndexMap
+    from ndv.models._array_display_model import (
+        IndexMap,  # pyright: ignore[reportPrivateImportUsage]
+    )
     from pymmcore_plus import CMMCorePlus
     from pymmcore_plus.metadata import FrameMetaV1, SummaryMetaV1
     from PyQt6.QtWidgets import QWidget
