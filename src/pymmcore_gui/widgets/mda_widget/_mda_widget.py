@@ -6,13 +6,18 @@ from typing import Any, cast
 
 from pyfirmata2 import Arduino, Pin
 from pymmcore_plus import CMMCorePlus
-from pymmcore_plus.mda.handlers import OMEZarrWriter
 from pymmcore_widgets import MDAWidget
 from pymmcore_widgets.useq_widgets._mda_sequence import PYMMCW_METADATA_KEY
 from qtpy.QtWidgets import QBoxLayout, QMessageBox, QWidget
 from useq import CustomAction, MDAEvent, MDASequence
 
 from pymmcore_gui._engine import ArduinoEngine
+from pymmcore_gui.writers import (
+    OMETiffWriterMM,
+    OMEZarrWriterMM,
+    TensorStoreWriterMM,
+    TiffSequenceWriterMM,
+)
 
 from ._arduino import ArduinoLedWidget
 from ._arduino._arduino_led_dialog import StimulationValues
@@ -25,7 +30,6 @@ from ._save_widget import (
     ZARR_TESNSORSTORE,
     SaveGroupBox,
 )
-from ._writers import _OMETiffWriter, _TensorStoreHandler, _TiffSequenceWriter
 
 OME_TIFFS = tuple(WRITERS[OME_TIFF])
 NUM_SPLIT = re.compile(r"(.*?)(?:_(\d{3,}))?$")
@@ -281,7 +285,7 @@ class _MDAWidget(MDAWidget):
     def execute_mda(self, output: Any) -> None:
         sequence = self.value()
         if output is not None:
-            sequence.metadata["hacky_handler"] = output
+            sequence.metadata["mm_handler"] = output
         self._mmc.run_mda(sequence)
 
     # ------------------- private Methods ----------------------
@@ -331,7 +335,7 @@ class _MDAWidget(MDAWidget):
 
     def _create_writer(
         self, save_format: str, save_path: Path
-    ) -> OMEZarrWriter | _OMETiffWriter | _TensorStoreHandler | _TiffSequenceWriter:
+    ) -> OMEZarrWriterMM | OMETiffWriterMM | TensorStoreWriterMM | TiffSequenceWriterMM:
         """Create a writer for the MDAViewer based on the save format."""
         # use internal OME-TIFF writer if selected
         if OME_TIFF in save_format:
@@ -339,15 +343,15 @@ class _MDAWidget(MDAWidget):
             # we need to add the ".ome.tif" to correctly use the OMETiffWriter
             if not save_path.name.endswith(OME_TIFFS):
                 save_path = save_path.with_suffix(OME_TIFF)
-            return _OMETiffWriter(save_path)
+            return OMETiffWriterMM(save_path)
         elif OME_ZARR in save_format:
-            return OMEZarrWriter(save_path)
+            return OMEZarrWriterMM(save_path)
         elif ZARR_TESNSORSTORE in save_format:
-            return _TensorStoreHandler(
+            return TensorStoreWriterMM(
                 driver="zarr", path=save_path, delete_existing=True
             )
         else:
-            return _TiffSequenceWriter(save_path)
+            return TiffSequenceWriterMM(save_path)
 
     def _group_by_position(self, events: list[MDAEvent]) -> list[list[MDAEvent]]:
         """Group the MDA events by position."""

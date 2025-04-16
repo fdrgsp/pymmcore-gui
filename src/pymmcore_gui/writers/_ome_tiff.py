@@ -10,12 +10,12 @@ from pymmcore_plus.metadata.serialize import to_builtins
 if TYPE_CHECKING:
     import numpy as np
 
-EXT = ".ome.tif"
+EXT = [".ome.tif", ".ome.tiff"]
 META = "_metadata.json"
 SEQ = "_useq_MDASequence.json"
 
 
-class _OMETiffWriter(OMETiffWriter):
+class OMETiffWriterMM(OMETiffWriter):
     """MDA handler that writes to a 5D OME-TIFF file.
 
     Positions will be split into different files.
@@ -29,8 +29,8 @@ class _OMETiffWriter(OMETiffWriter):
         The filename to write to.  Must end with '.ome.tiff' or '.ome.tif'.
     """
 
-    def __init__(self, filename: Path | str) -> None:
-        super().__init__(filename)
+    def __init__(self, path: Path | str) -> None:
+        super().__init__(path)
 
         self._folder: Path = Path(self._filename)
         # create a folder to store the OME-TIFF files
@@ -54,8 +54,12 @@ class _OMETiffWriter(OMETiffWriter):
 
         # add the position key to the filename if there are multiple positions
         if (seq := self.current_sequence) and seq.sizes.get("p", 1) > 1:
-            folder_name = self._folder.name.replace(EXT, "")
-            pos_name = f"_{self._get_current_pos_name(position_key)}{EXT}"
+            ext = ""
+            for ext in EXT:
+                if self._folder.name.endswith(ext):
+                    break
+            folder_name = self._folder.name.replace(ext, "")
+            pos_name = f"_{self._get_current_pos_name(position_key)}{ext}"
         else:
             folder_name = self._folder.name
             pos_name = ""
@@ -102,13 +106,13 @@ class _OMETiffWriter(OMETiffWriter):
         for position_key in list(self.frame_metadatas.keys()):
             pos_name = self._get_current_pos_name(position_key)
             frames_meta = []
-            # NOTE: we need to remopve the "hacky_handler" key from the metadata
+            # NOTE: we need to remopve the "mm_handler" key from the metadata
             # because it is not serializable
             for p in self.frame_metadatas[position_key]:
                 ev = p.get("mda_event")
                 if ev and ev.sequence:
                     seq_meta = dict(ev.sequence.metadata)
-                    seq_meta.pop("hacky_handler", None)
+                    seq_meta.pop("mm_handler", None)
                     new_ev_seq = ev.sequence.model_copy(update={"metadata": seq_meta})
                     ev_clean = ev.model_copy(update={"sequence": new_ev_seq})
                     p["mda_event"] = ev_clean
@@ -123,8 +127,8 @@ class _OMETiffWriter(OMETiffWriter):
         # save sequence
         with open(self._folder / SEQ, "w") as f:
             if self.current_sequence is not None:
-                # NOTE: we need to remove the "hacky_handler" key from the metadata
+                # NOTE: we need to remove the "mm_handler" key from the metadata
                 seq_meta = dict(self.current_sequence.metadata)
-                seq_meta.pop("hacky_handler", None)
+                seq_meta.pop("mm_handler", None)
                 seq = self.current_sequence.model_copy(update={"metadata": seq_meta})
                 f.write(seq.model_dump_json(exclude_unset=True, indent=4))

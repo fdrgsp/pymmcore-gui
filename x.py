@@ -4,7 +4,9 @@ from pymmcore_plus import CMMCorePlus
 from qtpy.QtWidgets import QApplication, QWidget
 
 from pymmcore_gui._ndv_viewers import NDVViewersManager
-from pymmcore_gui.widgets.mda_widget._writers import _TensorStoreHandler, _TiffSequenceWriter, _OMETiffWriter
+from pymmcore_gui.widgets.mda_widget._writers import (
+    _TiffSequenceWriter,
+)
 
 
 def _on_viewer_created(ndv_viewer: ndv.ArrayViewer, sequence: useq.MDASequence) -> None:
@@ -33,7 +35,7 @@ seq = useq.MDASequence(
     axis_order="pc",
     stage_positions=[(1, 1)],
     channels=["DAPI", "FITC"],
-    metadata={"hacky_handler": h},
+    metadata={"mm_handler": h},
 )
 
 mmc.run_mda(seq)

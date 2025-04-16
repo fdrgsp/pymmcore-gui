@@ -9,7 +9,7 @@ import ndv
 import numpy as np
 import useq
 from ndv import DataWrapper
-from pymmcore_plus.mda.handlers import ImageSequenceWriter, TensorStoreHandler
+from pymmcore_plus.mda.handlers import TensorStoreHandler
 from pymmcore_plus.mda.handlers._5d_writer_base import _5DWriterBase
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -74,8 +74,8 @@ class NDVViewersManager(QObject):
         TensorStoreHandler if none exist. Then we create a new ndv viewer and show it.
         """
         self._own_handler = None
-        if "hacky_handler" in sequence.metadata:
-            h = cast("_5DWriterBase", sequence.metadata["hacky_handler"])
+        if "mm_handler" in sequence.metadata:
+            h = cast("_5DWriterBase", sequence.metadata["mm_handler"])
             h.sequenceStarted(sequence, meta)
             self._own_handler = h  # type: ignore
         else:

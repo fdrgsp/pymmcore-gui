@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 FRAME_KEY = "frame"
 
 
-class _TiffSequenceWriter(ImageSequenceWriter):
+class TiffSequenceWriterMM(ImageSequenceWriter):
     """Write each frame of an MDA to a directory as individual image files.
 
     This writer assumes very little about the sequence, and simply writes each frame
@@ -91,7 +91,7 @@ class _TiffSequenceWriter(ImageSequenceWriter):
             imwrite_kwargs=imwrite_kwargs,
         )
 
-    # TODO: also override the sequenceStarted to set tghe correct args. this should be
+    # TODO: also override the sequenceStarted to set the correct args. this should be
     # in pymmcore_plus
     def sequenceStarted(
         self, seq: useq.MDASequence, meta: SummaryMetaV1 | object = _NULL
@@ -112,9 +112,9 @@ class _TiffSequenceWriter(ImageSequenceWriter):
                 delimiter=self._delimiter,
                 include_frame_count=self._include_frame_count,
             )
-            # NOTE: we need to remove the "hacky_handler" key from the metadata
+            # NOTE: we need to remove the "mm_handler" key from the metadata
             seq_meta = dict(seq.metadata)
-            seq_meta.pop("hacky_handler", None)
+            seq_meta.pop("mm_handler", None)
             updated_seq = seq.model_copy(update={"metadata": seq_meta})
             # make directory and write metadata
             self._seq_meta_file.write_text(
@@ -144,11 +144,11 @@ class _TiffSequenceWriter(ImageSequenceWriter):
         # WRITE DATA TO DISK
         self._imwrite(str(_dir / filename), frame, **self._imwrite_kwargs)
 
-        # NOTE: we need to remove the "hacky_handler" key from the metadata
+        # NOTE: we need to remove the "mm_handler" key from the metadata
         meta_ev = meta.get("mda_event")
         if meta_ev is not None and meta_ev.sequence is not None:
             seq_meta = dict(meta_ev.sequence.metadata)
-            seq_meta.pop("hacky_handler", None)
+            seq_meta.pop("mm_handler", None)
             new_ev_seq = meta_ev.sequence.model_copy(update={"metadata": seq_meta})
             ev_clean = meta_ev.model_copy(update={"sequence": new_ev_seq})
             meta["mda_event"] = ev_clean

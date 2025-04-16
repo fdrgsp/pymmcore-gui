@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import time
 from typing import TYPE_CHECKING, Literal, TypeAlias
 
-from pymmcore_plus._logger import logger
 from pymmcore_plus.mda.handlers import TensorStoreHandler
-from pymmcore_plus.metadata.serialize import to_builtins
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -17,7 +14,7 @@ TsDriver: TypeAlias = Literal["zarr", "zarr3", "n5", "neuroglancer_precomputed"]
 WAIT_TIME = 10  # seconds
 
 
-class _TensorStoreHandler(TensorStoreHandler):
+class TensorStoreWriterMM(TensorStoreHandler):
     def __init__(
         self,
         *,
@@ -41,14 +38,14 @@ class _TensorStoreHandler(TensorStoreHandler):
         if not (store := self._store) or not store.kvstore:
             return  # pragma: no cover
 
-        # NOTE: we need to remopve the "hacky_handler" key from the metadata
+        # NOTE: we need to remopve the "mm_handler" key from the metadata
         # because it is not serializable
         frames_meta = []
         for f in [m[1] for m in self.frame_metadatas]:
             ev = f.get("mda_event")
             if ev and ev.sequence:
                 seq_meta = dict(ev.sequence.metadata)
-                seq_meta.pop("hacky_handler", None)
+                seq_meta.pop("mm_handler", None)
                 new_ev_seq = ev.sequence.model_copy(update={"metadata": seq_meta})
                 ev_clean = ev.model_copy(update={"sequence": new_ev_seq})
                 f["mda_event"] = ev_clean
@@ -64,21 +61,8 @@ class _TensorStoreHandler(TensorStoreHandler):
 
         if self.ts_driver.startswith("zarr"):
             store.kvstore.write(
-                ".zattrs", json_dumps(to_builtins(metadata)).decode("utf-8")
-            )
-            attrs = store.kvstore.read(".zattrs").result().value
-            logger.info("Writing 'tensorstore_zarr' store 'zattrs' to disk.")
-            start_time = time.time()
-            # HACK: wait for attrs to be written. If we don't have the while loop,
-            # most of the time the attrs will not be written. To avoid looping forever,
-            # we wait for WAIT_TIME seconds. If the attrs are not written by then,
-            # we continue.
-            while not attrs and not time.time() - start_time > WAIT_TIME:
-                store.kvstore.write(
-                    ".zattrs", json_dumps(to_builtins(metadata)).decode("utf-8")
-                )
-                attrs = store.kvstore.read(".zattrs").result().value
-
+                ".zattrs", json_dumps(metadata).decode("utf-8")
+            ).result()
         elif self.ts_driver == "n5":  # pragma: no cover
             attrs = json_loads(store.kvstore.read("attributes.json").result().value)
             attrs.update(metadata)
