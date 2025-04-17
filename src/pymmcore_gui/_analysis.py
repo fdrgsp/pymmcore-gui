@@ -18,8 +18,8 @@
 # from scipy.signal import find_peaks
 # from tqdm import tqdm
 
-# from micromanager_gui._menubar._menubar import EVOKED
-# from micromanager_gui._plate_viewer._util import (
+# from pymmcore_gui._menubar._menubar import EVOKED
+# from pymmcore_gui.calcium_plate_viewer._util import (
 #     COND1,
 #     COND2,
 #     ROIData,
@@ -29,11 +29,11 @@
 #     get_linear_phase,
 #     get_overlap_roi_with_stimulated_area,
 # )
-# from micromanager_gui._widgets._mda_widget._real_time_analysis_wdg import (
+# from pymmcore_gui._widgets._mda_widget._real_time_analysis_wdg import (
 #     SPONTANEOUS,
 #     RealTimeAnalysisParameters,
 # )
-# from micromanager_gui.readers import OMEZarrReader, TensorstoreZarrReader
+# from pymmcore_gui.readers import OMEZarrReader, TensorstoreZarrReader
 
 # from ._widgets._mda_widget._save_widget import (
 #     ALL_EXTENSIONS,
@@ -47,7 +47,7 @@
 #     from pymmcore_plus import CMMCorePlus
 #     from pymmcore_plus.metadata import FrameMetaV1
 
-#     from micromanager_gui._plate_viewer._plate_map import PlateMapData
+#     from pymmcore_gui.calcium_plate_viewer._plate_map import PlateMapData
 
 
 # CHANNEL = [0, 0]

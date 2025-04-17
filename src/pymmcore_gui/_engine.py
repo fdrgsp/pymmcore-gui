@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
     from .slackbot import MMSlackBot
 
-    # from micromanager_gui._slackbot._mm_slackbot import MMSlackBot
+    # from pymmcore_gui._slackbot._mm_slackbot import MMSlackBot
 
 WARNING_EMOJI = ":warning:"
 ALARM_EMOJI = ":rotating_light:"

@@ -19,9 +19,9 @@
 #     QWidget,
 # )
 
-# from micromanager_gui._plate_viewer._plate_map import PlateMapData, PlateMapWidget
-# from micromanager_gui._plate_viewer._segmentation import _SelectModelPath
-# from micromanager_gui._plate_viewer._util import _BrowseWidget
+# from pymmcore_gui.calcium_plate_viewer._plate_map import PlateMapData, PlateMapWidget
+# from pymmcore_gui.calcium_plate_viewer._segmentation import _SelectModelPath
+# from pymmcore_gui.calcium_plate_viewer._util import _BrowseWidget
 
 # CUSTOM = "custom"
 # CYTO3 = "cyto3"

@@ -53,6 +53,12 @@ dependencies = [
     "pydantic<2.11.0",
     "pyfirmata2",
     "slack_bolt",
+    "scikit-image",
+    "cellpose",
+    "matplotlib",
+    "mplcursors",
+    "oasis-deconv!=0.2.1",
+    # "tensorstore!=0.1.72",
 ]
 
 # TO USE pymmcore-nano, you need to add pymmcore-nano to dependencies
