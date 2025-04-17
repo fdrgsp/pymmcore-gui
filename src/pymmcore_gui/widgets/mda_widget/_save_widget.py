@@ -31,19 +31,19 @@ if TYPE_CHECKING:
 ZARR_TESNSORSTORE = "tensorstore-zarr"
 OME_ZARR = "ome-zarr"
 OME_TIFF = "ome-tiff"
-TIFF_SEQ = "tiff-sequence"
+# TIFF_SEQ = "tiff-sequence"
 
 # dict with writer name and extension
 WRITERS: dict[str, list[str]] = {
     ZARR_TESNSORSTORE: [".tensorstore.zarr"],
     OME_ZARR: [".ome.zarr"],
     OME_TIFF: [".ome.tif", ".ome.tiff"],
-    TIFF_SEQ: [""],
+    # TIFF_SEQ: [""],
 }
 
 EXT_TO_WRITER = {x: w for w, exts in WRITERS.items() for x in exts}
 ALL_EXTENSIONS = [x for exts in WRITERS.values() for x in exts if x]
-DIRECTORY_WRITERS = {TIFF_SEQ}  # technically could be zarr too
+# DIRECTORY_WRITERS = {TIFF_SEQ}  # technically could be zarr too
 
 FILE_NAME = "Filename:"
 SUBFOLDER = "Subfolder:"
@@ -153,7 +153,7 @@ class SaveGroupBox(QGroupBox):
         - format: str - Set the combo box to the writer with this name.
         - should_save: bool - Set the checked state of the checkbox.
         """
-        if isinstance(value, (str, Path)):
+        if isinstance(value, str | Path):
             self.setCurrentPath(value)
             self.setChecked(True)
             return
@@ -189,10 +189,10 @@ class SaveGroupBox(QGroupBox):
         elif not allow_name_change:
             if ext := Path(name).suffix:
                 warn(
-                    f"Invalid format {ext!r}. Defaulting to {TIFF_SEQ} writer.",
+                    f"Invalid format {ext!r}. Defaulting to {OME_TIFF} writer.",
                     stacklevel=2,
                 )
-            self._writer_combo.setCurrentText(TIFF_SEQ)
+            self._writer_combo.setCurrentText(OME_TIFF)
         elif name:
             # otherwise, if the name is not empty, add the first extension from the
             # current writer
@@ -213,7 +213,10 @@ class SaveGroupBox(QGroupBox):
         "Subfolder" or "Filename" depending on the writer type
         """
         # update the label
-        self.name_label.setText(SUBFOLDER if writer in DIRECTORY_WRITERS else FILE_NAME)
+        # self.name_label.setText(
+        #   SUBFOLDER if writer in DIRECTORY_WRITERS else FILE_NAME
+        # )
+        self.name_label.setText(FILE_NAME)
 
         # if the name currently end with a known extension from the selected
         # writer, then we're done

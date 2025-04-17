@@ -16,7 +16,6 @@ from pymmcore_gui.writers import (
     OMETiffWriterMM,
     OMEZarrWriterMM,
     TensorStoreWriterMM,
-    TiffSequenceWriterMM,
 )
 
 from ._arduino import ArduinoLedWidget
@@ -335,7 +334,7 @@ class _MDAWidget(MDAWidget):
 
     def _create_writer(
         self, save_format: str, save_path: Path
-    ) -> OMEZarrWriterMM | OMETiffWriterMM | TensorStoreWriterMM | TiffSequenceWriterMM:
+    ) -> OMEZarrWriterMM | OMETiffWriterMM | TensorStoreWriterMM:
         """Create a writer for the MDAViewer based on the save format."""
         # use internal OME-TIFF writer if selected
         if OME_TIFF in save_format:
@@ -351,7 +350,11 @@ class _MDAWidget(MDAWidget):
                 driver="zarr", path=save_path, delete_existing=True
             )
         else:
-            return TiffSequenceWriterMM(save_path)
+            raise ValueError(
+                f"Invalid format {save_format!r}. Must be one of {list(WRITERS)}"
+            )
+        # else:
+        #     return TiffSequenceWriterMM(save_path)
 
     def _group_by_position(self, events: list[MDAEvent]) -> list[list[MDAEvent]]:
         """Group the MDA events by position."""

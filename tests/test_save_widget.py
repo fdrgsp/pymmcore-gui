@@ -4,16 +4,17 @@ import pytest
 from pytestqt.qtbot import QtBot
 
 from pymmcore_gui.widgets.mda_widget._save_widget import (
-    DIRECTORY_WRITERS,
     FILE_NAME,
     OME_TIFF,
     OME_ZARR,
     SUBFOLDER,
-    TIFF_SEQ,
     WRITERS,
     ZARR_TESNSORSTORE,
     SaveGroupBox,
 )
+
+TIFF_SEQ = "tiff-sequence"
+DIRECTORY_WRITERS = {TIFF_SEQ}
 
 
 def test_set_get_value(qtbot: QtBot) -> None:
