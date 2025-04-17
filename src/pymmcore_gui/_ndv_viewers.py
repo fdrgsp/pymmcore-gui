@@ -87,8 +87,8 @@ class NDVViewersManager(QObject):
             )
             h.sequenceStarted(sequence, meta)
 
-            # use TensorStoreWriterMM to display the data in the ndv viewer if writer
-            # is a TiffSequenceWriterMM
+            # TODO: temporary. use TensorStoreWriterMM to display the data in the ndv
+            # viewer if writer is a TiffSequenceWriterMM. Make a DataWrapper.
             if isinstance(h, TiffSequenceWriterMM):
                 self._tiff_seq_handler = h
                 self._handler = TensorStoreWriterMM(driver="zarr", kvstore="memory://")
