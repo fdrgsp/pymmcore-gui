@@ -165,6 +165,7 @@ class MicroManagerGUI(QMainWindow):
             WidgetAction.ILLUM,
             WidgetAction.CONSOLE,
             WidgetAction.EXCEPTION_LOG,
+            WidgetAction.CALCIUM_PLATE_VIEWER
         ],
     }
 
