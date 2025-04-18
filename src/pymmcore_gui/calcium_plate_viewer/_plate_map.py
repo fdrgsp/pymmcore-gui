@@ -228,7 +228,7 @@ class PlateMapWidget(QWidget):
         super().__init__(parent)
 
         self._plate_view = WellPlateView()
-        self._plate_view._change_selection = self._change_selection
+        self._plate_view._change_selection = self._change_selection  # type: ignore
 
         self._clear_selection_btn = QPushButton("Clear Selection")
         self._clear_selection_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -307,7 +307,7 @@ class PlateMapWidget(QWidget):
 
     def clear_condition(self) -> None:
         """Clear the condition of the selected wells."""
-        wells: tuple[tuple[int, int]] = self._plate_view.selectedIndices()
+        wells: tuple[tuple[int, int], ...] = self._plate_view.selectedIndices()
         for well in wells:
             r, c = well
             self._plate_view.setWellColor(r, c, None)

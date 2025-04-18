@@ -397,7 +397,7 @@ show_config_wizard = WidgetActionInfo(
 show_calcium_plate = WidgetActionInfo(
     key=WidgetAction.CALCIUM_PLATE_VIEWER,
     icon="mdi:calcium",
-    create_widget=open_calcium_plate_viewer,
+    create_widget=open_calcium_plate_viewer,  # type: ignore
     dock_area=None,
     checkable=False,
 )

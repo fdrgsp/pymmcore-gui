@@ -473,7 +473,7 @@ def create_stimulation_mask(stimulation_file: str) -> np.ndarray:
 
     # check if the image is already a binary mask
     if np.unique(blue_img).size == 2:
-        return blue_img  # type: ignore
+        return blue_img
 
     # apply Gaussian Blur to reduce noise
     blur = filters.gaussian(blue_img, sigma=2)
@@ -494,7 +494,7 @@ def create_stimulation_mask(stimulation_file: str) -> np.ndarray:
     # final closing with a larger structuring element
     final_mask = morphology.closing(eroded, selem_large)
 
-    return final_mask.astype(np.uint8)  # type: ignore
+    return final_mask.astype(np.uint8)
 
 
 def get_overlap_roi_with_stimulated_area(
@@ -514,4 +514,4 @@ def get_overlap_roi_with_stimulated_area(
     # count overlapping pixels (logical AND operation)
     overlapping_pixels = np.count_nonzero(roi_mask & stimulation_mask)
 
-    return overlapping_pixels / cell_pixels
+    return overlapping_pixels / cell_pixels  # type: ignore

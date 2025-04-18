@@ -844,7 +844,7 @@ class CalciumPlateViewer(QMainWindow):
         for f in Path(self._labels_path).iterdir():
             name = f.name.replace(f.suffix, "")
             if pos_name and pos_name in f.name and name.endswith(f"_{pos_idx}"):
-                return tifffile.imread(f)  # type: ignore
+                return tifffile.imread(f)
         return None
 
     def _on_fov_double_click(self) -> None:
