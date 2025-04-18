@@ -95,6 +95,7 @@ allow-direct-references = true
 # same as console_scripts entry point
 [project.scripts]
 mmgui = "pymmcore_gui._app:main"
+pv = "pymmcore_gui._app:calcium_plate_viewer"
 
 [project.urls]
 homepage = "https://github.com/tlambert03/pymmcore-gui"
