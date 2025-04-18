@@ -860,13 +860,16 @@ class CalciumPlateViewer(QMainWindow):
 
         data = self._datastore.isel(p=value.pos_idx)
 
-        # TODO: fix me, I do not work!
         viewer = ArrayViewer(data)
+        viewer._viewer_model.show_roi_button = False
+        viewer._viewer_model.show_3d_button = False
         wdg = cast("QWidget", viewer.widget())
-        wdg.setParent(self)
+        wdg.setParent(self._fov_table)
         wdg.setWindowTitle(value.fov.name or f"Position {value.pos_idx}")
         wdg.setWindowFlag(Qt.WindowType.Dialog)
         viewer.show()
+
+        self.s = viewer
 
     def _update_single_wells_graphs_combo(
         self,
