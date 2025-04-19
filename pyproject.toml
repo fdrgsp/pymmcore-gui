@@ -53,11 +53,6 @@ dependencies = [
     "pydantic<2.11.0",
     "pyfirmata2",
     "slack_bolt",
-    "scikit-image",
-    "cellpose",
-    "matplotlib",
-    "mplcursors",
-    "oasis-deconv!=0.2.1",
     # "tensorstore!=0.1.72",
 ]
 
@@ -95,7 +90,6 @@ allow-direct-references = true
 # same as console_scripts entry point
 [project.scripts]
 mmgui = "pymmcore_gui._app:main"
-pv = "pymmcore_gui._app:calcium_plate_viewer"
 
 [project.urls]
 homepage = "https://github.com/tlambert03/pymmcore-gui"

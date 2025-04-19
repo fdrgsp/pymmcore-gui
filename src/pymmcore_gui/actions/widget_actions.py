@@ -231,13 +231,6 @@ def create_config_wizard(parent: QWidget) -> pmmw.ConfigWizard:
     return ConfigWizard(config_file=config_file, core=mmcore, parent=parent)
 
 
-def open_calcium_plate_viewer(parent: QWidget) -> None:
-    """Open the Calcium Plate Viewer widget."""
-    from pymmcore_gui._app import calcium_plate_viewer
-
-    return calcium_plate_viewer()
-
-
 # ######################## WidgetAction Enum #########################
 
 
@@ -390,14 +383,6 @@ show_config_wizard = WidgetActionInfo(
     key=WidgetAction.CONFIG_WIZARD,
     icon="mdi:cog",
     create_widget=create_config_wizard,
-    dock_area=None,
-    checkable=False,
-)
-
-show_calcium_plate = WidgetActionInfo(
-    key=WidgetAction.CALCIUM_PLATE_VIEWER,
-    icon="mdi:calcium",
-    create_widget=open_calcium_plate_viewer,  # type: ignore
     dock_area=None,
     checkable=False,
 )

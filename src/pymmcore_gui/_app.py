@@ -17,7 +17,6 @@ from superqt.utils import WorkerBase
 
 from pymmcore_gui import __version__
 from pymmcore_gui._main_window import ICON, MicroManagerGUI
-from pymmcore_gui.calcium_plate_viewer import CalciumPlateViewer
 from pymmcore_gui.settings import Settings
 
 if TYPE_CHECKING:
@@ -133,20 +132,6 @@ def main() -> QCoreApplication:
     # I also tried retaining a global app reference within this module, but that led
     # to consistent segfaults for reasons I don't understand.
     return app
-
-
-def calcium_plate_viewer() -> None:
-    """Open the Calcium Plate Viewer."""
-    from fonticon_mdi6 import MDI6
-    from qtpy.QtGui import QIcon
-    from superqt.fonticon import icon
-
-    app = QApplication([])
-    app.setWindowIcon(QIcon(icon(MDI6.view_comfy, color="#00FF00")))
-    pl = CalciumPlateViewer()
-    pl.show()
-    _install_excepthook()
-    app.exec()
 
 
 # ------------------- Custom excepthook -------------------
