@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import tifffile
+import useq
 from fonticon_mdi6 import MDI6
 from oasis.functions import deconvolve
 from qtpy.QtCore import QSize, Signal
@@ -33,6 +34,7 @@ from superqt.utils import create_worker
 from tqdm import tqdm
 
 from ._logger import LOGGER
+from ._to_csv import _save_to_csv
 from ._util import (
     COND1,
     COND2,
@@ -302,7 +304,7 @@ class _AnalyseCalciumTraces(QWidget):
             _connect={
                 "yielded": self._show_and_log_error,
                 "finished": self._on_worker_finished,
-                "errored": self._on_worker_finished,
+                "errored": self._on_worker_errored,
             },
         )
 
@@ -509,6 +511,15 @@ class _AnalyseCalciumTraces(QWidget):
             self._plate_viewer._analysis_data = self._analysis_data
             self._plate_viewer._analysis_files_path = self._analysis_path.value()
 
+            # update the graphs with the new data
+            if self._plate_viewer._tab.currentIndex() == 1:
+                self._plate_viewer._on_tab_changed(1)
+                for gh in self._plate_viewer.SW_GRAPHS:
+                    gh._on_combo_changed(gh._combo.currentText())
+
+        # save the analysis data to a JSON file
+        _save_to_csv(self._analysis_path.value(), self._analysis_data)
+
         # show a message box if there are failed labels
         if self._failed_labels:
             msg = (
@@ -516,6 +527,13 @@ class _AnalyseCalciumTraces(QWidget):
                 + "\n".join(self._failed_labels)
             )
             self._show_and_log_error(msg)
+
+    def _on_worker_errored(self) -> None:
+        """Called when the worker encounters an error."""
+        LOGGER.info("Extraction of traces terminated with an error.")
+        self._enable(True)
+        self._elapsed_timer.stop()
+        self._cancel_waiting_bar.stop()
 
     def _update_progress_label(self, time_str: str) -> None:
         """Update the progress label with elapsed time."""

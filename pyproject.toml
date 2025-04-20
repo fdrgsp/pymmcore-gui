@@ -58,6 +58,7 @@ dependencies = [
     "matplotlib",
     "mplcursors",
     "oasis-deconv!=0.2.1",
+    "pandas"
     # "tensorstore!=0.1.72",
 ]
 
