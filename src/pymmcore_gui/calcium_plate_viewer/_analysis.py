@@ -789,7 +789,7 @@ class _AnalyseCalciumTraces(QWidget):
         elapsed_time_list: list[float],
     ) -> None:
         """Process individual ROI traces."""
-        # calculate the mean trace for the roi
+        # get the data for the current label
         masked_data = data[:, label_mask]
 
         # get the size of the roi in µm or px if µm is not available
