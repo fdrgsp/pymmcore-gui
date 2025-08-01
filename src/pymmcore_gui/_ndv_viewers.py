@@ -1,22 +1,31 @@
 from __future__ import annotations
 
+import sys
 import warnings
-from typing import TYPE_CHECKING, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    TypeGuard,
+    cast,
+)
 from weakref import WeakSet, WeakValueDictionary
 
 import ndv
+import numpy as np
 import useq
-from pymmcore_plus.mda.handlers import TensorStoreHandler
+from ndv.models import DataWrapper
+from pymmcore_plus.mda.handlers import ImageSequenceWriter, TensorStoreHandler
+from pymmcore_plus.mda.handlers._5d_writer_base import _5DWriterBase
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtWidgets import QWidget
+from PyQt6Ads import CDockWidget
 
-from pymmcore_gui._qt.QtAds import CDockWidget
-from pymmcore_gui._qt.QtCore import QObject, QTimer, Signal
-from pymmcore_gui._qt.QtWidgets import QWidget
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
 
-    import numpy as np
+    from collections.abc import Hashable, Iterator, Mapping, Sequence
+
     from ndv.models._array_display_model import (
         IndexMap,  # pyright: ignore[reportPrivateImportUsage]
     )
@@ -42,9 +51,9 @@ class NDVViewersManager(QObject):
         The CMMCorePlus instance.
     """
 
-    mdaViewerCreated = Signal(ndv.ArrayViewer, useq.MDASequence)
-    previewViewerCreated = Signal(CDockWidget)
-    viewerDestroyed = Signal(str)
+    mdaViewerCreated = pyqtSignal(ndv.ArrayViewer, useq.MDASequence)
+    previewViewerCreated = pyqtSignal(CDockWidget)
+    viewerDestroyed = pyqtSignal(str)
 
     def __init__(self, parent: QWidget, mmcore: CMMCorePlus):
         super().__init__(parent)
@@ -96,11 +105,15 @@ class NDVViewersManager(QObject):
         self._is_mda_running = True
 
         self._own_handler = self._handler = None
-        if handlers := self._mmc.mda.get_output_handlers():
+        handlers = self._mmc.mda.get_output_handlers()
+        # if someone else (the MDAWidget) has created a handler for this sequence
+        # and it is not saved as an ImageSequenceWriter, we use that handler.
+        if handlers and not isinstance(handlers[0], ImageSequenceWriter):
             # someone else has created a handler for this sequence
             self._handler = handlers[0]
         else:
-            # if it does not exist, create a new TensorStoreHandler
+            # if it does not exist or is a ImageSequenceWriter,
+            # create a new TensorStoreHandler
             self._own_handler = TensorStoreHandler(driver="zarr", kvstore="memory://")
             self._own_handler.reset(sequence)
 
@@ -125,6 +138,8 @@ class NDVViewersManager(QObject):
             if isinstance(handler, TensorStoreHandler):
                 # TODO: temporary. maybe create the DataWrapper for the handlers
                 viewer.data = handler.store
+            elif isinstance(handler, _5DWriterBase):
+                viewer.data = _OME5DWrapper(handler)
             else:
                 warnings.warn(
                     f"don't know how to show data of type {type(handler)}",
@@ -169,18 +184,7 @@ class NDVViewersManager(QObject):
             preview = NDVPreview(mmcore=self._mmc)
             if not isinstance((parent := self.parent()), QWidget):
                 parent = None  # pragma: no cover
-
-            # this is a hacky workaround:
-            # Calling CDockWidget('title', parent) is deprecated
-            # It is preferred to instantiate with a CDockManager.
-            # parent will almost always be the MainWindow that dock_manager
-            # (and in reality, will never be None)
-            if dm := getattr(parent, "dock_manager", None):
-                dw = CDockWidget(dm, "Preview", parent)
-            else:  # pragma: no cover
-                dw = CDockWidget("Preview", parent)
-
-            self._current_image_preview = dw
+            self._current_image_preview = dw = CDockWidget("Preview", parent)
             self._preview_dock_widgets.add(dw)
             dw.setWidget(preview)
             dw.setFeature(dw.DockWidgetFeature.DockWidgetFloatable, False)
@@ -222,3 +226,63 @@ class NDVViewersManager(QObject):
                 if preview._get_core_dtype_shape() != preview.dtype_shape:
                     preview.detach()
                     self._current_image_preview = None
+
+
+# --------------------------------------------------------------------------------
+# this could be improved.  Just a quick Datawrapper for the pymmcore-plus 5D writer
+# indexing and isel is particularly ugly at the moment.  TODO...
+
+class _OME5DWrapper(DataWrapper["_5DWriterBase"]):
+    @classmethod
+    def supports(cls, obj: Any) -> TypeGuard[_5DWriterBase]:
+        if "pymmcore_plus.mda" in sys.modules:
+            from pymmcore_plus.mda.handlers._5d_writer_base import _5DWriterBase
+
+            return isinstance(obj, _5DWriterBase)
+        return False
+
+    @property
+    def dims(self) -> tuple[Hashable, ...]:
+        """Return the dimension labels for the data."""
+        if not self.data.current_sequence:
+            return ()
+        return (*tuple(self.data.current_sequence.sizes), "y", "x")
+
+    @property
+    def coords(self) -> Mapping[Hashable, Sequence]:
+        """Return the coordinates for the data."""
+        if not self.data.current_sequence or not self.data.position_arrays:
+            return {}
+        coords: dict[Hashable, Sequence] = {
+            dim: range(size) for dim, size in self.data.current_sequence.sizes.items()
+        }
+        ary = next(iter(self.data.position_arrays.values()))
+        coords.update({"y": range(ary.shape[-2]), "x": range(ary.shape[-1])})
+        return coords
+
+    @property
+    def dtype(self) -> np.dtype:
+        """Return the dtype for the data."""
+        try:
+            return self.data.position_arrays["p0"].dtype
+        except Exception:
+            return super().dtype
+
+    def isel(self, index: Mapping[int, int | slice]) -> np.ndarray:
+        # oh lord look away.
+        # this is a mess, partially caused by the ndv slice/model
+
+        idx = [index.get(k, slice(None)) for k in range(len(self.dims))]
+        try:
+            pidx = self.dims.index("p")
+        except ValueError:
+            pidx = 0
+
+        _pcoord: int | slice = index[pidx]
+        pcoord: int = _pcoord.start if isinstance(_pcoord, slice) else _pcoord
+
+        del idx[pidx]
+        key = self.data.get_position_key(pcoord)
+        data = self.data.position_arrays[key][tuple(idx)]
+        # add back position dimension
+        return np.expand_dims(data, axis=pidx)
