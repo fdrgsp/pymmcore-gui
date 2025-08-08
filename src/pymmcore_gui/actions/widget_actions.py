@@ -154,9 +154,9 @@ def create_config_wizard(parent: QWidget) -> pmmw.ConfigWizard:
 
 def create_stage_explorer_widget(parent: QWidget) -> pmmw.StageExplorer:
     """Create the Stage Explorer widget."""
-    from pymmcore_widgets import StageExplorer
+    from pymmcore_gui.widgets._stage_explorer import MMStageExplorer
 
-    return StageExplorer(parent=parent, mmcore=_get_core(parent))
+    return MMStageExplorer(parent=parent, mmcore=_get_core(parent))
 
 
 # ######################## WidgetAction Enum #########################
