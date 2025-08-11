@@ -51,9 +51,6 @@ class MMStageExplorer(StageExplorer):
         if not positions:
             return
 
-        from rich import print
-        print(positions)
-
         self.rois_to_positions.emit(positions)
 
         return positions
