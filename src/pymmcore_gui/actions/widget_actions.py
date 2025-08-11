@@ -11,11 +11,13 @@ from pymmcore_gui._qt.QtAds import CDockWidget, DockWidgetArea, SideBarLocation
 from pymmcore_gui._qt.QtCore import Qt
 from pymmcore_gui._qt.QtGui import QAction
 from pymmcore_gui._qt.QtWidgets import QDialog, QVBoxLayout, QWidget
+from pymmcore_gui.widgets._stage_explorer import MMStageExplorer
 
 from ._action_info import ActionKey, WidgetActionInfo, _ensure_isinstance
 
 if TYPE_CHECKING:
     import pymmcore_widgets as pmmw
+    import useq
 
     from pymmcore_gui._main_window import MicroManagerGUI
     from pymmcore_gui._qt.QtCore import QObject
@@ -102,7 +104,16 @@ def create_mda_widget(parent: QWidget) -> pmmw.MDAWidget:
     # from pymmcore_gui.widgets import _MDAWidget
     from pymmcore_widgets import MDAWidget
 
-    return MDAWidget(parent=parent, mmcore=_get_core(parent))
+    mda_widget = MDAWidget(parent=parent, mmcore=_get_core(parent))
+
+    # Check if MMStageExplorer exists and connect the signal
+    main_window = _get_mm_main_window(parent)
+    if main_window:
+        stage_exp = main_window.get_widget(WidgetAction.STAGE_CONTROL, create=False)
+        if stage_exp and isinstance(stage_exp, MMStageExplorer):
+            stage_exp.rois_to_positions.connect(mda_widget.stage_positions.setValue)
+
+    return mda_widget
 
 
 def create_camera_roi(parent: QWidget) -> pmmw.CameraRoiWidget:
@@ -154,9 +165,18 @@ def create_config_wizard(parent: QWidget) -> pmmw.ConfigWizard:
 
 def create_stage_explorer_widget(parent: QWidget) -> pmmw.StageExplorer:
     """Create the Stage Explorer widget."""
-    from pymmcore_gui.widgets._stage_explorer import MMStageExplorer
+    stage_explorer = MMStageExplorer(parent=parent, mmcore=_get_core(parent))
 
-    return MMStageExplorer(parent=parent, mmcore=_get_core(parent))
+    # connect the signal to update MDAWidget
+    def _handle_rois_to_positions(positions: list[useq.AbsolutePosition]) -> None:
+        main_window = _get_mm_main_window(parent)
+        if main_window:
+            mda_widget = main_window.get_widget(WidgetAction.MDA_WIDGET, create=False)
+            if mda_widget:
+                mda_widget.stage_positions.setValue(positions)
+
+    stage_explorer.rois_to_positions.connect(_handle_rois_to_positions)
+    return stage_explorer
 
 
 # ######################## WidgetAction Enum #########################
