@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Annotated, TypeVar, cast
 
@@ -101,17 +102,17 @@ def create_install_widgets(parent: QWidget) -> QDialog:
 
 def create_mda_widget(parent: QWidget) -> pmmw.MDAWidget:
     """Create the MDA widget."""
-    # from pymmcore_gui.widgets import _MDAWidget
     from pymmcore_widgets import MDAWidget
 
     mda_widget = MDAWidget(parent=parent, mmcore=_get_core(parent))
 
-    # Check if MMStageExplorer exists and connect the signal
+    # check if MMStageExplorer exists and connect the signal
     main_window = _get_mm_main_window(parent)
     if main_window:
-        stage_exp = main_window.get_widget(WidgetAction.STAGE_CONTROL, create=False)
-        if stage_exp and isinstance(stage_exp, MMStageExplorer):
-            stage_exp.rois_to_positions.connect(mda_widget.stage_positions.setValue)
+        with contextlib.suppress(KeyError):
+            stage_exp = main_window.get_widget(WidgetAction.STAGE_CONTROL, create=False)
+            if stage_exp and isinstance(stage_exp, MMStageExplorer):
+                stage_exp.rois_to_positions.connect(mda_widget.stage_positions.setValue)
 
     return mda_widget
 
@@ -171,9 +172,10 @@ def create_stage_explorer_widget(parent: QWidget) -> pmmw.StageExplorer:
     def _handle_rois_to_positions(positions: list[useq.AbsolutePosition]) -> None:
         main_window = _get_mm_main_window(parent)
         if main_window:
-            mda_widget = main_window.get_widget(WidgetAction.MDA_WIDGET, create=False)
-            if mda_widget:
-                mda_widget.stage_positions.setValue(positions)
+            with contextlib.suppress(KeyError):
+                mda_wdg = main_window.get_widget(WidgetAction.MDA_WIDGET, create=False)
+                if mda_wdg:
+                    mda_wdg.stage_positions.setValue(positions)
 
     stage_explorer.rois_to_positions.connect(_handle_rois_to_positions)
     return stage_explorer
