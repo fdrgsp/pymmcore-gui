@@ -1,19 +1,25 @@
 from __future__ import annotations
 
 import warnings
-from typing import TYPE_CHECKING, cast
+from typing import (
+    TYPE_CHECKING,
+    cast,
+)
 from weakref import WeakSet, WeakValueDictionary
 
 import ndv
 import useq
-from pymmcore_plus.mda.handlers import TensorStoreHandler
+from pymmcore_plus.mda.handlers import ImageSequenceWriter, TensorStoreHandler
+from pymmcore_plus.mda.handlers._5d_writer_base import _5DWriterBase
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtWidgets import QWidget
+from PyQt6Ads import CDockWidget
 
-from pymmcore_gui._qt.QtAds import CDockWidget
-from pymmcore_gui._qt.QtCore import QObject, QTimer, Signal
-from pymmcore_gui._qt.QtWidgets import QWidget
+from pymmcore_gui._ndv_wrappers import _OME5DWrapper
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
 
 if TYPE_CHECKING:
+
     from collections.abc import Iterator
 
     import numpy as np
@@ -42,9 +48,9 @@ class NDVViewersManager(QObject):
         The CMMCorePlus instance.
     """
 
-    mdaViewerCreated = Signal(ndv.ArrayViewer, useq.MDASequence)
-    previewViewerCreated = Signal(CDockWidget)
-    viewerDestroyed = Signal(str)
+    mdaViewerCreated = pyqtSignal(ndv.ArrayViewer, useq.MDASequence)
+    previewViewerCreated = pyqtSignal(CDockWidget)
+    viewerDestroyed = pyqtSignal(str)
 
     def __init__(self, parent: QWidget, mmcore: CMMCorePlus):
         super().__init__(parent)
@@ -96,11 +102,15 @@ class NDVViewersManager(QObject):
         self._is_mda_running = True
 
         self._own_handler = self._handler = None
-        if handlers := self._mmc.mda.get_output_handlers():
+        handlers = self._mmc.mda.get_output_handlers()
+        # if someone else (the MDAWidget) has created a handler for this sequence
+        # and it is not saved as an ImageSequenceWriter, we use that handler.
+        if handlers and not isinstance(handlers[0], ImageSequenceWriter):
             # someone else has created a handler for this sequence
             self._handler = handlers[0]
         else:
-            # if it does not exist, create a new TensorStoreHandler
+            # if it does not exist or is a ImageSequenceWriter,
+            # create a new TensorStoreHandler
             self._own_handler = TensorStoreHandler(driver="zarr", kvstore="memory://")
             self._own_handler.reset(sequence)
 
@@ -123,8 +133,9 @@ class NDVViewersManager(QObject):
         if viewer.data_wrapper is None:
             handler = self._handler or self._own_handler
             if isinstance(handler, TensorStoreHandler):
-                # TODO: temporary. maybe create the DataWrapper for the handlers
                 viewer.data = handler.store
+            elif isinstance(handler, _5DWriterBase):
+                viewer.data = _OME5DWrapper(handler)
             else:
                 warnings.warn(
                     f"don't know how to show data of type {type(handler)}",
