@@ -16,9 +16,9 @@ from typing import TYPE_CHECKING
 import ndv
 import useq
 from pymmcore_plus import CMMCorePlus
-from pymmcore_plus.mda.handlers import OMETiffWriter
+from pymmcore_plus.mda.handlers import OMEWriterHandler
 
-from pymmcore_gui._ndv_wrappers import _OME5DWrapper
+from pymmcore_gui._ndv_wrappers import TiffWriterWrapper, ZarrWriterWrapper
 
 if TYPE_CHECKING:
     from typing import TypeAlias
@@ -27,8 +27,8 @@ if TYPE_CHECKING:
 
 
 # backend = "acquire-zarr"
-# backend = "tensorstore"
-backend = "tiff"
+backend = "tensorstore"
+# backend = "tiff"
 
 suffix = ".ome.zarr" if backend != "tiff" else ".ome.tiff"
 tmp_dir = Path(f"/Users/fdrgsp/Desktop/t/data{suffix}")
@@ -41,22 +41,21 @@ mmc = CMMCorePlus.instance()
 mmc.loadSystemConfiguration("/Users/fdrgsp/Desktop/test_config.cfg")
 
 
-# handler = OMEWriterHandler(
-#     path=str(tmp_dir),
-#     backend=backend,
-#     overwrite=True,
-# )
-handler = OMETiffWriter(str(tmp_dir))
+handler = OMEWriterHandler(
+    path=str(tmp_dir),
+    backend=backend,
+    overwrite=True,
+)
 
 
 mmc.mda.run(seq, output=handler)
 
 
-# wrapper = NGFFWriterWrapper(handler)
-wrapper = _OME5DWrapper(handler)
+wrapper = (
+    TiffWriterWrapper(handler) if backend == "tiff" else ZarrWriterWrapper(handler)
+)
 
-# # print(wrapper.data)
-# # print(wrapper.data.dtype)
-# # print(wrapper.data.shape)
-# ndv.imshow(wrapper)
+print(wrapper.data)
+print(wrapper.dtype)
+print(wrapper.sizes())
 ndv.imshow(wrapper)

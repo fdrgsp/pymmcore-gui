@@ -15,7 +15,7 @@ from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QWidget
 from PyQt6Ads import CDockWidget
 
-from pymmcore_gui._ndv_wrappers import _OME5DWrapper
+# from pymmcore_gui._ndv_wrappers import _OME5DWrapper
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
 
 if TYPE_CHECKING:
@@ -134,8 +134,8 @@ class NDVViewersManager(QObject):
             handler = self._handler or self._own_handler
             if isinstance(handler, TensorStoreHandler):
                 viewer.data = handler.store
-            elif isinstance(handler, _5DWriterBase):
-                viewer.data = _OME5DWrapper(handler)
+            # elif isinstance(handler, _5DWriterBase):
+            #     viewer.data = _OME5DWrapper(handler)
             else:
                 warnings.warn(
                     f"don't know how to show data of type {type(handler)}",

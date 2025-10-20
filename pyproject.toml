@@ -49,7 +49,7 @@ dependencies = [
     "superqt[cmap,iconify]>=0.7.1",
     "tifffile>=2024.12.12",
     "tqdm>=4.67.1",
-    "zarr>=2.18.3,<3.0",
+    "zarr>=3.0",
     "sentry-sdk>=2.20.0",
 ]
 

@@ -1,0 +1,314 @@
+from __future__ import annotations
+
+from abc import abstractmethod
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, TypeGuard
+
+import numpy as np
+from ndv import DataWrapper
+
+if TYPE_CHECKING:
+    from collections.abc import Hashable, Mapping, Sequence
+    from typing import TypeAlias
+
+    from pymmcore_plus.mda.handlers import OMEWriterHandler
+
+    Index: TypeAlias = int | slice
+
+
+class OMEWriterWrapperBase(DataWrapper["OMEWriterHandler"]):
+    """Base class for OMEWriterHandler wrappers.
+
+    Provides common functionality for wrapping OMEWriterHandler objects
+    from pymmcore-plus that write data using the ome-writers library.
+
+    This base class handles:
+    - Path management
+    - Dimension and coordinate tracking
+    - Common interface implementation
+
+    Subclasses must implement:
+    - _update_structure(): Update dims, coords, shape, dtype from disk
+    - isel(): Data slicing implementation
+    """
+
+    def __init__(self, data: OMEWriterHandler) -> None:
+        """Initialize the wrapper.
+
+        Parameters
+        ----------
+        data : OMEWriterHandler
+            The OMEWriterHandler instance that has written or is writing data.
+        """
+        super().__init__(data)
+
+        # Store path
+        self._path = Path(self._data.path)
+
+        # Initialize dimension and coordinate info
+        self._dims: tuple[Hashable, ...] = ()
+        self._coords: Mapping[Hashable, Sequence] = {}
+        self._dtype: np.dtype | None = None
+        self._shape: tuple[int, ...] = ()
+
+        # Initial structure update
+        self._update_structure()
+
+    @abstractmethod
+    def _update_structure(self) -> None:
+        """Update the internal structure by reading from disk.
+
+        Must update: _dims, _coords, _dtype, _shape
+        """
+
+    def _update_zarr_structure(self) -> None:
+        """Update structure for Zarr backend."""
+        if not self._path.exists():
+            # No data written yet - set empty structure
+            self._dims = ()
+            self._coords = {}
+            self._shape = ()
+            return
+
+        import zarr
+
+        self._zarr_group = zarr.open(str(self._path), mode="r")
+
+        # Get the list of position arrays
+        position_keys = sorted(
+            [k for k in self._zarr_group.keys() if k.isdigit()],
+            key=int,
+        )
+
+        if not position_keys:
+            self._dims = ()
+            self._coords = {}
+            self._shape = ()
+            return
+
+        # Get shape from first position
+        first_array = self._zarr_group[position_keys[0]]
+        self._dtype = np.dtype(first_array.dtype)
+
+        # Shape is (n_positions, ...) + first_array.shape
+        n_positions = len(position_keys)
+        self._shape = (n_positions, *tuple(first_array.shape))
+
+        # Determine dimension names from array shape and OME metadata
+        # Try to get dimension info from OME metadata
+        try:
+            ome_attrs = dict(self._zarr_group.attrs)
+            if "ome" in ome_attrs and "multiscales" in ome_attrs["ome"]:
+                multiscales = ome_attrs["ome"]["multiscales"][0]
+                if "axes" in multiscales:
+                    axes = multiscales["axes"]
+                    # axes should match the first_array dimensions
+                    dim_names = tuple([ax["name"] for ax in axes])
+                    # Prepend 'p' for position
+                    self._dims = ("p", *dim_names)
+                else:
+                    self._dims = self._default_dims(self._shape)
+            else:
+                self._dims = self._default_dims(self._shape)
+        except Exception:
+            self._dims = self._default_dims(self._shape)
+
+        # Create coordinates
+        self._coords = {
+            dim: range(size) for dim, size in zip(self._dims, self._shape, strict=True)
+        }
+
+    def _update_tiff_structure(self) -> None:
+        """Update structure for TIFF backend."""
+        if not self._path.exists():
+            # No data written yet
+            self._dims = ()
+            self._coords = {}
+            self._shape = ()
+            return
+
+        import tifffile
+
+        with tifffile.TiffFile(str(self._path)) as tif:
+            if not tif.series:
+                self._dims = ()
+                self._coords = {}
+                self._shape = ()
+                return
+
+            series = tif.series[0]
+            self._shape = tuple(series.shape)
+            self._dtype = np.dtype(series.dtype)
+
+            # For TIFF, try to parse OME-XML to get dimension order
+            if tif.is_ome and tif.ome_metadata:
+                # Parse dimension order from OME-XML
+                # Common orders: TZCYX, ZCYX, CYX, etc.
+                try:
+                    # This is a simplified approach - we'll use default names
+                    self._dims = self._default_dims(self._shape)
+                except Exception:
+                    self._dims = self._default_dims(self._shape)
+            else:
+                self._dims = self._default_dims(self._shape)
+
+        # Create coordinates
+        self._coords = {
+            dim: range(size) for dim, size in zip(self._dims, self._shape, strict=True)
+        }
+
+    @staticmethod
+    def _default_dims(shape: tuple[int, ...]) -> tuple[str, ...]:
+        """Generate default dimension names based on shape length."""
+        ndim = len(shape)
+        if ndim == 0:
+            return ()
+        elif ndim == 1:
+            return ("x",)
+        elif ndim == 2:
+            return ("y", "x")
+        elif ndim == 3:
+            # Could be (c, y, x) or (z, y, x) - assume channels
+            return ("c", "y", "x")
+        elif ndim == 4:
+            # (p, c, y, x) or (c, z, y, x)
+            return ("p", "c", "y", "x")
+        elif ndim == 5:
+            # (p, c, z, y, x)
+            return ("p", "c", "z", "y", "x")
+        elif ndim == 6:
+            # (t, p, c, z, y, x)
+            return ("t", "p", "c", "z", "y", "x")
+        else:
+            # Fallback to generic dimension names
+            return tuple(f"dim_{i}" for i in range(ndim))
+
+    @classmethod
+    def supports(cls, obj: Any) -> TypeGuard[OMEWriterHandler]:
+        """Check if this wrapper supports the given object.
+
+        Parameters
+        ----------
+        obj : Any
+            The object to check.
+
+        Returns
+        -------
+        bool
+            True if obj is an OMEWriterHandler instance.
+        """
+        # Check if it's an OMEWriterHandler by checking for the required attributes
+        return (
+            hasattr(obj, "path")
+            and hasattr(obj, "backend")
+            and hasattr(obj, "stream")
+            and hasattr(obj, "sequenceStarted")
+        )
+
+    @property
+    def dims(self) -> tuple[Hashable, ...]:
+        """Return the dimension labels for the data."""
+        self._update_structure()  # Update in case new data was written
+        return self._dims
+
+    @property
+    def coords(self) -> Mapping[Hashable, Sequence]:
+        """Return the coordinates for the data."""
+        self._update_structure()  # Update in case new data was written
+        return self._coords
+
+    @property
+    def dtype(self) -> np.dtype:
+        """Return the dtype of the data."""
+        self._update_structure()  # Update in case new data was written
+        if self._dtype is None:
+            return np.dtype("uint8")  # Default fallback
+        return self._dtype
+
+    def isel(self, index: Mapping[int, int | slice]) -> np.ndarray:
+        """Select data by dimension index.
+
+        Parameters
+        ----------
+        index : Mapping[int, int | slice]
+            Mapping from dimension index to integer or slice.
+
+        Returns
+        -------
+        np.ndarray
+            The selected data as a numpy array.
+        """
+        self._update_structure()  # Update in case new data was written
+
+        if not self._shape:
+            return np.array([])
+
+        # Convert index mapping to tuple
+        idx = tuple(index.get(k, slice(None)) for k in range(len(self._dims)))
+
+        if self._is_zarr:
+            return self._isel_zarr(idx)
+        else:
+            return self._isel_tiff(idx)
+
+    def _isel_zarr(self, idx: tuple[int | slice, ...]) -> np.ndarray:
+        """Select data from Zarr storage."""
+        import zarr
+
+        if self._zarr_group is None:
+            self._zarr_group = zarr.open(str(self._path), mode="r")
+
+        # First index is position
+        position_idx = idx[0] if idx else slice(None)
+        rest_idx = idx[1:] if len(idx) > 1 else ()
+
+        # Get position keys
+        position_keys = sorted(
+            [k for k in self._zarr_group.keys() if k.isdigit()],
+            key=int,
+        )
+
+        if isinstance(position_idx, int):
+            # Single position
+            if position_idx < 0:
+                position_idx = len(position_keys) + position_idx
+            arr = self._zarr_group[position_keys[position_idx]]
+            return np.asarray(arr[rest_idx])
+        else:
+            # Slice of positions
+            selected_keys = position_keys[position_idx]
+            if not selected_keys:
+                return np.array([])
+
+            # Load each position and stack
+            arrays = [
+                np.asarray(self._zarr_group[key][rest_idx]) for key in selected_keys
+            ]
+            return np.stack(arrays, axis=0)
+
+    def _isel_tiff(self, idx: tuple[int | slice, ...]) -> np.ndarray:
+        """Select data from TIFF storage."""
+        import tifffile
+
+        # Load the entire TIFF into memory if not already loaded
+        if self._tiff_data is None:
+            with tifffile.TiffFile(str(self._path)) as tif:
+                self._tiff_data = tif.asarray()
+
+        return np.asarray(self._tiff_data[idx])
+
+    def refresh(self) -> None:
+        """Manually refresh the data structure.
+
+        This forces a re-read of the file structure from disk, which is useful
+        when data is being written in real-time and you want to see the latest
+        state.
+
+        This will also clear any cached data (for TIFF files) and reset the
+        zarr group handle.
+        """
+        self._tiff_data = None
+        self._zarr_group = None
+        self._update_structure()
+        # Emit signal that dimensions may have changed
+        self.dims_changed.emit()
