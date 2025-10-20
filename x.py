@@ -14,6 +14,7 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pymmcore_plus import CMMCorePlus
 import numpy as np
 from ome_writers import Dimension, create_stream
 from pymmcore_plus.mda.handlers import OMEWriterHandler
@@ -35,7 +36,8 @@ backend = "acquire-zarr"
 # tmp_dir = Path(
 #     tempfile.mkdtemp(suffix=".ome.zarr" if backend != "tiff" else ".ome.tiff")
 # )
-tmp_dir = Path("/Users/fdrgsp/Desktop/t")
+suffix = ".ome.zarr" if backend != "tiff" else ".ome.tiff"
+tmp_dir = Path(f"/Users/fdrgsp/Desktop/t/data{suffix}")
 print(f"Writing data to: {tmp_dir}")
 
 
@@ -64,6 +66,8 @@ handler = OMEWriterHandler(
     overwrite=True,
 )
 
+
+
 # Write data for each position
 print("Writing data to OME-Zarr...")
 for pos in range(num_positions):
@@ -76,35 +80,35 @@ for pos in range(num_positions):
         overwrite=True,
     )
 
-    # Generate unique data for this position
-    data = np.random.randint(0, 65535, size=(nt, nc, nz, ny, nx), dtype=np.uint16)
-    # Add a constant offset to make positions visually distinct
-    data = data + pos * 10000
+#     # Generate unique data for this position
+#     data = np.random.randint(0, 65535, size=(nt, nc, nz, ny, nx), dtype=np.uint16)
+#     # Add a constant offset to make positions visually distinct
+#     data = data + pos * 10000
 
-    # Write data frame by frame (as would happen during acquisition)
-    for t in range(nt):
-        for c in range(nc):
-            for z in range(nz):
-                frame = data[t, c, z]
-                stream.append(frame)
+#     # Write data frame by frame (as would happen during acquisition)
+#     for t in range(nt):
+#         for c in range(nc):
+#             for z in range(nz):
+#                 frame = data[t, c, z]
+#                 stream.append(frame)
 
-    # Flush the stream to ensure all data is written
-    stream.flush()
-    print(f"  Position {pos} written successfully!")
+#     # Flush the stream to ensure all data is written
+#     stream.flush()
+#     print(f"  Position {pos} written successfully!")
 
-from rich import print
-print(list(tmp_dir.iterdir()))
+# from rich import print
+# print(list(tmp_dir.iterdir()))
 
-print("\nAll positions written successfully!")
+# print("\nAll positions written successfully!")
 
-# Now visualize the data using ndv
-print("\nVisualizing with ndv...")
+# # Now visualize the data using ndv
+# print("\nVisualizing with ndv...")
 
-# The OMEWriterWrapper will automatically detect the handler
-# and provide read access to the data
-wrapper = NGFFWriterWrapper(handler)
+# # The OMEWriterWrapper will automatically detect the handler
+# # and provide read access to the data
+# wrapper = NGFFWriterWrapper(handler)
 
-# print(wrapper.data)
-# print(wrapper.data.dtype)
-# print(wrapper.data.shape)
-# ndv.imshow(wrapper)
+# # print(wrapper.data)
+# # print(wrapper.data.dtype)
+# # print(wrapper.data.shape)
+# # ndv.imshow(wrapper)
