@@ -44,6 +44,7 @@ class WidgetAction(ActionKey):
     EXCEPTION_LOG = "pymmcore_gui.exception_log"
     STAGE_CONTROL = "pymmcore_gui.stage_control_widget"
     CONFIG_WIZARD = "pymmcore_gui.hardware_config_wizard"
+    STAGE_EXPLORER = "pymmcore_gui.stage_explorer_widget"
 
 
 # ######################## Functions that create widgets #########################
@@ -108,7 +109,9 @@ def create_mda_widget(parent: QWidget) -> pmmw.MDAWidget:
     main_window = _get_mm_main_window(parent)
     if main_window:
         with contextlib.suppress(KeyError):
-            stage_exp = main_window.get_widget(WidgetAction.STAGE_CONTROL, create=False)
+            stage_exp = main_window.get_widget(
+                WidgetAction.STAGE_EXPLORER, create=False
+            )
             if stage_exp and isinstance(stage_exp, pmmw.StageExplorer):
                 _setup_stage_mda_connections(stage_exp, mda_widget)
 
@@ -293,7 +296,7 @@ show_config_wizard = WidgetActionInfo(
 )
 
 stage_explorer_widget = WidgetActionInfo(
-    key=WidgetAction.STAGE_CONTROL,
+    key=WidgetAction.STAGE_EXPLORER,
     text="Stage Explorer",
     icon="mdi:map-search",
     create_widget=create_stage_explorer_widget,
