@@ -182,6 +182,7 @@ minversion = "8.0"
 testpaths = ["tests"]
 filterwarnings = [
     "error",
+    "ignore::requests.exceptions.RequestsDependencyWarning",
     "ignore:Parsing dates involving a day of month::ipykernel",
     "ignore:Failed to disconnect:RuntimeWarning",
     "ignore:Error fetching icon::superqt",
