@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import functools
 import warnings
 from typing import TYPE_CHECKING, Any, cast
 from weakref import WeakSet, WeakValueDictionary
@@ -129,27 +128,7 @@ class NDVViewersManager(QObject):
         mda_ev.frameReady.connect(self._on_frame_ready)
         mda_ev.sequenceFinished.connect(self._on_sequence_finished)
 
-        # Monkeypatch run_mda to always inject a default writer when none is
-        # provided.  This ensures the MDA runner manages the handler lifecycle
-        # (prepare / _writeframe / cleanup) so the viewer manager only needs to
-        # create the viewer on the main thread.
-        self._patch_run_mda()
-
         parent.destroyed.connect(self._cleanup)
-
-    def _patch_run_mda(self) -> None:
-        """Wrap CMMCorePlus.run_mda to inject a default OME writer."""
-        original = self._mmc.run_mda
-
-        @functools.wraps(original)
-        def _run_mda_with_default_writer(
-            events: Any, *, output: Any = None, **kwargs: Any
-        ) -> Any:
-            if output is None:
-                output = OMERunnerHandler.in_tempdir()
-            return original(events, output=output, **kwargs)
-
-        self._mmc.run_mda = _run_mda_with_default_writer  #  type: ignore
 
     def _cleanup(self, obj: QObject | None = None) -> None:
         self._active_mda_viewer = None

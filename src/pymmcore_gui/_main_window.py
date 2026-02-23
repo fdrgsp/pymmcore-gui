@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import functools
 import logging
 import sys
 from collections.abc import Callable
 from contextlib import suppress
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 from weakref import WeakValueDictionary
 
 from pymmcore_plus import CMMCorePlus
+from pymmcore_plus.mda.handlers._runner_handler import OMERunnerHandler
 from pymmcore_widgets import ConfigWizard
 from superqt import QIconifyIcon
 
@@ -175,6 +177,12 @@ class MicroManagerGUI(QMainWindow):
             self._on_system_config_loaded
         )
 
+        # Patch mda.run to always inject a default OMERunnerHandler when no
+        # output is provided.  This ensures that every MDA acquisition gets a
+        # handler whose stream the viewer manager can display, regardless of
+        # whether the caller uses mmcore.run_mda() or mmcore.mda.run().
+        self._patch_mda_run()
+
         self._viewers_manager = NDVViewersManager(self, self._mmc)
         self._viewers_manager.mdaViewerCreated.connect(self._on_mda_viewer_created)
         self._viewers_manager.previewViewerCreated.connect(self._on_previewer_created)
@@ -233,6 +241,22 @@ class MicroManagerGUI(QMainWindow):
         self._central_dock_area = self.dock_manager.setCentralWidget(self._central)
 
         # QTimer.singleShot(0, self._restore_state)
+
+    # --------------------- Private helpers -------------------
+
+    def _patch_mda_run(self) -> None:
+        """Wrap ``mmcore.mda.run`` to inject a default OME writer."""
+        original = self._mmc.mda.run
+
+        @functools.wraps(original)
+        def _run_with_default_writer(
+            events: Any, *, output: Any = None, **kwargs: Any
+        ) -> Any:
+            if output is None:
+                output = OMERunnerHandler.in_tempdir()
+            return original(events, output=output, **kwargs)
+
+        self._mmc.mda.run = _run_with_default_writer  # type: ignore[method-assign]
 
     # --------------------- Properties ----------------------
 
