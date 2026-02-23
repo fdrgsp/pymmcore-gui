@@ -7,7 +7,7 @@ from superqt import QIconifyIcon
 
 from pymmcore_gui._qt.QtCore import Signal
 from pymmcore_gui._qt.QtGui import QAction
-from pymmcore_gui._qt.QtWidgets import QMessageBox
+from pymmcore_gui._qt.QtWidgets import QMessageBox, QToolBar
 
 if TYPE_CHECKING:
     import useq
@@ -30,7 +30,7 @@ class _StageExplorer(StageExplorer):
         if scan_idx + 1 < len(actions):
             tb.insertAction(actions[scan_idx + 1], self._send_to_mda_action)
         else:
-            tb.addAction(self._send_to_mda_action)
+            QToolBar.addAction(tb, self._send_to_mda_action)
 
     def _on_send_to_mda(self) -> None:
         z_pos = self._mmc.getZPosition()
