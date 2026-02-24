@@ -254,7 +254,12 @@ class MicroManagerGUI(QMainWindow):
         ) -> Any:
             if output is None:
                 output = OMERunnerHandler.in_tempdir()
-            return original(events, output=output, **kwargs)
+            try:
+                return original(events, output=output, **kwargs)
+            except Exception as exc:
+                from pymmcore_gui._qt.QtCore import QTimer
+
+                QTimer.singleShot(0, lambda e=exc: self._on_exception(e))
 
         self._mmc.mda.run = _run_with_default_writer  # type: ignore[method-assign]
 
