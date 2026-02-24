@@ -130,6 +130,11 @@ class NDVViewersManager(QObject):
 
         parent.destroyed.connect(self._cleanup)
 
+    @property
+    def active_viewer(self) -> ndv.ArrayViewer | None:
+        """The currently active ndv viewer, or None if no viewer is active."""
+        return self._active_mda_viewer
+
     def _cleanup(self, obj: QObject | None = None) -> None:
         self._active_mda_viewer = None
         self._handler = None

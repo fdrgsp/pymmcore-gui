@@ -275,6 +275,10 @@ class MicroManagerGUI(QMainWindow):
     def mmcore(self) -> CMMCorePlus:
         return self._mmc
 
+    @property
+    def viewer_manager(self) -> NDVViewersManager:
+        return self._viewers_manager
+
     # --------------------- Public methods ----------------------
     # -----------------------------------------------------------
 
