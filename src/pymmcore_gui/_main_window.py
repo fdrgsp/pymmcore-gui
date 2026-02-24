@@ -46,7 +46,6 @@ if TYPE_CHECKING:
         ConfigWizard,
         GroupPresetTableWidget,
         InstallWidget,
-        MDAWidget,
         PixelConfigurationWidget,
         PropertyBrowser,
     )
@@ -54,8 +53,10 @@ if TYPE_CHECKING:
 
     from pymmcore_gui.widgets._about_widget import AboutWidget
     from pymmcore_gui.widgets._exception_log import ExceptionLog
+    from pymmcore_gui.widgets._mda_widget import _MDAWidget
     from pymmcore_gui.widgets._mm_console import MMConsole
     from pymmcore_gui.widgets._stage_control import StagesControlWidget
+    from pymmcore_gui.widgets._stage_explorer import _StageExplorer
 
     from ._app import MMQApplication
 
@@ -311,13 +312,15 @@ class MicroManagerGUI(QMainWindow):
     @overload
     def get_widget(self, key: Literal[WidgetAction.INSTALL_DEVICES], create: bool = ...) -> InstallWidget: ...  # noqa: E501
     @overload
-    def get_widget(self, key: Literal[WidgetAction.MDA_WIDGET], create: bool = ...) -> MDAWidget: ...  # noqa: E501
+    def get_widget(self, key: Literal[WidgetAction.MDA_WIDGET], create: bool = ...) -> _MDAWidget: ...  # noqa: E501
     @overload
     def get_widget(self, key: Literal[WidgetAction.PIXEL_CONFIG], create: bool = ...) -> PixelConfigurationWidget: ...  # noqa: E501
     @overload
     def get_widget(self, key: Literal[WidgetAction.PROP_BROWSER], create: bool = ...) -> PropertyBrowser: ...  # noqa: E501
     @overload
     def get_widget(self, key: Literal[WidgetAction.STAGE_CONTROL], create: bool = ...) -> StagesControlWidget: ...  # noqa: E501
+    @overload
+    def get_widget(self, key: Literal[WidgetAction.STAGE_EXPLORER], create: bool = ...) -> _StageExplorer: ...  # noqa: E501
     # generic fallback
     @overload
     def get_widget(self, key: str, create: bool = ...) -> QWidget: ...
