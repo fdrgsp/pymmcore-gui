@@ -157,7 +157,7 @@ class NDVViewersManager(QObject):
 
     def _create_ndv_viewer(self, sequence: MDASequence) -> ndv.ArrayViewer:
         """Create a new ndv viewer with no data."""
-        ndv_viewer = ndv.ArrayViewer()
+        ndv_viewer = ndv.ArrayViewer(channel_axis="c", channel_mode="composite")
         self._seq_viewers[str(sequence.uid)] = ndv_viewer
         self.mdaViewerCreated.emit(ndv_viewer, sequence)
         return ndv_viewer
