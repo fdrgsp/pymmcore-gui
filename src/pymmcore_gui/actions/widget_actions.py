@@ -6,20 +6,18 @@ import contextlib
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Annotated, TypeVar, cast
 
+import pymmcore_widgets as pmmw
 from pymmcore_plus import CMMCorePlus
+from pymmcore_widgets import StageExplorer
 
 from pymmcore_gui._qt.QtAds import CDockWidget, DockWidgetArea, SideBarLocation
 from pymmcore_gui._qt.QtCore import Qt
 from pymmcore_gui._qt.QtGui import QAction
 from pymmcore_gui._qt.QtWidgets import QDialog, QVBoxLayout, QWidget
-from pymmcore_gui.widgets._mda_widget import _MDAWidget
-from pymmcore_gui.widgets._stage_explorer import _StageExplorer
 
 from ._action_info import ActionKey, WidgetActionInfo, _ensure_isinstance
 
 if TYPE_CHECKING:
-    import pymmcore_widgets as pmmw
-
     from pymmcore_gui._main_window import MicroManagerGUI
     from pymmcore_gui._qt.QtCore import QObject
     from pymmcore_gui.widgets._exception_log import ExceptionLog
@@ -101,9 +99,11 @@ def create_install_widgets(parent: QWidget) -> QDialog:
     return wdg
 
 
-def create_mda_widget(parent: QWidget) -> _MDAWidget:
+def create_mda_widget(parent: QWidget) -> pmmw.MDAWidget:
     """Create the MDA widget."""
-    mda_widget = _MDAWidget(parent=parent, mmcore=_get_core(parent))
+    from pymmcore_widgets import MDAWidget
+
+    mda_widget = MDAWidget(parent=parent, mmcore=_get_core(parent))
 
     main_window = _get_mm_main_window(parent)
     if main_window:
@@ -111,7 +111,7 @@ def create_mda_widget(parent: QWidget) -> _MDAWidget:
             stage_exp = main_window.get_widget(
                 WidgetAction.STAGE_EXPLORER, create=False
             )
-            if stage_exp and isinstance(stage_exp, _StageExplorer):
+            if stage_exp and isinstance(stage_exp, pmmw.StageExplorer):
                 _setup_stage_mda_connections(stage_exp, mda_widget)
 
     return mda_widget
@@ -164,15 +164,15 @@ def create_config_wizard(parent: QWidget) -> pmmw.ConfigWizard:
     return ConfigWizard(config_file=config_file, core=mmcore, parent=parent)
 
 
-def create_stage_explorer_widget(parent: QWidget) -> _StageExplorer:
+def create_stage_explorer_widget(parent: QWidget) -> pmmw.StageExplorer:
     """Create the Stage Explorer widget."""
-    stage_explorer = _StageExplorer(parent=parent, mmcore=_get_core(parent))
+    stage_explorer = StageExplorer(parent=parent, mmcore=_get_core(parent))
 
     main_window = _get_mm_main_window(parent)
     if main_window:
         with contextlib.suppress(KeyError):
             mda_wdg = main_window.get_widget(WidgetAction.MDA_WIDGET, create=False)
-            if mda_wdg and isinstance(mda_wdg, _MDAWidget):
+            if mda_wdg and isinstance(mda_wdg, pmmw.MDAWidget):
                 _setup_stage_mda_connections(stage_explorer, mda_wdg)
 
     return stage_explorer
@@ -302,10 +302,10 @@ stage_explorer_widget = WidgetActionInfo(
 
 
 def _setup_stage_mda_connections(
-    stage_explorer: _StageExplorer | None = None,
-    mda_widget: _MDAWidget | None = None,
+    stage_explorer: pmmw.StageExplorer | None = None,
+    mda_widget: pmmw.MDAWidget | None = None,
 ) -> None:
-    """Helper function to connect the StageExplorer ROIs to the _MDAWidget positions."""
+    """Helper function to connect the StageExplorer ROIs to the MDAWidget positions."""
     if stage_explorer is None or mda_widget is None:
         return
 

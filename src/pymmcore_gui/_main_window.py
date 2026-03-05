@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-import functools
 import logging
 import sys
 from collections.abc import Callable
 from contextlib import suppress
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast, overload
+from typing import TYPE_CHECKING, Literal, cast, overload
 from weakref import WeakValueDictionary
 
 from pymmcore_plus import CMMCorePlus
-from pymmcore_plus.mda.handlers._runner_handler import OMERunnerHandler
 from pymmcore_widgets import ConfigWizard
 from superqt import QIconifyIcon
 
@@ -46,17 +44,17 @@ if TYPE_CHECKING:
         ConfigWizard,
         GroupPresetTableWidget,
         InstallWidget,
+        MDAWidget,
         PixelConfigurationWidget,
         PropertyBrowser,
+        StageExplorer,
     )
     from useq import MDASequence
 
     from pymmcore_gui.widgets._about_widget import AboutWidget
     from pymmcore_gui.widgets._exception_log import ExceptionLog
-    from pymmcore_gui.widgets._mda_widget import _MDAWidget
     from pymmcore_gui.widgets._mm_console import MMConsole
     from pymmcore_gui.widgets._stage_control import StagesControlWidget
-    from pymmcore_gui.widgets._stage_explorer import _StageExplorer
 
     from ._app import MMQApplication
 
@@ -178,12 +176,6 @@ class MicroManagerGUI(QMainWindow):
             self._on_system_config_loaded
         )
 
-        # Patch mda.run to always inject a default OMERunnerHandler when no
-        # output is provided.  This ensures that every MDA acquisition gets a
-        # handler whose stream the viewer manager can display, regardless of
-        # whether the caller uses mmcore.run_mda() or mmcore.mda.run().
-        self._patch_mda_run()
-
         self._viewers_manager = NDVViewersManager(self, self._mmc)
         self._viewers_manager.mdaViewerCreated.connect(self._on_mda_viewer_created)
         self._viewers_manager.previewViewerCreated.connect(self._on_previewer_created)
@@ -243,27 +235,6 @@ class MicroManagerGUI(QMainWindow):
 
         # QTimer.singleShot(0, self._restore_state)
 
-    # --------------------- Private helpers -------------------
-
-    def _patch_mda_run(self) -> None:
-        """Wrap ``mmcore.mda.run`` to inject a default OME writer."""
-        original = self._mmc.mda.run
-
-        @functools.wraps(original)
-        def _run_with_default_writer(
-            events: Any, *, output: Any = None, **kwargs: Any
-        ) -> Any:
-            if output is None:
-                output = OMERunnerHandler.in_tempdir()
-            try:
-                return original(events, output=output, **kwargs)
-            except Exception as exc:
-                from pymmcore_gui._qt.QtCore import QTimer
-
-                QTimer.singleShot(0, lambda e=exc: self._on_exception(e))
-
-        self._mmc.mda.run = _run_with_default_writer  # type: ignore[method-assign]
-
     # --------------------- Properties ----------------------
 
     @property
@@ -316,7 +287,7 @@ class MicroManagerGUI(QMainWindow):
     @overload
     def get_widget(self, key: Literal[WidgetAction.INSTALL_DEVICES], create: bool = ...) -> InstallWidget: ...  # noqa: E501
     @overload
-    def get_widget(self, key: Literal[WidgetAction.MDA_WIDGET], create: bool = ...) -> _MDAWidget: ...  # noqa: E501
+    def get_widget(self, key: Literal[WidgetAction.MDA_WIDGET], create: bool = ...) -> MDAWidget: ...  # noqa: E501
     @overload
     def get_widget(self, key: Literal[WidgetAction.PIXEL_CONFIG], create: bool = ...) -> PixelConfigurationWidget: ...  # noqa: E501
     @overload
@@ -324,7 +295,7 @@ class MicroManagerGUI(QMainWindow):
     @overload
     def get_widget(self, key: Literal[WidgetAction.STAGE_CONTROL], create: bool = ...) -> StagesControlWidget: ...  # noqa: E501
     @overload
-    def get_widget(self, key: Literal[WidgetAction.STAGE_EXPLORER], create: bool = ...) -> _StageExplorer: ...  # noqa: E501
+    def get_widget(self, key: Literal[WidgetAction.STAGE_EXPLORER], create: bool = ...) -> StageExplorer: ...  # noqa: E501
     # generic fallback
     @overload
     def get_widget(self, key: str, create: bool = ...) -> QWidget: ...

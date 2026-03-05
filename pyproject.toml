@@ -53,15 +53,15 @@ dependencies = [
     "yaozarrs[io]>=0.2.0",
 ]
 
-[tool.uv]
-override-dependencies = [
-    "ome-writers[tensorstore,tifffile] @ git+https://github.com/fdrgsp/ome-writers@christina",
-    "useq-schema @ git+https://github.com/fdrgsp/useq-schema@christina"
-]
+# [tool.uv]
+# override-dependencies = [
+    # "ome-writers[tensorstore,tifffile] @ git+https://github.com/fdrgsp/ome-writers@christina",
+    # "useq-schema @ git+https://github.com/fdrgsp/useq-schema@christina"
+# ]
 
 [tool.uv.sources]
 pymmcore-widgets = { git = "https://github.com/fdrgsp/pymmcore-widgets", rev = "christina"}
-pymmcore-plus = { git = "https://github.com/fdrgsp/pymmcore-plus", rev = "christina"}
+pymmcore-plus = { git = "https://github.com/fdrgsp/pymmcore-plus"}
 
 # TO USE pymmcore-nano, you need to add pymmcore-nano to dependencies
 # and uncomment the override-dependencies line below
