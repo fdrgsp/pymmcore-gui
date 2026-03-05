@@ -18,6 +18,8 @@ from pymmcore_gui._qt.QtWidgets import QDialog, QVBoxLayout, QWidget
 from ._action_info import ActionKey, WidgetActionInfo, _ensure_isinstance
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from pymmcore_gui._main_window import MicroManagerGUI
     from pymmcore_gui._qt.QtCore import QObject
     from pymmcore_gui.widgets._exception_log import ExceptionLog
@@ -103,7 +105,14 @@ def create_mda_widget(parent: QWidget) -> pmmw.MDAWidget:
     """Create the MDA widget."""
     from pymmcore_widgets import MDAWidget
 
-    mda_widget = MDAWidget(parent=parent, mmcore=_get_core(parent))
+    class _MDAWidget(MDAWidget):
+        def prepare_mda(self) -> bool | str | Path | None:
+            output = super().prepare_mda()
+            if output is None:
+                output = "memory"
+            return output
+
+    mda_widget = _MDAWidget(parent=parent, mmcore=_get_core(parent))
 
     main_window = _get_mm_main_window(parent)
     if main_window:
