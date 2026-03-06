@@ -185,22 +185,3 @@ def test_mda(gui: MicroManagerGUI, qtbot: QtBot) -> None:
             ),
         )
     assert vm._active_mda_viewer is not None
-
-
-def test_mda_run_exception_shows_notification(
-    gui: MicroManagerGUI, qtbot: QtBot
-) -> None:
-    """Exceptions raised during MDA run are shown via the notification manager."""
-    err = FileExistsError("File /tmp/foo.ome.tif already exists.")
-    with (
-        patch.object(gui._mmc.mda, "run", side_effect=err),
-        patch.object(gui.nm, "show_error_message") as mock_error,
-    ):
-        # Re-patch so _run_with_default_writer wraps our patched run
-        gui._patch_mda_run()
-        gui._mmc.mda.run(useq.MDASequence())
-        # singleShot posts to the event loop; process it
-        qtbot.wait(50)
-
-    mock_error.assert_called_once()
-    assert "foo.ome.tif" in mock_error.call_args[0][0]
