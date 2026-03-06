@@ -93,6 +93,10 @@ class NDVViewersManager(QObject):
         We grab the first handler in the list of output handlers, or create a new
         TensorStoreHandler if none exist. Then we create a new ndv viewer and show it.
         """
+        # if the gui is in live mode, stop it to avoid conflicts.
+        if self._mmc.isSequenceRunning():
+            self._mmc.stopSequenceAcquisition()
+
         self._is_mda_running = True
 
         self._own_handler = self._handler = None
