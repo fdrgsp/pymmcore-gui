@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 
 import pytest
 import useq
-from pymmcore_plus.mda.handlers._runner_handler import OMERunnerHandler
 from useq import MDASequence
 
 from pymmcore_gui._ndv_viewers import NDVViewersManager
@@ -31,7 +30,6 @@ def test_viewers_manager(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
             channels=["DAPI", "FITC"],  # pyright: ignore
             z_plan=useq.ZRangeAround(range=4, step=1),
         ),
-        output=OMERunnerHandler.in_tempdir(),
     )
     assert len(manager) == 1
 

@@ -182,6 +182,8 @@ filterwarnings = [
     "ignore:Failed to disconnect:RuntimeWarning",
     "ignore:Error fetching icon::superqt",
     "ignore:.*`do_history`.*::ipykernel",
+    "ignore:The 'pymmcore_plus.mda.handlers' module is deprecated",
+    "ignore:`get_output_handlers` is deprecated.*:DeprecationWarning",
 ]
 
 # https://coverage.readthedocs.io/
