@@ -40,7 +40,13 @@ class NDVPreview(ImagePreviewBase):
             self._setup_viewer()
         if self._buffer is not None:
             self._buffer.append(data)
-            self._viewer.display_model.current_index.update({0: len(self._buffer) - 1})
+            # # Emit data_changed to tell the viewer to re-fetch texture data.
+            # # RingBuffer only emits `resized` (-> dims_changed) when the length
+            # # changes, but after it is full the length stays constant and no
+            # # signal fires.  Even on the first append the viewer may skip the
+            # # request because `current_index` doesn't change.
+            # if (wrapper := self._viewer.data_wrapper) is not None:
+            #     wrapper.data_changed.emit()
             if self.process_events_on_update:
                 QApplication.processEvents()
 
