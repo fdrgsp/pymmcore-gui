@@ -11,7 +11,7 @@ from pymmcore_plus.mda.handlers import TensorStoreHandler
 from pymmcore_gui._qt.QtAds import CDockWidget
 from pymmcore_gui._qt.QtCore import QObject, QTimer, Signal
 from pymmcore_gui._qt.QtWidgets import QWidget
-from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
+from pymmcore_gui.widgets.image_preview._ndv_preview_no_buffer import NDVPreviewNoBuffer
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -161,7 +161,7 @@ class NDVViewersManager(QObject):
 
     def _create_ndv_viewer(self, sequence: MDASequence) -> ndv.ArrayViewer:
         """Create a new ndv viewer with no data."""
-        ndv_viewer = ndv.ArrayViewer(channel_axis="c", channel_mode="composite")
+        ndv_viewer = ndv.ArrayViewer()
         self._seq_viewers[str(sequence.uid)] = ndv_viewer
         self.mdaViewerCreated.emit(ndv_viewer, sequence)
         return ndv_viewer
@@ -170,7 +170,7 @@ class NDVViewersManager(QObject):
         """Create or show the image preview widget, return True if created."""
         preview = None
         if self._current_image_preview is None:
-            preview = NDVPreview(mmcore=self._mmc)
+            preview = NDVPreviewNoBuffer(mmcore=self._mmc)
             if not isinstance((parent := self.parent()), QWidget):
                 parent = None  # pragma: no cover
 
