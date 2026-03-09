@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     import rendercanvas.qt
     from pymmcore_plus import CMMCorePlus
 
-    class QRenderWidget(rendercanvas.qt.QRenderWidget, QWidget): ...  # pyright: ignore [reportIncompatibleMethodOverride]
+    class QRenderWidget(rendercanvas.qt.QRenderWidget, QWidget): ...  # pyright: ignore
 
 
 class NDVPreview(ImagePreviewBase):
@@ -74,9 +74,7 @@ class NDVPreview(ImagePreviewBase):
             return  # pragma: no cover
 
         self._core_dtype = core_dtype
-        self._viewer.data = self._buffer = RingBuffer(
-            max_capacity=1, dtype=core_dtype
-        )
+        self._viewer.data = self._buffer = RingBuffer(max_capacity=1, dtype=core_dtype)
         self._viewer.display_model.visible_axes = (1, 2)
         if core_dtype[1][-1] == 3:  # RGB
             self._viewer.display_model.channel_axis = 3
