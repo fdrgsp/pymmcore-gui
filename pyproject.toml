@@ -54,6 +54,7 @@ dependencies = [
 
 [tool.uv.sources]
 pymmcore-widgets = { git = "https://github.com/fdrgsp/pymmcore-widgets", rev = "christina"}
+pymmcore-plus = { git = "https://github.com/pymmcore-plus/pymmcore-plus", rev = "main"}
 
 # TO USE pymmcore-nano, you need to add pymmcore-nano to dependencies
 # and uncomment the override-dependencies line below
