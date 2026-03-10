@@ -44,7 +44,7 @@
 
 
 
-- `ndv` tab titles are not visible on Windows when not selected; fix contrast.
+- `ndv` tab titles are not visible on Windows when not selected; fix contrast.  ✅
 
 
 
