@@ -1692,8 +1692,8 @@ wheels = [
 
 [[package]]
 name = "ome-writers"
-version = "0.3.0"
-source = { registry = "https://pypi.org/simple" }
+version = "0.3.1.dev5+g71dc49126"
+source = { git = "https://github.com/pymmcore-plus/ome-writers?rev=main#71dc49126c933a5fa3b1fc01c5a6b07ebc98eb9e" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -1701,10 +1701,6 @@ dependencies = [
     { name = "pydantic-extra-types" },
     { name = "typing-extensions" },
     { name = "yaozarrs", extra = ["io"] },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/64/d1/bfe5e6020cf72a95031bbc0a43b175ee54fb388dba2ad28641f84c31ecb9/ome_writers-0.3.0.tar.gz", hash = "sha256:52497f55ab473aa1c8b44d66d3382b552fabe7197823f37d522a8bcc57e03acc", size = 159039, upload-time = "2026-02-27T16:15:09.64Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/2e/f0/20a63db89681f73f1dc3d75d720322d9b92e3ee6df2a9861b24371d52e16/ome_writers-0.3.0-py3-none-any.whl", hash = "sha256:6f74c825170d4d76059bcf592c2086cd1fdaaf0ee9d6e2bc3004a8d7b7384500", size = 90478, upload-time = "2026-02-27T16:15:08.321Z" },
 ]
 
 [package.optional-dependencies]
@@ -2405,9 +2401,9 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "ndv", extras = ["vispy"], specifier = ">=0.5.0rc4" },
-    { name = "ome-writers", extras = ["tensorstore", "tifffile"], specifier = ">=0.3.0" },
+    { name = "ome-writers", extras = ["tensorstore", "tifffile"], git = "https://github.com/pymmcore-plus/ome-writers?rev=main" },
     { name = "pydantic-settings", specifier = ">=2.7.1" },
-    { name = "pymmcore-plus", extras = ["cli"], git = "https://github.com/pymmcore-plus/pymmcore-plus?rev=main" },
+    { name = "pymmcore-plus", extras = ["cli"], specifier = ">=0.18.0rc1" },
     { name = "pymmcore-widgets", git = "https://github.com/fdrgsp/pymmcore-widgets?rev=christina" },
     { name = "pyqt6", specifier = "==6.9.1" },
     { name = "pyqt6ads", specifier = "==4.4.0.post2" },
@@ -2454,8 +2450,8 @@ test = [
 
 [[package]]
 name = "pymmcore-plus"
-version = "0.18.0rc2.dev4+g6cfac8dc2"
-source = { git = "https://github.com/pymmcore-plus/pymmcore-plus?rev=main#6cfac8dc2e11e85411c643fbd3378f84245c76e3" }
+version = "0.18.0rc1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -2468,6 +2464,10 @@ dependencies = [
     { name = "typer" },
     { name = "typing-extensions" },
     { name = "useq-schema" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9b/93/697059b58a5aea37a2e9786cbc860c0ea955f7f7b5b1ead12de50a9d3f5e/pymmcore_plus-0.18.0rc1.tar.gz", hash = "sha256:a43055366d8ba108f1add7ed5cc73630fa41cd03a288da23cdb1dc44234582a0", size = 284466, upload-time = "2026-03-03T20:36:35.129Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/90/f5/191e8b038a4c56cfb7f258f69afea8efa53233d372b3c332a08b817a1c13/pymmcore_plus-0.18.0rc1-py3-none-any.whl", hash = "sha256:5fec73c2c44539648492a46338a084c9315470a25b971cb23fd4d51d8801beb1", size = 254391, upload-time = "2026-03-03T20:36:33.443Z" },
 ]
 
 [package.optional-dependencies]
