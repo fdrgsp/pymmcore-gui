@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pymmcore_widgets import StageExplorer as _StageExplorer
+from pymmcore_widgets import StageExplorer
 from pymmcore_widgets.control._rois.roi_manager import GRAY
 from superqt import QIconifyIcon
 
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
 
 
-class StageExplorer(_StageExplorer):
+class _StageExplorer(StageExplorer):
     """StageExplorer subclass with 'Send to MDA' support."""
 
     sendToMDARequested = Signal(list, bool)
