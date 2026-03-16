@@ -13,19 +13,23 @@ from __future__ import annotations
 import sys
 from enum import Enum, auto
 
-from PyQt6.QtCore import (
+from PyQt6.QtCore import (  # type: ignore[attr-defined]
     QEasingCurve,
+    QEvent,
+    QObject,
     QPropertyAnimation,
     QRect,
     Qt,
-    pyqtProperty,
+    pyqtProperty,  # pyright: ignore
 )
 from PyQt6.QtGui import (
     QColor,
+    QEnterEvent,
     QFont,
     QFontDatabase,
     QFontMetrics,
     QPainter,
+    QPaintEvent,
     QPalette,
     QPen,
 )
@@ -129,6 +133,7 @@ def mono_font(size_pt: float = 10, weight: int = QFont.Weight.Normal) -> QFont:
 
 
 def make_dark_palette() -> QPalette:
+    """Build a dark QPalette matching the mockup color tokens."""
     p = QPalette()
 
     p.setColor(QPalette.ColorRole.Window, Clr.BG_BASE)
@@ -184,9 +189,10 @@ class MicroscopeStyle(QProxyStyle):
     def pixelMetric(
         self,
         metric: QStyle.PixelMetric,
-        option: QStyleOption = None,
-        widget: QWidget = None,
+        option: QStyleOption | None = None,
+        widget: QWidget | None = None,
     ) -> int:
+        """Override a few pixel metrics for our theme."""
         if metric == QStyle.PixelMetric.PM_ScrollBarExtent:
             return 5
         if metric == QStyle.PixelMetric.PM_ScrollBarSliderMin:
@@ -200,11 +206,11 @@ class MicroscopeStyle(QProxyStyle):
     def drawPrimitive(
         self,
         element: QStyle.PrimitiveElement,
-        option: QStyleOption,
-        painter: QPainter,
-        widget: QWidget = None,
+        option: QStyleOption | None,
+        painter: QPainter | None,
+        widget: QWidget | None = None,
     ) -> None:
-        # Suppress default frame drawing for scroll areas — we draw our own
+        """Suppress default frame drawing for scroll areas."""
         if element == QStyle.PrimitiveElement.PE_Frame and isinstance(
             widget, QScrollArea
         ):
@@ -218,6 +224,8 @@ class MicroscopeStyle(QProxyStyle):
 
 
 class DeviceStatus(Enum):
+    """Connection status for the colored indicator dot."""
+
     CONNECTED = auto()
     DISCONNECTED = auto()
     BUSY = auto()
@@ -245,7 +253,7 @@ class CollapsiblePanelHeader(QWidget):
         summary: str = "",
         status: DeviceStatus = DeviceStatus.CONNECTED,
         show_status_dot: bool = True,
-        parent: QWidget = None,
+        parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._title = title
@@ -280,6 +288,7 @@ class CollapsiblePanelHeader(QWidget):
 
     @property
     def expanded(self) -> bool:
+        """Whether the chevron points down (expanded) or right (collapsed)."""
         return self._expanded
 
     @expanded.setter
@@ -292,6 +301,7 @@ class CollapsiblePanelHeader(QWidget):
 
     @property
     def summary(self) -> str:
+        """Short text shown to the right of the title when collapsed."""
         return self._summary
 
     @summary.setter
@@ -301,6 +311,7 @@ class CollapsiblePanelHeader(QWidget):
 
     @property
     def status(self) -> DeviceStatus:
+        """Device status controlling the colored indicator dot."""
         return self._status
 
     @status.setter
@@ -310,17 +321,17 @@ class CollapsiblePanelHeader(QWidget):
 
     # -- Events --
 
-    def enterEvent(self, event) -> None:
+    def enterEvent(self, event: QEnterEvent | None) -> None:  # noqa: D102
         self._hovered = True
         self.update()
 
-    def leaveEvent(self, event) -> None:
+    def leaveEvent(self, a0: QEvent | None) -> None:  # noqa: D102
         self._hovered = False
         self.update()
 
     # -- Painting --
 
-    def paintEvent(self, event) -> None:
+    def paintEvent(self, a0: QPaintEvent | None) -> None:  # noqa: D102
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
@@ -430,7 +441,7 @@ class CollapsiblePanel(QWidget):
         status: DeviceStatus = DeviceStatus.CONNECTED,
         show_status_dot: bool = True,
         expanded: bool = False,
-        parent: QWidget = None,
+        parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
 
@@ -448,7 +459,7 @@ class CollapsiblePanel(QWidget):
             status=status,
             show_status_dot=show_status_dot,
         )
-        self._header.mousePressEvent = self._on_header_click
+        self._header.installEventFilter(self)
         layout.addWidget(self._header)
 
         # Body container
@@ -486,21 +497,24 @@ class CollapsiblePanel(QWidget):
         # panels update in the same frame. Safe because we animate the
         # panel's own fixedHeight — no body-sizeHint chain is involved.
         parent = self.parentWidget()
-        if parent is not None and parent.layout() is not None:
-            parent.layout().activate()
+        if parent is not None and (lay := parent.layout()) is not None:
+            lay.activate()
 
     panelHeight = pyqtProperty(int, _get_panel_height, _set_panel_height)
 
     @property
     def body_layout(self) -> QVBoxLayout:
+        """Layout to add content widgets to."""
         return self._body_layout
 
     @property
     def header(self) -> CollapsiblePanelHeader:
+        """The clickable header widget."""
         return self._header
 
     @property
     def expanded(self) -> bool:
+        """Whether the panel body is visible."""
         return self._expanded
 
     @expanded.setter
@@ -512,10 +526,16 @@ class CollapsiblePanel(QWidget):
         self._animate(val)
 
     def toggle(self) -> None:
+        """Toggle between expanded and collapsed."""
         self.expanded = not self._expanded
 
-    def _on_header_click(self, event) -> None:
-        self.toggle()
+    def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
+        """Catch mouse presses on the header to toggle."""
+        if a0 is self._header and a1 is not None:
+            if a1.type() == QEvent.Type.MouseButtonPress:
+                self.toggle()
+                return True
+        return super().eventFilter(a0, a1)
 
     def _animate(self, expanding: bool) -> None:
         self._anim.stop()
@@ -544,6 +564,13 @@ class CollapsiblePanel(QWidget):
         if not self._expanded:
             self._body.setMaximumHeight(0)
 
+    def paintEvent(self, a0: QPaintEvent | None) -> None:
+        """Draw bottom border (separator between this panel's body and the next)."""
+        p = QPainter(self)
+        p.setPen(QPen(Clr.BORDER_SUBTLE, 1))
+        p.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
+        p.end()
+
 
 # ═══════════════════════════════════════════════════════════════════
 # Placeholder content widgets (just labels for now)
@@ -553,7 +580,12 @@ class CollapsiblePanel(QWidget):
 class PlaceholderContent(QWidget):
     """Simple placeholder showing lines of text to represent panel content."""
 
-    def __init__(self, lines: list[str], height: int = 80, parent: QWidget = None):
+    def __init__(
+        self,
+        lines: list[str],
+        height: int = 80,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -576,7 +608,7 @@ class PlaceholderContent(QWidget):
 class Sidebar(QWidget):
     """Scrollable sidebar containing collapsible panels."""
 
-    def __init__(self, parent: QWidget = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setFixedWidth(SIDEBAR_W)
 
@@ -629,12 +661,12 @@ class Sidebar(QWidget):
         # ── Objective ──
         obj = CollapsiblePanel(
             title="Objective",
-            summary="40× Oil 1.30",
+            summary="40x Oil 1.30",
         )
         obj.body_layout.addWidget(
             PlaceholderContent(
                 [
-                    "[4×] [10×] [20×] [40× Oil] [63×] [100×]",
+                    "[4x] [10x] [20x] [40x Oil] [63x] [100x]",
                     "Pixel size: 0.162 μm",
                 ]
             )
@@ -644,15 +676,15 @@ class Sidebar(QWidget):
         # ── Camera ──
         cam = CollapsiblePanel(
             title="Camera",
-            summary="100 ms · 1×1",
+            summary="100 ms \u00b7 1x1",
         )
         cam.body_layout.addWidget(
             PlaceholderContent(
                 [
                     "Exposure:  100 ms",
                     "Gain:      1.0",
-                    "Binning:   [1×1] [2×2] [4×4]",
-                    "Format:    2048 × 2048 · 16 bit",
+                    "Binning:   [1x1] [2x2] [4x4]",
+                    "Format:    2048 x 2048 \u00b7 16 bit",
                 ]
             )
         )
@@ -677,7 +709,7 @@ class Sidebar(QWidget):
         # ── Histogram ──
         hist = CollapsiblePanel(
             title="Histogram",
-            summary="0 – 4095",
+            summary="0 - 4095",
             show_status_dot=False,
         )
         hist.body_layout.addWidget(
@@ -695,14 +727,14 @@ class Sidebar(QWidget):
         # ── Acquisition ──
         acq = CollapsiblePanel(
             title="Acquisition",
-            summary="Z×50 · T×100",
+            summary="Zx50 \u00b7 Tx100",
             show_status_dot=False,
         )
         acq.body_layout.addWidget(
             PlaceholderContent(
                 [
                     "☑ Z-Stack      50 sl · 0.5 μm",
-                    "☑ Time Series  100 × 30 s",
+                    "☑ Time Series  100 x 30 s",
                     "☐ Tile Scan    —",
                     "☐ Positions    —",
                     "",
@@ -714,7 +746,7 @@ class Sidebar(QWidget):
         )
         self._layout.addWidget(acq)
 
-    def paintEvent(self, event) -> None:
+    def paintEvent(self, a0: QPaintEvent | None) -> None:
         """Draw right border."""
         p = QPainter(self)
         p.setPen(QPen(Clr.BORDER_SUBTLE, 1))
@@ -728,6 +760,8 @@ class Sidebar(QWidget):
 
 
 class MainWindow(QMainWindow):
+    """Top-level window with sidebar + viewport."""
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Microscope Control — Panel Mockup")
@@ -759,6 +793,7 @@ class MainWindow(QMainWindow):
 
 
 def main() -> None:
+    """Launch the mockup application."""
     app = QApplication(sys.argv)
 
     # Apply our style and palette
