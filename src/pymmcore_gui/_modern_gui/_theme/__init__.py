@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from pymmcore_gui._qt.QtGui import QGuiApplication
 from pymmcore_gui._qt.QtWidgets import QApplication
 
 from ._dark import DARK_THEME
@@ -61,7 +62,7 @@ def set_theme(t: Theme) -> None:
     global _current_theme
     _current_theme = t
     app = QApplication.instance()
-    if app is not None:
+    if isinstance(app, QGuiApplication):
         app.setPalette(to_qpalette(t.palette))
 
 

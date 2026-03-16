@@ -15,7 +15,6 @@ import random
 
 from pymmcore_plus import CMMCorePlus
 from pymmcore_plus.experimental.simulate import Line, Point, Rectangle, Sample
-from qtpy.QtWidgets import QApplication
 
 from pymmcore_gui import create_mmgui
 
