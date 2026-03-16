@@ -1,3 +1,4 @@
+# ruff: noqa: D102
 """
 Collapsible Panel Sidebar — Qt Implementation.
 
@@ -16,7 +17,9 @@ from enum import Enum, auto
 from PyQt6.QtCore import (  # type: ignore[attr-defined]
     QEasingCurve,
     QEvent,
+    QMimeData,
     QObject,
+    QPoint,
     QPropertyAnimation,
     QRect,
     Qt,
@@ -24,14 +27,21 @@ from PyQt6.QtCore import (  # type: ignore[attr-defined]
 )
 from PyQt6.QtGui import (
     QColor,
+    QDrag,
+    QDragEnterEvent,
+    QDragLeaveEvent,
+    QDragMoveEvent,
+    QDropEvent,
     QEnterEvent,
     QFont,
     QFontDatabase,
     QFontMetrics,
+    QMouseEvent,
     QPainter,
     QPaintEvent,
     QPalette,
     QPen,
+    QPixmap,
 )
 from PyQt6.QtWidgets import (
     QApplication,
@@ -321,17 +331,17 @@ class CollapsiblePanelHeader(QWidget):
 
     # -- Events --
 
-    def enterEvent(self, event: QEnterEvent | None) -> None:  # noqa: D102
+    def enterEvent(self, event: QEnterEvent | None) -> None:
         self._hovered = True
         self.update()
 
-    def leaveEvent(self, a0: QEvent | None) -> None:  # noqa: D102
+    def leaveEvent(self, a0: QEvent | None) -> None:
         self._hovered = False
         self.update()
 
     # -- Painting --
 
-    def paintEvent(self, a0: QPaintEvent | None) -> None:  # noqa: D102
+    def paintEvent(self, a0: QPaintEvent | None) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
@@ -484,6 +494,11 @@ class CollapsiblePanel(QWidget):
         if expanded:
             self._header.expanded = True
 
+        # Drag state
+        self._drag_start_pos: QPoint | None = None
+        self._drag_started = False
+        self._drag_highlighted = False
+
         self.setSizePolicy(SP_PREFERRED, SP_MAXIMUM)
 
     # -- Animated property: panel's own fixed height --
@@ -530,12 +545,61 @@ class CollapsiblePanel(QWidget):
         self.expanded = not self._expanded
 
     def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
-        """Catch mouse presses on the header to toggle."""
-        if a0 is self._header and a1 is not None:
-            if a1.type() == QEvent.Type.MouseButtonPress:
-                self.toggle()
+        """Handle click-to-toggle and drag-to-reorder on the header."""
+        if a0 is self._header and isinstance(a1, QMouseEvent):
+            etype = a1.type()
+            if etype == QEvent.Type.MouseButtonPress:
+                self._drag_start_pos = a1.position().toPoint()
+                self._drag_started = False
+                return True
+            if etype == QEvent.Type.MouseMove and self._drag_start_pos is not None:
+                pos = a1.position().toPoint()
+                if (
+                    not self._drag_started
+                    and (pos - self._drag_start_pos).manhattanLength()
+                    > QApplication.startDragDistance()
+                ):
+                    self._drag_started = True
+                    self._start_drag()
+                return True
+            if etype == QEvent.Type.MouseButtonRelease:
+                if self._drag_start_pos is not None and not self._drag_started:
+                    self.toggle()
+                self._drag_start_pos = None
+                self._drag_started = False
                 return True
         return super().eventFilter(a0, a1)
+
+    def _start_drag(self) -> None:
+        """Initiate a QDrag for reordering this panel."""
+        content = self.parentWidget()
+        if isinstance(content, SidebarContent):
+            content._drag_source = self
+
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData("application/x-panel-drag", b"")
+        drag.setMimeData(mime)
+
+        # Semi-transparent grab of the header as the drag pixmap
+        raw = self._header.grab()
+        pixmap = QPixmap(raw.size())
+        pixmap.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pixmap)
+        p.setOpacity(0.7)
+        p.drawPixmap(0, 0, raw)
+        p.end()
+        drag.setPixmap(pixmap)
+        if self._drag_start_pos is not None:
+            drag.setHotSpot(self._drag_start_pos)
+
+        drag.exec(Qt.DropAction.MoveAction)
+
+        # Clean up
+        self._drag_start_pos = None
+        self._drag_started = False
+        if isinstance(content, SidebarContent):
+            content._drag_source = None
 
     def _animate(self, expanding: bool) -> None:
         self._anim.stop()
@@ -565,8 +629,10 @@ class CollapsiblePanel(QWidget):
             self._body.setMaximumHeight(0)
 
     def paintEvent(self, a0: QPaintEvent | None) -> None:
-        """Draw bottom border (separator between this panel's body and the next)."""
+        """Draw bottom border and optional drag-hover highlight."""
         p = QPainter(self)
+        if self._drag_highlighted:
+            p.fillRect(self.rect(), QColor(255, 255, 255, 20))
         p.setPen(QPen(Clr.BORDER_SUBTLE, 1))
         p.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
         p.end()
@@ -601,6 +667,132 @@ class PlaceholderContent(QWidget):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# SidebarContent — drag-reorder container
+# ═══════════════════════════════════════════════════════════════════
+
+
+class SidebarContent(QWidget):
+    """Scroll content widget that supports drag-reorder of CollapsiblePanels."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self._drag_source: CollapsiblePanel | None = None
+        self._hover_panel: CollapsiblePanel | None = None
+        self._drop_above = True
+
+        # Indicator line (positioned absolutely, shown during drag)
+        self._drop_line = QFrame(self)
+        self._drop_line.setFixedHeight(3)
+        self._drop_line.setAutoFillBackground(True)
+        line_pal = self._drop_line.palette()
+        line_pal.setColor(QPalette.ColorRole.Window, QColor(255, 255, 255))
+        self._drop_line.setPalette(line_pal)
+        self._drop_line.hide()
+
+    def _panels(self) -> list[CollapsiblePanel]:
+        """Return ordered list of CollapsiblePanel children."""
+        lay = self.layout()
+        if not lay:
+            return []
+        return [
+            w
+            for i in range(lay.count())
+            if (item := lay.itemAt(i)) is not None
+            and isinstance(w := item.widget(), CollapsiblePanel)
+        ]
+
+    def _panel_at_pos(self, pos: QPoint) -> CollapsiblePanel | None:
+        """Find which panel contains the given position."""
+        for panel in self._panels():
+            if panel.geometry().contains(pos):
+                return panel
+        return None
+
+    def _clear_hover(self) -> None:
+        if self._hover_panel is not None:
+            self._hover_panel._drag_highlighted = False
+            self._hover_panel.update()
+            self._hover_panel = None
+        self._drop_line.hide()
+
+    def dragEnterEvent(self, a0: QDragEnterEvent | None) -> None:
+        if a0 is None:
+            return
+        mime = a0.mimeData()
+        if mime is not None and mime.hasFormat("application/x-panel-drag"):
+            a0.acceptProposedAction()
+
+    def dragMoveEvent(self, a0: QDragMoveEvent | None) -> None:
+        if a0 is None:
+            return
+        mime = a0.mimeData()
+        if mime is None or not mime.hasFormat("application/x-panel-drag"):
+            return
+        a0.acceptProposedAction()
+
+        pos = a0.position().toPoint()
+        panel = self._panel_at_pos(pos)
+
+        # Hovering over the source panel or empty space -> hide indicator
+        if panel is None or panel is self._drag_source:
+            self._clear_hover()
+            return
+
+        # Update highlight on the hovered panel
+        if self._hover_panel is not panel:
+            self._clear_hover()
+            self._hover_panel = panel
+            panel._drag_highlighted = True
+            panel.update()
+
+        # Top half -> line above, bottom half -> line below
+        rect = panel.geometry()
+        above = pos.y() < rect.top() + rect.height() // 2
+        self._drop_above = above
+        line_y = rect.top() - 1 if above else rect.bottom()
+        self._drop_line.setGeometry(0, line_y, self.width(), 3)
+        self._drop_line.raise_()
+        self._drop_line.show()
+
+    def dragLeaveEvent(self, a0: QDragLeaveEvent | None) -> None:
+        self._clear_hover()
+
+    def dropEvent(self, a0: QDropEvent | None) -> None:
+        if a0 is None:
+            return
+        mime = a0.mimeData()
+        if mime is None or not mime.hasFormat("application/x-panel-drag"):
+            return
+        a0.acceptProposedAction()
+
+        source = self._drag_source
+        target = self._hover_panel
+        drop_above = self._drop_above
+        self._clear_hover()
+
+        if source is None or target is None or source is target:
+            return
+
+        lay = self.layout()
+        if not isinstance(lay, QVBoxLayout):
+            return
+
+        panels = self._panels()
+        src_idx = panels.index(source)
+        tgt_idx = panels.index(target)
+
+        insert_idx = tgt_idx if drop_above else tgt_idx + 1
+        if src_idx < insert_idx:
+            insert_idx -= 1
+        if src_idx == insert_idx:
+            return
+
+        lay.removeWidget(source)
+        lay.insertWidget(insert_idx, source)
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Sidebar assembly
 # ═══════════════════════════════════════════════════════════════════
 
@@ -613,7 +805,7 @@ class Sidebar(QWidget):
         self.setFixedWidth(SIDEBAR_W)
 
         # Scroll content
-        content = QWidget()
+        content = SidebarContent()
         self._layout = QVBoxLayout(content)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(0)
