@@ -18,7 +18,6 @@ from PyQt6.QtCore import (
     QPropertyAnimation,
     QRect,
     Qt,
-    QTimer,
     pyqtProperty,
 )
 from PyQt6.QtGui import (
@@ -420,12 +419,9 @@ class CollapsiblePanelHeader(QWidget):
 
 
 class CollapsiblePanel(QWidget):
-    """
-    A collapsible panel with an animated body.
+    """A collapsible panel with an animated body."""
 
-    The body widget's maximumHeight is animated between 0 and its
-    sizeHint().height(). Content goes inside `body_layout`.
-    """
+    HEADER_H = CollapsiblePanelHeader.HEADER_HEIGHT
 
     def __init__(
         self,
@@ -457,32 +453,40 @@ class CollapsiblePanel(QWidget):
 
         # Body container
         self._body = QWidget()
-        self._body.setMaximumHeight(0 if not expanded else 16777215)
         self._body_layout = QVBoxLayout(self._body)
         self._body_layout.setContentsMargins(Sp.SM, Sp.XS, Sp.SM, Sp.SM)
         self._body_layout.setSpacing(Sp.SM)
         layout.addWidget(self._body)
 
-        # Animation
-        self._anim = QPropertyAnimation(self._body, b"maximumHeight")
+        # Animation targets the panel's own fixedHeight.
+        # This avoids touching body constraints during animation, sidestepping
+        # layout-propagation glitches through the sizeHint chain.
+        self._anim = QPropertyAnimation(self, b"panelHeight")
         self._anim.setDuration(250)
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.finished.connect(self._on_anim_finished)
+
+        if not expanded:
+            self._body.setMaximumHeight(0)
 
         # Set initial state
         if expanded:
             self._header.expanded = True
-            # Defer measuring content height until layout is done
-            QTimer.singleShot(0, self._snap_open)
 
         self.setSizePolicy(SP_PREFERRED, SP_MAXIMUM)
 
-    def _snap_open(self) -> None:
-        """After layout pass, set max height to content height."""
-        self._body.setMaximumHeight(self._body.sizeHint().height())
+    # -- Animated property: panel's own fixed height --
+
+    def _get_panel_height(self) -> int:
+        return self.height()
+
+    def _set_panel_height(self, h: int) -> None:
+        self.setFixedHeight(h)
+
+    panelHeight = pyqtProperty(int, _get_panel_height, _set_panel_height)
 
     @property
     def body_layout(self) -> QVBoxLayout:
-        """Add content widgets to this layout."""
         return self._body_layout
 
     @property
@@ -509,19 +513,30 @@ class CollapsiblePanel(QWidget):
 
     def _animate(self, expanding: bool) -> None:
         self._anim.stop()
+        current_h = self.height()
 
         if expanding:
-            # Temporarily remove max height to measure content
+            # Unconstrain body so we can measure the natural panel height
             self._body.setMaximumHeight(16777215)
-            target = self._body.sizeHint().height()
-            self._body.setMaximumHeight(0)
-            self._anim.setStartValue(0)
+            target = self.HEADER_H + self._body.sizeHint().height()
+            # Lock at current collapsed height, then animate to target
+            self.setFixedHeight(current_h)
+            self._anim.setStartValue(current_h)
             self._anim.setEndValue(target)
         else:
-            self._anim.setStartValue(self._body.maximumHeight())
-            self._anim.setEndValue(0)
+            # Lock at current expanded height, then animate to header-only
+            self.setFixedHeight(current_h)
+            self._anim.setStartValue(current_h)
+            self._anim.setEndValue(self.HEADER_H)
 
         self._anim.start()
+
+    def _on_anim_finished(self) -> None:
+        # Remove fixed-height constraint so the layout manages us normally
+        self.setMinimumHeight(0)
+        self.setMaximumHeight(16777215)
+        if not self._expanded:
+            self._body.setMaximumHeight(0)
 
 
 # ═══════════════════════════════════════════════════════════════════
