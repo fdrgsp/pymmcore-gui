@@ -482,6 +482,12 @@ class CollapsiblePanel(QWidget):
 
     def _set_panel_height(self, h: int) -> None:
         self.setFixedHeight(h)
+        # Force synchronous parent layout so the scroll area and sibling
+        # panels update in the same frame. Safe because we animate the
+        # panel's own fixedHeight — no body-sizeHint chain is involved.
+        parent = self.parentWidget()
+        if parent is not None and parent.layout() is not None:
+            parent.layout().activate()
 
     panelHeight = pyqtProperty(int, _get_panel_height, _set_panel_height)
 
@@ -764,6 +770,7 @@ def main() -> None:
 
     win = MainWindow()
     win.show()
+    win.resize(900, 500)
     sys.exit(app.exec())
 
 
