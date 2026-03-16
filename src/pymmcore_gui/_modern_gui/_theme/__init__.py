@@ -8,6 +8,7 @@ from pymmcore_gui._qt.QtWidgets import QApplication, QStyle, QToolBar
 
 from ._dark import DARK_THEME
 from ._fonts import mono_font, ui_font
+from ._light import LIGHT_THEME
 from ._qt import color_to_qcolor, to_qpalette
 from ._scaled_view import ScaledThemeView
 from ._style import MicroscopeStyle
@@ -27,6 +28,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DARK_THEME",
+    "LIGHT_THEME",
     "ZOOM_STEPS",
     "Brush",
     "Color",

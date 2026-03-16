@@ -145,4 +145,4 @@ class Theme:
     radius: int = 3
     radius_lg: int = 6
     row_height: int = 36
-    sidebar_width: int = 300
+    sidebar_width: int = 240

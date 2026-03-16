@@ -19,6 +19,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QApplication,
     QHBoxLayout,
     QMainWindow,
+    QPushButton,
     QSizePolicy,
     QToolBar,
     QWidget,
@@ -36,6 +37,7 @@ from ._theme import (
     zoom_out,
 )
 from ._theme._dark import DARK_THEME
+from ._theme._light import LIGHT_THEME
 
 
 class ModeTab(QWidget):
@@ -183,6 +185,20 @@ class MainWindow(QMainWindow):
         self._toolbar.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
         self._mode_tabs = ModeTabBar()
         self._toolbar.addWidget(self._mode_tabs)
+
+        spacer = QWidget()
+        spacer.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self._toolbar.addWidget(spacer)
+
+        self._theme_btn = QPushButton("☀")
+        self._theme_btn.setFixedSize(32, 32)
+        self._theme_btn.setToolTip("Toggle light/dark theme")
+        self._theme_btn.clicked.connect(self._toggle_theme)
+        self._is_dark = True
+        self._toolbar.addWidget(self._theme_btn)
+
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._toolbar)
 
         central = QWidget()
@@ -205,6 +221,11 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(mods | Qt.Key.Key_Plus), self, zoom_in)  # type: ignore
         QShortcut(QKeySequence(mods | Qt.Key.Key_Minus), self, zoom_out)  # type: ignore
         QShortcut(QKeySequence(mods | Qt.Key.Key_0), self, reset_zoom)  # type: ignore
+
+    def _toggle_theme(self) -> None:
+        self._is_dark = not self._is_dark
+        set_theme(DARK_THEME if self._is_dark else LIGHT_THEME)
+        self._theme_btn.setText("☀" if self._is_dark else "🌙")
 
     @property
     def mmcore(self) -> CMMCorePlus | None:
