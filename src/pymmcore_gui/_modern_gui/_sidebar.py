@@ -72,6 +72,9 @@ class CollapsiblePanelHeader(QWidget):
         self._hovered = False
         self._chevron_angle = 0.0
 
+        # must use fixed height for smooth animation;
+        # don't swap for sizeHint since that breaks layouts when collapsed
+        self.setFixedHeight(theme().row_height)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -133,11 +136,10 @@ class CollapsiblePanelHeader(QWidget):
         self._hovered = False
         self.update()
 
-    def sizeHint(self) -> QSize:
-        return QSize(super().sizeHint().width(), theme().row_height)
-
-    def minimumSizeHint(self) -> QSize:
-        return self.sizeHint()
+    def changeEvent(self, a0: QEvent | None) -> None:
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
+            self.setFixedHeight(theme().row_height)
+        super().changeEvent(a0)
 
     # -- Painting --
 
