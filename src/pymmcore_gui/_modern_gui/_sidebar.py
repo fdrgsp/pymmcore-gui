@@ -39,7 +39,7 @@ from pymmcore_gui._qt.QtWidgets import (
 )
 
 from ._enums import DeviceStatus
-from ._theme import Sp, mono_font, qcolor, theme, ui_font
+from ._theme import ROW_HEIGHT, Sp, mono_font, qcolor, theme, ui_font
 
 RADIUS_LG = 6
 SIDEBAR_W = 300
@@ -56,7 +56,7 @@ class CollapsiblePanelHeader(QWidget):
     All via QPainter — no child widgets, no QSS.
     """
 
-    HEADER_HEIGHT = 36
+    HEADER_HEIGHT = ROW_HEIGHT
 
     def __init__(
         self,
@@ -608,9 +608,9 @@ class Sidebar(QWidget):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setWidget(content)
 
-        # Outer layout holds the scroll area
+        # Outer layout holds the scroll area (1px right margin for border)
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setContentsMargins(0, 0, 1, 0)
         outer.setSpacing(0)
         outer.addWidget(scroll)
 

@@ -7,7 +7,7 @@ from pymmcore_gui._qt.QtWidgets import QApplication
 from ._dark import DARK_THEME
 from ._fonts import mono_font, ui_font
 from ._qt import color_to_qcolor, to_qpalette
-from ._style import RADIUS, MicroscopeStyle, Sp
+from ._style import RADIUS, ROW_HEIGHT, MicroscopeStyle, Sp
 from ._types import (
     Brush,
     Color,
@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 __all__ = [
     "DARK_THEME",
     "RADIUS",
+    "ROW_HEIGHT",
     "Brush",
     "Color",
     "ColorGroup",
