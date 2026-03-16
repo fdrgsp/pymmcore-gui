@@ -6,8 +6,10 @@ from pymmcore_gui._qt.QtCore import (  # type: ignore[attr-defined]
     QMimeData,
     QObject,
     QPoint,
+    QPointF,
     QPropertyAnimation,
     QRect,
+    QSize,
     Qt,
     pyqtProperty,  # pyright: ignore
 )
@@ -27,6 +29,7 @@ from pymmcore_gui._qt.QtGui import (
     QPalette,
     QPen,
     QPixmap,
+    QPolygonF,
 )
 from pymmcore_gui._qt.QtWidgets import (
     QApplication,
@@ -39,24 +42,18 @@ from pymmcore_gui._qt.QtWidgets import (
 )
 
 from ._enums import DeviceStatus
-from ._theme import ROW_HEIGHT, Sp, mono_font, qcolor, theme, ui_font
-
-RADIUS_LG = 6
-SIDEBAR_W = 300
+from ._theme import mono_font, qcolor, theme, ui_font
 
 SP_PREFERRED = QSizePolicy.Policy.Preferred
 SP_MAXIMUM = QSizePolicy.Policy.Maximum
 
 
 class CollapsiblePanelHeader(QWidget):
-    """
-    Custom-painted header bar for a collapsible panel.
+    """Custom-painted header bar for a collapsible panel.
 
-    Draws: chevron (▶ / ▼), status dot, title, summary text.
+    Draws: chevron, status dot, title, summary text.
     All via QPainter — no child widgets, no QSS.
     """
-
-    HEADER_HEIGHT = ROW_HEIGHT
 
     def __init__(
         self,
@@ -73,13 +70,12 @@ class CollapsiblePanelHeader(QWidget):
         self._show_dot = show_status_dot
         self._expanded = False
         self._hovered = False
-        self._chevron_angle = 0.0  # 0 = collapsed (right), 90 = expanded (down)
+        self._chevron_angle = 0.0
 
-        self.setFixedHeight(self.HEADER_HEIGHT)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
-        # Chevron animation
         self._chevron_anim = QPropertyAnimation(self, b"chevronAngle")
         self._chevron_anim.setDuration(200)
         self._chevron_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
@@ -99,7 +95,6 @@ class CollapsiblePanelHeader(QWidget):
 
     @property
     def expanded(self) -> bool:
-        """Whether the chevron points down (expanded) or right (collapsed)."""
         return self._expanded
 
     @expanded.setter
@@ -112,7 +107,6 @@ class CollapsiblePanelHeader(QWidget):
 
     @property
     def summary(self) -> str:
-        """Short text shown to the right of the title when collapsed."""
         return self._summary
 
     @summary.setter
@@ -122,7 +116,6 @@ class CollapsiblePanelHeader(QWidget):
 
     @property
     def status(self) -> DeviceStatus:
-        """Device status controlling the colored indicator dot."""
         return self._status
 
     @status.setter
@@ -140,6 +133,12 @@ class CollapsiblePanelHeader(QWidget):
         self._hovered = False
         self.update()
 
+    def sizeHint(self) -> QSize:
+        return QSize(super().sizeHint().width(), theme().row_height)
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
     # -- Painting --
 
     def paintEvent(self, a0: QPaintEvent | None) -> None:
@@ -147,9 +146,9 @@ class CollapsiblePanelHeader(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         w, h = self.width(), self.height()
+        t = theme()
 
         # Background
-        t = theme()
         bg = qcolor(t.bg_raised if self._hovered else t.bg_base)
         p.fillRect(0, 0, w, h, bg)
 
@@ -157,27 +156,23 @@ class CollapsiblePanelHeader(QWidget):
         p.setPen(QPen(qcolor(t.border_subtle), 1))
         p.drawLine(0, h - 1, w, h - 1)
 
-        x = Sp.SM  # running x cursor
+        x = t.sp_sm  # running x cursor
 
         # ── Chevron ──
+        chev_size = t.scaled(4)
         p.save()
-        p.translate(x + 6, h / 2)
+        p.translate(x + t.scaled(6), h / 2)
         p.rotate(self._chevron_angle)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(qcolor(t.text_disabled))
-        # Small right-pointing triangle
         tri = [
-            (-3, -4),
-            (4, 0),
-            (-3, 4),
+            QPointF(-chev_size * 0.75, -chev_size),
+            QPointF(chev_size, 0),
+            QPointF(-chev_size * 0.75, chev_size),
         ]
-        from PyQt6.QtCore import QPointF
-        from PyQt6.QtGui import QPolygonF
-
-        poly = QPolygonF([QPointF(tx, ty) for tx, ty in tri])
-        p.drawPolygon(poly)
+        p.drawPolygon(QPolygonF(tri))
         p.restore()
-        x += 12 + Sp.XS
+        x += t.scaled(12) + t.sp_xs
 
         # ── Status dot ──
         if self._show_dot:
@@ -190,7 +185,7 @@ class CollapsiblePanelHeader(QWidget):
                 }.get(self._status, t.text_disabled)
             )
 
-            dot_r = 3.5
+            dot_r = t.scaled(3.5)
             dot_cx = x + dot_r
             dot_cy = h / 2
 
@@ -199,26 +194,25 @@ class CollapsiblePanelHeader(QWidget):
             glow = QColor(dot_color)
             glow.setAlphaF(0.3)
             p.setBrush(glow)
-            p.drawEllipse(QPointF(dot_cx, dot_cy), dot_r + 2, dot_r + 2)
+            p.drawEllipse(QPointF(dot_cx, dot_cy), dot_r * 1.5, dot_r * 1.5)
 
             # Dot
             p.setBrush(dot_color)
             p.drawEllipse(QPointF(dot_cx, dot_cy), dot_r, dot_r)
 
-            x += int(dot_r * 2) + Sp.XS
+            x += int(dot_r * 2) + t.sp_xs
 
         # ── Title ──
         title_font = ui_font(10, QFont.Weight.DemiBold)
         p.setFont(title_font)
         p.setPen(qcolor(t.text_primary))
-        title_rect = QRect(x, 0, w - x - Sp.SM, h)
+        title_rect = QRect(x, 0, w - x - t.sp_sm, h)
         fm = QFontMetrics(title_font)
         title_width = fm.horizontalAdvance(self._title)
         p.drawText(title_rect, Qt.AlignmentFlag.AlignVCenter, self._title)
 
-        # ── Summary (shown when collapsed, fades based on chevron angle) ──
+        # ── Summary ──
         if self._summary:
-            # Opacity: 1 when chevron=0 (collapsed), 0 when chevron=90 (expanded)
             opacity = 1.0 - (self._chevron_angle / 90.0)
             if opacity > 0.01:
                 summary_font = mono_font(8)
@@ -227,8 +221,8 @@ class CollapsiblePanelHeader(QWidget):
                 summary_color.setAlphaF(opacity)
                 p.setPen(summary_color)
 
-                summary_x = x + title_width + Sp.SM
-                summary_rect = QRect(summary_x, 0, w - summary_x - Sp.SM, h)
+                summary_x = x + title_width + t.sp_sm
+                summary_rect = QRect(summary_x, 0, w - summary_x - t.sp_sm, h)
                 p.drawText(
                     summary_rect,
                     Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
@@ -245,8 +239,6 @@ class CollapsiblePanelHeader(QWidget):
 
 class CollapsiblePanel(QWidget):
     """A collapsible panel with an animated body."""
-
-    HEADER_H = CollapsiblePanelHeader.HEADER_HEIGHT
 
     def __init__(
         self,
@@ -277,15 +269,14 @@ class CollapsiblePanel(QWidget):
         layout.addWidget(self._header)
 
         # Body container
+        t = theme()
         self._body = QWidget()
         self._body_layout = QVBoxLayout(self._body)
-        self._body_layout.setContentsMargins(Sp.SM, Sp.XS, Sp.SM, Sp.SM)
-        self._body_layout.setSpacing(Sp.SM)
+        self._body_layout.setContentsMargins(t.sp_sm, t.sp_xs, t.sp_sm, t.sp_sm)
+        self._body_layout.setSpacing(t.sp_sm)
         layout.addWidget(self._body)
 
-        # Animation targets the panel's own fixedHeight.
-        # This avoids touching body constraints during animation, sidestepping
-        # layout-propagation glitches through the sizeHint chain.
+        # Animation
         self._anim = QPropertyAnimation(self, b"panelHeight")
         self._anim.setDuration(250)
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
@@ -294,7 +285,6 @@ class CollapsiblePanel(QWidget):
         if not expanded:
             self._body.setMaximumHeight(0)
 
-        # Set initial state
         if expanded:
             self._header.expanded = True
 
@@ -305,6 +295,10 @@ class CollapsiblePanel(QWidget):
 
         self.setSizePolicy(SP_PREFERRED, SP_MAXIMUM)
 
+    @property
+    def header_height(self) -> int:
+        return theme().row_height
+
     # -- Animated property: panel's own fixed height --
 
     def _get_panel_height(self) -> int:
@@ -312,9 +306,6 @@ class CollapsiblePanel(QWidget):
 
     def _set_panel_height(self, h: int) -> None:
         self.setFixedHeight(h)
-        # Force synchronous parent layout so the scroll area and sibling
-        # panels update in the same frame. Safe because we animate the
-        # panel's own fixedHeight — no body-sizeHint chain is involved.
         parent = self.parentWidget()
         if parent is not None and (lay := parent.layout()) is not None:
             lay.activate()
@@ -323,17 +314,14 @@ class CollapsiblePanel(QWidget):
 
     @property
     def body_layout(self) -> QVBoxLayout:
-        """Layout to add content widgets to."""
         return self._body_layout
 
     @property
     def header(self) -> CollapsiblePanelHeader:
-        """The clickable header widget."""
         return self._header
 
     @property
     def expanded(self) -> bool:
-        """Whether the panel body is visible."""
         return self._expanded
 
     @expanded.setter
@@ -345,11 +333,16 @@ class CollapsiblePanel(QWidget):
         self._animate(val)
 
     def toggle(self) -> None:
-        """Toggle between expanded and collapsed."""
         self.expanded = not self._expanded
 
+    def changeEvent(self, event: QEvent | None) -> None:
+        if event is not None and event.type() == QEvent.Type.StyleChange:
+            t = theme()
+            self._body_layout.setContentsMargins(t.sp_sm, t.sp_xs, t.sp_sm, t.sp_sm)
+            self._body_layout.setSpacing(t.sp_sm)
+        super().changeEvent(event)
+
     def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
-        """Handle click-to-toggle and drag-to-reorder on the header."""
         if a0 is self._header and isinstance(a1, QMouseEvent):
             etype = a1.type()
             if etype == QEvent.Type.MouseButtonPress:
@@ -375,7 +368,6 @@ class CollapsiblePanel(QWidget):
         return super().eventFilter(a0, a1)
 
     def _start_drag(self) -> None:
-        """Initiate a QDrag for reordering this panel."""
         content = self.parentWidget()
         if isinstance(content, SidebarContent):
             content._drag_source = self
@@ -385,7 +377,6 @@ class CollapsiblePanel(QWidget):
         mime.setData("application/x-panel-drag", b"")
         drag.setMimeData(mime)
 
-        # Semi-transparent grab of the header as the drag pixmap
         raw = self._header.grab()
         pixmap = QPixmap(raw.size())
         pixmap.fill(Qt.GlobalColor.transparent)
@@ -399,7 +390,6 @@ class CollapsiblePanel(QWidget):
 
         drag.exec(Qt.DropAction.MoveAction)
 
-        # Clean up
         self._drag_start_pos = None
         self._drag_started = False
         if isinstance(content, SidebarContent):
@@ -408,35 +398,31 @@ class CollapsiblePanel(QWidget):
     def _animate(self, expanding: bool) -> None:
         self._anim.stop()
         current_h = self.height()
+        hh = self.header_height
 
         if expanding:
-            # Unconstrain body so we can measure the natural panel height
             self._body.setMaximumHeight(16777215)
-            target = self.HEADER_H + self._body.sizeHint().height()
-            # Lock at current collapsed height, then animate to target
+            target = hh + self._body.sizeHint().height()
             self.setFixedHeight(current_h)
             self._anim.setStartValue(current_h)
             self._anim.setEndValue(target)
         else:
-            # Lock at current expanded height, then animate to header-only
             self.setFixedHeight(current_h)
             self._anim.setStartValue(current_h)
-            self._anim.setEndValue(self.HEADER_H)
+            self._anim.setEndValue(hh)
 
         self._anim.start()
 
     def _on_anim_finished(self) -> None:
-        # Remove fixed-height constraint so the layout manages us normally
         self.setMinimumHeight(0)
         self.setMaximumHeight(16777215)
         if not self._expanded:
             self._body.setMaximumHeight(0)
 
     def paintEvent(self, a0: QPaintEvent | None) -> None:
-        """Draw bottom border and optional drag-hover highlight."""
         p = QPainter(self)
         if self._drag_highlighted:
-            p.fillRect(self.rect(), QColor(255, 255, 255, 20))
+            p.fillRect(self.rect(), qcolor(theme().drag_highlight))
         p.setPen(QPen(qcolor(theme().border_subtle), 1))
         p.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
         p.end()
@@ -452,17 +438,15 @@ class SidebarContent(QWidget):
         self._hover_panel: CollapsiblePanel | None = None
         self._drop_above = True
 
-        # Indicator line (positioned absolutely, shown during drag)
         self._drop_line = QFrame(self)
         self._drop_line.setFixedHeight(3)
         self._drop_line.setAutoFillBackground(True)
         line_pal = self._drop_line.palette()
-        line_pal.setColor(QPalette.ColorRole.Window, QColor(255, 255, 255))
+        line_pal.setColor(QPalette.ColorRole.Window, qcolor(theme().drop_indicator))
         self._drop_line.setPalette(line_pal)
         self._drop_line.hide()
 
     def _panels(self) -> list[CollapsiblePanel]:
-        """Return ordered list of CollapsiblePanel children."""
         lay = self.layout()
         if not lay:
             return []
@@ -474,7 +458,6 @@ class SidebarContent(QWidget):
         ]
 
     def _panel_at_pos(self, pos: QPoint) -> CollapsiblePanel | None:
-        """Find which panel contains the given position."""
         for panel in self._panels():
             if panel.geometry().contains(pos):
                 return panel
@@ -505,19 +488,16 @@ class SidebarContent(QWidget):
         pos = a0.position().toPoint()
         panel = self._panel_at_pos(pos)
 
-        # Hovering over the source panel or empty space -> hide indicator
         if panel is None or panel is self._drag_source:
             self._clear_hover()
             return
 
-        # Update highlight on the hovered panel
         if self._hover_panel is not panel:
             self._clear_hover()
             self._hover_panel = panel
             panel._drag_highlighted = True
             panel.update()
 
-        # Top half -> line above, bottom half -> line below
         rect = panel.geometry()
         above = pos.y() < rect.top() + rect.height() // 2
         self._drop_above = above
@@ -575,15 +555,26 @@ class PlaceholderContent(QWidget):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(Sp.XXS)
+        layout.setSpacing(theme().sp_xxs)
         for line in lines:
             lbl = QLabel(line)
             lbl.setFont(mono_font(8))
-            # Use palette for color — no stylesheet
             pal = lbl.palette()
             pal.setColor(QPalette.ColorRole.WindowText, qcolor(theme().text_secondary))
             lbl.setPalette(pal)
             layout.addWidget(lbl)
+
+    def changeEvent(self, event: QEvent | None) -> None:
+        if event is not None and event.type() == QEvent.Type.StyleChange:
+            t = theme()
+            if lay := self.layout():
+                lay.setSpacing(t.sp_xxs)
+                # Re-apply fonts on child labels
+                for i in range(lay.count()):
+                    item = lay.itemAt(i)
+                    if item and (w := item.widget()) is not None:
+                        w.setFont(mono_font(8))
+        super().changeEvent(event)
 
 
 class Sidebar(QWidget):
@@ -591,7 +582,7 @@ class Sidebar(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setFixedWidth(SIDEBAR_W)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
 
         # Scroll content
         content = SidebarContent()
@@ -608,13 +599,13 @@ class Sidebar(QWidget):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setWidget(content)
 
-        # Outer layout holds the scroll area (1px right margin for border)
+        # Outer layout (1px right margin for border)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 1, 0)
         outer.setSpacing(0)
         outer.addWidget(scroll)
 
-        # ── Positioning ──
+        # ── Panels ──
         pos = CollapsiblePanel(
             title="Positioning",
             summary="74.4, -147.6, 12.3",
@@ -623,23 +614,22 @@ class Sidebar(QWidget):
         pos.body_layout.addWidget(
             PlaceholderContent(
                 [
-                    "X:    74.40  μm",
-                    "Y:  -147.60  μm",
-                    "Z:    12.34  μm",
+                    "X:    74.40  \u03bcm",
+                    "Y:  -147.60  \u03bcm",
+                    "Z:    12.34  \u03bcm",
                     "",
                     "Step: [0.1] [1] [10] [100] [1k]",
                     "",
-                    "┌─── Joystick ───┐",
-                    "│                │",
-                    "│       +        │",
-                    "│                │",
-                    "└────────────────┘",
+                    "\u250c\u2500\u2500\u2500 Joystick \u2500\u2500\u2500\u2510",
+                    "\u2502                \u2502",
+                    "\u2502       +        \u2502",
+                    "\u2502                \u2502",
+                    "\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518",
                 ]
             )
         )
         self._layout.addWidget(pos)
 
-        # ── Objective ──
         obj = CollapsiblePanel(
             title="Objective",
             summary="40x Oil 1.30",
@@ -648,13 +638,12 @@ class Sidebar(QWidget):
             PlaceholderContent(
                 [
                     "[4x] [10x] [20x] [40x Oil] [63x] [100x]",
-                    "Pixel size: 0.162 μm",
+                    "Pixel size: 0.162 \u03bcm",
                 ]
             )
         )
         self._layout.addWidget(obj)
 
-        # ── Camera ──
         cam = CollapsiblePanel(
             title="Camera",
             summary="100 ms \u00b7 1x1",
@@ -671,23 +660,21 @@ class Sidebar(QWidget):
         )
         self._layout.addWidget(cam)
 
-        # ── Channels ──
         ch = CollapsiblePanel(
             title="Channels",
-            summary="DAPI · GFP · Cy5",
+            summary="DAPI \u00b7 GFP \u00b7 Cy5",
         )
         ch.body_layout.addWidget(
             PlaceholderContent(
                 [
-                    "■ DAPI    50 ms   👁",
-                    "■ GFP    100 ms   👁",
-                    "■ Cy5    200 ms   👁",
+                    "\u25a0 DAPI    50 ms   \ud83d\udc41",
+                    "\u25a0 GFP    100 ms   \ud83d\udc41",
+                    "\u25a0 Cy5    200 ms   \ud83d\udc41",
                 ]
             )
         )
         self._layout.addWidget(ch)
 
-        # ── Histogram ──
         hist = CollapsiblePanel(
             title="Histogram",
             summary="0 - 4095",
@@ -696,16 +683,15 @@ class Sidebar(QWidget):
         hist.body_layout.addWidget(
             PlaceholderContent(
                 [
-                    "┌──── histogram ────┐",
-                    "│▓▓░░░░░░░░░░░░░░░░│",
-                    "└──────────────────-┘",
-                    "[⚡ Auto] [↺ Reset] [㏒] [◐]",
+                    "\u250c\u2500\u2500\u2500 histogram \u2500\u2500\u2500\u2510",
+                    "\u2502\u2593\u2593\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2502",
+                    "\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500-\u2518",
+                    "[\u26a1 Auto] [\u21ba Reset] [\u33d2] [\u25d0]",
                 ]
             )
         )
         self._layout.addWidget(hist)
 
-        # ── Acquisition ──
         acq = CollapsiblePanel(
             title="Acquisition",
             summary="Zx50 \u00b7 Tx100",
@@ -714,10 +700,10 @@ class Sidebar(QWidget):
         acq.body_layout.addWidget(
             PlaceholderContent(
                 [
-                    "☑ Z-Stack      50 sl · 0.5 μm",
-                    "☑ Time Series  100 x 30 s",
-                    "☐ Tile Scan    —",
-                    "☐ Positions    —",
+                    "\u2611 Z-Stack      50 sl \u00b7 0.5 \u03bcm",
+                    "\u2611 Time Series  100 x 30 s",
+                    "\u2610 Tile Scan    \u2014",
+                    "\u2610 Positions    \u2014",
                     "",
                     "Frames:    15,000",
                     "Duration:  50 min",
@@ -727,8 +713,13 @@ class Sidebar(QWidget):
         )
         self._layout.addWidget(acq)
 
+    def sizeHint(self) -> QSize:
+        return QSize(theme().sidebar_width, super().sizeHint().height())
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
     def paintEvent(self, a0: QPaintEvent | None) -> None:
-        """Draw right border."""
         p = QPainter(self)
         p.setPen(QPen(qcolor(theme().border_subtle), 1))
         p.drawLine(self.width() - 1, 0, self.width() - 1, self.height())

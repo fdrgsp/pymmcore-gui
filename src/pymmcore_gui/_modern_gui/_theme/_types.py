@@ -95,7 +95,10 @@ class Palette:
 
 @dataclass
 class Theme:
-    """Extended design tokens beyond QPalette."""
+    """Extended design tokens beyond QPalette.
+
+    All values are base (unscaled). Use `ScaledThemeView` for zoom-aware access.
+    """
 
     palette: Palette = field(default_factory=Palette)
 
@@ -125,3 +128,21 @@ class Theme:
     status_green: Color = Color()
     status_red: Color = Color()
     status_amber: Color = Color()
+
+    # -- interaction feedback -----------------------------------------------
+    drag_highlight: Color = Color(0xFF, 0xFF, 0xFF, 0x14)  # overlay on hover
+    drop_indicator: Color = Color(0xFF, 0xFF, 0xFF)
+
+    # -- spacing (base values, 4px grid) ------------------------------------
+    sp_xxs: int = 4
+    sp_xs: int = 8
+    sp_sm: int = 12
+    sp_md: int = 16
+    sp_lg: int = 24
+    sp_xl: int = 32
+
+    # -- metrics ------------------------------------------------------------
+    radius: int = 3
+    radius_lg: int = 6
+    row_height: int = 36
+    sidebar_width: int = 300

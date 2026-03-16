@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pymmcore_gui._qt.QtGui import QGuiApplication
-from pymmcore_gui._qt.QtWidgets import QApplication
+from pymmcore_gui._qt.QtCore import QCoreApplication, QEvent, QSize
+from pymmcore_gui._qt.QtGui import QFont, QGuiApplication
+from pymmcore_gui._qt.QtWidgets import QApplication, QStyle, QToolBar
 
 from ._dark import DARK_THEME
 from ._fonts import mono_font, ui_font
 from ._qt import color_to_qcolor, to_qpalette
-from ._style import RADIUS, ROW_HEIGHT, MicroscopeStyle, Sp
+from ._scaled_view import ScaledThemeView
+from ._style import MicroscopeStyle
 from ._types import (
     Brush,
     Color,
@@ -25,8 +27,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DARK_THEME",
-    "RADIUS",
-    "ROW_HEIGHT",
+    "ZOOM_STEPS",
     "Brush",
     "Color",
     "ColorGroup",
@@ -35,35 +36,139 @@ __all__ = [
     "LinearGradient",
     "MicroscopeStyle",
     "Palette",
-    "Sp",
+    "ScaledThemeView",
     "Theme",
     "make_dark_palette",
     "mono_font",
     "qcolor",
+    "raw_theme",
+    "reset_zoom",
+    "set_style",
     "set_theme",
+    "set_zoom",
     "theme",
     "ui_font",
+    "zoom_in",
+    "zoom_out",
 ]
 
 # ═══════════════════════════════════════════════════════════════════
-# Theme accessor
+# State
 # ═══════════════════════════════════════════════════════════════════
 
 _current_theme: Theme = DARK_THEME
+_current_style: MicroscopeStyle | None = None
+_view: ScaledThemeView | None = None
+_base_font_pt: float = 0.0
+
+ZOOM_STEPS = (0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0)
+_zoom_index: int = ZOOM_STEPS.index(1.0)
+
+# ═══════════════════════════════════════════════════════════════════
+# Theme accessors
+# ═══════════════════════════════════════════════════════════════════
 
 
-def theme() -> Theme:
-    """Return the active theme."""
+def theme() -> ScaledThemeView:
+    """Return a live zoom-scaled view of the active theme."""
+    if _view is None:
+        raise RuntimeError("call set_style() during app init")
+    return _view
+
+
+def raw_theme() -> Theme:
+    """Return the underlying unscaled Theme dataclass."""
     return _current_theme
 
 
 def set_theme(t: Theme) -> None:
     """Set the active theme and push its QPalette to the application."""
-    global _current_theme
+    global _current_theme, _view
     _current_theme = t
+    if _current_style is not None:
+        _view = ScaledThemeView(t, _current_style)
     app = QApplication.instance()
     if isinstance(app, QGuiApplication):
         app.setPalette(to_qpalette(t.palette))
+
+
+def set_style(style: MicroscopeStyle) -> None:
+    """Register the app style and capture the base font size."""
+    global _current_style, _view, _base_font_pt
+    _current_style = style
+    app = QApplication.instance()
+    if isinstance(app, QApplication):
+        _base_font_pt = app.font().pointSizeF()
+    _view = ScaledThemeView(_current_theme, style)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Zoom
+# ═══════════════════════════════════════════════════════════════════
+
+
+def set_zoom(factor: float) -> None:
+    """Set zoom factor and refresh the entire UI."""
+    if _current_style is None:
+        raise RuntimeError("call set_style() during app init")
+
+    # no view rebuild needed; ScaledThemeView reads zoom live.
+    _current_style.zoom_factor = factor
+
+    app = QApplication.instance()
+    if not isinstance(app, QApplication):
+        return
+
+    # Pillar 2: scale app font
+    font = QFont(app.font())
+    font.setPointSizeF(_base_font_pt * factor)
+    app.setFont(font)
+
+    # Pillar 3: icon sizes on caching widgets
+    icon_sz = _current_style.pixelMetric(QStyle.PixelMetric.PM_ToolBarIconSize)
+    for w in app.allWidgets():
+        if isinstance(w, QToolBar):
+            w.setIconSize(QSize(icon_sz, icon_sz))
+
+    # Force complete relayout
+    for w in app.allWidgets():
+        if layout := w.layout():
+            layout.invalidate()
+        QCoreApplication.sendEvent(w, QEvent(QEvent.Type.StyleChange))
+        w.updateGeometry()
+    for win in app.topLevelWidgets():
+        if layout := win.layout():
+            layout.activate()
+
+    # TODO: persist zoom to QSettings
+
+
+def zoom_in() -> None:
+    """Step zoom up to the next level."""
+    global _zoom_index
+    if _zoom_index < len(ZOOM_STEPS) - 1:
+        _zoom_index += 1
+        set_zoom(ZOOM_STEPS[_zoom_index])
+
+
+def zoom_out() -> None:
+    """Step zoom down to the previous level."""
+    global _zoom_index
+    if _zoom_index > 0:
+        _zoom_index -= 1
+        set_zoom(ZOOM_STEPS[_zoom_index])
+
+
+def reset_zoom() -> None:
+    """Reset zoom to 1.0."""
+    global _zoom_index
+    _zoom_index = ZOOM_STEPS.index(1.0)
+    set_zoom(1.0)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Helpers
+# ═══════════════════════════════════════════════════════════════════
 
 
 def qcolor(c: Color) -> QColor:

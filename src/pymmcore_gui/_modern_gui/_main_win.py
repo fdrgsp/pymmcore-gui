@@ -4,12 +4,16 @@ from pymmcore_plus import CMMCorePlus
 
 from pymmcore_gui._modern_gui._sidebar import Sidebar
 from pymmcore_gui._modern_gui._viewport import ImageViewport
-from pymmcore_gui._qt.QtCore import QRectF, Qt, pyqtSignal
+from pymmcore_gui._qt.QtCore import QEvent, QRectF, QSize, Qt, pyqtSignal
 from pymmcore_gui._qt.QtGui import (
+    QEnterEvent,
     QFont,
     QFontMetricsF,
+    QKeySequence,
     QMouseEvent,
     QPainter,
+    QPaintEvent,
+    QShortcut,
 )
 from pymmcore_gui._qt.QtWidgets import (
     QApplication,
@@ -20,14 +24,24 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 
-from ._theme import MicroscopeStyle, Sp, make_dark_palette, qcolor, theme, ui_font
-
-UNDERLINE_H = 3
-TAB_FONT_SIZE = 11
+from ._theme import (
+    MicroscopeStyle,
+    qcolor,
+    reset_zoom,
+    set_style,
+    set_theme,
+    theme,
+    ui_font,
+    zoom_in,
+    zoom_out,
+)
+from ._theme._dark import DARK_THEME
 
 
 class ModeTab(QWidget):
     """Single mode tab, custom-painted with optional active underline."""
+
+    _BASE_HEIGHT = 40
 
     clicked = pyqtSignal()
 
@@ -39,10 +53,16 @@ class ModeTab(QWidget):
 
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
-        fm = QFontMetricsF(ui_font(TAB_FONT_SIZE, QFont.Weight.Medium))
-        w = int(fm.horizontalAdvance(label)) + Sp.LG * 2
-        self.setFixedSize(w, 40)
+    def sizeHint(self) -> QSize:
+        t = theme()
+        fm = QFontMetricsF(ui_font(11, QFont.Weight.Medium))
+        w = int(fm.horizontalAdvance(self._label)) + t.sp_lg * 2
+        return QSize(w, t.scaled(self._BASE_HEIGHT))
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
 
     @property
     def active(self) -> bool:
@@ -53,11 +73,12 @@ class ModeTab(QWidget):
         self._active = val
         self.update()
 
-    def paintEvent(self, event: object) -> None:
+    def paintEvent(self, event: QPaintEvent | None) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         t = theme()
         w, h = self.width(), self.height()
+        underline_h = t.scaled(3)
 
         # Text
         if self._active:
@@ -67,10 +88,10 @@ class ModeTab(QWidget):
         else:
             text_color = qcolor(t.text_secondary)
 
-        p.setFont(ui_font(TAB_FONT_SIZE, QFont.Weight.Medium))
+        p.setFont(ui_font(11, QFont.Weight.Medium))
         p.setPen(text_color)
         p.drawText(
-            QRectF(0, 0, w, h - UNDERLINE_H),
+            QRectF(0, 0, w, h - underline_h),
             Qt.AlignmentFlag.AlignCenter,
             self._label,
         )
@@ -79,25 +100,25 @@ class ModeTab(QWidget):
         if self._active:
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(qcolor(t.accent))
-            bar_w = w - Sp.SM * 2
+            bar_w = w - t.sp_sm * 2
             p.drawRoundedRect(
-                QRectF((w - bar_w) / 2, h - UNDERLINE_H, bar_w, UNDERLINE_H),
+                QRectF((w - bar_w) / 2, h - underline_h, bar_w, underline_h),
                 1.5,
                 1.5,
             )
 
         p.end()
 
-    def enterEvent(self, event: object) -> None:
+    def enterEvent(self, event: QEnterEvent | None) -> None:
         self._hovered = True
         self.update()
 
-    def leaveEvent(self, event: object) -> None:
+    def leaveEvent(self, event: QEvent | None) -> None:
         self._hovered = False
         self.update()
 
-    def mousePressEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
+    def mousePressEvent(self, event: QMouseEvent | None) -> None:
+        if event is not None and event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
 
 
@@ -110,7 +131,7 @@ class ModeTabBar(QWidget):
         super().__init__(parent)
         labels = ["Configure", "Acquire", "Process", "Analyze"]
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(Sp.SM, 0, 0, 0)
+        layout.setContentsMargins(theme().sp_sm, 0, 0, 0)
         layout.setSpacing(0)
 
         self._tabs: list[ModeTab] = []
@@ -131,6 +152,13 @@ class ModeTabBar(QWidget):
             tab.active = tab._label == label
         self.mode_changed.emit(label)
 
+    def changeEvent(self, event: QEvent | None) -> None:
+        if event is not None and event.type() == QEvent.Type.StyleChange:
+            t = theme()
+            if lay := self.layout():
+                lay.setContentsMargins(t.sp_sm, 0, 0, 0)
+        super().changeEvent(event)
+
 
 class MainWindow(QMainWindow):
     """Top-level window with sidebar + viewport."""
@@ -138,11 +166,12 @@ class MainWindow(QMainWindow):
     def __init__(self, *, mmcore: CMMCorePlus | None = None) -> None:
         super().__init__()
 
-        # MOVE ME
+        # App-level style + theme setup
         if isinstance(qapp := QApplication.instance(), QApplication):
-            qapp.setStyle(MicroscopeStyle())
-            qapp.setPalette(make_dark_palette())
-            qapp.setFont(ui_font(10))
+            style = MicroscopeStyle()
+            qapp.setStyle(style)
+            set_style(style)
+            set_theme(DARK_THEME)
 
         self._mmc = mmcore or CMMCorePlus.instance()
         self.setWindowTitle("Microscope Control — Panel Mockup")
@@ -169,6 +198,13 @@ class MainWindow(QMainWindow):
         layout.setSpacing(0)
         layout.addWidget(Sidebar())
         layout.addWidget(self._viewport)
+
+        # Zoom shortcuts
+        mods = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
+        QShortcut(QKeySequence(mods | Qt.Key.Key_Equal), self, zoom_in)  # type: ignore
+        QShortcut(QKeySequence(mods | Qt.Key.Key_Plus), self, zoom_in)  # type: ignore
+        QShortcut(QKeySequence(mods | Qt.Key.Key_Minus), self, zoom_out)  # type: ignore
+        QShortcut(QKeySequence(mods | Qt.Key.Key_0), self, reset_zoom)  # type: ignore
 
     @property
     def mmcore(self) -> CMMCorePlus | None:

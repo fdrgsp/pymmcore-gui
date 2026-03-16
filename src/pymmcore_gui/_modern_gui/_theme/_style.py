@@ -1,40 +1,48 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from pymmcore_gui._qt.QtGui import QPen
 from pymmcore_gui._qt.QtWidgets import (
     QProxyStyle,
     QScrollArea,
+    QSizePolicy,
     QStyle,
     QStyleOption,
     QWidget,
 )
 
 if TYPE_CHECKING:
+    from pymmcore_gui._qt.QtCore import Qt
     from pymmcore_gui._qt.QtGui import QPainter
 
 
-class Sp:
-    """Spacing tokens (px). 4px base grid."""
-
-    XXS = 4
-    XS = 8
-    SM = 12
-    MD = 16
-    LG = 24
-    XL = 32
-
-
-RADIUS = 3
-ROW_HEIGHT = 36  # standard height for toolbars, panel headers, etc.
-
-
 class MicroscopeStyle(QProxyStyle):
-    """Thin proxy over Fusion. Overrides only what we need."""
+    """Zoomable proxy over Fusion.
+
+    All pixel metrics are scaled by `zoom_factor`. Custom base overrides
+    (e.g. thin scrollbars) are preserved via `_BASE_OVERRIDES` and still
+    route through zoom.
+    """
+
+    _BASE_OVERRIDES: ClassVar[dict[QStyle.PixelMetric, int]] = {
+        QStyle.PixelMetric.PM_ScrollBarExtent: 8,
+        QStyle.PixelMetric.PM_ScrollBarSliderMin: 20,
+    }
 
     def __init__(self) -> None:
         super().__init__("Fusion")
+        self._zoom: float = 1.0
+
+    @property
+    def zoom_factor(self) -> float:
+        return self._zoom
+
+    @zoom_factor.setter
+    def zoom_factor(self, value: float) -> None:
+        self._zoom = max(0.25, min(value, 4.0))
+
+    # ── Scaled metrics ────────────────────────────────────────────
 
     def pixelMetric(
         self,
@@ -42,16 +50,27 @@ class MicroscopeStyle(QProxyStyle):
         option: QStyleOption | None = None,
         widget: QWidget | None = None,
     ) -> int:
-        """Override a few pixel metrics for our theme."""
-        if metric == QStyle.PixelMetric.PM_ScrollBarExtent:
-            return 5
-        if metric == QStyle.PixelMetric.PM_ScrollBarSliderMin:
-            return 20
-        if metric == QStyle.PixelMetric.PM_LayoutHorizontalSpacing:
-            return Sp.SM
-        if metric == QStyle.PixelMetric.PM_LayoutVerticalSpacing:
-            return Sp.XXS
-        return super().pixelMetric(metric, option, widget)
+        base = self._BASE_OVERRIDES.get(metric)
+        if base is None:
+            base = super().pixelMetric(metric, option, widget)
+        if base < 0:
+            return base  # preserve sentinels (-1 = disabled)
+        return max(1, round(base * self._zoom))
+
+    def layoutSpacing(
+        self,
+        control1: QSizePolicy.ControlType,
+        control2: QSizePolicy.ControlType,
+        orientation: Qt.Orientation,
+        option: QStyleOption | None = None,
+        widget: QWidget | None = None,
+    ) -> int:
+        val = super().layoutSpacing(control1, control2, orientation, option, widget)
+        if val < 0:
+            return val  # -1 means "use pixelMetric-based spacing"
+        return max(1, round(val * self._zoom))
+
+    # ── Drawing overrides (unchanged) ─────────────────────────────
 
     def _border_color(self) -> QPen:
         """Resolve the border-subtle pen (late import avoids circular ref)."""

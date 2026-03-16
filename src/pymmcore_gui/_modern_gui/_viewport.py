@@ -11,8 +11,10 @@ from pymmcore_widgets import ImagePreview
 from pymmcore_gui._modern_gui._utils import current_core
 from pymmcore_gui._qt.QtCore import (
     QEvent,
+    QObject,
     QPointF,
     QRectF,
+    QSize,
     Qt,
     QTimer,
     Signal,
@@ -20,11 +22,13 @@ from pymmcore_gui._qt.QtCore import (
 from pymmcore_gui._qt.QtGui import (
     QBrush,
     QColor,
+    QEnterEvent,
     QFont,
     QFontMetricsF,
     QImage,
     QMouseEvent,
     QPainter,
+    QPaintEvent,
     QPalette,
     QPen,
     QPixmap,
@@ -39,7 +43,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 
-from ._theme import ROW_HEIGHT, mono_font, qcolor, theme, ui_font
+from ._theme import mono_font, qcolor, theme, ui_font
 
 # Viewport-specific colors not covered by the shared theme
 OVERLAY = QColor(255, 255, 255, 102)  # ~40% white
@@ -55,9 +59,9 @@ CH_CY5 = QColor(0xCC, 0x44, 0xCC)
 
 
 class ToolbarButton(QWidget):
-    """A small toolbar button with text/icon, hover state, and optional
-    toggle/active styling.  Painted entirely via QPainter.
-    """
+    """A small toolbar button with hover state and optional toggle styling."""
+
+    _BASE_HEIGHT = 26
 
     clicked = Signal()
 
@@ -78,11 +82,16 @@ class ToolbarButton(QWidget):
 
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
-        self.setFixedHeight(26)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
+    def sizeHint(self) -> QSize:
+        t = theme()
         fm = QFontMetricsF(ui_font(8, QFont.Weight.Medium))
-        text_w = fm.horizontalAdvance(text)
-        self.setFixedWidth(int(text_w) + 20)
+        w = int(fm.horizontalAdvance(self._text)) + t.sp_lg
+        return QSize(w, t.scaled(self._BASE_HEIGHT))
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
 
     @property
     def checked(self) -> bool:
@@ -93,7 +102,7 @@ class ToolbarButton(QWidget):
         self._checked = val
         self.update()
 
-    def paintEvent(self, event) -> None:
+    def paintEvent(self, event: QPaintEvent | None) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = self.rect().adjusted(0, 0, -1, -1)
@@ -130,7 +139,7 @@ class ToolbarButton(QWidget):
             if bg != Qt.GlobalColor.transparent
             else QBrush(Qt.BrushStyle.NoBrush)
         )
-        p.drawRoundedRect(QRectF(r), 3, 3)
+        p.drawRoundedRect(QRectF(r), t.radius, t.radius)
 
         # Text
         p.setPen(QColor(text_color))
@@ -138,11 +147,11 @@ class ToolbarButton(QWidget):
         p.drawText(QRectF(r), Qt.AlignmentFlag.AlignCenter, self._text)
         p.end()
 
-    def enterEvent(self, event) -> None:
+    def enterEvent(self, event: QEnterEvent | None) -> None:
         self._hovered = True
         self.update()
 
-    def leaveEvent(self, event) -> None:
+    def leaveEvent(self, event: QEvent | None) -> None:
         self._hovered = False
         self.update()
 
@@ -162,9 +171,15 @@ class ToolbarButton(QWidget):
 class ToolbarSep(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setFixedSize(1, 18)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
-    def paintEvent(self, event) -> None:
+    def sizeHint(self) -> QSize:
+        return QSize(1, theme().scaled(18))
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def paintEvent(self, event: QPaintEvent | None) -> None:
         p = QPainter(self)
         p.setPen(QPen(qcolor(theme().border_subtle), 1))
         p.drawLine(0, 0, 0, self.height())
@@ -182,7 +197,7 @@ class OverlayInfo:
 
     label: str = "Live"
     detail: str = "DAPI+GFP+Cy5"
-    dimensions: str = "2048 × 2048"
+    dimensions: str = "2048 × 2048"  # noqa: RUF001
     scale_bar_um: float = 100.0
     scale_bar_px: int = 80
     cursor_x: int = 0
@@ -203,22 +218,23 @@ class ViewportOverlay(QWidget):
 
         self.info = OverlayInfo()
 
-    def eventFilter(self, obj: object, event: object) -> bool:
-        if isinstance(event, QEvent) and event.type() == QEvent.Type.Resize:
+    def eventFilter(self, obj: QObject | None, event: QEvent | None) -> bool:
+        if event is not None and event.type() == QEvent.Type.Resize and obj is not None:
             self.setGeometry(obj.rect())  # type: ignore[union-attr]
         return False
 
-    def paintEvent(self, event: object) -> None:
+    def paintEvent(self, event: QPaintEvent | None) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
         ov = self.info
-        margin = 16
+        t = theme()
+        margin = t.sp_md
 
         # ── Top-left: label ──
         p.setFont(mono_font(8))
         p.setPen(OVERLAY_DIM)
-        p.drawText(margin, margin + 12, ov.label)
+        p.drawText(margin, margin + t.sp_sm, ov.label)
 
         # ── Top-right: detail info ──
         p.setFont(mono_font(8))
@@ -231,20 +247,23 @@ class ViewportOverlay(QWidget):
         for line in lines:
             fm = QFontMetricsF(p.font())
             tw = fm.horizontalAdvance(line)
-            p.drawText(int(w - margin - tw), y + 12, line)
-            y += 16
+            p.drawText(int(w - margin - tw), y + t.sp_sm, line)
+            y += t.sp_md
 
         # ── Bottom-left: scale bar ──
         sb_x = margin
-        sb_y = h - margin - 18
+        sb_y = h - margin - t.scaled(18)
 
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(QColor(255, 255, 255, 204)))
-        p.drawRoundedRect(QRectF(sb_x, sb_y, ov.scale_bar_px, 3), 1.5, 1.5)
+        bar_h = t.scaled(3)
+        p.drawRoundedRect(
+            QRectF(sb_x, sb_y, ov.scale_bar_px, bar_h), bar_h / 2, bar_h / 2
+        )
 
         p.setFont(mono_font(8))
         p.setPen(OVERLAY)
-        p.drawText(sb_x, sb_y + 16, f"{ov.scale_bar_um:.0f} μm")
+        p.drawText(sb_x, sb_y + t.sp_md, f"{ov.scale_bar_um:.0f} μm")
 
         # ── Bottom-right: cursor info ──
         cursor_text = f"X: {ov.cursor_x}  Y: {ov.cursor_y}  ·  I: {ov.cursor_intensity}"
@@ -265,6 +284,8 @@ class ViewportOverlay(QWidget):
 class ChannelButton(QWidget):
     """A channel toggle button with a colored dot."""
 
+    _BASE_HEIGHT = 22
+
     toggled = Signal(bool)
 
     def __init__(
@@ -283,10 +304,16 @@ class ChannelButton(QWidget):
 
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
-        self.setFixedHeight(22)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
+    def sizeHint(self) -> QSize:
+        t = theme()
         fm = QFontMetricsF(ui_font(8, QFont.Weight.Medium))
-        self.setFixedWidth(int(fm.horizontalAdvance(name)) + 28)
+        w = int(fm.horizontalAdvance(self._name)) + t.sp_xl
+        return QSize(w, t.scaled(self._BASE_HEIGHT))
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
 
     @property
     def active(self) -> bool:
@@ -297,13 +324,12 @@ class ChannelButton(QWidget):
         self._active = val
         self.update()
 
-    def paintEvent(self, event) -> None:
+    def paintEvent(self, event: QPaintEvent | None) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = self.rect().adjusted(0, 0, -1, -1)
         t = theme()
 
-        # Border when active
         if self._active:
             p.setPen(QPen(qcolor(t.border_default), 1))
         else:
@@ -313,11 +339,11 @@ class ChannelButton(QWidget):
             p.setBrush(QBrush(qcolor(t.bg_hover)))
         else:
             p.setBrush(QBrush(Qt.BrushStyle.NoBrush))
-        p.drawRoundedRect(QRectF(r), 2, 2)
+        p.drawRoundedRect(QRectF(r), t.radius, t.radius)
 
         # Dot
-        dot_r = 3
-        dot_x = 8
+        dot_r = t.scaled(3)
+        dot_x = t.sp_xs
         dot_y = r.height() / 2
         dot_color = QColor(self._color) if self._active else qcolor(t.text_disabled)
         p.setPen(Qt.PenStyle.NoPen)
@@ -329,17 +355,22 @@ class ChannelButton(QWidget):
         p.setPen(text_color)
         p.setFont(ui_font(8, QFont.Weight.Medium))
         p.drawText(
-            QRectF(dot_x + dot_r + 5, 0, r.width() - dot_x - dot_r - 10, r.height()),
+            QRectF(
+                dot_x + dot_r + t.scaled(5),
+                0,
+                r.width() - dot_x - dot_r - t.scaled(10),
+                r.height(),
+            ),
             Qt.AlignmentFlag.AlignVCenter,
             self._name,
         )
         p.end()
 
-    def enterEvent(self, event) -> None:
+    def enterEvent(self, event: QEnterEvent | None) -> None:
         self._hovered = True
         self.update()
 
-    def leaveEvent(self, event) -> None:
+    def leaveEvent(self, event: QEvent | None) -> None:
         self._hovered = False
         self.update()
 
@@ -358,17 +389,19 @@ class ChannelButton(QWidget):
 class ChannelStrip(QWidget):
     """Horizontal strip of channel toggle buttons."""
 
+    _BASE_HEIGHT = 28
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setFixedHeight(28)
+        t = theme()
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 3, 12, 3)
-        layout.setSpacing(2)
+        layout.setContentsMargins(t.sp_sm, t.scaled(3), t.sp_sm, t.scaled(3))
+        layout.setSpacing(t.scaled(2))
 
         self._channels: dict[str, ChannelButton] = {}
 
-        # Default channels
         for name, color in [
             ("DAPI", CH_DAPI),
             ("GFP", CH_GFP),
@@ -384,7 +417,21 @@ class ChannelStrip(QWidget):
         self._merge_btn.checked = True
         layout.addWidget(self._merge_btn)
 
-    def paintEvent(self, event) -> None:
+    def sizeHint(self) -> QSize:
+        return QSize(super().sizeHint().width(), theme().scaled(self._BASE_HEIGHT))
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def changeEvent(self, event: QEvent | None) -> None:
+        if event is not None and event.type() == QEvent.Type.StyleChange:
+            t = theme()
+            if lay := self.layout():
+                lay.setContentsMargins(t.sp_sm, t.scaled(3), t.sp_sm, t.scaled(3))
+                lay.setSpacing(t.scaled(2))
+        super().changeEvent(event)
+
+    def paintEvent(self, event: QPaintEvent | None) -> None:
         p = QPainter(self)
         p.setPen(QPen(qcolor(theme().border_subtle), 1))
         w, h = self.width(), self.height()
@@ -402,7 +449,8 @@ class ChannelStrip(QWidget):
 class SnapThumbnail(QWidget):
     """A single snap thumbnail with timestamp and star toggle."""
 
-    THUMB_SIZE = 52
+    _BASE_THUMB = 52
+    _BASE_LABEL_H = 14
 
     clicked = Signal()
 
@@ -413,20 +461,39 @@ class SnapThumbnail(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self._pixmap = pixmap.scaled(
-            self.THUMB_SIZE,
-            self.THUMB_SIZE,
-            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-            Qt.TransformationMode.SmoothTransformation,
-        )
+        self._original_pixmap = pixmap
+        self._pixmap: QPixmap | None = None
         self._timestamp = timestamp
         self._hovered = False
         self._active = False
         self._starred = False
 
-        self.setFixedSize(self.THUMB_SIZE, self.THUMB_SIZE + 14)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._rescale_pixmap()
+
+    def _rescale_pixmap(self) -> None:
+        s = theme().scaled(self._BASE_THUMB)
+        self._pixmap = self._original_pixmap.scaled(
+            s,
+            s,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+    def sizeHint(self) -> QSize:
+        t = theme()
+        s = t.scaled(self._BASE_THUMB)
+        return QSize(s, s + t.scaled(self._BASE_LABEL_H))
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def changeEvent(self, event: QEvent | None) -> None:
+        if event is not None and event.type() == QEvent.Type.StyleChange:
+            self._rescale_pixmap()
+        super().changeEvent(event)
 
     @property
     def active(self) -> bool:
@@ -437,12 +504,11 @@ class SnapThumbnail(QWidget):
         self._active = val
         self.update()
 
-    def paintEvent(self, event) -> None:
+    def paintEvent(self, event: QPaintEvent | None) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        s = self.THUMB_SIZE
-
         t = theme()
+        s = t.scaled(self._BASE_THUMB)
 
         # Border
         if self._active:
@@ -453,15 +519,16 @@ class SnapThumbnail(QWidget):
             p.setPen(QPen(Qt.PenStyle.NoPen))
 
         p.setBrush(QBrush(qcolor(t.bg_raised)))
-        p.drawRoundedRect(QRectF(0, 0, s, s), 3, 3)
+        p.drawRoundedRect(QRectF(0, 0, s, s), t.radius, t.radius)
 
         # Image
-        p.setClipRect(QRectF(1, 1, s - 2, s - 2))
-        p.drawPixmap(1, 1, self._pixmap)
+        if self._pixmap is not None:
+            p.setClipRect(QRectF(1, 1, s - 2, s - 2))
+            p.drawPixmap(1, 1, self._pixmap)
         p.setClipping(False)
 
         # Timestamp bar
-        ts_h = 12
+        ts_h = t.sp_sm
         ts_y = s - ts_h
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(QColor(0, 0, 0, 153)))
@@ -482,23 +549,29 @@ class SnapThumbnail(QWidget):
             )
             p.setFont(ui_font(7))
             p.setPen(star_color)
-            p.drawText(QRectF(s - 14, 1, 12, 12), Qt.AlignmentFlag.AlignCenter, "★")
+            star_sz = t.sp_sm
+            p.drawText(
+                QRectF(s - star_sz - 2, 1, star_sz, star_sz),
+                Qt.AlignmentFlag.AlignCenter,
+                "★",
+            )
 
         p.end()
 
-    def enterEvent(self, event) -> None:
+    def enterEvent(self, event: QEnterEvent | None) -> None:
         self._hovered = True
         self.update()
 
-    def leaveEvent(self, event) -> None:
+    def leaveEvent(self, event: QEvent | None) -> None:
         self._hovered = False
         self.update()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            # Check if star area clicked
-            s = self.THUMB_SIZE
-            star_rect = QRectF(s - 14, 1, 14, 14)
+            t = theme()
+            s = t.scaled(self._BASE_THUMB)
+            star_sz = t.sp_sm
+            star_rect = QRectF(s - star_sz - 2, 1, star_sz + 2, star_sz + 2)
             if star_rect.contains(event.position()):
                 self._starred = not self._starred
                 self.update()
@@ -512,20 +585,29 @@ class _RotatedLabel(QWidget):
     def __init__(self, text: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._text = text
-        self._font = ui_font(11, QFont.Weight.DemiBold)
-        fm = QFontMetricsF(self._font)
-        text_h = int(fm.horizontalAdvance(text))
-        self.setFixedWidth(int(fm.height()) + 4)
-        self.setMinimumHeight(text_h + 8)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
 
-    def paintEvent(self, event: object) -> None:
+    def _font(self) -> QFont:
+        return ui_font(11, QFont.Weight.DemiBold)
+
+    def sizeHint(self) -> QSize:
+        fm = QFontMetricsF(self._font())
+        w = int(fm.height()) + 4
+        h = int(fm.horizontalAdvance(self._text)) + 8
+        return QSize(w, h)
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def paintEvent(self, event: QPaintEvent | None) -> None:
+        font = self._font()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setFont(self._font)
+        p.setFont(font)
         p.setPen(qcolor(theme().text_disabled))
         p.translate(self.width() / 2, self.height() / 2)
         p.rotate(-90)
-        fm = QFontMetricsF(self._font)
+        fm = QFontMetricsF(font)
         tw = fm.horizontalAdvance(self._text)
         p.drawText(
             QRectF(-tw / 2, -fm.height() / 2, tw, fm.height()),
@@ -543,17 +625,18 @@ class _RotatedLabel(QWidget):
 class SnapFilmstrip(QWidget):
     """Horizontal filmstrip of snap thumbnails with a clear button."""
 
-    STRIP_HEIGHT = 72
+    _BASE_STRIP_HEIGHT = 72
 
     snap_selected = Signal(int)  # index
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setFixedHeight(self.STRIP_HEIGHT)
+        t = theme()
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         outer = QHBoxLayout(self)
-        outer.setContentsMargins(12, 0, 12, 0)
-        outer.setSpacing(8)
+        outer.setContentsMargins(t.sp_sm, 0, t.sp_sm, 0)
+        outer.setSpacing(t.sp_xs)
 
         # Rotated label
         self._label = _RotatedLabel("SNAPS")
@@ -565,14 +648,14 @@ class SnapFilmstrip(QWidget):
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._scroll.setWidgetResizable(True)
-        self._scroll.setFixedHeight(self.STRIP_HEIGHT)
+        self._scroll.setFixedHeight(t.scaled(self._BASE_STRIP_HEIGHT))
         outer.addWidget(self._scroll, 1)
 
         # Inner widget with horizontal layout
         self._container = QWidget()
         self._thumb_layout = QHBoxLayout(self._container)
-        self._thumb_layout.setContentsMargins(0, 6, 0, 0)
-        self._thumb_layout.setSpacing(6)
+        self._thumb_layout.setContentsMargins(0, t.scaled(6), 0, 0)
+        self._thumb_layout.setSpacing(t.scaled(6))
         self._thumb_layout.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         )
@@ -582,33 +665,42 @@ class SnapFilmstrip(QWidget):
 
         # Clear button
         self._clear_btn = ToolbarButton("Clear")
-        self._clear_btn.setFixedHeight(22)
+        self._clear_btn.setFixedHeight(t.scaled(22))
         self._clear_btn.clicked.connect(self.clear)
         outer.addWidget(self._clear_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
-    def add_snap(self, data: np.ndarray, timestamp: str | None = None) -> None:
-        """Add a snap image to the filmstrip.
+    def sizeHint(self) -> QSize:
+        return QSize(
+            super().sizeHint().width(),
+            theme().scaled(self._BASE_STRIP_HEIGHT),
+        )
 
-        Parameters
-        ----------
-        data : np.ndarray
-            Image data. Accepts (H, W), (H, W, 3), or (H, W, 4).
-            Will be converted to QPixmap internally.
-        timestamp : str, optional
-            Display timestamp. Defaults to current time HH:MM:SS.
-        """
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def changeEvent(self, event: QEvent | None) -> None:
+        if event is not None and event.type() == QEvent.Type.StyleChange:
+            t = theme()
+            self._scroll.setFixedHeight(t.scaled(self._BASE_STRIP_HEIGHT))
+            if lay := self.layout():
+                lay.setContentsMargins(t.sp_sm, 0, t.sp_sm, 0)
+                lay.setSpacing(t.sp_xs)
+            self._thumb_layout.setContentsMargins(0, t.scaled(6), 0, 0)
+            self._thumb_layout.setSpacing(t.scaled(6))
+        super().changeEvent(event)
+
+    def add_snap(self, data: np.ndarray, timestamp: str | None = None) -> None:
+        """Add a snap image to the filmstrip."""
         if timestamp is None:
             timestamp = time.strftime("%H:%M:%S")
 
         pixmap = self._ndarray_to_pixmap(data)
+        idx = len(self._thumbnails)
         thumb = SnapThumbnail(pixmap, timestamp)
-        thumb.clicked.connect(
-            lambda idx=len(self._thumbnails): self._on_thumb_clicked(idx)
-        )
+        thumb.clicked.connect(lambda _idx=idx: self._on_thumb_clicked(_idx))
         self._thumb_layout.addWidget(thumb)
         self._thumbnails.append(thumb)
 
-        # Scroll to end
         QTimer.singleShot(10, self._scroll_to_end)
 
     def clear(self) -> None:
@@ -633,7 +725,6 @@ class SnapFilmstrip(QWidget):
         """Convert a numpy array to QPixmap."""
         if data.ndim == 2:
             h, w = data.shape
-            # Normalize to 8-bit if needed
             if data.dtype != np.uint8:
                 d = data.astype(np.float32)
                 lo, hi = d.min(), d.max()
@@ -643,7 +734,6 @@ class SnapFilmstrip(QWidget):
                     d = np.zeros_like(data, dtype=np.uint8)
             else:
                 d = data
-            # Grayscale → RGB
             rgb = np.stack([d, d, d], axis=-1)
             img = QImage(rgb.data, w, h, w * 3, QImage.Format.Format_RGB888)
             return QPixmap.fromImage(img.copy())
@@ -665,7 +755,7 @@ class SnapFilmstrip(QWidget):
 
         raise ValueError(f"Unsupported ndarray shape: {data.shape}")
 
-    def paintEvent(self, event) -> None:
+    def paintEvent(self, event: QPaintEvent | None) -> None:
         p = QPainter(self)
         p.setPen(QPen(qcolor(theme().border_subtle), 1))
         p.drawLine(0, 0, self.width(), 0)
@@ -686,23 +776,21 @@ class ViewportToolbar(QWidget):
     fit_clicked = Signal()
     range_toggled = Signal(bool)
 
-    TOOLBAR_HEIGHT = ROW_HEIGHT
-
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setFixedHeight(self.TOOLBAR_HEIGHT)
+        t = theme()
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 4, 12, 4)
-        layout.setSpacing(6)
+        layout.setContentsMargins(t.sp_sm, t.scaled(4), t.sp_sm, t.scaled(4))
+        layout.setSpacing(t.scaled(6))
 
         self._snap_btn = ToolbarButton("📷 Snap")
         self._snap_btn.clicked.connect(self.snap_clicked)
         layout.addWidget(self._snap_btn)
 
-        # Live
         self._live_btn = ToolbarButton(
-            "● Live", accent_color=qcolor(theme().status_red), checkable=True
+            "● Live", accent_color=qcolor(t.status_red), checkable=True
         )
         self._live_btn.checked = False
         self._live_btn.clicked.connect(
@@ -712,10 +800,9 @@ class ViewportToolbar(QWidget):
 
         layout.addWidget(ToolbarSep())
 
-        # Zoom
         self._zoom_in = ToolbarButton("🔍+")
         layout.addWidget(self._zoom_in)
-        self._zoom_out = ToolbarButton("🔍−")
+        self._zoom_out = ToolbarButton("🔍-")
         layout.addWidget(self._zoom_out)
         self._fit_btn = ToolbarButton("Fit")
         self._fit_btn.clicked.connect(self.fit_clicked)
@@ -723,7 +810,6 @@ class ViewportToolbar(QWidget):
 
         layout.addWidget(ToolbarSep())
 
-        # Range indicator
         self._range_btn = ToolbarButton("◐ Range", checkable=True)
         self._range_btn.clicked.connect(
             lambda: self.range_toggled.emit(self._range_btn.checked)
@@ -732,13 +818,27 @@ class ViewportToolbar(QWidget):
 
         layout.addStretch()
 
-        # Zoom percentage
         self._zoom_label = QLabel("32.08%")
         self._zoom_label.setFont(mono_font(8))
         zpal = self._zoom_label.palette()
-        zpal.setColor(QPalette.ColorRole.WindowText, qcolor(theme().text_secondary))
+        zpal.setColor(QPalette.ColorRole.WindowText, qcolor(t.text_secondary))
         self._zoom_label.setPalette(zpal)
         layout.addWidget(self._zoom_label)
+
+    def sizeHint(self) -> QSize:
+        return QSize(super().sizeHint().width(), theme().row_height)
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def changeEvent(self, event: QEvent | None) -> None:
+        if event is not None and event.type() == QEvent.Type.StyleChange:
+            t = theme()
+            if lay := self.layout():
+                lay.setContentsMargins(t.sp_sm, t.scaled(4), t.sp_sm, t.scaled(4))
+                lay.setSpacing(t.scaled(6))
+            self._zoom_label.setFont(mono_font(8))
+        super().changeEvent(event)
 
     @property
     def zoom_label(self) -> QLabel:
@@ -755,7 +855,7 @@ class ViewportToolbar(QWidget):
     def set_zoom_text(self, text: str) -> None:
         self._zoom_label.setText(text)
 
-    def paintEvent(self, event) -> None:
+    def paintEvent(self, event: QPaintEvent | None) -> None:
         p = QPainter(self)
         p.setPen(QPen(qcolor(theme().border_subtle), 1))
         p.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
@@ -769,16 +869,7 @@ class ViewportToolbar(QWidget):
 
 
 class ImageViewport(QWidget):
-    """Complete image viewport area: toolbar + canvas + channels + filmstrip.
-
-    Public API:
-        add_snap(data, timestamp)  — add a snap to the filmstrip
-        clear_snaps()              — clear all snaps
-        canvas                     — access the ImagePreview
-        toolbar                    — access the ViewportToolbar
-        channel_strip              — access the ChannelStrip
-        filmstrip                  — access the SnapFilmstrip
-    """
+    """Complete image viewport area: toolbar + canvas + channels + filmstrip."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -788,47 +879,38 @@ class ImageViewport(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Toolbar
         self.toolbar = ViewportToolbar()
         layout.addWidget(self.toolbar)
 
-        # Image canvas (expands to fill)
         self.canvas = ImagePreview(mmcore=current_core(self))
         self.overlay = ViewportOverlay(self.canvas)
         layout.addWidget(self.canvas, 1)
 
-        # Channel strip
         self.channel_strip = ChannelStrip()
         layout.addWidget(self.channel_strip)
 
-        # Snap filmstrip
         self.filmstrip = SnapFilmstrip()
         layout.addWidget(self.filmstrip)
 
-        # ── Wire up toolbar signals ──
         self.toolbar.live_toggled.connect(self._on_live_toggled)
         self.toolbar.snap_clicked.connect(self._on_snap_clicked)
 
     def clear_snaps(self) -> None:
-        """Clear all snaps from the filmstrip."""
         self.filmstrip.clear()
 
     def _on_snap_clicked(self) -> None:
-        # In real implementation, would trigger actual snap capture
         if core := current_core(self):
             if core.isSequenceRunning():
                 core.stopSequenceAcquisition()
             img = core.snap()
-            # timestamp in HH:MM:SS:msec format
             timestamp = (
                 time.strftime("%H:%M:%S") + f":{int(time.time() * 1000) % 1000:03d}"
             )
             self.filmstrip.add_snap(img, timestamp)
 
     def _on_live_toggled(self, live: bool) -> None:
-        # In real implementation, would start/stop live view
         if core := current_core(self):
             if live:
-                core.startContinuousSequenceAcquisition()  # dummy interval
+                core.startContinuousSequenceAcquisition()
             else:
                 core.stopSequenceAcquisition()
