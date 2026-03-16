@@ -160,21 +160,34 @@ DEVICE_POSITIONS: dict[str, list[str]] = {
     "source": ["LED 365nm", "LED 470nm", "LED 555nm", "LED 630nm", "Halogen"],
     "laser": ["488nm", "561nm", "640nm", "405nm", "730nm STED"],
     "exfilter": [
-        "AT350/50x", "ET470/40x", "ET545/30x", "ET620/60x",
-        "Cleanup 488/10", "Empty",
+        "AT350/50x",
+        "ET470/40x",
+        "ET545/30x",
+        "ET620/60x",
+        "Cleanup 488/10",
+        "Empty",
     ],
     "phaseplate": ["Vortex 0-2π", "Top-hat", "None"],
     "dichroic": ["T400lp", "T495lpxr", "T660lpxr", "Quad-band", "Mirror"],
     "condenser": ["Phase 1", "DIC", "Darkfield", "Brightfield"],
     "objective": [
-        "4×/0.13", "10×/0.30", "20×/0.50",
-        "40×Oil 1.30", "63×Oil 1.40", "100×Oil 1.45",
+        "4×/0.13",
+        "10×/0.30",
+        "20×/0.50",
+        "40×Oil 1.30",
+        "63×Oil 1.40",
+        "100×Oil 1.45",
     ],
     "illumobjective": ["5×/0.16", "10×/0.30", "20×/0.50"],
     "scanmirror": ["Galvo XY", "Resonant+Galvo"],
     "emfilter": [
-        "ET460/50m", "ET525/50m", "ET605/70m", "ET700/75m",
-        "Notch 488", "Notch 775", "Empty",
+        "ET460/50m",
+        "ET525/50m",
+        "ET605/70m",
+        "ET700/75m",
+        "Notch 488",
+        "Notch 775",
+        "Empty",
     ],
     "beamsplitter": ["50/50", "80/20", "565LP dichroic", "Bypass"],
     "optivar": ["1.0×", "1.5×", "2.0×"],
@@ -252,8 +265,7 @@ class LPConfig:
         in_edges = [e for e in self.edges if e.target_id == node_id]
         out_edges = [e for e in self.edges if e.source_id == node_id]
         self.edges = [
-            e for e in self.edges
-            if e.source_id != node_id and e.target_id != node_id
+            e for e in self.edges if e.source_id != node_id and e.target_id != node_id
         ]
         for ie in in_edges:
             for oe in out_edges:
@@ -261,7 +273,9 @@ class LPConfig:
         self.nodes = [n for n in self.nodes if n.id != node_id]
 
     def edges_for(self, node_id: str) -> list[LPEdge]:
-        return [e for e in self.edges if e.source_id == node_id or e.target_id == node_id]
+        return [
+            e for e in self.edges if e.source_id == node_id or e.target_id == node_id
+        ]
 
     def beam_role(self, node_id: str) -> BeamType:
         """Determine the visual role of a node based on connected edge beams."""
@@ -333,7 +347,11 @@ def _layout_epi(
     pos[dic_id] = LayoutPos(0, 0)
 
     # Excitation upstream
-    ex_inputs = [e.source_id for e in cfg.edges if e.target_id == dic_id and e.beam == BeamType.EX]
+    ex_inputs = [
+        e.source_id
+        for e in cfg.edges
+        if e.target_id == dic_id and e.beam == BeamType.EX
+    ]
     for i, src_id in enumerate(ex_inputs):
         col = 0.0 if len(ex_inputs) == 1 else (i - (len(ex_inputs) - 1) / 2)
         _trace_up(cfg, pos, src_id, dic_id, col, -1)
@@ -342,7 +360,11 @@ def _layout_epi(
     _trace_down_shared(cfg, pos, dic_id, spec_id)
 
     # Emission rightward
-    em_outputs = [e.target_id for e in cfg.edges if e.source_id == dic_id and e.beam == BeamType.EM]
+    em_outputs = [
+        e.target_id
+        for e in cfg.edges
+        if e.source_id == dic_id and e.beam == BeamType.EM
+    ]
     em_col = 1.0
     for tid in em_outputs:
         _trace_right(cfg, pos, tid, em_col, 0)
@@ -351,7 +373,8 @@ def _layout_epi(
     # Trans detection from specimen
     if spec_id:
         trans_out = [
-            e.target_id for e in cfg.edges
+            e.target_id
+            for e in cfg.edges
             if e.source_id == spec_id and e.beam == BeamType.EM
         ]
         for i, tid in enumerate(trans_out):
@@ -371,7 +394,8 @@ def _trace_up(
     while cur and cur != stop_id:
         chain.append(cur)
         parents = [
-            e.source_id for e in cfg.edges
+            e.source_id
+            for e in cfg.edges
             if e.target_id == cur and e.beam == BeamType.EX
         ]
         cur = parents[0] if parents else None
@@ -390,7 +414,8 @@ def _trace_down_shared(
     row_offset = 1
     while cur:
         children = [
-            e.target_id for e in cfg.edges
+            e.target_id
+            for e in cfg.edges
             if e.source_id == cur and e.beam == BeamType.SHARED
         ]
         if not children:
@@ -412,7 +437,8 @@ def _trace_right(
 ) -> None:
     pos[node_id] = LayoutPos(col, row)
     children = [
-        e.target_id for e in cfg.edges
+        e.target_id
+        for e in cfg.edges
         if e.source_id == node_id and e.beam == BeamType.EM
     ]
     if len(children) == 1:
@@ -431,7 +457,8 @@ def _trace_down_from(
 ) -> None:
     pos[node_id] = LayoutPos(col, row)
     children = [
-        e.target_id for e in cfg.edges
+        e.target_id
+        for e in cfg.edges
         if e.source_id == node_id and e.beam == BeamType.EM
     ]
     for i, cid in enumerate(children):
@@ -440,7 +467,8 @@ def _trace_down_from(
 
 def _subtree_width(cfg: LPConfig, node_id: str) -> float:
     children = [
-        e.target_id for e in cfg.edges
+        e.target_id
+        for e in cfg.edges
         if e.source_id == node_id and e.beam == BeamType.EM
     ]
     if len(children) <= 1:
@@ -448,15 +476,14 @@ def _subtree_width(cfg: LPConfig, node_id: str) -> float:
     return sum(_subtree_width(cfg, c) for c in children)
 
 
-def _layout_linear(
-    cfg: LPConfig, pos: dict[str, LayoutPos], spec_id: str
-) -> None:
+def _layout_linear(cfg: LPConfig, pos: dict[str, LayoutPos], spec_id: str) -> None:
     # Trace ex chain up from specimen
     ex_chain: list[str] = []
     cur = spec_id
     while True:
         parents = [
-            e.source_id for e in cfg.edges
+            e.source_id
+            for e in cfg.edges
             if e.target_id == cur and e.beam == BeamType.EX
         ]
         if not parents:
@@ -469,7 +496,8 @@ def _layout_linear(
         pos[nid] = LayoutPos(0, i)
 
     em_start = [
-        e.target_id for e in cfg.edges
+        e.target_id
+        for e in cfg.edges
         if e.source_id == spec_id and e.beam == BeamType.EM
     ]
     for i, tid in enumerate(em_start):
@@ -577,7 +605,9 @@ class DeviceNodeItem(QGraphicsObject):
         name_rect = QRectF(4, 22, self.WIDTH - 8, 20)
         name_text = self.node.position or "—"
         fm = QFontMetricsF(name_font)
-        elided = fm.elidedText(name_text, Qt.TextElideMode.ElideRight, name_rect.width())
+        elided = fm.elidedText(
+            name_text, Qt.TextElideMode.ElideRight, name_rect.width()
+        )
 
         if self.node.passthru:
             # Strikethrough
@@ -789,12 +819,8 @@ class BeamEdgeItem(QGraphicsObject):
         arrow = QPolygonF(
             [
                 QPointF(mx + math.cos(angle) * s, my + math.sin(angle) * s),
-                QPointF(
-                    mx + math.cos(angle + 2.5) * s, my + math.sin(angle + 2.5) * s
-                ),
-                QPointF(
-                    mx + math.cos(angle - 2.5) * s, my + math.sin(angle - 2.5) * s
-                ),
+                QPointF(mx + math.cos(angle + 2.5) * s, my + math.sin(angle + 2.5) * s),
+                QPointF(mx + math.cos(angle - 2.5) * s, my + math.sin(angle - 2.5) * s),
             ]
         )
         arrow_color = QColor(color)
@@ -934,7 +960,9 @@ class PositionPicker(QWidget):
     position_selected = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        super().__init__(
+            parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint
+        )
         self.setFixedWidth(200)
 
         layout = QVBoxLayout(self)
@@ -1006,7 +1034,9 @@ class InsertDevicePicker(QWidget):
     device_selected = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        super().__init__(
+            parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint
+        )
         self.setFixedWidth(180)
 
         layout = QVBoxLayout(self)
@@ -1031,9 +1061,7 @@ class InsertDevicePicker(QWidget):
         self.setPalette(pal)
         self.setAutoFillBackground(True)
 
-    def show_for(
-        self, device_types: list[str], global_pos: QPointF
-    ) -> None:
+    def show_for(self, device_types: list[str], global_pos: QPointF) -> None:
         self._list.clear()
         for dt in device_types:
             label = DEVICE_TYPES.get(dt, {}).get("label", dt)
@@ -1098,7 +1126,9 @@ class LightPathScene(QGraphicsScene):
                 node_center[node.id] = QPointF(x + NODE_W / 2, y + NODE_H / 2)
 
                 # Connect signals
-                item.clicked.connect(lambda n=node, it=item: self._on_node_clicked(n, it))
+                item.clicked.connect(
+                    lambda n=node, it=item: self._on_node_clicked(n, it)
+                )
                 item.remove_requested.connect(lambda n=node: self._on_remove(n))
                 item.passthru_toggled.connect(
                     lambda n=node: self._on_passthru_toggle(n)
@@ -1124,9 +1154,7 @@ class LightPathScene(QGraphicsScene):
             ):
                 mid = (p1 + p2) / 2
                 ins_btn = InsertButton(mid)
-                ins_btn.clicked.connect(
-                    lambda e=edge: self._on_insert_clicked(e)
-                )
+                ins_btn.clicked.connect(lambda e=edge: self._on_insert_clicked(e))
                 self.addItem(ins_btn)
 
                 hover_zone = EdgeHoverZone(p1, p2, ins_btn)
@@ -1159,9 +1187,7 @@ class LightPathScene(QGraphicsScene):
         )
 
         picker = PositionPicker(view)
-        picker.show_for(
-            node.label, positions, node.position, QPointF(global_pos)
-        )
+        picker.show_for(node.label, positions, node.position, QPointF(global_pos))
 
         def on_selected(pos: str) -> None:
             node.position = pos
@@ -1238,9 +1264,7 @@ class LightPathView(QGraphicsView):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         if hasattr(self, "_config"):
-            self.fitInView(
-                self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio
-            )
+            self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
 
 # ═══════════════════════════════════════════════════════════════
