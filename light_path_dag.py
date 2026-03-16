@@ -1,3 +1,5 @@
+# ruff: noqa
+# pylint: disable
 """Light Path DAG Editor — PyQt6 Implementation.
 
 Dataclass-backed graph model rendered via QGraphicsScene.

@@ -1,20 +1,6 @@
-# ruff: noqa: D102
-"""
-Collapsible Panel Sidebar — Qt Implementation.
-
-Scrollable left panel with collapsible sections, matching the HTML mockup.
-No QSS. Only QPalette + QProxyStyle(Fusion) + custom QWidget painting.
-
-Usage:
-    python collapsible_panels.py
-"""
-
 from __future__ import annotations
 
-import sys
-from enum import Enum, auto
-
-from PyQt6.QtCore import (  # type: ignore[attr-defined]
+from pymmcore_gui._qt.QtCore import (  # type: ignore[attr-defined]
     QEasingCurve,
     QEvent,
     QMimeData,
@@ -25,7 +11,7 @@ from PyQt6.QtCore import (  # type: ignore[attr-defined]
     Qt,
     pyqtProperty,  # pyright: ignore
 )
-from PyQt6.QtGui import (
+from pymmcore_gui._qt.QtGui import (
     QColor,
     QDrag,
     QDragEnterEvent,
@@ -34,7 +20,6 @@ from PyQt6.QtGui import (
     QDropEvent,
     QEnterEvent,
     QFont,
-    QFontDatabase,
     QFontMetrics,
     QMouseEvent,
     QPainter,
@@ -43,208 +28,24 @@ from PyQt6.QtGui import (
     QPen,
     QPixmap,
 )
-from PyQt6.QtWidgets import (
+from pymmcore_gui._qt.QtWidgets import (
     QApplication,
     QFrame,
-    QHBoxLayout,
     QLabel,
-    QMainWindow,
-    QProxyStyle,
     QScrollArea,
     QSizePolicy,
-    QStyle,
-    QStyleOption,
     QVBoxLayout,
     QWidget,
 )
 
-# ═══════════════════════════════════════════════════════════════════
-# Design Tokens
-# ═══════════════════════════════════════════════════════════════════
-SP_EXPANDING = QSizePolicy.Policy.Expanding
-SP_PREFERRED = QSizePolicy.Policy.Preferred
-SP_MAXIMUM = QSizePolicy.Policy.Maximum
+from ._enums import DeviceStatus
+from ._theme import Sp, mono_font, qcolor, theme, ui_font
 
-
-class Clr:
-    """Color tokens — matches the HTML mockup exactly."""
-
-    BG_DEEPEST = QColor(0x12, 0x12, 0x12)
-    BG_BASE = QColor(0x1E, 0x1E, 0x1E)
-    BG_RAISED = QColor(0x25, 0x25, 0x25)
-    BG_SURFACE = QColor(0x2D, 0x2D, 0x2D)
-    BG_HOVER = QColor(0x35, 0x35, 0x35)
-    BG_ACTIVE = QColor(0x40, 0x40, 0x40)
-
-    TEXT_PRIMARY = QColor(0xE0, 0xE0, 0xE0)
-    TEXT_SECONDARY = QColor(0xA0, 0xA0, 0xA0)
-    TEXT_DISABLED = QColor(0x70, 0x70, 0x70)
-
-    BORDER_SUBTLE = QColor(0x33, 0x33, 0x33)
-    BORDER_DEFAULT = QColor(0x44, 0x44, 0x44)
-    BORDER_FOCUS = QColor(0x4A, 0x9E, 0xFF)
-
-    ACCENT = QColor(0x4A, 0x9E, 0xFF)
-    ACCENT_MUTED = QColor(0x4A, 0x9E, 0xFF, 0x26)  # ~15%
-
-    GREEN = QColor(0x4C, 0xAF, 0x50)
-    RED = QColor(0xEF, 0x53, 0x50)
-    AMBER = QColor(0xFF, 0xA7, 0x26)
-
-
-class Sp:
-    """Spacing tokens (px). 4px base grid."""
-
-    XXS = 4
-    XS = 8
-    SM = 12
-    MD = 16
-    LG = 24
-    XL = 32
-
-
-RADIUS = 3
 RADIUS_LG = 6
 SIDEBAR_W = 300
 
-
-# ═══════════════════════════════════════════════════════════════════
-# Fonts
-# ═══════════════════════════════════════════════════════════════════
-
-
-def ui_font(size_pt: float = 10, weight: int = QFont.Weight.Normal) -> QFont:
-    """System UI font."""
-    f = QFont()
-    f.setPointSizeF(size_pt)
-    f.setWeight(weight)
-    return f
-
-
-def mono_font(size_pt: float = 10, weight: int = QFont.Weight.Normal) -> QFont:
-    """Monospace font — try JetBrains Mono, fall back to system mono."""
-    families = ["JetBrains Mono", "SF Mono", "Cascadia Code", "Fira Code", "Consolas"]
-    for fam in families:
-        if fam in QFontDatabase.families():
-            f = QFont(fam)
-            f.setPointSizeF(size_pt)
-            f.setWeight(weight)
-            return f
-    f = QFont()
-    f.setStyleHint(QFont.StyleHint.Monospace)
-    f.setPointSizeF(size_pt)
-    f.setWeight(weight)
-    return f
-
-
-# ═══════════════════════════════════════════════════════════════════
-# QPalette
-# ═══════════════════════════════════════════════════════════════════
-
-
-def make_dark_palette() -> QPalette:
-    """Build a dark QPalette matching the mockup color tokens."""
-    p = QPalette()
-
-    p.setColor(QPalette.ColorRole.Window, Clr.BG_BASE)
-    p.setColor(QPalette.ColorRole.WindowText, Clr.TEXT_PRIMARY)
-    p.setColor(QPalette.ColorRole.Base, Clr.BG_DEEPEST)
-    p.setColor(QPalette.ColorRole.AlternateBase, Clr.BG_RAISED)
-    p.setColor(QPalette.ColorRole.Button, Clr.BG_SURFACE)
-    p.setColor(QPalette.ColorRole.ButtonText, Clr.TEXT_PRIMARY)
-    p.setColor(QPalette.ColorRole.Highlight, Clr.ACCENT)
-    p.setColor(QPalette.ColorRole.HighlightedText, Clr.TEXT_PRIMARY)
-    p.setColor(QPalette.ColorRole.ToolTipBase, Clr.BG_RAISED)
-    p.setColor(QPalette.ColorRole.ToolTipText, Clr.TEXT_PRIMARY)
-    p.setColor(QPalette.ColorRole.PlaceholderText, Clr.TEXT_DISABLED)
-    p.setColor(QPalette.ColorRole.BrightText, Clr.TEXT_PRIMARY)
-    p.setColor(QPalette.ColorRole.Link, Clr.ACCENT)
-    p.setColor(QPalette.ColorRole.Mid, Clr.BORDER_DEFAULT)
-    p.setColor(QPalette.ColorRole.Dark, Clr.BG_DEEPEST)
-    p.setColor(QPalette.ColorRole.Midlight, Clr.BG_HOVER)
-    p.setColor(QPalette.ColorRole.Shadow, QColor(0, 0, 0))
-    p.setColor(QPalette.ColorRole.Light, Clr.BG_HOVER)
-
-    # Disabled
-    p.setColor(
-        QPalette.ColorGroup.Disabled,
-        QPalette.ColorRole.WindowText,
-        Clr.TEXT_DISABLED,
-    )
-    p.setColor(
-        QPalette.ColorGroup.Disabled,
-        QPalette.ColorRole.ButtonText,
-        Clr.TEXT_DISABLED,
-    )
-
-    return p
-
-
-# ═══════════════════════════════════════════════════════════════════
-# QProxyStyle — wraps Fusion, tweaks geometry and painting
-# ═══════════════════════════════════════════════════════════════════
-
-
-class MicroscopeStyle(QProxyStyle):
-    """Thin proxy over Fusion. Overrides only what we need.
-
-    - Global border-radius → 3px
-    - Scrollbar width → 5px, minimal styling
-    - Frame painting for our custom containers.
-    """
-
-    def __init__(self) -> None:
-        super().__init__("Fusion")
-
-    def pixelMetric(
-        self,
-        metric: QStyle.PixelMetric,
-        option: QStyleOption | None = None,
-        widget: QWidget | None = None,
-    ) -> int:
-        """Override a few pixel metrics for our theme."""
-        if metric == QStyle.PixelMetric.PM_ScrollBarExtent:
-            return 5
-        if metric == QStyle.PixelMetric.PM_ScrollBarSliderMin:
-            return 20
-        if metric == QStyle.PixelMetric.PM_LayoutHorizontalSpacing:
-            return Sp.SM
-        if metric == QStyle.PixelMetric.PM_LayoutVerticalSpacing:
-            return Sp.XXS
-        return super().pixelMetric(metric, option, widget)
-
-    def drawPrimitive(
-        self,
-        element: QStyle.PrimitiveElement,
-        option: QStyleOption | None,
-        painter: QPainter | None,
-        widget: QWidget | None = None,
-    ) -> None:
-        """Suppress default frame drawing for scroll areas."""
-        if element == QStyle.PrimitiveElement.PE_Frame and isinstance(
-            widget, QScrollArea
-        ):
-            return
-        super().drawPrimitive(element, option, painter, widget)
-
-
-# ═══════════════════════════════════════════════════════════════════
-# DeviceStatus — the little colored dot
-# ═══════════════════════════════════════════════════════════════════
-
-
-class DeviceStatus(Enum):
-    """Connection status for the colored indicator dot."""
-
-    CONNECTED = auto()
-    DISCONNECTED = auto()
-    BUSY = auto()
-    ERROR = auto()
-
-
-# ═══════════════════════════════════════════════════════════════════
-# CollapsiblePanelHeader — custom-painted clickable header
-# ═══════════════════════════════════════════════════════════════════
+SP_PREFERRED = QSizePolicy.Policy.Preferred
+SP_MAXIMUM = QSizePolicy.Policy.Maximum
 
 
 class CollapsiblePanelHeader(QWidget):
@@ -348,11 +149,12 @@ class CollapsiblePanelHeader(QWidget):
         w, h = self.width(), self.height()
 
         # Background
-        bg = Clr.BG_RAISED if self._hovered else Clr.BG_BASE
+        t = theme()
+        bg = qcolor(t.bg_raised if self._hovered else t.bg_base)
         p.fillRect(0, 0, w, h, bg)
 
         # Bottom border
-        p.setPen(QPen(Clr.BORDER_SUBTLE, 1))
+        p.setPen(QPen(qcolor(t.border_subtle), 1))
         p.drawLine(0, h - 1, w, h - 1)
 
         x = Sp.SM  # running x cursor
@@ -362,7 +164,7 @@ class CollapsiblePanelHeader(QWidget):
         p.translate(x + 6, h / 2)
         p.rotate(self._chevron_angle)
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(Clr.TEXT_DISABLED)
+        p.setBrush(qcolor(t.text_disabled))
         # Small right-pointing triangle
         tri = [
             (-3, -4),
@@ -379,12 +181,14 @@ class CollapsiblePanelHeader(QWidget):
 
         # ── Status dot ──
         if self._show_dot:
-            dot_color = {
-                DeviceStatus.CONNECTED: Clr.GREEN,
-                DeviceStatus.DISCONNECTED: Clr.RED,
-                DeviceStatus.BUSY: Clr.AMBER,
-                DeviceStatus.ERROR: Clr.RED,
-            }.get(self._status, Clr.TEXT_DISABLED)
+            dot_color = qcolor(
+                {
+                    DeviceStatus.CONNECTED: t.status_green,
+                    DeviceStatus.DISCONNECTED: t.status_red,
+                    DeviceStatus.BUSY: t.status_amber,
+                    DeviceStatus.ERROR: t.status_red,
+                }.get(self._status, t.text_disabled)
+            )
 
             dot_r = 3.5
             dot_cx = x + dot_r
@@ -406,7 +210,7 @@ class CollapsiblePanelHeader(QWidget):
         # ── Title ──
         title_font = ui_font(10, QFont.Weight.DemiBold)
         p.setFont(title_font)
-        p.setPen(Clr.TEXT_PRIMARY)
+        p.setPen(qcolor(t.text_primary))
         title_rect = QRect(x, 0, w - x - Sp.SM, h)
         fm = QFontMetrics(title_font)
         title_width = fm.horizontalAdvance(self._title)
@@ -419,7 +223,7 @@ class CollapsiblePanelHeader(QWidget):
             if opacity > 0.01:
                 summary_font = mono_font(8)
                 p.setFont(summary_font)
-                summary_color = QColor(Clr.TEXT_SECONDARY)
+                summary_color = qcolor(t.text_secondary)
                 summary_color.setAlphaF(opacity)
                 p.setPen(summary_color)
 
@@ -633,42 +437,9 @@ class CollapsiblePanel(QWidget):
         p = QPainter(self)
         if self._drag_highlighted:
             p.fillRect(self.rect(), QColor(255, 255, 255, 20))
-        p.setPen(QPen(Clr.BORDER_SUBTLE, 1))
+        p.setPen(QPen(qcolor(theme().border_subtle), 1))
         p.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
         p.end()
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Placeholder content widgets (just labels for now)
-# ═══════════════════════════════════════════════════════════════════
-
-
-class PlaceholderContent(QWidget):
-    """Simple placeholder showing lines of text to represent panel content."""
-
-    def __init__(
-        self,
-        lines: list[str],
-        height: int = 80,
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(Sp.XXS)
-        for line in lines:
-            lbl = QLabel(line)
-            lbl.setFont(mono_font(8))
-            # Use palette for color — no stylesheet
-            pal = lbl.palette()
-            pal.setColor(QPalette.ColorRole.WindowText, Clr.TEXT_SECONDARY)
-            lbl.setPalette(pal)
-            layout.addWidget(lbl)
-
-
-# ═══════════════════════════════════════════════════════════════════
-# SidebarContent — drag-reorder container
-# ═══════════════════════════════════════════════════════════════════
 
 
 class SidebarContent(QWidget):
@@ -792,9 +563,27 @@ class SidebarContent(QWidget):
         lay.insertWidget(insert_idx, source)
 
 
-# ═══════════════════════════════════════════════════════════════════
-# Sidebar assembly
-# ═══════════════════════════════════════════════════════════════════
+class PlaceholderContent(QWidget):
+    """Simple placeholder showing lines of text to represent panel content."""
+
+    def __init__(
+        self,
+        lines: list[str],
+        height: int = 80,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(Sp.XXS)
+        for line in lines:
+            lbl = QLabel(line)
+            lbl.setFont(mono_font(8))
+            # Use palette for color — no stylesheet
+            pal = lbl.palette()
+            pal.setColor(QPalette.ColorRole.WindowText, qcolor(theme().text_secondary))
+            lbl.setPalette(pal)
+            layout.addWidget(lbl)
 
 
 class Sidebar(QWidget):
@@ -941,65 +730,6 @@ class Sidebar(QWidget):
     def paintEvent(self, a0: QPaintEvent | None) -> None:
         """Draw right border."""
         p = QPainter(self)
-        p.setPen(QPen(Clr.BORDER_SUBTLE, 1))
+        p.setPen(QPen(qcolor(theme().border_subtle), 1))
         p.drawLine(self.width() - 1, 0, self.width() - 1, self.height())
         p.end()
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Main Window
-# ═══════════════════════════════════════════════════════════════════
-
-
-class MainWindow(QMainWindow):
-    """Top-level window with sidebar + viewport."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.setWindowTitle("Microscope Control — Panel Mockup")
-        self.resize(900, 700)
-
-        central = QWidget()
-        self.setCentralWidget(central)
-
-        # Viewport placeholder
-        viewport = QWidget()
-        viewport.setSizePolicy(SP_EXPANDING, SP_EXPANDING)
-
-        # Paint the viewport area black
-        pal = viewport.palette()
-        pal.setColor(QPalette.ColorRole.Window, QColor(0, 0, 0))
-        viewport.setPalette(pal)
-        viewport.setAutoFillBackground(True)
-
-        layout = QHBoxLayout(central)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.addWidget(Sidebar())
-        layout.addWidget(viewport)
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Entry point
-# ═══════════════════════════════════════════════════════════════════
-
-
-def main() -> None:
-    """Launch the mockup application."""
-    app = QApplication(sys.argv)
-
-    # Apply our style and palette
-    app.setStyle(MicroscopeStyle())
-    app.setPalette(make_dark_palette())
-
-    # Global font
-    app.setFont(ui_font(10))
-
-    win = MainWindow()
-    win.show()
-    win.resize(900, 500)
-    sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    main()

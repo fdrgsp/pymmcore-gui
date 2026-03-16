@@ -101,12 +101,22 @@ def run(
         "--no-telemetry",
         help="Disable telemetry.",
     ),
+    window: str | None = typer.Option(
+        None,
+        "--window",
+        help="Window class to use (e.g. 'pymmcore_gui:MicroManagerGUI').",
+    ),
 ) -> None:
     """Run the Micro-Manager GUI (this is the default command)."""
     from pymmcore_gui import create_mmgui
 
     mm_config = "MMConfig_demo.cfg" if demo_config else config
-    create_mmgui(mm_config=mm_config, exec_app=True, install_sentry=not no_telemetry)
+    create_mmgui(
+        mm_config=mm_config,
+        exec_app=True,
+        install_sentry=not no_telemetry,
+        window_cls=window,
+    )
     sys.exit(0)
 
 

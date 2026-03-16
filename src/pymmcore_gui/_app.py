@@ -8,7 +8,7 @@ import sys
 import traceback
 import warnings
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from superqt.utils import WorkerBase
 
@@ -16,7 +16,13 @@ from pymmcore_gui import __version__
 from pymmcore_gui._main_window import ICON, MicroManagerGUI
 from pymmcore_gui._qt.QtCore import QTimer, Signal
 from pymmcore_gui._qt.QtGui import QIcon
-from pymmcore_gui._qt.QtWidgets import QApplication, QCheckBox, QMessageBox, QWidget
+from pymmcore_gui._qt.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QMainWindow,
+    QMessageBox,
+    QWidget,
+)
 from pymmcore_gui._settings import Settings
 
 from . import _sentry
@@ -28,6 +34,12 @@ if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
 
     ExcTuple = tuple[type[BaseException], BaseException, TracebackType | None]
+
+    class WindowProtocol(Protocol):
+        def __init__(self, *, mmcore: CMMCorePlus | None = None) -> None: ...
+        @property
+        def mmcore(self) -> CMMCorePlus: ...
+
 
 APP_NAME = "pyMM"
 APP_VERSION = __version__
@@ -86,6 +98,7 @@ def create_mmgui(
     install_sys_excepthook: bool = True,
     install_sentry: bool = True,
     exec_app: bool = True,
+    window_cls: type[WindowProtocol] | str | None = None,
 ) -> MicroManagerGUI:
     """Initialize the pymmcore-gui application and Main Window.
 
@@ -119,6 +132,10 @@ def create_mmgui(
         If True (the default), the QApplication event loop will be started.  If
         False, the event loop will not be started, and the caller is responsible for
         starting it with `QApplication.instance().exec()`.
+    window_cls : type[WindowProtocol] | str | None
+        The QMainWindow subclass to use for the main window.  If None (the default),
+        `MicroManagerGUI` will be used.  If a string is passed, it should be
+        importable in the format "module.submodule.ClassName".
     """
     global _QAPP
     # Note: in practice this should almost never be None,
@@ -152,8 +169,21 @@ def create_mmgui(
 
     # -------------------------------------------------
 
-    win = MicroManagerGUI(mmcore=mmcore)
-    QTimer.singleShot(0, lambda: win.restore_state(show=True))
+    if window_cls is None:
+        window_cls = MicroManagerGUI
+    elif isinstance(window_cls, str):
+        # if a string was passed, try to import that as the window class
+        module_name, class_name = window_cls.rsplit(".", 1)
+        module = importlib.import_module(module_name)
+        window_cls = getattr(module, class_name)
+    if not issubclass(window_cls, QMainWindow):  # type: ignore
+        raise TypeError(f"{window_cls} is not a subclass of QMainWindow")
+
+    win = window_cls(mmcore=mmcore)
+    if hasattr(win, "restore_state"):
+        QTimer.singleShot(0, lambda: win.restore_state(show=True))
+    else:
+        win.show()
 
     # if False was passed, don't load any config at all
     if mm_config is not False:

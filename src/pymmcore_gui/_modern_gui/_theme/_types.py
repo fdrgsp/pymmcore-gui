@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from typing import Union
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,13 +22,13 @@ class GradientSpread(enum.IntEnum):
 
 @dataclass(frozen=True, slots=True)
 class GradientStop:
-    position: float  # 0.0 – 1.0
+    position: float  # 0.0 - 1.0
     color: Color
 
 
 @dataclass(frozen=True, slots=True)
 class LinearGradient:
-    """Linear gradient in object-bounding-mode coordinates (0–1)."""
+    """Linear gradient in object-bounding-mode coordinates (0-1)."""
 
     stops: tuple[GradientStop, ...] = ()
     x1: float = 0.0
@@ -40,7 +39,7 @@ class LinearGradient:
 
 
 #: A brush is either a solid color or a linear gradient.
-Brush = Union[Color, LinearGradient]
+Brush = Color | LinearGradient
 
 
 @dataclass
@@ -87,15 +86,42 @@ class ColorGroup:
 
 @dataclass
 class Palette:
-    """Complete palette: three color groups.
-
-    - `active`   — window that has keyboard focus
-    - `inactive` — other (unfocused) windows
-    - `disabled` — disabled widgets
-
-    In most Qt styles, `active` and `inactive` are identical.
-    """
+    """Three color groups: active, inactive, disabled."""
 
     active: ColorGroup = field(default_factory=ColorGroup)
     inactive: ColorGroup = field(default_factory=ColorGroup)
     disabled: ColorGroup = field(default_factory=ColorGroup)
+
+
+@dataclass
+class Theme:
+    """Extended design tokens beyond QPalette."""
+
+    palette: Palette = field(default_factory=Palette)
+
+    # -- backgrounds --------------------------------------------------------
+    bg_deepest: Color = Color()
+    bg_base: Color = Color()
+    bg_raised: Color = Color()
+    bg_surface: Color = Color()
+    bg_hover: Color = Color()
+    bg_active: Color = Color()
+
+    # -- text ---------------------------------------------------------------
+    text_primary: Color = Color(0xE0, 0xE0, 0xE0)
+    text_secondary: Color = Color(0xA0, 0xA0, 0xA0)
+    text_disabled: Color = Color(0x70, 0x70, 0x70)
+
+    # -- borders ------------------------------------------------------------
+    border_subtle: Color = Color()
+    border_default: Color = Color()
+    border_focus: Color = Color()
+
+    # -- accent -------------------------------------------------------------
+    accent: Color = Color()
+    accent_muted: Color = Color()
+
+    # -- semantic status ----------------------------------------------------
+    status_green: Color = Color()
+    status_red: Color = Color()
+    status_amber: Color = Color()
