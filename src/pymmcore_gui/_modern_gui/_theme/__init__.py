@@ -64,7 +64,8 @@ _view: ScaledThemeView | None = None
 _base_font_pt: float = 0.0
 
 ZOOM_STEPS = (0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0)
-_zoom_index: int = ZOOM_STEPS.index(1.0)
+_DEFAULT_ZOOM = 1.25
+_zoom_index: int = ZOOM_STEPS.index(_DEFAULT_ZOOM)
 
 # ═══════════════════════════════════════════════════════════════════
 # Theme accessors
@@ -102,6 +103,7 @@ def set_style(style: MicroscopeStyle) -> None:
     if isinstance(app, QApplication):
         _base_font_pt = app.font().pointSizeF()
     _view = ScaledThemeView(_current_theme, style)
+    set_zoom(_DEFAULT_ZOOM)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -162,10 +164,10 @@ def zoom_out() -> None:
 
 
 def reset_zoom() -> None:
-    """Reset zoom to 1.0."""
+    """Reset zoom to the default level."""
     global _zoom_index
-    _zoom_index = ZOOM_STEPS.index(1.0)
-    set_zoom(1.0)
+    _zoom_index = ZOOM_STEPS.index(_DEFAULT_ZOOM)
+    set_zoom(_DEFAULT_ZOOM)
 
 
 # ═══════════════════════════════════════════════════════════════════

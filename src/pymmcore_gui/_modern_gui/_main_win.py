@@ -177,7 +177,7 @@ class MainWindow(QMainWindow):
 
         self._mmc = mmcore or CMMCorePlus.instance()
         self.setWindowTitle("Microscope Control — Panel Mockup")
-        self.resize(900, 700)
+        self.resize(1800, 1200)
 
         self._toolbar = QToolBar()
         self._toolbar.setMovable(False)
@@ -187,9 +187,7 @@ class MainWindow(QMainWindow):
         self._toolbar.addWidget(self._mode_tabs)
 
         spacer = QWidget()
-        spacer.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._toolbar.addWidget(spacer)
 
         self._theme_btn = QPushButton("☀")
@@ -212,7 +210,7 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addWidget(Sidebar())
+        layout.addWidget(Sidebar(self))
         layout.addWidget(self._viewport)
 
         # Zoom shortcuts

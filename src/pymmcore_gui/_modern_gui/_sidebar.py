@@ -43,6 +43,7 @@ from pymmcore_gui._qt.QtWidgets import (
 
 from ._enums import DeviceStatus
 from ._theme import mono_font, qcolor, theme, ui_font
+from ._xy_stage_panel import CollapsibleXYStagePanel
 
 SP_PREFERRED = QSizePolicy.Policy.Preferred
 SP_MAXIMUM = QSizePolicy.Policy.Maximum
@@ -608,34 +609,9 @@ class Sidebar(QWidget):
         outer.addWidget(scroll)
 
         # ── Panels ──
-        pos = CollapsiblePanel(
-            title="Positioning",
-            summary="74.4, -147.6, 12.3",
-            expanded=True,
-        )
-        pos.body_layout.addWidget(
-            PlaceholderContent(
-                [
-                    "X:    74.40  \u03bcm",
-                    "Y:  -147.60  \u03bcm",
-                    "Z:    12.34  \u03bcm",
-                    "",
-                    "Step: [0.1] [1] [10] [100] [1k]",
-                    "",
-                    "\u250c\u2500\u2500\u2500 Joystick \u2500\u2500\u2500\u2510",
-                    "\u2502                \u2502",
-                    "\u2502       +        \u2502",
-                    "\u2502                \u2502",
-                    "\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518",
-                ]
-            )
-        )
-        self._layout.addWidget(pos)
+        self._layout.addWidget(CollapsibleXYStagePanel(self))
 
-        obj = CollapsiblePanel(
-            title="Objective",
-            summary="40x Oil 1.30",
-        )
+        obj = CollapsiblePanel(title="Objective", summary="40x Oil 1.30")
         obj.body_layout.addWidget(
             PlaceholderContent(
                 [
@@ -646,10 +622,7 @@ class Sidebar(QWidget):
         )
         self._layout.addWidget(obj)
 
-        cam = CollapsiblePanel(
-            title="Camera",
-            summary="100 ms \u00b7 1x1",
-        )
+        cam = CollapsiblePanel(title="Camera", summary="100 ms \u00b7 1x1")
         cam.body_layout.addWidget(
             PlaceholderContent(
                 [
@@ -662,10 +635,7 @@ class Sidebar(QWidget):
         )
         self._layout.addWidget(cam)
 
-        ch = CollapsiblePanel(
-            title="Channels",
-            summary="DAPI \u00b7 GFP \u00b7 Cy5",
-        )
+        ch = CollapsiblePanel(title="Channels", summary="DAPI \u00b7 GFP \u00b7 Cy5")
         ch.body_layout.addWidget(
             PlaceholderContent(
                 [
@@ -678,9 +648,7 @@ class Sidebar(QWidget):
         self._layout.addWidget(ch)
 
         hist = CollapsiblePanel(
-            title="Histogram",
-            summary="0 - 4095",
-            show_status_dot=False,
+            title="Histogram", summary="0 - 4095", show_status_dot=False
         )
         hist.body_layout.addWidget(
             PlaceholderContent(
@@ -695,9 +663,7 @@ class Sidebar(QWidget):
         self._layout.addWidget(hist)
 
         acq = CollapsiblePanel(
-            title="Acquisition",
-            summary="Zx50 \u00b7 Tx100",
-            show_status_dot=False,
+            title="Acquisition", summary="Zx50 \u00b7 Tx100", show_status_dot=False
         )
         acq.body_layout.addWidget(
             PlaceholderContent(

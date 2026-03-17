@@ -1,15 +1,3 @@
-# /// script
-# requires-python = ">=3.14"
-# dependencies = [
-#     "pymmcore-gui",
-#     "pymmcore-plus[simulate]>=0.17.3",
-#     "pymmcore-widgets[pyqt6]",
-# ]
-#
-# [tool.uv.sources]
-# pymmcore-widgets = { path = "../pymmcore-widgets", editable = true }
-# pymmcore-gui = { path = ".", editable = true }
-# ///
 import math
 import random
 

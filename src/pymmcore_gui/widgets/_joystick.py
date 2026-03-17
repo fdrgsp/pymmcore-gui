@@ -28,6 +28,8 @@ class JoystickWidget(QWidget):
         self._knob_pos = QPointF(0, 0)  # relative to center, in pixels
         self._dragging = False
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        self.setMouseTracking(True)
 
     # ---- geometry helpers ----
 
@@ -127,6 +129,12 @@ class JoystickWidget(QWidget):
         p.drawLine(center + QPointF(-radius, 0), center + QPointF(radius, 0))
         p.drawLine(center + QPointF(0, -radius), center + QPointF(0, radius))
 
+        # vector line from center to knob
+        if self._dragging and self._knob_pos != QPointF(0, 0):
+            line_color = QColor(74, 158, 255, 100)
+            p.setPen(QPen(line_color, 3))
+            p.drawLine(center, center + self._knob_pos)
+
         # knob
         knob_center = center + self._knob_pos
         kr = self._knob_radius
@@ -181,22 +189,6 @@ class StageJoystick(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._joystick)
-
-    @property
-    def max_um_per_sec(self) -> float:
-        return self._max_speed
-
-    @max_um_per_sec.setter
-    def max_um_per_sec(self, value: float) -> None:
-        self._max_speed = value
-
-    @property
-    def speed_exponent(self) -> float:
-        return self._speed_exponent
-
-    @speed_exponent.setter
-    def speed_exponent(self, value: float) -> None:
-        self._speed_exponent = value
 
     def _on_deflection(self, dx: float, dy: float) -> None:
         self._dx = dx
