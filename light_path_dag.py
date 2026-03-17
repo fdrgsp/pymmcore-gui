@@ -748,7 +748,7 @@ class SpecimenItem(QGraphicsObject):
         painter.drawText(
             QRectF(0, 0, self.SIZE, self.SIZE),
             Qt.AlignmentFlag.AlignCenter,
-            "🔬",
+            "🐛",
         )
 
         # Label
