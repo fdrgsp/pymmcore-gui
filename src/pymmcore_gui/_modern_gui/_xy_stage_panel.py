@@ -31,6 +31,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPushButton,
     QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
@@ -39,7 +40,6 @@ from pymmcore_gui._qt.QtWidgets import (
 from pymmcore_gui.widgets._joystick import JoystickWidget
 
 from ._theme import mono_font, qcolor, theme, ui_font
-from ._theme._buttons import ButtonVariant, StyledButton
 
 if TYPE_CHECKING:
     from pymmcore_gui._qt.QtGui import QKeyEvent, QMouseEvent, QPaintEvent
@@ -650,11 +650,10 @@ class GoToSection(QWidget):
         self._y_label = QLabel("Y")
         self._x_input = QLineEdit("0")
         self._y_input = QLineEdit("0")
-        self._move_btn = StyledButton(
-            "\u2197 Move to position",
-            variant=ButtonVariant.SUBTLE,
-            min_width=100,
-        )
+        self._move_btn = QPushButton("\u2197 Move to position")
+        self._move_btn.setProperty("variant", "subtle")
+        self._move_btn.setFont(ui_font(8, QFont.Weight.Medium))
+        self._move_btn.setMinimumWidth(100)
 
         self._x_input.setValidator(QDoubleValidator())
         self._y_input.setValidator(QDoubleValidator())
@@ -794,12 +793,14 @@ class SavedPositionsSection(QWidget):
         self._list_layout.setContentsMargins(0, 0, 0, 0)
         self._list_layout.setSpacing(theme().scaled(2))
 
-        self._save_btn = StyledButton(
-            "+ Save current", variant=ButtonVariant.SUBTLE, min_width=80
-        )
-        self._clear_btn = StyledButton(
-            "Clear all", variant=ButtonVariant.DANGER, min_width=80
-        )
+        self._save_btn = QPushButton("+ Save current")
+        self._save_btn.setProperty("variant", "subtle")
+        self._save_btn.setFont(ui_font(8, QFont.Weight.Medium))
+        self._save_btn.setMinimumWidth(80)
+        self._clear_btn = QPushButton("Clear all")
+        self._clear_btn.setProperty("variant", "danger")
+        self._clear_btn.setFont(ui_font(8, QFont.Weight.Medium))
+        self._clear_btn.setMinimumWidth(80)
 
         btn_row = QHBoxLayout()
         btn_row.setContentsMargins(0, 0, 0, 0)

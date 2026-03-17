@@ -37,6 +37,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -51,139 +52,6 @@ OVERLAY_DIM = QColor(255, 255, 255, 64)  # ~25% white
 CH_DAPI = QColor(0x44, 0x72, 0xC4)
 CH_GFP = QColor(0x00, 0xCC, 0x66)
 CH_CY5 = QColor(0xCC, 0x44, 0xCC)
-
-
-# ═══════════════════════════════════════════════════════════════
-# ToolbarButton — custom painted, no QSS
-# ═══════════════════════════════════════════════════════════════
-
-
-class ToolbarButton(QWidget):
-    """A small toolbar button with hover state and optional toggle styling."""
-
-    _BASE_HEIGHT = 26
-
-    clicked = Signal()
-
-    def __init__(
-        self,
-        text: str,
-        *,
-        checkable: bool = False,
-        accent_color: QColor | None = None,
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self._text = text
-        self._checkable = checkable
-        self._checked = False
-        self._hovered = False
-        self._accent = accent_color
-
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMouseTracking(True)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-
-    def sizeHint(self) -> QSize:
-        t = theme()
-        fm = QFontMetricsF(ui_font(8, QFont.Weight.Medium))
-        w = int(fm.horizontalAdvance(self._text)) + t.sp_lg
-        return QSize(w, t.scaled(self._BASE_HEIGHT))
-
-    def minimumSizeHint(self) -> QSize:
-        return self.sizeHint()
-
-    @property
-    def checked(self) -> bool:
-        return self._checked
-
-    @checked.setter
-    def checked(self, val: bool) -> None:
-        self._checked = val
-        self.update()
-
-    def paintEvent(self, event: QPaintEvent | None) -> None:
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        r = self.rect().adjusted(0, 0, -1, -1)
-        t = theme()
-
-        # Background
-        if self._accent and self._checked:
-            bg = QColor(self._accent)
-            bg.setAlpha(40)
-            border = QColor(self._accent)
-            border.setAlpha(76)
-            text_color = self._accent
-        elif self._checked:
-            bg = qcolor(t.accent_muted)
-            border = qcolor(t.accent)
-            border.setAlpha(76)
-            text_color = qcolor(t.accent)
-        elif self._hovered:
-            bg = qcolor(t.bg_hover)
-            border = Qt.GlobalColor.transparent
-            text_color = qcolor(t.text_primary)
-        else:
-            bg = Qt.GlobalColor.transparent
-            border = Qt.GlobalColor.transparent
-            text_color = qcolor(t.text_secondary)
-
-        p.setPen(
-            QPen(QColor(border), 1)
-            if border != Qt.GlobalColor.transparent
-            else QPen(Qt.PenStyle.NoPen)
-        )
-        p.setBrush(
-            QBrush(QColor(bg))
-            if bg != Qt.GlobalColor.transparent
-            else QBrush(Qt.BrushStyle.NoBrush)
-        )
-        p.drawRoundedRect(QRectF(r), t.radius, t.radius)
-
-        # Text
-        p.setPen(QColor(text_color))
-        p.setFont(ui_font(8, QFont.Weight.Medium))
-        p.drawText(QRectF(r), Qt.AlignmentFlag.AlignCenter, self._text)
-        p.end()
-
-    def enterEvent(self, event: QEnterEvent | None) -> None:
-        self._hovered = True
-        self.update()
-
-    def leaveEvent(self, event: QEvent | None) -> None:
-        self._hovered = False
-        self.update()
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            if self._checkable:
-                self._checked = not self._checked
-            self.clicked.emit()
-            self.update()
-
-
-# ═══════════════════════════════════════════════════════════════
-# Toolbar Separator
-# ═══════════════════════════════════════════════════════════════
-
-
-class ToolbarSep(QWidget):
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-
-    def sizeHint(self) -> QSize:
-        return QSize(1, theme().scaled(18))
-
-    def minimumSizeHint(self) -> QSize:
-        return self.sizeHint()
-
-    def paintEvent(self, event: QPaintEvent | None) -> None:
-        p = QPainter(self)
-        p.setPen(QPen(qcolor(theme().border_subtle), 1))
-        p.drawLine(0, 0, 0, self.height())
-        p.end()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -308,7 +176,7 @@ class ChannelButton(QWidget):
 
     def sizeHint(self) -> QSize:
         t = theme()
-        fm = QFontMetricsF(ui_font(8, QFont.Weight.Medium))
+        fm = QFontMetricsF(ui_font(10, QFont.Weight.Medium))
         w = int(fm.horizontalAdvance(self._name)) + t.sp_xl
         return QSize(w, t.scaled(self._BASE_HEIGHT))
 
@@ -353,7 +221,7 @@ class ChannelButton(QWidget):
         # Name
         text_color = qcolor(t.text_primary if self._active else t.text_secondary)
         p.setPen(text_color)
-        p.setFont(ui_font(8, QFont.Weight.Medium))
+        p.setFont(ui_font(10, QFont.Weight.Medium))
         p.drawText(
             QRectF(
                 dot_x + dot_r + t.scaled(5),
@@ -413,8 +281,10 @@ class ChannelStrip(QWidget):
 
         layout.addStretch()
 
-        self._merge_btn = ToolbarButton("Merge", checkable=True)
-        self._merge_btn.checked = True
+        self._merge_btn = QPushButton("Merge")
+        self._merge_btn.setCheckable(True)
+        self._merge_btn.setChecked(True)
+        self._merge_btn.setFont(ui_font(10, QFont.Weight.Medium))
         layout.addWidget(self._merge_btn)
 
     def sizeHint(self) -> QSize:
@@ -664,7 +534,9 @@ class SnapFilmstrip(QWidget):
         self._thumbnails: list[SnapThumbnail] = []
 
         # Clear button
-        self._clear_btn = ToolbarButton("Clear")
+        self._clear_btn = QPushButton("Clear")
+        self._clear_btn.setProperty("variant", "danger")
+        self._clear_btn.setFont(ui_font(10, QFont.Weight.Medium))
         self._clear_btn.setFixedHeight(t.scaled(22))
         self._clear_btn.clicked.connect(self.clear)
         outer.addWidget(self._clear_btn, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -785,34 +657,46 @@ class ViewportToolbar(QWidget):
         layout.setContentsMargins(t.sp_sm, t.scaled(4), t.sp_sm, t.scaled(4))
         layout.setSpacing(t.scaled(6))
 
-        self._snap_btn = ToolbarButton("📷 Snap")
+        btn_font = ui_font(10, QFont.Weight.Medium)
+
+        self._snap_btn = QPushButton("📷 Snap")
+        self._snap_btn.setFont(btn_font)
         self._snap_btn.clicked.connect(self.snap_clicked)
         layout.addWidget(self._snap_btn)
 
-        self._live_btn = ToolbarButton(
-            "● Live", accent_color=qcolor(t.status_red), checkable=True
-        )
-        self._live_btn.checked = False
+        self._live_btn = QPushButton("● Live")
+        self._live_btn.setFont(btn_font)
+        self._live_btn.setCheckable(True)
+        self._live_btn.setProperty("accent", qcolor(t.status_red))
         self._live_btn.clicked.connect(
-            lambda: self.live_toggled.emit(self._live_btn.checked)
+            lambda: self.live_toggled.emit(self._live_btn.isChecked())
         )
         layout.addWidget(self._live_btn)
 
-        layout.addWidget(ToolbarSep())
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.Shape.VLine)
+        layout.addWidget(sep1)
 
-        self._zoom_in = ToolbarButton("🔍+")
+        self._zoom_in = QPushButton("🔍+")
+        self._zoom_in.setFont(btn_font)
         layout.addWidget(self._zoom_in)
-        self._zoom_out = ToolbarButton("🔍-")
+        self._zoom_out = QPushButton("🔍-")
+        self._zoom_out.setFont(btn_font)
         layout.addWidget(self._zoom_out)
-        self._fit_btn = ToolbarButton("Fit")
+        self._fit_btn = QPushButton("Fit")
+        self._fit_btn.setFont(btn_font)
         self._fit_btn.clicked.connect(self.fit_clicked)
         layout.addWidget(self._fit_btn)
 
-        layout.addWidget(ToolbarSep())
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.VLine)
+        layout.addWidget(sep2)
 
-        self._range_btn = ToolbarButton("◐ Range", checkable=True)
+        self._range_btn = QPushButton("◐ Range")
+        self._range_btn.setFont(btn_font)
+        self._range_btn.setCheckable(True)
         self._range_btn.clicked.connect(
-            lambda: self.range_toggled.emit(self._range_btn.checked)
+            lambda: self.range_toggled.emit(self._range_btn.isChecked())
         )
         layout.addWidget(self._range_btn)
 
@@ -845,11 +729,11 @@ class ViewportToolbar(QWidget):
         return self._zoom_label
 
     @property
-    def live_button(self) -> ToolbarButton:
+    def live_button(self) -> QPushButton:
         return self._live_btn
 
     @property
-    def snap_button(self) -> ToolbarButton:
+    def snap_button(self) -> QPushButton:
         return self._snap_btn
 
     def set_zoom_text(self, text: str) -> None:
