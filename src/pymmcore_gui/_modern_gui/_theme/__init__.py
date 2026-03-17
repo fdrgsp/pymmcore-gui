@@ -87,6 +87,15 @@ def raw_theme() -> Theme:
 def set_theme(t: Theme) -> None:
     """Set the active theme and push its QPalette to the application."""
     global _current_theme, _view
+
+    # App-level style + theme setup
+    if isinstance(qapp := QApplication.instance(), QApplication):
+        if style := qapp.style():
+            if not isinstance(style, MicroscopeStyle):
+                style = MicroscopeStyle()
+                qapp.setStyle(style)
+                set_style(style)
+
     _current_theme = t
     if _current_style is not None:
         _view = ScaledThemeView(t, _current_style)

@@ -16,7 +16,6 @@ from pymmcore_gui._qt.QtGui import (
     QShortcut,
 )
 from pymmcore_gui._qt.QtWidgets import (
-    QApplication,
     QHBoxLayout,
     QMainWindow,
     QPushButton,
@@ -26,10 +25,8 @@ from pymmcore_gui._qt.QtWidgets import (
 )
 
 from ._theme import (
-    MicroscopeStyle,
     qcolor,
     reset_zoom,
-    set_style,
     set_theme,
     theme,
     ui_font,
@@ -168,12 +165,7 @@ class MainWindow(QMainWindow):
     def __init__(self, *, mmcore: CMMCorePlus | None = None) -> None:
         super().__init__()
 
-        # App-level style + theme setup
-        if isinstance(qapp := QApplication.instance(), QApplication):
-            style = MicroscopeStyle()
-            qapp.setStyle(style)
-            set_style(style)
-            set_theme(DARK_THEME)
+        set_theme(DARK_THEME)
 
         self._mmc = mmcore or CMMCorePlus.instance()
         self.setWindowTitle("Microscope Control — Panel Mockup")
