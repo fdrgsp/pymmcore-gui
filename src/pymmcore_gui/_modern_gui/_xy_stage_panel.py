@@ -31,7 +31,6 @@ from pymmcore_gui._qt.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QPushButton,
     QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
@@ -40,6 +39,7 @@ from pymmcore_gui._qt.QtWidgets import (
 from pymmcore_gui.widgets._joystick import JoystickWidget
 
 from ._theme import mono_font, qcolor, theme, ui_font
+from ._theme._buttons import ButtonVariant, StyledButton
 
 if TYPE_CHECKING:
     from pymmcore_gui._qt.QtGui import QKeyEvent, QMouseEvent, QPaintEvent
@@ -161,10 +161,6 @@ class ModeTabBar(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setMouseTracking(True)
 
-    @property
-    def active_mode(self) -> int:
-        return self._active
-
     def sizeHint(self) -> QSize:
         return QSize(0, theme().scaled(self._BASE_HEIGHT))
 
@@ -210,15 +206,16 @@ class ModeTabBar(QWidget):
         p.setBrush(qcolor(t.bg_raised))
         p.drawRoundedRect(QRectF(0.5, 0.5, w - 1, h - 1), t.radius, t.radius)
 
-        font = ui_font(9)
-        p.setFont(font)
-
         for i, label in enumerate(self._labels):
             rect = self._tab_rect(i)
             if i == self._active:
                 p.setPen(Qt.PenStyle.NoPen)
                 p.setBrush(qcolor(t.accent_muted))
-                p.drawRoundedRect(rect.adjusted(1, 1, -1, -1), t.scaled(2), t.scaled(2))
+                p.drawRoundedRect(
+                    rect.adjusted(1, 1, -1, -1),
+                    t.scaled(2),
+                    t.scaled(2),
+                )
                 p.setPen(qcolor(t.accent))
                 p.setFont(ui_font(9, QFont.Weight.Medium))
             elif i == self._hovered:
@@ -653,7 +650,11 @@ class GoToSection(QWidget):
         self._y_label = QLabel("Y")
         self._x_input = QLineEdit("0")
         self._y_input = QLineEdit("0")
-        self._move_btn = QPushButton("\u2197 Move to position")
+        self._move_btn = StyledButton(
+            "\u2197 Move to position",
+            variant=ButtonVariant.SUBTLE,
+            min_width=100,
+        )
 
         self._x_input.setValidator(QDoubleValidator())
         self._y_input.setValidator(QDoubleValidator())
@@ -681,59 +682,21 @@ class GoToSection(QWidget):
         self.moveRequested.emit(x, y)
 
     def changeEvent(self, a0: object) -> None:
-        from pymmcore_gui._qt.QtCore import QEvent
-
         if isinstance(a0, QEvent) and a0.type() == QEvent.Type.StyleChange:
-            self._apply_styles()
+            self._apply_fonts()
         super().changeEvent(a0)  # type: ignore[arg-type]
 
-    def _apply_styles(self) -> None:
-        t = theme()
+    def _apply_fonts(self) -> None:
         for label, color in [(self._x_label, "#EF6B6B"), (self._y_label, "#6BCF6B")]:
             label.setFont(mono_font(9, QFont.Weight.DemiBold))
             pal = label.palette()
             pal.setColor(pal.ColorRole.WindowText, QColor(color))
             label.setPalette(pal)
-
         for inp in (self._x_input, self._y_input):
             inp.setFont(mono_font(10))
 
-        self._move_btn.setFont(ui_font(9, QFont.Weight.Medium))
-
-        # Stylesheet for inputs to match theme
-        inp_style = (
-            f"QLineEdit {{"
-            f"  background: {_css_color(t.bg_raised)};"
-            f"  border: 1px solid {_css_color(t.border_default)};"
-            f"  border-radius: {t.radius}px;"
-            f"  color: {_css_color(t.text_primary)};"
-            f"  padding: {t.sp_xxs}px {t.sp_xs}px;"
-            f"}}"
-            f"QLineEdit:focus {{"
-            f"  border-color: {_css_color(t.accent)};"
-            f"}}"
-        )
-        self._x_input.setStyleSheet(inp_style)
-        self._y_input.setStyleSheet(inp_style)
-
-        btn_style = (
-            f"QPushButton {{"
-            f"  background: {_css_color(t.bg_surface)};"
-            f"  border: 1px solid {_css_color(t.border_default)};"
-            f"  border-radius: {t.radius}px;"
-            f"  color: {_css_color(t.text_secondary)};"
-            f"  padding: {t.sp_xxs + 2}px {t.sp_md}px;"
-            f"}}"
-            f"QPushButton:hover {{"
-            f"  background: {_css_color(t.accent_muted)};"
-            f"  color: {_css_color(t.accent)};"
-            f"  border-color: {_css_color(t.accent)};"
-            f"}}"
-        )
-        self._move_btn.setStyleSheet(btn_style)
-
     def showEvent(self, a0: object) -> None:
-        self._apply_styles()
+        self._apply_fonts()
         super().showEvent(a0)  # type: ignore[arg-type]
 
 
@@ -831,8 +794,12 @@ class SavedPositionsSection(QWidget):
         self._list_layout.setContentsMargins(0, 0, 0, 0)
         self._list_layout.setSpacing(theme().scaled(2))
 
-        self._save_btn = QPushButton("+ Save current")
-        self._clear_btn = QPushButton("Clear all")
+        self._save_btn = StyledButton(
+            "+ Save current", variant=ButtonVariant.SUBTLE, min_width=80
+        )
+        self._clear_btn = StyledButton(
+            "Clear all", variant=ButtonVariant.DANGER, min_width=80
+        )
 
         btn_row = QHBoxLayout()
         btn_row.setContentsMargins(0, 0, 0, 0)
@@ -876,51 +843,9 @@ class SavedPositionsSection(QWidget):
             self._list_layout.addWidget(item)
 
     def changeEvent(self, a0: object) -> None:
-        from pymmcore_gui._qt.QtCore import QEvent
-
         if isinstance(a0, QEvent) and a0.type() == QEvent.Type.StyleChange:
             self._list_layout.setSpacing(theme().scaled(2))
-            self._apply_btn_styles()
         super().changeEvent(a0)  # type: ignore[arg-type]
-
-    def _apply_btn_styles(self) -> None:
-        t = theme()
-        btn_style = (
-            f"QPushButton {{"
-            f"  background: {_css_color(t.bg_surface)};"
-            f"  border: 1px solid {_css_color(t.border_subtle)};"
-            f"  border-radius: {t.radius}px;"
-            f"  color: {_css_color(t.text_secondary)};"
-            f"  padding: {t.sp_xxs}px;"
-            f"  font-size: {t.scaled(8)}pt;"
-            f"}}"
-            f"QPushButton:hover {{"
-            f"  background: {_css_color(t.bg_hover)};"
-            f"  color: {_css_color(t.text_primary)};"
-            f"}}"
-        )
-        self._save_btn.setStyleSheet(btn_style)
-
-        danger_style = (
-            f"QPushButton {{"
-            f"  background: {_css_color(t.bg_surface)};"
-            f"  border: 1px solid {_css_color(t.border_subtle)};"
-            f"  border-radius: {t.radius}px;"
-            f"  color: {_css_color(t.text_secondary)};"
-            f"  padding: {t.sp_xxs}px;"
-            f"  font-size: {t.scaled(8)}pt;"
-            f"}}"
-            f"QPushButton:hover {{"
-            f"  background: rgba(239, 83, 80, 0.15);"
-            f"  color: rgb(239, 83, 80);"
-            f"  border-color: rgb(239, 83, 80);"
-            f"}}"
-        )
-        self._clear_btn.setStyleSheet(danger_style)
-
-    def showEvent(self, a0: object) -> None:
-        self._apply_btn_styles()
-        super().showEvent(a0)  # type: ignore[arg-type]
 
 
 # Section Label
@@ -940,8 +865,6 @@ class _SectionLabel(QLabel):
         self.setPalette(pal)
 
     def changeEvent(self, a0: object) -> None:
-        from pymmcore_gui._qt.QtCore import QEvent
-
         if isinstance(a0, QEvent) and a0.type() == QEvent.Type.StyleChange:
             self._apply_style()
         super().changeEvent(a0)  # type: ignore[arg-type]
@@ -1073,9 +996,3 @@ def CollapsibleXYStagePanel(parent: QWidget | None = None) -> QWidget:
 
 
 # Helpers
-
-
-def _css_color(c: object) -> str:
-    """Convert a theme Color to a CSS rgb() string."""
-    qc = qcolor(c)  # type: ignore[arg-type]
-    return f"rgb({qc.red()}, {qc.green()}, {qc.blue()})"

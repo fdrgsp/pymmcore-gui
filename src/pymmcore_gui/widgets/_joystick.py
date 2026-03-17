@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from pymmcore_widgets.control._q_stage_controller import QStageMoveAccumulator
 
 from pymmcore_gui._qt.QtCore import QPointF, QSize, Qt, QTimer, Signal
-from pymmcore_gui._qt.QtGui import QBrush, QColor, QPainter, QPen, QRadialGradient
+from pymmcore_gui._qt.QtGui import QBrush, QPainter, QPen, QRadialGradient
 from pymmcore_gui._qt.QtWidgets import QSizePolicy, QVBoxLayout, QWidget
 
 if TYPE_CHECKING:
@@ -109,30 +109,31 @@ class JoystickWidget(QWidget):
         radius = self._radius
         pal = self.palette()
 
-        # background
+        # background — use palette base color
+        bg_color = pal.window().color()
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QBrush(QColor(0, 0, 0)))
+        p.setBrush(QBrush(bg_color))
         p.drawRect(self.rect())
 
-        # outer ring
+        # outer ring — use palette mid for border, base for fill
         ring_color = pal.mid().color()
         p.setPen(QPen(ring_color, 2))
-        bg = pal.dark().color()
-        bg.setAlpha(180)
-        p.setBrush(QBrush(bg))
+        fill = pal.base().color()
+        p.setBrush(QBrush(fill))
         p.drawEllipse(center, radius, radius)
 
         # crosshair
         cross = pal.mid().color()
-        cross.setAlpha(120)
+        cross.setAlpha(80)
         p.setPen(QPen(cross, 1, Qt.PenStyle.DashLine))
         p.drawLine(center + QPointF(-radius, 0), center + QPointF(radius, 0))
         p.drawLine(center + QPointF(0, -radius), center + QPointF(0, radius))
 
         # vector line from center to knob
         if self._dragging and self._knob_pos != QPointF(0, 0):
-            line_color = QColor(74, 158, 255, 100)
-            p.setPen(QPen(line_color, 3))
+            accent = pal.highlight().color()
+            accent.setAlpha(100)
+            p.setPen(QPen(accent, 3))
             p.drawLine(center, center + self._knob_pos)
 
         # knob
@@ -140,10 +141,11 @@ class JoystickWidget(QWidget):
         kr = self._knob_radius
         grad = QRadialGradient(knob_center, kr)
         if self._dragging:
-            grad.setColorAt(0, QColor(100, 180, 255))
-            grad.setColorAt(1, QColor(40, 100, 200))
+            accent = pal.highlight().color()
+            grad.setColorAt(0, accent.lighter(130))
+            grad.setColorAt(1, accent)
         else:
-            fg = pal.windowText().color()
+            fg = pal.mid().color()
             fg.setAlpha(200)
             grad.setColorAt(0, fg)
             fg.setAlpha(120)

@@ -8,6 +8,7 @@ def _make_active_group() -> ColorGroup:
     return ColorGroup(
         window=Color(0x1E, 0x1E, 0x1E),
         window_text=Color(0xE0, 0xE0, 0xE0),
+        text=Color(0xE0, 0xE0, 0xE0),
         base=Color(0x12, 0x12, 0x12),
         alternate_base=Color(0x25, 0x25, 0x25),
         button=Color(0x2D, 0x2D, 0x2D),
@@ -33,6 +34,7 @@ DARK_THEME = Theme(
         inactive=_make_active_group(),
         disabled=ColorGroup(
             window_text=Color(0x70, 0x70, 0x70),
+            text=Color(0x70, 0x70, 0x70),
             button_text=Color(0x70, 0x70, 0x70),
         ),
     ),
