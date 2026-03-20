@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pymmcore_plus import CMMCorePlus
 
-from pymmcore_gui._modern_gui._sidebar import Sidebar
 from pymmcore_gui._modern_gui._viewport import ImageViewport
+from pymmcore_gui._modern_gui.sidebar._sidebar import Sidebar
 from pymmcore_gui._qt.QtCore import QEvent, QRectF, QSize, Qt, pyqtSignal
 from pymmcore_gui._qt.QtGui import (
     QEnterEvent,

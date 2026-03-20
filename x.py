@@ -68,5 +68,6 @@ for qx, qy in [(800, 800), (-800, 800), (-800, -800), (800, -800)]:
 sample = Sample(objects)
 
 core = CMMCorePlus.instance()
+core.loadSystemConfiguration()
 with sample.patch(core):
     create_mmgui(window_cls="pymmcore_gui._modern_gui.MainWindow", exec_app=True)

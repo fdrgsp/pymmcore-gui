@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from pymmcore_widgets.control._q_stage_controller import QStageMoveAccumulator
 
+from pymmcore_gui._modern_gui._theme import mono_font, qcolor, theme, ui_font
 from pymmcore_gui._modern_gui._utils import current_core
 from pymmcore_gui._qt.QtCore import (
     QEvent,
@@ -38,8 +39,6 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 from pymmcore_gui.widgets._joystick import JoystickWidget
-
-from ._theme import mono_font, qcolor, theme, ui_font
 
 if TYPE_CHECKING:
     from pymmcore_gui._qt.QtGui import QKeyEvent, QMouseEvent, QPaintEvent
@@ -979,10 +978,9 @@ class XYStagePanel(QWidget):
 
 # Collapsible panel subclass
 
-
 def CollapsibleXYStagePanel(parent: QWidget | None = None) -> QWidget:
     """Create an XY Stage panel wrapped in a collapsible header."""
-    from ._sidebar import CollapsiblePanel
+    from ._collapsible_panel import CollapsiblePanel
 
     panel = CollapsiblePanel(
         title="XY Stage",

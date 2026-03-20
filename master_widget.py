@@ -578,6 +578,7 @@ def build_master_widget() -> QWidget:
 
 
 def main() -> None:
+    """Execute the master widget and save to PNG."""
     from pymmcore_gui._modern_gui._theme import set_theme
 
     app = QApplication.instance() or QApplication(sys.argv)

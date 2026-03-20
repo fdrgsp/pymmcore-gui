@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pymmcore_gui._modern_gui._enums import DeviceStatus
+from pymmcore_gui._modern_gui._theme import mono_font, qcolor, theme, ui_font
 from pymmcore_gui._qt.QtCore import (  # type: ignore[attr-defined]
     QEasingCurve,
     QEvent,
@@ -35,15 +37,10 @@ from pymmcore_gui._qt.QtWidgets import (
     QApplication,
     QFrame,
     QLabel,
-    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
-
-from ._enums import DeviceStatus
-from ._theme import mono_font, qcolor, theme, ui_font
-from ._xy_stage_panel import CollapsibleXYStagePanel
 
 SP_PREFERRED = QSizePolicy.Policy.Preferred
 SP_MAXIMUM = QSizePolicy.Policy.Maximum
@@ -161,7 +158,7 @@ class CollapsiblePanelHeader(QWidget):
 
         x = t.sp_sm  # running x cursor
 
-        # ── Chevron ──
+        # Chevron
         chev_size = t.scaled(4)
         p.save()
         p.translate(x + t.scaled(6), h / 2)
@@ -177,7 +174,7 @@ class CollapsiblePanelHeader(QWidget):
         p.restore()
         x += t.scaled(12) + t.sp_xs
 
-        # ── Status dot ──
+        # Status dot
         if self._show_dot:
             dot_color = qcolor(
                 {
@@ -205,7 +202,7 @@ class CollapsiblePanelHeader(QWidget):
 
             x += int(dot_r * 2) + t.sp_xs
 
-        # ── Title ──
+        # Title
         title_font = ui_font(10, QFont.Weight.DemiBold)
         p.setFont(title_font)
         p.setPen(qcolor(t.text_primary))
@@ -214,7 +211,7 @@ class CollapsiblePanelHeader(QWidget):
         title_width = fm.horizontalAdvance(self._title)
         p.drawText(title_rect, Qt.AlignmentFlag.AlignVCenter, self._title)
 
-        # ── Summary ──
+        # Summary
         if self._summary:
             opacity = 1.0 - (self._chevron_angle / 90.0)
             if opacity > 0.01:
@@ -233,11 +230,6 @@ class CollapsiblePanelHeader(QWidget):
                 )
 
         p.end()
-
-
-# ═══════════════════════════════════════════════════════════════════
-# CollapsiblePanel — header + animated body
-# ═══════════════════════════════════════════════════════════════════
 
 
 class CollapsiblePanel(QWidget):
@@ -578,117 +570,3 @@ class PlaceholderContent(QWidget):
                     if item and (w := item.widget()) is not None:
                         w.setFont(mono_font(8))
         super().changeEvent(event)
-
-
-class Sidebar(QWidget):
-    """Scrollable sidebar containing collapsible panels."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
-
-        # Scroll content
-        content = SidebarContent()
-        self._layout = QVBoxLayout(content)
-        self._layout.setContentsMargins(0, 0, 0, 0)
-        self._layout.setSpacing(0)
-        self._layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-
-        # Scroll area
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setWidget(content)
-
-        # Outer layout (1px right margin for border)
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 1, 0)
-        outer.setSpacing(0)
-        outer.addWidget(scroll)
-
-        # ── Panels ──
-        self._layout.addWidget(CollapsibleXYStagePanel(self))
-
-        obj = CollapsiblePanel(title="Objective", summary="40x Oil 1.30")
-        obj.body_layout.addWidget(
-            PlaceholderContent(
-                [
-                    "[4x] [10x] [20x] [40x Oil] [63x] [100x]",
-                    "Pixel size: 0.162 \u03bcm",
-                ]
-            )
-        )
-        self._layout.addWidget(obj)
-
-        cam = CollapsiblePanel(title="Camera", summary="100 ms \u00b7 1x1")
-        cam.body_layout.addWidget(
-            PlaceholderContent(
-                [
-                    "Exposure:  100 ms",
-                    "Gain:      1.0",
-                    "Binning:   [1x1] [2x2] [4x4]",
-                    "Format:    2048 x 2048 \u00b7 16 bit",
-                ]
-            )
-        )
-        self._layout.addWidget(cam)
-
-        ch = CollapsiblePanel(title="Channels", summary="DAPI \u00b7 GFP \u00b7 Cy5")
-        ch.body_layout.addWidget(
-            PlaceholderContent(
-                [
-                    "\u25a0 DAPI    50 ms   \ud83d\udc41",
-                    "\u25a0 GFP    100 ms   \ud83d\udc41",
-                    "\u25a0 Cy5    200 ms   \ud83d\udc41",
-                ]
-            )
-        )
-        self._layout.addWidget(ch)
-
-        hist = CollapsiblePanel(
-            title="Histogram", summary="0 - 4095", show_status_dot=False
-        )
-        hist.body_layout.addWidget(
-            PlaceholderContent(
-                [
-                    "\u250c\u2500\u2500\u2500 histogram \u2500\u2500\u2500\u2510",
-                    "\u2502\u2593\u2593\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2502",
-                    "\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500-\u2518",
-                    "[\u26a1 Auto] [\u21ba Reset] [\u33d2] [\u25d0]",
-                ]
-            )
-        )
-        self._layout.addWidget(hist)
-
-        acq = CollapsiblePanel(
-            title="Acquisition", summary="Zx50 \u00b7 Tx100", show_status_dot=False
-        )
-        acq.body_layout.addWidget(
-            PlaceholderContent(
-                [
-                    "\u2611 Z-Stack      50 sl \u00b7 0.5 \u03bcm",
-                    "\u2611 Time Series  100 x 30 s",
-                    "\u2610 Tile Scan    \u2014",
-                    "\u2610 Positions    \u2014",
-                    "",
-                    "Frames:    15,000",
-                    "Duration:  50 min",
-                    "Storage:   11.2 GB",
-                ]
-            )
-        )
-        self._layout.addWidget(acq)
-
-    def sizeHint(self) -> QSize:
-        return QSize(theme().sidebar_width, super().sizeHint().height())
-
-    def minimumSizeHint(self) -> QSize:
-        return self.sizeHint()
-
-    def paintEvent(self, a0: QPaintEvent | None) -> None:
-        p = QPainter(self)
-        p.setPen(QPen(qcolor(theme().border_subtle), 1))
-        p.drawLine(self.width() - 1, 0, self.width() - 1, self.height())
-        p.end()
