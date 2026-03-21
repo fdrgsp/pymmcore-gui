@@ -1,172 +1,144 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from unittest.mock import patch
+
+import pytest
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
     from pytestqt.qtbot import QtBot
 
+    from pymmcore_gui.widgets._toolbars import OCToolBar
 
-def test_oc_toolbar_initial_state(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
-    """Test that OCToolBar is populated with channel presets on creation."""
+
+@pytest.fixture()
+def oc_toolbar(mmcore: CMMCorePlus, qtbot: QtBot) -> OCToolBar:
     from pymmcore_gui.widgets._toolbars import OCToolBar
 
     toolbar = OCToolBar(mmcore)
     qtbot.addWidget(toolbar)
+    return toolbar
 
+
+def test_oc_toolbar_initial_state(
+    mmcore: CMMCorePlus, oc_toolbar: OCToolBar
+) -> None:
+    """Test that OCToolBar is populated with channel presets on creation."""
     ch_group = mmcore.getChannelGroup()
     assert ch_group == "Channel"
 
     expected = list(mmcore.getAvailableConfigs(ch_group))
-    action_texts = [a.text() for a in toolbar.actions()]
+    action_texts = [a.text() for a in oc_toolbar.actions()]
     assert action_texts == expected
 
 
-def test_oc_toolbar_action_sets_config(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+def test_oc_toolbar_action_sets_config(
+    mmcore: CMMCorePlus, oc_toolbar: OCToolBar
+) -> None:
     """Test that clicking an action sets the config on core."""
-    from pymmcore_gui.widgets._toolbars import OCToolBar
-
-    toolbar = OCToolBar(mmcore)
-    qtbot.addWidget(toolbar)
-
-    actions = toolbar.actions()
-    # find a non-current preset
     current = mmcore.getCurrentConfig(mmcore.getChannelGroup())
-    target = next(a for a in actions if a.text() != current)
+    target = next(a for a in oc_toolbar.actions() if a.text() != current)
 
     target.trigger()
     assert mmcore.getCurrentConfig(mmcore.getChannelGroup()) == target.text()
 
 
-def test_oc_toolbar_system_configuration_loaded(
-    mmcore: CMMCorePlus, qtbot: QtBot
+@pytest.mark.parametrize(
+    "signal_attr, emit_args",
+    [
+        ("systemConfigurationLoaded", ()),
+        ("configGroupChanged", ("Channel", "DAPI")),
+        ("channelGroupChanged", ("Channel",)),
+        ("configDefined", ("Channel", "DAPI", "Dichroic", "Label", "Q505LP")),
+        ("configDeleted", ("Channel", "DAPI")),
+    ],
+    ids=[
+        "systemConfigurationLoaded",
+        "configGroupChanged",
+        "channelGroupChanged",
+        "configDefined",
+        "configDeleted",
+    ],
+)
+def test_oc_toolbar_refresh_signals(
+    mmcore: CMMCorePlus,
+    oc_toolbar: OCToolBar,
+    signal_attr: str,
+    emit_args: tuple[str, ...],
 ) -> None:
-    """Test that systemConfigurationLoaded triggers a refresh."""
-    from pymmcore_gui.widgets._toolbars import OCToolBar
+    """Test that signals connected to _refresh repopulate the toolbar."""
+    oc_toolbar.clear()
+    assert len(oc_toolbar.actions()) == 0
 
-    toolbar = OCToolBar(mmcore)
-    qtbot.addWidget(toolbar)
+    signal = getattr(mmcore.events, signal_attr)
+    signal.emit(*emit_args)
 
-    with patch.object(toolbar, "_refresh", wraps=toolbar._refresh) as mock_refresh:
-        # reconnect the mocked method
-        mmcore.events.systemConfigurationLoaded.connect(mock_refresh)
-        mmcore.events.systemConfigurationLoaded.emit()
-        mock_refresh.assert_called()
+    assert len(oc_toolbar.actions()) > 0
 
 
-def test_oc_toolbar_config_group_changed(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
-    """Test that configGroupChanged triggers a refresh."""
-    from pymmcore_gui.widgets._toolbars import OCToolBar
-
-    toolbar = OCToolBar(mmcore)
-    qtbot.addWidget(toolbar)
-
-    # clear toolbar to verify it gets repopulated on signal
-    toolbar.clear()
-    assert len(toolbar.actions()) == 0
-    mmcore.events.configGroupChanged.emit("Channel", "DAPI")
-    # _refresh should have repopulated the toolbar
-    assert len(toolbar.actions()) > 0
-
-
-def test_oc_toolbar_channel_group_changed(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
-    """Test that channelGroupChanged triggers a refresh."""
-    from pymmcore_gui.widgets._toolbars import OCToolBar
-
-    toolbar = OCToolBar(mmcore)
-    qtbot.addWidget(toolbar)
-
-    # clear toolbar to verify it gets repopulated on signal
-    toolbar.clear()
-    assert len(toolbar.actions()) == 0
-    mmcore.events.channelGroupChanged.emit("Channel")
-    # _refresh should have repopulated the toolbar
-    assert len(toolbar.actions()) > 0
-
-
-def test_oc_toolbar_config_set(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+def test_oc_toolbar_config_set(
+    mmcore: CMMCorePlus, oc_toolbar: OCToolBar
+) -> None:
     """Test that configSet updates the checked state of actions."""
-    from pymmcore_gui.widgets._toolbars import OCToolBar
-
-    toolbar = OCToolBar(mmcore)
-    qtbot.addWidget(toolbar)
-
     ch_group = mmcore.getChannelGroup()
     target_preset = "DAPI"
     mmcore.setConfig(ch_group, target_preset)
 
-    # verify the correct action is now checked
-    for action in toolbar.actions():
-        if action.text() == target_preset:
-            assert action.isChecked()
-        else:
-            assert not action.isChecked()
+    for action in oc_toolbar.actions():
+        assert action.isChecked() == (action.text() == target_preset)
 
 
-def test_oc_toolbar_property_changed(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
-    """Test that propertyChanged on Core/ChannelGroup triggers refresh."""
-    from pymmcore_gui.widgets._toolbars import OCToolBar
-
-    toolbar = OCToolBar(mmcore)
-    qtbot.addWidget(toolbar)
-
-    with patch.object(toolbar, "_refresh") as mock_refresh:
-        # changing ChannelGroup property should trigger refresh
-        mmcore.events.propertyChanged.emit("Core", "ChannelGroup", "Camera")
-        mock_refresh.assert_called()
-
-
-def test_oc_toolbar_property_changed_ignores_other(
-    mmcore: CMMCorePlus, qtbot: QtBot
+@pytest.mark.parametrize(
+    "device, prop, value, should_refresh",
+    [
+        ("Core", "ChannelGroup", "Camera", True),
+        ("Camera", "Exposure", "10", False),
+        ("Core", "Focus", "Z", False),
+    ],
+    ids=["core-channel-group", "other-device", "core-other-property"],
+)
+def test_oc_toolbar_property_changed(
+    mmcore: CMMCorePlus,
+    oc_toolbar: OCToolBar,
+    device: str,
+    prop: str,
+    value: str,
+    should_refresh: bool,
 ) -> None:
-    """Test that propertyChanged for non-ChannelGroup is ignored."""
-    from pymmcore_gui.widgets._toolbars import OCToolBar
+    """Test that only Core/ChannelGroup property changes trigger refresh."""
+    oc_toolbar.clear()
+    assert len(oc_toolbar.actions()) == 0
 
-    toolbar = OCToolBar(mmcore)
-    qtbot.addWidget(toolbar)
+    mmcore.events.propertyChanged.emit(device, prop, value)
 
-    with patch.object(
-        toolbar, "_on_property_changed", wraps=toolbar._on_property_changed
-    ) as mock_handler:
-        mmcore.events.propertyChanged.connect(mock_handler)
-        initial_actions = [a.text() for a in toolbar.actions()]
-        mmcore.events.propertyChanged.emit("Camera", "Exposure", "10")
-        mock_handler.assert_called()
-        # actions should not have changed
-        assert [a.text() for a in toolbar.actions()] == initial_actions
+    if should_refresh:
+        assert len(oc_toolbar.actions()) > 0
+    else:
+        assert len(oc_toolbar.actions()) == 0
 
 
-def test_oc_toolbar_config_defined(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
-    """Test that configDefined triggers a refresh."""
-    from pymmcore_gui.widgets._toolbars import OCToolBar
-
-    toolbar = OCToolBar(mmcore)
-    qtbot.addWidget(toolbar)
-
+def test_oc_toolbar_config_defined_adds_preset(
+    mmcore: CMMCorePlus, oc_toolbar: OCToolBar
+) -> None:
+    """Test that defining a new config adds it to the toolbar."""
     ch_group = mmcore.getChannelGroup()
-    initial_count = len(toolbar.actions())
+    initial_count = len(oc_toolbar.actions())
 
-    # define a new config in the channel group
     mmcore.defineConfig(ch_group, "NewChannel", "Dichroic", "Label", "Q505LP")
 
-    assert len(toolbar.actions()) == initial_count + 1
-    assert "NewChannel" in [a.text() for a in toolbar.actions()]
+    assert len(oc_toolbar.actions()) == initial_count + 1
+    assert "NewChannel" in [a.text() for a in oc_toolbar.actions()]
 
 
-def test_oc_toolbar_config_deleted(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
-    """Test that configDeleted triggers a refresh."""
-    from pymmcore_gui.widgets._toolbars import OCToolBar
-
-    toolbar = OCToolBar(mmcore)
-    qtbot.addWidget(toolbar)
-
+def test_oc_toolbar_config_deleted_removes_preset(
+    mmcore: CMMCorePlus, oc_toolbar: OCToolBar
+) -> None:
+    """Test that deleting a config removes it from the toolbar."""
     ch_group = mmcore.getChannelGroup()
-    initial_count = len(toolbar.actions())
     presets = list(mmcore.getAvailableConfigs(ch_group))
+    initial_count = len(oc_toolbar.actions())
 
-    # delete a config
     mmcore.deleteConfig(ch_group, presets[-1])
 
-    assert len(toolbar.actions()) == initial_count - 1
-    assert presets[-1] not in [a.text() for a in toolbar.actions()]
+    assert len(oc_toolbar.actions()) == initial_count - 1
+    assert presets[-1] not in [a.text() for a in oc_toolbar.actions()]
