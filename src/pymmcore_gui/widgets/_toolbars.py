@@ -40,7 +40,6 @@ class OCToolBar(QToolBar):
 
     def _refresh(self) -> None:
         """Clear and refresh with all settings in current channel group."""
-        print('-------------')
         self.clear()
         mmc = self.mmc
         if not (ch_group := mmc.getChannelGroup()):
