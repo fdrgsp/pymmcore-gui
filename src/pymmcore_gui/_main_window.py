@@ -40,7 +40,7 @@ from ._settings import Settings
 from .actions import CoreAction, QCoreAction, WidgetAction, WidgetActionInfo
 from .actions._action_info import ActionInfo
 from .widgets._dithered_gradient import DitheredGradient
-from .widgets._toolbars import OCToolBar, ShuttersToolbar
+from .widgets._toolbars import ExposureToolBar, OCToolBar, ShuttersToolbar
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -90,6 +90,7 @@ class Toolbar(str, Enum):
     OPTICAL_CONFIGS = "Optical Configs"
     WIDGETS = "Widgets"
     SHUTTERS = "Shutters"
+    EXPOSURE = "Exposure"
 
     def __str__(self) -> str:
         return str(self.value)
@@ -180,6 +181,7 @@ class MicroManagerGUI(QMainWindow):
             CoreAction.SNAP,
             CoreAction.TOGGLE_LIVE,
         ],
+        Toolbar.EXPOSURE: ExposureToolBar,
         Toolbar.OPTICAL_CONFIGS: OCToolBar,
         Toolbar.SHUTTERS: ShuttersToolbar,
         Toolbar.WIDGETS: [

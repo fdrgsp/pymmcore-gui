@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import cast
 
 from pymmcore_plus import CMMCorePlus, DeviceType
-from pymmcore_widgets import ShuttersWidget
+from pymmcore_widgets import DefaultCameraExposureWidget, ShuttersWidget
 
 from pymmcore_gui._qt.QtWidgets import QToolBar, QWidget, QWidgetAction
 
@@ -104,3 +104,15 @@ class ShuttersToolbar(QToolBar):
             if widget is not None:
                 widget.deleteLater()
             self.removeAction(action)
+
+
+class ExposureToolBar(QToolBar):
+    """A QToolBar containing the DefaultCameraExposureWidget."""
+
+    def __init__(
+        self,
+        mmc: CMMCorePlus,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__("Exposure", parent)
+        self.addWidget(DefaultCameraExposureWidget(mmcore=mmc, parent=self))
