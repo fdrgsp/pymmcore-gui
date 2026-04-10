@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from contextlib import suppress
-from itertools import chain
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING
 
 from pymmcore_plus import CMMCorePlus, DeviceType
 from pymmcore_widgets.control._q_stage_controller import QStageMoveAccumulator
@@ -13,16 +12,15 @@ from pymmcore_gui._qt.Qlementine import (  # type: ignore[attr-defined]
     QlementineStyle,
     SegmentedControl,
 )
-from pymmcore_gui._qt.QtCore import QSignalBlocker, QSize, Qt, QThread, QTimer, Signal
+from pymmcore_gui._qt.QtCore import QSize, Qt, QThread, QTimer, Signal
 from pymmcore_gui._qt.QtGui import QColor, QFont, QPalette
 from pymmcore_gui._qt.QtWidgets import (
     QApplication,
     QCheckBox,
-    QComboBox,
     QDoubleSpinBox,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QMenu,
     QPushButton,
     QSizePolicy,
@@ -35,7 +33,7 @@ if TYPE_CHECKING:
 
 ICON_SIZE = QSize(22, 22)
 BTN_SIZE = 58
-Z_BTN_HEIGHT = (BTN_SIZE * 3 + 2 * 2 - 2) // 2  # match 3-row D-pad height
+Z_BTN_HEIGHT = (BTN_SIZE * 3 + 2 * 2 - 2) // 2
 POLL_INTERVAL_MS = 500
 MAX_WHEEL_STEP = 1.0  # µm - cap scroll-wheel Z moves
 
@@ -47,18 +45,6 @@ _STEP_PRESETS: list[tuple[float, str]] = [
     (1000.0, "1k"),
 ]
 _DEFAULT_STEP_INDEX = 2  # 10 µm
-
-# (row, col): (icon_key, dx_sign, dy_sign)
-_DPAD_BUTTONS: dict[tuple[int, int], tuple[str, int, int]] = {
-    (0, 0): ("mdi:arrow-top-left", -1, -1),
-    (0, 1): ("mdi:arrow-up", 0, -1),
-    (0, 2): ("mdi:arrow-top-right", 1, -1),
-    (1, 0): ("mdi:arrow-left", -1, 0),
-    (1, 2): ("mdi:arrow-right", 1, 0),
-    (2, 0): ("mdi:arrow-bottom-left", -1, 1),
-    (2, 1): ("mdi:arrow-down", 0, 1),
-    (2, 2): ("mdi:arrow-bottom-right", 1, 1),
-}
 
 
 def _qlementine_style() -> QlementineStyle | None:
@@ -78,14 +64,23 @@ def _mono_font(size: int = 11) -> QFont:
     return font
 
 
+def _clear_layout(layout: QLayout) -> None:
+    while layout.count():
+        item = layout.takeAt(0)
+        if (w := item.widget()) is not None:
+            w.deleteLater()
+        elif (sub := item.layout()) is not None:
+            _clear_layout(sub)
+
+
 # ── Stage position poller (background thread) ───────────────────────
 
 
 class _StagePoller(QThread):
-    """Polls stage positions off the UI thread."""
+    """Polls Z stage positions off the UI thread."""
 
-    # x, y, z, has_xy, has_z
-    positionReady = Signal(float, float, float, bool, bool)
+    # list of (device_name, z_value)
+    positionReady = Signal(object)
 
     def __init__(self, mmc: CMMCorePlus, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -94,24 +89,21 @@ class _StagePoller(QThread):
 
     def run(self) -> None:
         while self._running:
-            try:
-                x = y = z = 0.0
-                has_xy = bool(self._mmc.getXYStageDevice())
-                has_z = bool(self._mmc.getFocusDevice())
-                if has_xy:
-                    x, y = self._mmc.getXYPosition()
-                if has_z:
-                    z = self._mmc.getPosition()
-                self.positionReady.emit(x, y, z, has_xy, has_z)
-            except Exception:
-                pass
+            positions: list[tuple[str, float]] = []
+            for dev in self._mmc.getLoadedDevicesOfType(DeviceType.Stage):
+                try:
+                    z = self._mmc.getPosition(dev)
+                    positions.append((dev, z))
+                except Exception:
+                    pass
+            self.positionReady.emit(positions)
             self.msleep(POLL_INTERVAL_MS)
 
     def stop(self) -> None:
         self._running = False
 
 
-# ── Position bar ─────────────────────────────────────────────────────
+# ── Position spinbox ─────────────────────────────────────────────────
 
 
 class _PositionSpinBox(QDoubleSpinBox):
@@ -164,114 +156,14 @@ class _PositionSpinBox(QDoubleSpinBox):
         self.goToRequested.emit(val)
 
 
-class _PositionBar(QWidget):
-    """X/Y/Z position readout - click a value to enter an absolute position."""
-
-    goToRequested = Signal(str, float)  # (axis, value)
-
-    AXIS_COLORS: ClassVar[dict[str, QColor]] = {
-        "X": QColor("#e06060"),
-        "Y": QColor("#60c060"),
-        "Z": QColor("#6090e0"),
-    }
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 2, 4, 2)
-        layout.setSpacing(4)
-
-        self._labels: dict[str, QLabel] = {}
-        self._spins: dict[str, _PositionSpinBox] = {}
-
-        for axis in ("X", "Y", "Z"):
-            row = QHBoxLayout()
-            row.setSpacing(6)
-
-            lbl = QLabel(axis, self)
-            lbl.setFont(_mono_font())
-            _set_label_color(lbl, self.AXIS_COLORS[axis])
-            self._labels[axis] = lbl
-
-            spin = _PositionSpinBox(self)
-            spin.goToRequested.connect(lambda v, a=axis: self.goToRequested.emit(a, v))
-            self._spins[axis] = spin
-
-            row.addWidget(lbl)
-            row.addWidget(spin, 1)
-            layout.addLayout(row)
-
-    def set_position(self, axis: str, value: float) -> None:
-        if axis in self._spins:
-            self._spins[axis].set_core_value(value)
-
-    def set_axis_visible(self, axis: str, visible: bool) -> None:
-        if axis in self._labels:
-            self._labels[axis].setVisible(visible)
-        if axis in self._spins:
-            self._spins[axis].setVisible(visible)
-
-
-# ── D-pad and Z buttons ─────────────────────────────────────────────
-
-
-class _DPadButton(QPushButton):
-    """A single directional button in the XY pad."""
-
-    def __init__(
-        self, icon_key: str, dx: int, dy: int, parent: QWidget | None = None
-    ) -> None:
-        super().__init__(parent)
-        self.dx = dx
-        self.dy = dy
-        self.setIcon(QIconifyIcon(icon_key, color="#aaa"))
-        self.setIconSize(ICON_SIZE)
-        self.setFixedSize(BTN_SIZE, BTN_SIZE)
-        self.setAutoRepeat(True)
-        self.setAutoRepeatDelay(400)
-        self.setAutoRepeatInterval(80)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-
-class _XYPad(QWidget):
-    """3x3 directional button grid for XY movement."""
-
-    moveRequested = Signal(int, int)
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        layout = QGridLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(2)
-
-        self._buttons: dict[tuple[int, int], _DPadButton] = {}
-        for (row, col), (icon_key, dx, dy) in _DPAD_BUTTONS.items():
-            btn = _DPadButton(icon_key, dx, dy, self)
-            btn.clicked.connect(
-                lambda _=False, x=dx, y=dy: self.moveRequested.emit(x, y)
-            )
-            layout.addWidget(btn, row, col)
-            self._buttons[(dx, dy)] = btn
-
-        # Center crosshair (decorative)
-        center = QLabel(self)
-        center.setPixmap(QIconifyIcon("mdi:crosshairs", color="#555").pixmap(ICON_SIZE))
-        center.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        center.setFixedSize(BTN_SIZE, BTN_SIZE)
-        layout.addWidget(center, 1, 1)
-
-    def flash_button(self, dx: int, dy: int) -> None:
-        """Briefly show the pressed state on the matching button."""
-        if btn := self._buttons.get((dx, dy)):
-            btn.setDown(True)
-            QTimer.singleShot(100, lambda: btn.setDown(False))
+# ── Z buttons ─────────────────────────────────────────────────────────
 
 
 class _ZButtons(QWidget):
     """Z-axis up/down buttons."""
 
     moveRequested = Signal(int)
+    wheelScrolled = Signal(int)  # direction: +1 / -1
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -292,6 +184,16 @@ class _ZButtons(QWidget):
         btn = self._up if direction > 0 else self._down
         btn.setDown(True)
         QTimer.singleShot(100, lambda: btn.setDown(False))
+
+    def wheelEvent(self, event: QWheelEvent | None) -> None:
+        if event is None:
+            return
+        delta = event.angleDelta().y()
+        if delta > 0:
+            self.wheelScrolled.emit(1)
+        elif delta < 0:
+            self.wheelScrolled.emit(-1)
+        event.accept()
 
     def _make_btn(self, icon_key: str) -> QPushButton:
         btn = QPushButton(self)
@@ -368,7 +270,7 @@ class _StepSizeBar(QWidget):
 
 
 class StagesControlWidget(QWidget):
-    """Unified stage control for XY and Z stages."""
+    """Z stage control for one or more focus devices."""
 
     def __init__(
         self, *, parent: QWidget | None = None, mmcore: CMMCorePlus | None = None
@@ -378,11 +280,10 @@ class StagesControlWidget(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         self._mmc = mmcore or CMMCorePlus.instance()
-        self._invert_x = False
-        self._invert_y = False
         self._invert_z = False
-        self._xy_accum: QStageMoveAccumulator | None = None
-        self._z_accum: QStageMoveAccumulator | None = None
+        self._z_accums: dict[str, QStageMoveAccumulator] = {}
+        self._z_btns_map: dict[str, _ZButtons] = {}
+        self._z_spin_map: dict[str, _PositionSpinBox] = {}
 
         self._build_ui()
         self._connect_signals()
@@ -398,7 +299,6 @@ class StagesControlWidget(QWidget):
         self._disconnect_accumulators()
         evts = self._mmc.events
         evts.systemConfigurationLoaded.disconnect(self._on_cfg_loaded)
-        evts.XYStagePositionChanged.disconnect(self._on_xy_pos_changed)
         evts.stagePositionChanged.disconnect(self._on_z_pos_changed)
 
     # ── UI construction ──────────────────────────────────────────────
@@ -408,48 +308,17 @@ class StagesControlWidget(QWidget):
         root.setContentsMargins(6, 6, 6, 6)
         root.setSpacing(4)
 
-        # XY device row
-        xy_row = QHBoxLayout()
-        xy_row.setSpacing(4)
-        self._xy_lbl = QLabel("XY", self)
-        self._xy_lbl.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self._xy_combo = QComboBox(self)
-        self._xy_combo.setToolTip("XY stage device")
-        xy_row.addWidget(self._xy_lbl)
-        xy_row.addWidget(self._xy_combo)
-        root.addLayout(xy_row)
-
-        # Z device row
-        z_row = QHBoxLayout()
-        z_row.setSpacing(4)
-        self._z_lbl = QLabel("Z", self)
-        self._z_lbl.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self._z_combo = QComboBox(self)
-        self._z_combo.setToolTip("Z stage device")
-        z_row.addWidget(self._z_lbl)
-        z_row.addWidget(self._z_combo)
-        root.addLayout(z_row)
-
-        # Step size bar (above buttons)
+        # Step size bar
         self._step_bar = _StepSizeBar(self)
         root.addWidget(self._step_bar)
 
-        # Movement controls: XY pad + Z buttons side by side
-        move_row = QHBoxLayout()
-        move_row.setSpacing(8)
-        self._xy_pad = _XYPad(self)
-        self._z_btns = _ZButtons(self)
-        move_row.addStretch()
-        move_row.addWidget(self._xy_pad)
-        move_row.addWidget(self._z_btns)
-        move_row.addStretch()
-        root.addLayout(move_row)
+        # Z buttons row (rebuilt dynamically per device)
+        self._z_btns_layout = QHBoxLayout()
+        self._z_btns_layout.setSpacing(8)
+        root.addLayout(self._z_btns_layout)
 
         # Keyboard hint
-        self._hint = QLabel(
-            "\u2190 \u2192 \u2191 \u2193 XY \u00b7 PgUp\u00b7PgDn / scroll Z",
-            self,
-        )
+        self._hint = QLabel("Esc to stop", self)
         self._hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         if qs := _qlementine_style():
             _set_label_color(
@@ -461,7 +330,7 @@ class StagesControlWidget(QWidget):
         self._hint.setFont(font)
         root.addWidget(self._hint)
 
-        # STOP button - full width, prominent
+        # STOP button
         self._stop_btn = QPushButton(
             QIconifyIcon("glyphs:stop-sign-bold", color="white"), "", self
         )
@@ -477,11 +346,12 @@ class StagesControlWidget(QWidget):
         )
         root.addWidget(self._stop_btn, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        # Position bar below stop button (vertical: X, Y, Z)
-        self._pos_bar = _PositionBar(self)
-        root.addWidget(self._pos_bar)
+        # Z position row (rebuilt dynamically per device)
+        self._z_pos_layout = QHBoxLayout()
+        self._z_pos_layout.setSpacing(8)
+        root.addLayout(self._z_pos_layout)
 
-        # Snap + Poll checkboxes at the bottom
+        # Snap + Poll checkboxes
         checks_row = QHBoxLayout()
         checks_row.setSpacing(15)
         self._snap_cb = QCheckBox("Snap on Click", self)
@@ -495,143 +365,112 @@ class StagesControlWidget(QWidget):
         checks_row.addStretch()
         root.addLayout(checks_row)
 
+    def _rebuild_z_widgets(self, z_devs: list[str]) -> None:
+        """Remove and recreate per-device Z buttons and position spinboxes."""
+        self._z_btns_map.clear()
+        self._z_spin_map.clear()
+        _clear_layout(self._z_btns_layout)
+        _clear_layout(self._z_pos_layout)
+
+        self._z_btns_layout.addStretch()
+        for dev in z_devs:
+            col = QVBoxLayout()
+            col.setSpacing(2)
+            col.setContentsMargins(0, 0, 0, 0)
+
+            dev_lbl = QLabel(dev, self)
+            dev_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            font = dev_lbl.font()
+            font.setPointSize(font.pointSize() - 1)
+            dev_lbl.setFont(font)
+            col.addWidget(dev_lbl)
+
+            btns = _ZButtons(self)
+            btns.moveRequested.connect(
+                lambda direction, d=dev: self._on_z_move(d, direction)
+            )
+            btns.wheelScrolled.connect(
+                lambda direction, d=dev: self._on_z_move(
+                    d, direction, max_step=MAX_WHEEL_STEP
+                )
+            )
+            col.addWidget(btns)
+            self._z_btns_map[dev] = btns
+
+            self._z_btns_layout.addLayout(col)
+        self._z_btns_layout.addStretch()
+
+        self._z_pos_layout.addStretch()
+        z_color = QColor("#6090e0")
+        for dev in z_devs:
+            col = QVBoxLayout()
+            col.setSpacing(2)
+            col.setContentsMargins(0, 0, 0, 0)
+
+            lbl = QLabel(dev, self)
+            lbl.setFont(_mono_font())
+            _set_label_color(lbl, z_color)
+            col.addWidget(lbl)
+
+            spin = _PositionSpinBox(self)
+            spin.goToRequested.connect(lambda v, d=dev: self._on_go_to(d, v))
+            self._z_spin_map[dev] = spin
+            col.addWidget(spin)
+
+            self._z_pos_layout.addLayout(col)
+        self._z_pos_layout.addStretch()
+
     # ── Signal wiring ────────────────────────────────────────────────
 
     def _connect_signals(self) -> None:
         self._mmc.events.systemConfigurationLoaded.connect(self._on_cfg_loaded)
-        self._mmc.events.XYStagePositionChanged.connect(self._on_xy_pos_changed)
         self._mmc.events.stagePositionChanged.connect(self._on_z_pos_changed)
-
-        self._xy_combo.currentTextChanged.connect(self._on_xy_device_changed)
-        self._z_combo.currentTextChanged.connect(self._on_z_device_changed)
         self._poll_cb.toggled.connect(self._on_poll_toggled)
         self._stop_btn.clicked.connect(self._stop_all)
-
-        self._xy_pad.moveRequested.connect(self._on_xy_move)
-        self._z_btns.moveRequested.connect(self._on_z_move)
-        self._pos_bar.goToRequested.connect(self._on_go_to)
 
     # ── Configuration loaded ─────────────────────────────────────────
 
     def _on_cfg_loaded(self) -> None:
-        xy_devs = list(self._mmc.getLoadedDevicesOfType(DeviceType.XYStage))
-        z_devs = list(self._mmc.getLoadedDevicesOfType(DeviceType.Stage))
-
-        with QSignalBlocker(self._xy_combo):
-            self._xy_combo.clear()
-            self._xy_combo.addItems(xy_devs)
-            default_xy = self._mmc.getXYStageDevice()
-            if default_xy in xy_devs:
-                self._xy_combo.setCurrentText(default_xy)
-
-        with QSignalBlocker(self._z_combo):
-            self._z_combo.clear()
-            self._z_combo.addItems(z_devs)
-            default_z = self._mmc.getFocusDevice()
-            if default_z in z_devs:
-                self._z_combo.setCurrentText(default_z)
-
-        has_xy = len(xy_devs) > 0
-        has_z = len(z_devs) > 0
-        self._xy_lbl.setVisible(len(xy_devs) > 1)
-        self._xy_combo.setVisible(len(xy_devs) > 1)
-        self._z_lbl.setVisible(len(z_devs) > 1)
-        self._z_combo.setVisible(len(z_devs) > 1)
-        self._xy_pad.setVisible(has_xy)
-        self._z_btns.setVisible(has_z)
-        self._pos_bar.set_axis_visible("X", has_xy)
-        self._pos_bar.set_axis_visible("Y", has_xy)
-        self._pos_bar.set_axis_visible("Z", has_z)
-
-        self._setup_accumulators()
+        z_devs = [str(d) for d in self._mmc.getLoadedDevicesOfType(DeviceType.Stage)]
+        self._rebuild_z_widgets(z_devs)
+        self._setup_accumulators(z_devs)
         self._update_positions()
 
-    def _on_xy_device_changed(self, device: str) -> None:
-        if device:
-            self._setup_accumulators()
-            self._update_positions()
-
-    def _on_z_device_changed(self, device: str) -> None:
-        if device:
-            self._setup_accumulators()
-            self._update_positions()
-
-    def _setup_accumulators(self) -> None:
+    def _setup_accumulators(self, z_devs: list[str]) -> None:
         self._disconnect_accumulators()
-
-        xy_dev = self._current_xy_device()
-        z_dev = self._current_z_device()
-
-        if xy_dev:
+        for dev in z_devs:
             with suppress(Exception):
-                accum = QStageMoveAccumulator.for_device(xy_dev, self._mmc)
-                accum.moveFinished.connect(self._update_positions)
-                self._xy_accum = accum
-
-        if z_dev:
-            with suppress(Exception):
-                accum = QStageMoveAccumulator.for_device(z_dev, self._mmc)
-                accum.moveFinished.connect(self._update_positions)
-                self._z_accum = accum
+                accum = QStageMoveAccumulator.for_device(dev, self._mmc)
+                accum.moveFinished.connect(
+                    lambda d=dev: self._update_single_position(d)
+                )
+                self._z_accums[dev] = accum
 
     def _disconnect_accumulators(self) -> None:
-        if self._xy_accum is not None:
+        for accum in self._z_accums.values():
             with suppress(TypeError, RuntimeError):
-                self._xy_accum.moveFinished.disconnect(self._update_positions)
-            self._xy_accum = None
-        if self._z_accum is not None:
-            with suppress(TypeError, RuntimeError):
-                self._z_accum.moveFinished.disconnect(self._update_positions)
-            self._z_accum = None
-
-    # ── Device helpers ───────────────────────────────────────────────
-
-    def _current_xy_device(self) -> str:
-        return self._xy_combo.currentText()
-
-    def _current_z_device(self) -> str:
-        return self._z_combo.currentText()
+                accum.moveFinished.disconnect()
+        self._z_accums.clear()
 
     # ── Movement ─────────────────────────────────────────────────────
 
-    def _on_xy_move(self, dx_sign: int, dy_sign: int) -> None:
-        if not self._xy_accum:
-            return
-        step = self._step_bar.current_step()
-        dx = step * dx_sign * (-1 if self._invert_x else 1)
-        dy = step * dy_sign * (-1 if self._invert_y else 1)
-        self._xy_accum.snap_on_finish = self._snap_cb.isChecked()
-        self._xy_accum.move_relative((dx, dy))
-
-    def _on_z_move(self, direction: int, max_step: float = 0) -> None:
-        if not self._z_accum:
+    def _on_z_move(self, device: str, direction: int, max_step: float = 0) -> None:
+        accum = self._z_accums.get(device)
+        if not accum:
             return
         step = self._step_bar.current_step()
         if max_step > 0:
             step = min(step, max_step)
         dz = step * direction * (-1 if self._invert_z else 1)
-        self._z_accum.snap_on_finish = self._snap_cb.isChecked()
-        self._z_accum.move_relative(dz)
+        accum.snap_on_finish = self._snap_cb.isChecked()
+        accum.move_relative(dz)
 
-    def _on_go_to(self, axis: str, value: float) -> None:
-        if axis in ("X", "Y") and self._xy_accum:
-            xy_dev = self._current_xy_device()
-            try:
-                cx, cy = self._mmc.getXYPosition(xy_dev)
-            except Exception:
-                return
-            if axis == "X":
-                self._xy_accum.move_absolute((value, cy))
-            else:
-                self._xy_accum.move_absolute((cx, value))
-        elif axis == "Z" and self._z_accum:
-            self._z_accum.move_absolute(value)
+    def _on_go_to(self, device: str, value: float) -> None:
+        if accum := self._z_accums.get(device):
+            accum.move_absolute(value)
 
     def _stop_all(self) -> None:
-        for dev in chain(
-            self._mmc.getLoadedDevicesOfType(DeviceType.XYStage),
-            self._mmc.getLoadedDevicesOfType(DeviceType.Stage),
-        ):
+        for dev in self._mmc.getLoadedDevicesOfType(DeviceType.Stage):
             try:
                 self._mmc.stop(dev)
             except Exception:
@@ -640,48 +479,24 @@ class StagesControlWidget(QWidget):
     # ── Position updates ─────────────────────────────────────────────
 
     def _update_positions(self) -> None:
-        """Immediate (synchronous) position refresh for config/device changes."""
-        xy_dev = self._current_xy_device()
-        if xy_dev:
+        for dev in self._z_spin_map:
+            self._update_single_position(dev)
+
+    def _update_single_position(self, device: str) -> None:
+        if spin := self._z_spin_map.get(device):
             try:
-                x, y = self._mmc.getXYPosition(xy_dev)
-                self._pos_bar.set_position("X", x)
-                self._pos_bar.set_position("Y", y)
+                spin.set_core_value(self._mmc.getPosition(device))
             except Exception:
                 pass
 
-        z_dev = self._current_z_device()
-        if z_dev:
-            try:
-                z = self._mmc.getPosition(z_dev)
-                self._pos_bar.set_position("Z", z)
-            except Exception:
-                pass
-
-    def _on_polled_position(
-        self, x: float, y: float, z: float, has_xy: bool, has_z: bool
-    ) -> None:
-        """Handle position data arriving from the background poller."""
-        if has_xy:
-            self._pos_bar.set_position("X", x)
-            self._pos_bar.set_position("Y", y)
-        if has_z:
-            self._pos_bar.set_position("Z", z)
-
-        # Also update the main window's status bar
-        from pymmcore_gui.actions.widget_actions import get_mm_main_window
-
-        if (win := get_mm_main_window(self)) and hasattr(win, "_core_status"):
-            win._core_status.update_stage_position(x, y, z, has_xy, has_z)
-
-    def _on_xy_pos_changed(self, device: str, x: float, y: float) -> None:
-        if device == self._current_xy_device():
-            self._pos_bar.set_position("X", x)
-            self._pos_bar.set_position("Y", y)
+    def _on_polled_position(self, positions: list[tuple[str, float]]) -> None:
+        for dev, z in positions:
+            if spin := self._z_spin_map.get(dev):
+                spin.set_core_value(z)
 
     def _on_z_pos_changed(self, device: str, z: float) -> None:
-        if device == self._current_z_device():
-            self._pos_bar.set_position("Z", z)
+        if spin := self._z_spin_map.get(device):
+            spin.set_core_value(z)
 
     # ── Polling ──────────────────────────────────────────────────────
 
@@ -693,44 +508,13 @@ class StagesControlWidget(QWidget):
             self._stage_poller.stop()
             self._stage_poller.wait()
 
-    # ── Keyboard & mouse ─────────────────────────────────────────────
-
     def keyPressEvent(self, event: QKeyEvent | None) -> None:
         if event is None:
             return
-        key = event.key()
-        if key == Qt.Key.Key_Left:
-            self._xy_pad.flash_button(-1, 0)
-            self._on_xy_move(-1, 0)
-        elif key == Qt.Key.Key_Right:
-            self._xy_pad.flash_button(1, 0)
-            self._on_xy_move(1, 0)
-        elif key == Qt.Key.Key_Up:
-            self._xy_pad.flash_button(0, -1)
-            self._on_xy_move(0, -1)
-        elif key == Qt.Key.Key_Down:
-            self._xy_pad.flash_button(0, 1)
-            self._on_xy_move(0, 1)
-        elif key == Qt.Key.Key_PageUp:
-            self._z_btns.flash_button(1)
-            self._on_z_move(1)
-        elif key == Qt.Key.Key_PageDown:
-            self._z_btns.flash_button(-1)
-            self._on_z_move(-1)
-        elif key == Qt.Key.Key_Escape:
+        if event.key() == Qt.Key.Key_Escape:
             self._stop_all()
         else:
             super().keyPressEvent(event)
-
-    def wheelEvent(self, event: QWheelEvent | None) -> None:
-        if event is None:
-            return
-        delta = event.angleDelta().y()
-        if delta > 0:
-            self._on_z_move(1, max_step=MAX_WHEEL_STEP)
-        elif delta < 0:
-            self._on_z_move(-1, max_step=MAX_WHEEL_STEP)
-        event.accept()
 
     # ── Context menu ─────────────────────────────────────────────────
 
@@ -738,32 +522,12 @@ class StagesControlWidget(QWidget):
         if event is None:
             return
         menu = QMenu(self)
-
-        invert_x = menu.addAction("Invert X")
-        if invert_x:
-            invert_x.setCheckable(True)
-            invert_x.setChecked(self._invert_x)
-            invert_x.toggled.connect(self._set_invert_x)
-
-        invert_y = menu.addAction("Invert Y")
-        if invert_y:
-            invert_y.setCheckable(True)
-            invert_y.setChecked(self._invert_y)
-            invert_y.toggled.connect(self._set_invert_y)
-
         invert_z = menu.addAction("Invert Z")
         if invert_z:
             invert_z.setCheckable(True)
             invert_z.setChecked(self._invert_z)
             invert_z.toggled.connect(self._set_invert_z)
-
         menu.exec(event.globalPos())
-
-    def _set_invert_x(self, v: bool) -> None:
-        self._invert_x = v
-
-    def _set_invert_y(self, v: bool) -> None:
-        self._invert_y = v
 
     def _set_invert_z(self, v: bool) -> None:
         self._invert_z = v
