@@ -17,7 +17,10 @@ from pymmcore_gui._qt.QtGui import QColor, QFont, QPalette
 from pymmcore_gui._qt.QtWidgets import (
     QApplication,
     QCheckBox,
+    QDial,
     QDoubleSpinBox,
+    QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLayout,
@@ -115,11 +118,11 @@ class _PositionSpinBox(QDoubleSpinBox):
 
     goToRequested = Signal(float)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, suffix: str = " µm") -> None:
         super().__init__(parent)
         self.setRange(-1e7, 1e7)
         self.setDecimals(2)
-        self.setSuffix(" µm")
+        self.setSuffix(suffix)
         self.setFont(_mono_font(12))
         self.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
@@ -154,6 +157,79 @@ class _PositionSpinBox(QDoubleSpinBox):
         self.setReadOnly(True)
         self.clearFocus()
         self.goToRequested.emit(val)
+
+
+# ── Dial widget (rotation stage) ────────────────────────────────────
+
+
+class _DialWidget(QWidget):
+    """Circular dial for rotation stages that expose DeviceUnitsPerRevolution."""
+
+    goToRequested = Signal(float)  # absolute position in device units
+
+    def __init__(self, units_per_rev: float, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._units_per_rev = units_per_rev
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        box = QGroupBox(self)
+        grid = QGridLayout(box)
+        grid.setContentsMargins(4, 4, 4, 4)
+        grid.setSpacing(2)
+
+        def _lbl(text: str) -> QLabel:
+            lbl = QLabel(text, box)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            font = lbl.font()
+            font.setPointSize(font.pointSize() - 1)
+            lbl.setFont(font)
+            return lbl
+
+        grid.addWidget(_lbl("180°"), 0, 1)
+        grid.addWidget(_lbl("90°"), 1, 0)
+        grid.addWidget(_lbl("270°"), 1, 2)
+        grid.addWidget(_lbl("0°"), 2, 1)
+
+        self._dial = QDial(box)
+        self._dial.setWrapping(True)
+        self._dial.setMinimumSize(110, 110)
+        self._dial.setMinimum(0)
+        self._dial.setMaximum(359)
+        self._dial.setNotchesVisible(True)
+        self._dial.setNotchTarget(23)
+        self._dial.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._dial.valueChanged.connect(self._on_dial_changed)
+        grid.addWidget(self._dial, 1, 1)
+
+        outer.addWidget(box)
+
+    def set_angle(self, degrees: float) -> None:
+        """Update dial display without emitting goToRequested."""
+        self._dial.blockSignals(True)
+        self._dial.setValue(int(degrees) % 360)
+        self._dial.blockSignals(False)
+
+    def _on_dial_changed(self, value: int) -> None:
+        self.goToRequested.emit(value * self._units_per_rev / 360)
+
+
+def _is_rotation_stage(mmc: CMMCorePlus, device: str) -> bool:
+    """Return True if the device exposes DeviceUnitsPerRevolution."""
+    try:
+        mmc.getProperty(device, "DeviceUnitsPerRevolution")
+        return True
+    except Exception:
+        return False
+
+
+def _units_per_rev(mmc: CMMCorePlus, device: str) -> float:
+    try:
+        return float(mmc.getProperty(device, "DeviceUnitsPerRevolution"))
+    except Exception:
+        return 360.0
 
 
 # ── Z buttons ─────────────────────────────────────────────────────────
@@ -284,6 +360,8 @@ class StagesControlWidget(QWidget):
         self._z_accums: dict[str, QStageMoveAccumulator] = {}
         self._z_btns_map: dict[str, _ZButtons] = {}
         self._z_spin_map: dict[str, _PositionSpinBox] = {}
+        self._rot_spin_map: dict[str, _PositionSpinBox] = {}
+        self._z_dial_map: dict[str, _DialWidget] = {}
 
         self._build_ui()
         self._connect_signals()
@@ -335,7 +413,6 @@ class StagesControlWidget(QWidget):
             QIconifyIcon("glyphs:stop-sign-bold", color="white"), "", self
         )
         self._stop_btn.setIconSize(QSize(32, 32))
-        self._stop_btn.setFixedWidth(234)
         self._stop_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._stop_btn.setToolTip("Stop all stage movement (Esc)")
         self._stop_btn.setStyleSheet(
@@ -344,7 +421,7 @@ class StagesControlWidget(QWidget):
             "QPushButton:hover { background: #c0333b; }"
             "QPushButton:pressed { background: #8a1a22; }"
         )
-        root.addWidget(self._stop_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        root.addWidget(self._stop_btn)
 
         # Z position row (rebuilt dynamically per device)
         self._z_pos_layout = QHBoxLayout()
@@ -366,14 +443,23 @@ class StagesControlWidget(QWidget):
         root.addLayout(checks_row)
 
     def _rebuild_z_widgets(self, z_devs: list[str]) -> None:
-        """Remove and recreate per-device Z buttons and position spinboxes."""
+        """Remove and recreate per-device Z buttons and position spinboxes.
+
+        Regular Z stages are rendered left-to-right; rotation (dial) stages
+        always appear to the right of all regular stages.
+        """
         self._z_btns_map.clear()
         self._z_spin_map.clear()
+        self._rot_spin_map.clear()
+        self._z_dial_map.clear()
         _clear_layout(self._z_btns_layout)
         _clear_layout(self._z_pos_layout)
 
+        regular = [d for d in z_devs if not _is_rotation_stage(self._mmc, d)]
+        rotation = [d for d in z_devs if _is_rotation_stage(self._mmc, d)]
+
         self._z_btns_layout.addStretch()
-        for dev in z_devs:
+        for dev in regular:
             col = QVBoxLayout()
             col.setSpacing(2)
             col.setContentsMargins(0, 0, 0, 0)
@@ -396,13 +482,41 @@ class StagesControlWidget(QWidget):
             )
             col.addWidget(btns)
             self._z_btns_map[dev] = btns
+            col_widget = QWidget(self)
+            col_widget.setLayout(col)
+            self._z_btns_layout.addWidget(
+                col_widget, alignment=Qt.AlignmentFlag.AlignTop
+            )
 
-            self._z_btns_layout.addLayout(col)
+        for dev in rotation:
+            col = QVBoxLayout()
+            col.setSpacing(2)
+            col.setContentsMargins(0, 0, 0, 0)
+
+            dev_lbl = QLabel(dev, self)
+            dev_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            font = dev_lbl.font()
+            font.setPointSize(font.pointSize() - 1)
+            dev_lbl.setFont(font)
+            col.addWidget(dev_lbl)
+
+            dial = _DialWidget(_units_per_rev(self._mmc, dev), self)
+            dial.goToRequested.connect(lambda v, d=dev: self._on_go_to_absolute(d, v))
+            col.addWidget(dial)
+            self._z_dial_map[dev] = dial
+            col_widget = QWidget(self)
+            col_widget.setLayout(col)
+            self._z_btns_layout.addWidget(
+                col_widget, alignment=Qt.AlignmentFlag.AlignCenter
+            )
+
         self._z_btns_layout.addStretch()
 
         self._z_pos_layout.addStretch()
         z_color = QColor("#6090e0")
-        for dev in z_devs:
+        rot_color = QColor("#e09060")
+
+        for dev in regular:
             col = QVBoxLayout()
             col.setSpacing(2)
             col.setContentsMargins(0, 0, 0, 0)
@@ -416,8 +530,29 @@ class StagesControlWidget(QWidget):
             spin.goToRequested.connect(lambda v, d=dev: self._on_go_to(d, v))
             self._z_spin_map[dev] = spin
             col.addWidget(spin)
-
             self._z_pos_layout.addLayout(col)
+
+        for dev in rotation:
+            col = QVBoxLayout()
+            col.setSpacing(2)
+            col.setContentsMargins(0, 0, 0, 0)
+
+            lbl = QLabel(dev, self)
+            lbl.setFont(_mono_font())
+            _set_label_color(lbl, rot_color)
+            col.addWidget(lbl)
+
+            rot_spin = _PositionSpinBox(self, suffix="°")
+            rot_spin.setRange(0, 360)
+            rot_spin.goToRequested.connect(
+                lambda v, d=dev: self._on_go_to_absolute(
+                    d, v * _units_per_rev(self._mmc, d) / 360
+                )
+            )
+            self._rot_spin_map[dev] = rot_spin
+            col.addWidget(rot_spin)
+            self._z_pos_layout.addLayout(col)
+
         self._z_pos_layout.addStretch()
 
     # ── Signal wiring ────────────────────────────────────────────────
@@ -469,6 +604,13 @@ class StagesControlWidget(QWidget):
         if accum := self._z_accums.get(device):
             accum.move_absolute(value)
 
+    def _on_go_to_absolute(self, device: str, value: float) -> None:
+        """Direct absolute move (used by dial — value already in device units)."""
+        try:
+            self._mmc.setPosition(device, value)
+        except Exception:
+            pass
+
     def _stop_all(self) -> None:
         for dev in self._mmc.getLoadedDevicesOfType(DeviceType.Stage):
             try:
@@ -481,22 +623,43 @@ class StagesControlWidget(QWidget):
     def _update_positions(self) -> None:
         for dev in self._z_spin_map:
             self._update_single_position(dev)
+        for dev in self._z_dial_map:
+            self._update_single_position(dev)
 
     def _update_single_position(self, device: str) -> None:
+        try:
+            pos = self._mmc.getPosition(device)
+        except Exception:
+            return
         if spin := self._z_spin_map.get(device):
-            try:
-                spin.set_core_value(self._mmc.getPosition(device))
-            except Exception:
-                pass
+            spin.set_core_value(pos)
+        if dial := self._z_dial_map.get(device):
+            upr = _units_per_rev(self._mmc, device)
+            dial.set_angle(pos / upr * 360)
+        if rot_spin := self._rot_spin_map.get(device):
+            upr = _units_per_rev(self._mmc, device)
+            rot_spin.set_core_value(pos / upr * 360)
 
     def _on_polled_position(self, positions: list[tuple[str, float]]) -> None:
         for dev, z in positions:
             if spin := self._z_spin_map.get(dev):
                 spin.set_core_value(z)
+            if dial := self._z_dial_map.get(dev):
+                upr = _units_per_rev(self._mmc, dev)
+                dial.set_angle(z / upr * 360)
+            if rot_spin := self._rot_spin_map.get(dev):
+                upr = _units_per_rev(self._mmc, dev)
+                rot_spin.set_core_value(z / upr * 360)
 
     def _on_z_pos_changed(self, device: str, z: float) -> None:
         if spin := self._z_spin_map.get(device):
             spin.set_core_value(z)
+        if dial := self._z_dial_map.get(device):
+            upr = _units_per_rev(self._mmc, device)
+            dial.set_angle(z / upr * 360)
+        if rot_spin := self._rot_spin_map.get(device):
+            upr = _units_per_rev(self._mmc, device)
+            rot_spin.set_core_value(z / upr * 360)
 
     # ── Polling ──────────────────────────────────────────────────────
 
