@@ -618,6 +618,8 @@ class StagesControlWidget(QWidget):
     def _setup_accumulators(self, z_devs: list[str]) -> None:
         self._disconnect_accumulators()
         for dev in z_devs:
+            if _is_rotation_stage(self._mmc, dev):
+                continue  # rotation stages use direct setPosition, no accumulator needed
             with suppress(Exception):
                 accum = QStageMoveAccumulator.for_device(dev, self._mmc)
                 accum.moveFinished.connect(
