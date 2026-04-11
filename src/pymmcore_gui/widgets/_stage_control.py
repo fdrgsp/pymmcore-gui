@@ -156,6 +156,7 @@ class _PositionSpinBox(QDoubleSpinBox):
         if self.isReadOnly():
             return
         val = self.value()
+        self._last_core_value = val  # prevent focusOutEvent from snapping back
         self.setReadOnly(True)
         self.clearFocus()
         self.goToRequested.emit(val)
@@ -167,7 +168,7 @@ class _PositionSpinBox(QDoubleSpinBox):
 class _DialWidget(QWidget):
     """Circular dial for rotation stages that expose DeviceUnitsPerRevolution."""
 
-    goToRequested = Signal(float)  # absolute position in device units
+    stepRequested = Signal(float)   # relative delta in degrees (for setRelativePosition)
 
     def __init__(self, units_per_rev: float, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -214,6 +215,14 @@ class _DialWidget(QWidget):
         self._last_sent_degrees: float = 0.0
         self._initialized: bool = False
         self._last_move_at: float = 0.0  # time.monotonic() of last goToRequested
+        self._pending_delta: float = 0.0
+
+        # Debounce: accumulate all rapid ticks and flush as ONE setRelativePosition.
+        # Without this, dragging 90° fires 90 individual calls and the device drops most.
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setSingleShot(True)
+        self._flush_timer.setInterval(80)  # ms quiet-time before flushing
+        self._flush_timer.timeout.connect(self._flush_pending)
 
     def set_angle(self, degrees: float) -> None:
         """Update dial display without emitting goToRequested."""
@@ -229,10 +238,20 @@ class _DialWidget(QWidget):
             self._dial.blockSignals(False)
 
     def cancel_pending(self) -> None:
-        """Cancel intent to move (no-op without debounce, kept for API compat)."""
+        """Cancel any buffered dial motion."""
+        self._flush_timer.stop()
+        self._pending_delta = 0.0
+
+    def sync_to(self, degrees: float) -> None:
+        """Sync tracking when an external source (e.g. lineedit) commands a move."""
+        self._last_sent_degrees = degrees  # keep unbounded — no % 360
+        self._last_move_at = time.monotonic()
+        self._dial.blockSignals(True)
+        self._dial.setValue(int(degrees) % 360)
+        self._dial.blockSignals(False)
 
     def _on_dial_changed(self, value: int) -> None:
-        """Fire goToRequested immediately on every tick — no debounce needed."""
+        """Accumulate dial ticks; flush as a single stepRequested after 80 ms idle."""
         print(f"[dial] valueChanged → {value}°")
         # Shortest-path delta so 359→0 moves forward, not backwards 359°
         prev = self._last_sent_degrees % 360
@@ -242,17 +261,24 @@ class _DialWidget(QWidget):
         elif delta < -180:
             delta += 360
 
-        target = self._last_sent_degrees + delta
-        self._last_sent_degrees = target
+        self._last_sent_degrees += delta
         self._last_move_at = time.monotonic()
+        self._pending_delta += delta
 
         # Keep the visual in sync with what the user just dialled
         self._dial.blockSignals(True)
-        self._dial.setValue(int(target) % 360)
+        self._dial.setValue(int(self._last_sent_degrees) % 360)
         self._dial.blockSignals(False)
 
-        print(f"[dial] goToRequested.emit({target:.2f})")
-        self.goToRequested.emit(target)
+        # (Re)start the debounce timer — fires once the user stops dragging
+        self._flush_timer.start()
+
+    def _flush_pending(self) -> None:
+        """Send the accumulated delta as a single relative-position command."""
+        if self._pending_delta:
+            print(f"[dial] stepRequested.emit({self._pending_delta:+.2f}°)")
+            self.stepRequested.emit(self._pending_delta)
+            self._pending_delta = 0.0
 
 
 def _is_rotation_stage(mmc: CMMCorePlus, device: str) -> bool:
@@ -540,7 +566,7 @@ class StagesControlWidget(QWidget):
             col.addWidget(dev_lbl)
 
             dial = _DialWidget(_units_per_rev(self._mmc, dev), self)
-            dial.goToRequested.connect(lambda v, d=dev: self._on_go_to_absolute(d, v))
+            dial.stepRequested.connect(lambda delta, d=dev: self._on_dial_step(d, delta))
             col.addWidget(dial)
             self._z_dial_map[dev] = dial
             col_widget = QWidget(self)
@@ -643,9 +669,20 @@ class StagesControlWidget(QWidget):
         if accum := self._z_accums.get(device):
             accum.move_absolute(value)
 
+    def _on_dial_step(self, device: str, delta: float) -> None:
+        """Relative move from dial — uses setRelativePosition to avoid wrap ambiguity."""
+        print(f"[stage] setRelativePosition({device!r}, {delta:+.2f})")
+        try:
+            self._mmc.setRelativePosition(device, delta)
+        except Exception as e:
+            print(f"[stage] setRelativePosition FAILED: {e}")
+
     def _on_go_to_absolute(self, device: str, value: float) -> None:
-        """Direct absolute move (used by dial/rot_spin — value in degrees)."""
+        """Absolute move (used by rot_spin lineedit — value in degrees)."""
         print(f"[stage] _on_go_to_absolute({device!r}, {value:.2f})")
+        # Sync the dial tracking so the next wheel-tick delta is correct
+        if dial := self._z_dial_map.get(device):
+            dial.sync_to(value)
         try:
             self._mmc.setPosition(device, value)
             print(f"[stage] setPosition OK")
@@ -680,7 +717,7 @@ class StagesControlWidget(QWidget):
         if dial := self._z_dial_map.get(device):
             dial.set_angle(pos)
         if rot_spin := self._rot_spin_map.get(device):
-            rot_spin.set_core_value(pos)
+            rot_spin.set_core_value(pos % 360)
 
     def _on_polled_position(self, positions: list[tuple[str, float]]) -> None:
         for dev, z in positions:
@@ -689,7 +726,7 @@ class StagesControlWidget(QWidget):
             if dial := self._z_dial_map.get(dev):
                 dial.set_angle(z)
             if rot_spin := self._rot_spin_map.get(dev):
-                rot_spin.set_core_value(z)
+                rot_spin.set_core_value(z % 360)
 
     def _on_z_pos_changed(self, device: str, z: float) -> None:
         if spin := self._z_spin_map.get(device):
@@ -697,7 +734,7 @@ class StagesControlWidget(QWidget):
         if dial := self._z_dial_map.get(device):
             dial.set_angle(z)
         if rot_spin := self._rot_spin_map.get(device):
-            rot_spin.set_core_value(z)
+            rot_spin.set_core_value(z % 360)
 
     # ── Polling ──────────────────────────────────────────────────────
 
