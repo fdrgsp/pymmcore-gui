@@ -27,6 +27,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QMenu,
     QPushButton,
     QSizePolicy,
+    QStyleFactory,
     QVBoxLayout,
     QWidget,
 )
@@ -201,19 +202,64 @@ class _DialWidget(QWidget):
         self._dial.setNotchesVisible(True)
         self._dial.setNotchTarget(23)
         self._dial.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # Force Fusion style so Qlementine doesn't break wrapping or wheel events
+        if (fusion := QStyleFactory.create("Fusion")):
+            self._dial.setStyle(fusion)
         self._dial.valueChanged.connect(self._on_dial_changed)
         grid.addWidget(self._dial, 1, 1)
 
         outer.addWidget(box)
 
+        # Debounce: only send a move command 150 ms after the last tick
+        self._pending_degrees: float | None = None
+        self._last_sent_degrees: float = 0.0
+        self._debounce_timer = QTimer(self)
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.setInterval(150)
+        self._debounce_timer.timeout.connect(self._send_debounced_move)
+
     def set_angle(self, degrees: float) -> None:
         """Update dial display without emitting goToRequested."""
-        self._dial.blockSignals(True)
-        self._dial.setValue(int(degrees) % 360)
-        self._dial.blockSignals(False)
+        if not self._debounce_timer.isActive() and self._pending_degrees is None:
+            # Not scrolling: keep tracking in sync with real position
+            self._last_sent_degrees = degrees
+            self._dial.blockSignals(True)
+            self._dial.setValue(int(degrees) % 360)
+            self._dial.blockSignals(False)
+
+    def cancel_pending(self) -> None:
+        """Cancel any debounced move that hasn't been sent yet."""
+        self._debounce_timer.stop()
+        self._pending_degrees = None
 
     def _on_dial_changed(self, value: int) -> None:
-        self.goToRequested.emit(value * self._units_per_rev / 360)
+        print(f"[dial] valueChanged → {value}°")
+        self._pending_degrees = float(value)
+        self._debounce_timer.start()
+
+    def _send_debounced_move(self) -> None:
+        print(f"[dial] debounce fired, _pending={self._pending_degrees}, _last={self._last_sent_degrees}")
+        if self._pending_degrees is None:
+            return
+        dial_degrees = self._pending_degrees
+        self._pending_degrees = None
+
+        prev = self._last_sent_degrees % 360
+        delta = dial_degrees - prev
+        if delta > 180:
+            delta -= 360
+        elif delta < -180:
+            delta += 360
+
+        target_degrees = self._last_sent_degrees + delta
+        self._last_sent_degrees = target_degrees
+        print(f"[dial] goToRequested.emit({target_degrees:.2f})")
+        self.goToRequested.emit(target_degrees)
+        # Lock dial to target immediately (mirrors x.py) so the next poll
+        # callback doesn't snap the visual back to the old position.
+        self._dial.blockSignals(True)
+        self._dial.setValue(int(target_degrees) % 360)
+        self._dial.blockSignals(False)
 
 
 def _is_rotation_stage(mmc: CMMCorePlus, device: str) -> bool:
@@ -545,9 +591,7 @@ class StagesControlWidget(QWidget):
             rot_spin = _PositionSpinBox(self, suffix="°")
             rot_spin.setRange(0, 360)
             rot_spin.goToRequested.connect(
-                lambda v, d=dev: self._on_go_to_absolute(
-                    d, v * _units_per_rev(self._mmc, d) / 360
-                )
+                lambda v, d=dev: self._on_go_to_absolute(d, v)
             )
             self._rot_spin_map[dev] = rot_spin
             col.addWidget(rot_spin)
@@ -605,13 +649,18 @@ class StagesControlWidget(QWidget):
             accum.move_absolute(value)
 
     def _on_go_to_absolute(self, device: str, value: float) -> None:
-        """Direct absolute move (used by dial — value already in device units)."""
+        """Direct absolute move (used by dial/rot_spin — value in degrees)."""
+        print(f"[stage] _on_go_to_absolute({device!r}, {value:.2f})")
         try:
             self._mmc.setPosition(device, value)
-        except Exception:
-            pass
+            print(f"[stage] setPosition OK")
+        except Exception as e:
+            print(f"[stage] setPosition FAILED: {e}")
 
     def _stop_all(self) -> None:
+        # Cancel any pending debounced dial move before stopping
+        for dial in self._z_dial_map.values():
+            dial.cancel_pending()
         for dev in self._mmc.getLoadedDevicesOfType(DeviceType.Stage):
             try:
                 self._mmc.stop(dev)
@@ -634,32 +683,26 @@ class StagesControlWidget(QWidget):
         if spin := self._z_spin_map.get(device):
             spin.set_core_value(pos)
         if dial := self._z_dial_map.get(device):
-            upr = _units_per_rev(self._mmc, device)
-            dial.set_angle(pos / upr * 360)
+            dial.set_angle(pos)
         if rot_spin := self._rot_spin_map.get(device):
-            upr = _units_per_rev(self._mmc, device)
-            rot_spin.set_core_value(pos / upr * 360)
+            rot_spin.set_core_value(pos)
 
     def _on_polled_position(self, positions: list[tuple[str, float]]) -> None:
         for dev, z in positions:
             if spin := self._z_spin_map.get(dev):
                 spin.set_core_value(z)
             if dial := self._z_dial_map.get(dev):
-                upr = _units_per_rev(self._mmc, dev)
-                dial.set_angle(z / upr * 360)
+                dial.set_angle(z)
             if rot_spin := self._rot_spin_map.get(dev):
-                upr = _units_per_rev(self._mmc, dev)
-                rot_spin.set_core_value(z / upr * 360)
+                rot_spin.set_core_value(z)
 
     def _on_z_pos_changed(self, device: str, z: float) -> None:
         if spin := self._z_spin_map.get(device):
             spin.set_core_value(z)
         if dial := self._z_dial_map.get(device):
-            upr = _units_per_rev(self._mmc, device)
-            dial.set_angle(z / upr * 360)
+            dial.set_angle(z)
         if rot_spin := self._rot_spin_map.get(device):
-            upr = _units_per_rev(self._mmc, device)
-            rot_spin.set_core_value(z / upr * 360)
+            rot_spin.set_core_value(z)
 
     # ── Polling ──────────────────────────────────────────────────────
 

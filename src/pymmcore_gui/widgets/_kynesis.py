@@ -4,10 +4,9 @@
 from __future__ import annotations
 
 from pymmcore_plus import CMMCorePlus, DeviceType
-from superqt.utils import signals_blocked
-
-from pymmcore_gui._qt.QtCore import Qt, QTimer, Signal
-from pymmcore_gui._qt.QtWidgets import (
+from qtpy import QtCore
+from qtpy.QtCore import Qt, QTimer, Signal
+from qtpy.QtWidgets import (
     QCheckBox,
     QDial,
     QDoubleSpinBox,
@@ -19,6 +18,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from superqt.utils import signals_blocked
 
 AlignCenter = Qt.AlignmentFlag.AlignCenter
 STAGE_DEVICES = {DeviceType.Stage, DeviceType.XYStage}
@@ -61,7 +61,7 @@ class _DialWidget(QWidget):
         self._one_deg_unit = DeviceUnitsPerRevolution / 360
 
         layout = QGridLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(5)
         self.setLayout(layout)
 
@@ -89,7 +89,7 @@ class _DialWidget(QWidget):
 
     def _create_label(self, text: str) -> QLabel:
         label = QLabel(text)
-        label.setAlignment(AlignCenter)
+        label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         return label
 
     def _on_dial_value_changed(self, value: int) -> None:
@@ -135,6 +135,10 @@ class KinesisRotationWidget(QWidget):
         self._dtype = self._mmc.getDeviceType(self._device)
         assert self._dtype in STAGE_DEVICES, f"{self._dtype} not in {STAGE_DEVICES}"
 
+        self._moving = False
+        self._pending_angle: int | None = None
+        self._last_sent_angle: float = 0.0
+
         self._create_widget()
 
         self._connect_events()
@@ -148,22 +152,25 @@ class KinesisRotationWidget(QWidget):
         self._step.setValue(10)
         self._step.setMaximum(9999)
         self._step.clearFocus()
-        self._step.setAttribute(Qt.WidgetAttribute.WA_MacShowFocusRect, False)
+        self._step.setAttribute(Qt.WidgetAttribute.WA_MacShowFocusRect, 0)
         self._step.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self._step.setAlignment(AlignCenter)
 
         self._btns = QWidget()
-        btns_layout = QGridLayout()
-        btns_layout.setContentsMargins(0, 0, 0, 0)
-        btns_layout.setSpacing(0)
-        self._btns.setLayout(btns_layout)
+        self._btns.setLayout(QGridLayout())
+        self._btns.layout().setContentsMargins(0, 0, 0, 0)
+        self._btns.layout().setSpacing(0)
 
         self._dial = _DialWidget(
             float(self._mmc.getProperty(self._device, "DeviceUnitsPerRevolution"))
         )
-        self._dial.valueChanged.connect(self._update_position_label)
-        self._dial.valueChanged.connect(self._on_value_changed)
-        btns_layout.addWidget(self._dial, 0, 0, AlignCenter)
+        self._dial.valueChanged.connect(self._on_dial_value_changed)
+        self._btns.layout().addWidget(self._dial, 0, 0, AlignCenter)
+
+        self._debounce_timer = QTimer(self)
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.setInterval(150)
+        self._debounce_timer.timeout.connect(self._send_debounced_move)
 
         self._readout = QLabel()
         self._readout.setAlignment(AlignCenter)
@@ -176,52 +183,48 @@ class KinesisRotationWidget(QWidget):
         self._poll_timer.timeout.connect(self._update_position_label)
         self._poll_cb.toggled.connect(self._toggle_poll_timer)
 
-        self.snap_checkbox = QCheckBox("Snap on Click")
+        self.snap_checkbox = QCheckBox(text="Snap on Click")
 
-        self.radiobutton = QRadioButton("Set as Default")
+        self.radiobutton = QRadioButton(text="Set as Default")
         self.radiobutton.toggled.connect(self._on_radiobutton_toggled)
 
         top_row = QWidget()
         top_row_layout = QHBoxLayout()
         top_row_layout.setAlignment(AlignCenter)
-        top_row_layout.addWidget(self.radiobutton)
         top_row.setLayout(top_row_layout)
+        top_row.layout().addWidget(self.radiobutton)
 
         bottom_row_1 = QWidget()
-        bottom_row_1_layout = QHBoxLayout()
-        bottom_row_1_layout.addWidget(self._readout)
-        bottom_row_1.setLayout(bottom_row_1_layout)
+        bottom_row_1.setLayout(QHBoxLayout())
+        bottom_row_1.layout().addWidget(self._readout)
 
         bottom_row_2 = QWidget()
         bottom_row_2_layout = QHBoxLayout()
         bottom_row_2_layout.setSpacing(10)
         bottom_row_2_layout.setContentsMargins(0, 0, 0, 0)
         bottom_row_2_layout.setAlignment(AlignCenter)
-        bottom_row_2_layout.addWidget(self.snap_checkbox)
-        bottom_row_2_layout.addWidget(self._poll_cb)
         bottom_row_2.setLayout(bottom_row_2_layout)
+        bottom_row_2.layout().addWidget(self.snap_checkbox)
+        bottom_row_2.layout().addWidget(self._poll_cb)
 
-        root = QVBoxLayout(self)
-        root.setSpacing(0)
-        root.setContentsMargins(5, 5, 5, 5)
-        root.addWidget(top_row)
-        root.addWidget(self._btns, 0, AlignCenter)
-        root.addWidget(bottom_row_1)
-        root.addWidget(bottom_row_2)
+        self.setLayout(QVBoxLayout())
+        self.layout().setSpacing(0)
+        self.layout().setContentsMargins(5, 5, 5, 5)
+        self.layout().addWidget(top_row)
+        self.layout().addWidget(self._btns, AlignCenter)
+        self.layout().addWidget(bottom_row_1)
+        self.layout().addWidget(bottom_row_2)
 
+        pos = self._mmc.getPosition(self._device)
+        self._last_sent_angle = pos
         with signals_blocked(self._dial):
-            self._dial.setValue(round(self._mmc.getPosition(self._device)))
+            self._dial.setValue(int(round(pos)) % 360)
 
     def _connect_events(self) -> None:
         self._mmc.events.propertyChanged.connect(self._on_prop_changed)
         self._mmc.events.systemConfigurationLoaded.connect(self._on_system_cfg)
-        if self._dtype is DeviceType.XYStage:
-            event = self._mmc.events.XYStagePositionChanged
-        elif self._dtype is DeviceType.Stage:
-            event = self._mmc.events.stagePositionChanged
-        else:
-            return
-        event.connect(self._update_position_label)
+        if self._dtype is DeviceType.Stage:
+            self._mmc.events.stagePositionChanged.connect(self._on_stage_moved)
 
     def _enable_wdg(self, enabled: bool) -> None:
         self._step.setEnabled(enabled)
@@ -248,9 +251,11 @@ class KinesisRotationWidget(QWidget):
     def _enable_and_update(self, enable: bool) -> None:
         if enable:
             self._enable_wdg(True)
-            self._update_position_label()
+            pos = self._mmc.getPosition(self._device)
+            self._last_sent_angle = pos
             with signals_blocked(self._dial):
-                self._dial.setValue(round(self._mmc.getPosition(self._device)))
+                self._dial.setValue(int(round(pos)) % 360)
+            self._update_position_label()
         else:
             self._readout.setText(f"{self._device} not loaded.")
             self._enable_wdg(False)
@@ -308,28 +313,53 @@ class KinesisRotationWidget(QWidget):
             self._dtype is DeviceType.Stage
             and self._device in self._mmc.getLoadedDevicesOfType(DeviceType.Stage)
         ):
-            p = str(round(self._mmc.getPosition(self._device), 2))
-            # / self._dial._one_deg_unit)
+            p = round(self._mmc.getPosition(self._device), 2)
             self._readout.setText(f"{self._device}:  {p}")
 
-    def _on_value_changed(self, angle: int) -> None:
-        # print("angle:", angle)
-        self._readout.setText(f"{self._device}:  {angle}")
-        self._move_stage(angle)
+    def _on_dial_value_changed(self, angle: int) -> None:
+        self._pending_angle = angle
+        self._debounce_timer.start()
 
-    def _move_stage(self, a: int) -> None:
-        self._mmc.setPosition(self._device, float(a))
+    def _send_debounced_move(self) -> None:
+        if self._pending_angle is None:
+            return
+        dial_angle = self._pending_angle
+        self._pending_angle = None
+
+        # Shortest-path delta — handles 359→0 wrap without spinning backwards
+        prev = self._last_sent_angle % 360
+        delta = dial_angle - prev
+        if delta > 180:
+            delta -= 360
+        elif delta < -180:
+            delta += 360
+
+        target = self._last_sent_angle + delta
+        self._last_sent_angle = target
+        self._move_stage(target)
+
+    def _on_stage_moved(self, device: str, pos: float) -> None:
+        if device != self._device:
+            return
+        with signals_blocked(self._dial):
+            self._dial.setValue(int(round(pos)) % 360)
+        self._readout.setText(f"{self._device}:  {round(pos, 2)}")
+
+    def _move_stage(self, a: float) -> None:
+        if self._moving:
+            return
+        self._moving = True
+        try:
+            self._mmc.setPosition(self._device, a)
+        finally:
+            self._moving = False
+        with signals_blocked(self._dial):
+            self._dial.setValue(int(round(a)) % 360)
         if self.snap_checkbox.isChecked():
             self._mmc.snap()
-        # print('getPosition:', self._mmc.getPosition(self._device))
 
     def _disconnect(self) -> None:
         self._mmc.events.propertyChanged.disconnect(self._on_prop_changed)
         self._mmc.events.systemConfigurationLoaded.disconnect(self._on_system_cfg)
-        if self._dtype is DeviceType.XYStage:
-            event = self._mmc.events.XYStagePositionChanged
-        elif self._dtype is DeviceType.Stage:
-            event = self._mmc.events.stagePositionChanged
-        else:
-            return
-        event.disconnect(self._update_position_label)
+        if self._dtype is DeviceType.Stage:
+            self._mmc.events.stagePositionChanged.disconnect(self._on_stage_moved)
