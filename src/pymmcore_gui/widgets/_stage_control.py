@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
@@ -210,56 +211,48 @@ class _DialWidget(QWidget):
 
         outer.addWidget(box)
 
-        # Debounce: only send a move command 150 ms after the last tick
-        self._pending_degrees: float | None = None
         self._last_sent_degrees: float = 0.0
-        self._debounce_timer = QTimer(self)
-        self._debounce_timer.setSingleShot(True)
-        self._debounce_timer.setInterval(150)
-        self._debounce_timer.timeout.connect(self._send_debounced_move)
+        self._initialized: bool = False
+        self._last_move_at: float = 0.0  # time.monotonic() of last goToRequested
 
     def set_angle(self, degrees: float) -> None:
         """Update dial display without emitting goToRequested."""
-        if not self._debounce_timer.isActive() and self._pending_degrees is None:
-            # Not scrolling: keep tracking in sync with real position
+        if not self._initialized:
             self._last_sent_degrees = degrees
+            self._initialized = True
+        # Don't visually snap the dial back while the stage is still moving.
+        # The stage typically takes ~1 s; suppress poll-driven updates for 1.5 s
+        # after the last command (mirrors x.py which never updates dial from poll).
+        if time.monotonic() - self._last_move_at > 1.5:
             self._dial.blockSignals(True)
             self._dial.setValue(int(degrees) % 360)
             self._dial.blockSignals(False)
 
     def cancel_pending(self) -> None:
-        """Cancel any debounced move that hasn't been sent yet."""
-        self._debounce_timer.stop()
-        self._pending_degrees = None
+        """Cancel intent to move (no-op without debounce, kept for API compat)."""
 
     def _on_dial_changed(self, value: int) -> None:
+        """Fire goToRequested immediately on every tick — no debounce needed."""
         print(f"[dial] valueChanged → {value}°")
-        self._pending_degrees = float(value)
-        self._debounce_timer.start()
-
-    def _send_debounced_move(self) -> None:
-        print(f"[dial] debounce fired, _pending={self._pending_degrees}, _last={self._last_sent_degrees}")
-        if self._pending_degrees is None:
-            return
-        dial_degrees = self._pending_degrees
-        self._pending_degrees = None
-
+        # Shortest-path delta so 359→0 moves forward, not backwards 359°
         prev = self._last_sent_degrees % 360
-        delta = dial_degrees - prev
+        delta = float(value) - prev
         if delta > 180:
             delta -= 360
         elif delta < -180:
             delta += 360
 
-        target_degrees = self._last_sent_degrees + delta
-        self._last_sent_degrees = target_degrees
-        print(f"[dial] goToRequested.emit({target_degrees:.2f})")
-        self.goToRequested.emit(target_degrees)
-        # Lock dial to target immediately (mirrors x.py) so the next poll
-        # callback doesn't snap the visual back to the old position.
+        target = self._last_sent_degrees + delta
+        self._last_sent_degrees = target
+        self._last_move_at = time.monotonic()
+
+        # Keep the visual in sync with what the user just dialled
         self._dial.blockSignals(True)
-        self._dial.setValue(int(target_degrees) % 360)
+        self._dial.setValue(int(target) % 360)
         self._dial.blockSignals(False)
+
+        print(f"[dial] goToRequested.emit({target:.2f})")
+        self.goToRequested.emit(target)
 
 
 def _is_rotation_stage(mmc: CMMCorePlus, device: str) -> bool:
