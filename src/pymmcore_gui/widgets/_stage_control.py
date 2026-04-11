@@ -488,9 +488,9 @@ class StagesControlWidget(QWidget):
         )
         root.addWidget(self._stop_btn)
 
-        # Z position row (rebuilt dynamically per device)
-        self._z_pos_layout = QHBoxLayout()
-        self._z_pos_layout.setSpacing(8)
+        # Z position column (rebuilt dynamically per device)
+        self._z_pos_layout = QVBoxLayout()
+        self._z_pos_layout.setSpacing(4)
         root.addLayout(self._z_pos_layout)
 
         # Snap + Poll checkboxes
@@ -577,35 +577,34 @@ class StagesControlWidget(QWidget):
 
         self._z_btns_layout.addStretch()
 
-        self._z_pos_layout.addStretch()
         z_color = QColor("#6090e0")
         rot_color = QColor("#e09060")
 
         for dev in regular:
-            col = QVBoxLayout()
-            col.setSpacing(2)
-            col.setContentsMargins(0, 0, 0, 0)
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            row.setContentsMargins(0, 0, 0, 0)
 
             lbl = QLabel(dev, self)
             lbl.setFont(_mono_font())
             _set_label_color(lbl, z_color)
-            col.addWidget(lbl)
+            row.addWidget(lbl)
 
             spin = _PositionSpinBox(self)
             spin.goToRequested.connect(lambda v, d=dev: self._on_go_to(d, v))
             self._z_spin_map[dev] = spin
-            col.addWidget(spin)
-            self._z_pos_layout.addLayout(col)
+            row.addWidget(spin)
+            self._z_pos_layout.addLayout(row)
 
         for dev in rotation:
-            col = QVBoxLayout()
-            col.setSpacing(2)
-            col.setContentsMargins(0, 0, 0, 0)
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            row.setContentsMargins(0, 0, 0, 0)
 
             lbl = QLabel(dev, self)
             lbl.setFont(_mono_font())
             _set_label_color(lbl, rot_color)
-            col.addWidget(lbl)
+            row.addWidget(lbl)
 
             rot_spin = _PositionSpinBox(self, suffix="°")
             rot_spin.setRange(0, 360)
@@ -613,10 +612,8 @@ class StagesControlWidget(QWidget):
                 lambda v, d=dev: self._on_go_to_absolute(d, v)
             )
             self._rot_spin_map[dev] = rot_spin
-            col.addWidget(rot_spin)
-            self._z_pos_layout.addLayout(col)
-
-        self._z_pos_layout.addStretch()
+            row.addWidget(rot_spin)
+            self._z_pos_layout.addLayout(row)
 
     # ── Signal wiring ────────────────────────────────────────────────
 
