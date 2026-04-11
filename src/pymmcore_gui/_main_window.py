@@ -243,8 +243,8 @@ class MicroManagerGUI(QMainWindow):
         self._status_bar = QStatusBar(self)
         self.setStatusBar(self._status_bar)
 
-        self._core_status = CoreStatusBar(self._mmc, self)
-        self._status_bar.addWidget(self._core_status, 1)
+        # self._core_status = CoreStatusBar(self._mmc, self)
+        # self._status_bar.addWidget(self._core_status, 1)
 
         self.bell_button = QPushButton(QIconifyIcon("codicon:bell"), None)
         self.bell_button.setFixedWidth(20)

@@ -5,7 +5,6 @@ from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from pymmcore_plus import CMMCorePlus, DeviceType
-from pymmcore_widgets.control._q_stage_controller import QStageMoveAccumulator
 from superqt import QIconifyIcon
 
 from pymmcore_gui._qt.Qlementine import (  # type: ignore[attr-defined]
@@ -94,14 +93,15 @@ class _StagePoller(QThread):
 
     def run(self) -> None:
         while self._running:
-            positions: list[tuple[str, float]] = []
-            for dev in self._mmc.getLoadedDevicesOfType(DeviceType.Stage):
-                try:
-                    z = self._mmc.getPosition(dev)
-                    positions.append((dev, z))
-                except Exception:
-                    pass
-            self.positionReady.emit(positions)
+            if not self._mmc.mda.is_running():
+                positions: list[tuple[str, float]] = []
+                for dev in self._mmc.getLoadedDevicesOfType(DeviceType.Stage):
+                    try:
+                        z = self._mmc.getPosition(dev)
+                        positions.append((dev, z))
+                    except Exception:
+                        pass
+                self.positionReady.emit(positions)
             self.msleep(POLL_INTERVAL_MS)
 
     def stop(self) -> None:
@@ -422,11 +422,16 @@ class StagesControlWidget(QWidget):
 
         self._mmc = mmcore or CMMCorePlus.instance()
         self._invert_z = False
-        self._z_accums: dict[str, QStageMoveAccumulator] = {}
         self._z_btns_map: dict[str, _ZButtons] = {}
         self._z_spin_map: dict[str, _PositionSpinBox] = {}
         self._rot_spin_map: dict[str, _PositionSpinBox] = {}
         self._z_dial_map: dict[str, _DialWidget] = {}
+
+        # Debounced snap: fire once the user stops moving the stage
+        self._snap_timer = QTimer(self)
+        self._snap_timer.setSingleShot(True)
+        self._snap_timer.setInterval(200)
+        self._snap_timer.timeout.connect(self._do_snap)
 
         self._build_ui()
         self._connect_signals()
@@ -439,10 +444,11 @@ class StagesControlWidget(QWidget):
     def _disconnect(self) -> None:
         self._stage_poller.stop()
         self._stage_poller.wait()
-        self._disconnect_accumulators()
         evts = self._mmc.events
         evts.systemConfigurationLoaded.disconnect(self._on_cfg_loaded)
         evts.stagePositionChanged.disconnect(self._on_z_pos_changed)
+        self._mmc.mda.events.sequenceStarted.disconnect(self._on_mda_started)
+        self._mmc.mda.events.sequenceFinished.disconnect(self._on_mda_finished)
 
     # ── UI construction ──────────────────────────────────────────────
 
@@ -498,10 +504,10 @@ class StagesControlWidget(QWidget):
         checks_row.setSpacing(15)
         self._snap_cb = QCheckBox("Snap on Click", self)
         self._snap_cb.setToolTip("Snap image after each move")
-        self._snap_cb.setChecked(True)
+        self._snap_cb.setChecked(False)
         self._poll_cb = QCheckBox("Poll", self)
         self._poll_cb.setToolTip("Poll stage position periodically")
-        self._poll_cb.setChecked(True)
+        self._poll_cb.setChecked(False)
         checks_row.addWidget(self._snap_cb)
         checks_row.addWidget(self._poll_cb)
         checks_row.addStretch()
@@ -620,6 +626,8 @@ class StagesControlWidget(QWidget):
     def _connect_signals(self) -> None:
         self._mmc.events.systemConfigurationLoaded.connect(self._on_cfg_loaded)
         self._mmc.events.stagePositionChanged.connect(self._on_z_pos_changed)
+        self._mmc.mda.events.sequenceStarted.connect(self._on_mda_started)
+        self._mmc.mda.events.sequenceFinished.connect(self._on_mda_finished)
         self._poll_cb.toggled.connect(self._on_poll_toggled)
         self._stop_btn.clicked.connect(self._stop_all)
 
@@ -628,43 +636,42 @@ class StagesControlWidget(QWidget):
     def _on_cfg_loaded(self) -> None:
         z_devs = [str(d) for d in self._mmc.getLoadedDevicesOfType(DeviceType.Stage)]
         self._rebuild_z_widgets(z_devs)
-        self._setup_accumulators(z_devs)
         self._update_positions()
-
-    def _setup_accumulators(self, z_devs: list[str]) -> None:
-        self._disconnect_accumulators()
-        for dev in z_devs:
-            if _is_rotation_stage(self._mmc, dev):
-                continue  # rotation stages use direct setPosition, no accumulator needed
-            with suppress(Exception):
-                accum = QStageMoveAccumulator.for_device(dev, self._mmc)
-                accum.moveFinished.connect(
-                    lambda d=dev: self._update_single_position(d)
-                )
-                self._z_accums[dev] = accum
-
-    def _disconnect_accumulators(self) -> None:
-        for accum in self._z_accums.values():
-            with suppress(TypeError, RuntimeError):
-                accum.moveFinished.disconnect()
-        self._z_accums.clear()
 
     # ── Movement ─────────────────────────────────────────────────────
 
     def _on_z_move(self, device: str, direction: int, max_step: float = 0) -> None:
-        accum = self._z_accums.get(device)
-        if not accum:
+        if self._mmc.mda.is_running():
             return
         step = self._step_bar.current_step()
         if max_step > 0:
             step = min(step, max_step)
         dz = step * direction * (-1 if self._invert_z else 1)
-        accum.snap_on_finish = self._snap_cb.isChecked()
-        accum.move_relative(dz)
+        with suppress(Exception):
+            self._mmc.setRelativePosition(device, dz)
+        if self._snap_cb.isChecked():
+            self._snap_timer.start()
 
     def _on_go_to(self, device: str, value: float) -> None:
-        if accum := self._z_accums.get(device):
-            accum.move_absolute(value)
+        if self._mmc.mda.is_running():
+            return
+        with suppress(Exception):
+            self._mmc.setPosition(device, value)
+        if self._snap_cb.isChecked():
+            self._snap_timer.start()
+
+    def _do_snap(self) -> None:
+        if self._mmc.mda.is_running():
+            return
+        with suppress(Exception):
+            self._mmc.snap()
+
+    def _on_mda_started(self, *_: object) -> None:
+        self._snap_timer.stop()
+        self.setEnabled(False)
+
+    def _on_mda_finished(self, *_: object) -> None:
+        self.setEnabled(True)
 
     def _on_dial_step(self, device: str, delta: float) -> None:
         """Relative move from dial — uses setRelativePosition to avoid wrap ambiguity."""
