@@ -93,7 +93,7 @@ class _StagePoller(QThread):
 
     def run(self) -> None:
         while self._running:
-            if not self._mmc.mda.is_running():
+            if not self._mmc.mda.is_running() and not self._mmc.isSequenceRunning():
                 positions: list[tuple[str, float]] = []
                 for dev in self._mmc.getLoadedDevicesOfType(DeviceType.Stage):
                     try:
@@ -424,7 +424,6 @@ class StagesControlWidget(QWidget):
         self._invert_z = False
         self._z_btns_map: dict[str, _ZButtons] = {}
         self._z_spin_map: dict[str, _PositionSpinBox] = {}
-        self._rot_spin_map: dict[str, _PositionSpinBox] = {}
         self._z_dial_map: dict[str, _DialWidget] = {}
 
         # Debounced snap: fire once the user stops moving the stage
@@ -521,7 +520,6 @@ class StagesControlWidget(QWidget):
         """
         self._z_btns_map.clear()
         self._z_spin_map.clear()
-        self._rot_spin_map.clear()
         self._z_dial_map.clear()
         _clear_layout(self._z_btns_layout)
         _clear_layout(self._z_pos_layout)
@@ -584,7 +582,6 @@ class StagesControlWidget(QWidget):
         self._z_btns_layout.addStretch()
 
         z_color = QColor("#6090e0")
-        rot_color = QColor("#e09060")
 
         for dev in regular:
             row = QHBoxLayout()
@@ -600,25 +597,6 @@ class StagesControlWidget(QWidget):
             spin.goToRequested.connect(lambda v, d=dev: self._on_go_to(d, v))
             self._z_spin_map[dev] = spin
             row.addWidget(spin)
-            self._z_pos_layout.addLayout(row)
-
-        for dev in rotation:
-            row = QHBoxLayout()
-            row.setSpacing(6)
-            row.setContentsMargins(0, 0, 0, 0)
-
-            lbl = QLabel(dev, self)
-            lbl.setFont(_mono_font())
-            _set_label_color(lbl, rot_color)
-            row.addWidget(lbl)
-
-            rot_spin = _PositionSpinBox(self, suffix="°")
-            rot_spin.setRange(0, 360)
-            rot_spin.goToRequested.connect(
-                lambda v, d=dev: self._on_go_to_absolute(d, v)
-            )
-            self._rot_spin_map[dev] = rot_spin
-            row.addWidget(rot_spin)
             self._z_pos_layout.addLayout(row)
 
     # ── Signal wiring ────────────────────────────────────────────────
@@ -681,18 +659,6 @@ class StagesControlWidget(QWidget):
         except Exception as e:
             print(f"[stage] setRelativePosition FAILED: {e}")
 
-    def _on_go_to_absolute(self, device: str, value: float) -> None:
-        """Absolute move (used by rot_spin lineedit — value in degrees)."""
-        print(f"[stage] _on_go_to_absolute({device!r}, {value:.2f})")
-        # Sync the dial tracking so the next wheel-tick delta is correct
-        if dial := self._z_dial_map.get(device):
-            dial.sync_to(value)
-        try:
-            self._mmc.setPosition(device, value)
-            print(f"[stage] setPosition OK")
-        except Exception as e:
-            print(f"[stage] setPosition FAILED: {e}")
-
     def _stop_all(self) -> None:
         # Cancel any pending debounced dial move before stopping
         for dial in self._z_dial_map.values():
@@ -720,8 +686,6 @@ class StagesControlWidget(QWidget):
             spin.set_core_value(pos)
         if dial := self._z_dial_map.get(device):
             dial.set_angle(pos)
-        if rot_spin := self._rot_spin_map.get(device):
-            rot_spin.set_core_value(pos % 360)
 
     def _on_polled_position(self, positions: list[tuple[str, float]]) -> None:
         for dev, z in positions:
@@ -729,16 +693,12 @@ class StagesControlWidget(QWidget):
                 spin.set_core_value(z)
             if dial := self._z_dial_map.get(dev):
                 dial.set_angle(z)
-            if rot_spin := self._rot_spin_map.get(dev):
-                rot_spin.set_core_value(z % 360)
 
     def _on_z_pos_changed(self, device: str, z: float) -> None:
         if spin := self._z_spin_map.get(device):
             spin.set_core_value(z)
         if dial := self._z_dial_map.get(device):
             dial.set_angle(z)
-        if rot_spin := self._rot_spin_map.get(device):
-            rot_spin.set_core_value(z % 360)
 
     # ── Polling ──────────────────────────────────────────────────────
 
