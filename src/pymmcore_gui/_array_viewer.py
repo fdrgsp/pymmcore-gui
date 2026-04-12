@@ -84,9 +84,9 @@ class MMArrayViewer(ndv.ArrayViewer):
         if data is None:
             return
 
-        arr = np.asarray(data)
-        if arr.size == 0:
-            return
+        with suppress(Exception):
+            if not all(data.shape):
+                return
 
         path, _ = QFileDialog.getSaveFileName(
             self.widget(),
@@ -113,13 +113,16 @@ class MMArrayViewer(ndv.ArrayViewer):
 
         # Multi-position: save one file per position.
         if sizes.get("p", 0) > 1:
-            _save_multiposition(arr, sizes, path, pixel_size_um, z_step_um, axes)
+            _save_multiposition(data, sizes, path, pixel_size_um, z_step_um, axes)
         else:
             # Squeeze out the p axis if present (size 1 by definition here).
             if "p" in sizes:
                 p_idx = list(sizes).index("p")
-                arr = np.squeeze(arr, axis=p_idx)
-            _save_as_tiff(arr, path, pixel_size_um, z_step_um, axes)
+                idx = tuple(
+                    0 if i == p_idx else slice(None) for i in range(len(data.shape))
+                )
+                data = data[idx]
+            _save_as_tiff(data, path, pixel_size_um, z_step_um, axes)
 
     def _get_roi_data(self) -> np.ndarray | None:
         """Extract the data under the current ROI bounding box."""
@@ -218,8 +221,6 @@ def _save_as_tiff(
     axes: str = "",
 ) -> None:
     """Save *arr* as an OME-TIFF with physical-size metadata."""
-    arr = np.asarray(arr)
-
     metadata: dict[str, Any] = {}
     if axes:
         metadata["axes"] = axes
@@ -232,6 +233,26 @@ def _save_as_tiff(
         metadata["PhysicalSizeZ"] = z_step_um
         metadata["PhysicalSizeZUnit"] = "µm"
 
-    tifffile.imwrite(
-        path, arr, ome=True, photometric="minisblack", metadata=metadata or None
-    )
+    shape = arr.shape
+    if len(shape) <= 2:
+        # Small 2-D array: safe to materialize all at once.
+        tifffile.imwrite(
+            path,
+            np.asarray(arr),
+            ome=True,
+            photometric="minisblack",
+            metadata=metadata or None,
+        )
+    else:
+        # Write one outer-axis slice at a time so the full array never needs to
+        # be allocated as a single contiguous block in RAM.
+        tifffile.imwrite(
+            path,
+            (np.asarray(arr[i]) for i in range(shape[0])),
+            shape=shape,
+            dtype=arr.dtype,
+            bigtiff=True,
+            ome=True,
+            photometric="minisblack",
+            metadata=metadata or None,
+        )
