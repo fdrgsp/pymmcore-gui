@@ -252,7 +252,6 @@ class _DialWidget(QWidget):
 
     def _on_dial_changed(self, value: int) -> None:
         """Accumulate dial ticks; flush as a single stepRequested after 80 ms idle."""
-        print(f"[dial] valueChanged → {value}°")
         # Shortest-path delta so 359→0 moves forward, not backwards 359°
         prev = self._last_sent_degrees % 360
         delta = float(value) - prev
@@ -276,7 +275,6 @@ class _DialWidget(QWidget):
     def _flush_pending(self) -> None:
         """Send the accumulated delta as a single relative-position command."""
         if self._pending_delta:
-            print(f"[dial] stepRequested.emit({self._pending_delta:+.2f}°)")
             self.stepRequested.emit(self._pending_delta)
             self._pending_delta = 0.0
 
@@ -524,8 +522,10 @@ class StagesControlWidget(QWidget):
         _clear_layout(self._z_btns_layout)
         _clear_layout(self._z_pos_layout)
 
-        regular = [d for d in z_devs if not _is_rotation_stage(self._mmc, d)]
-        rotation = [d for d in z_devs if _is_rotation_stage(self._mmc, d)]
+        regular: list[str] = []
+        rotation: list[str] = []
+        for d in z_devs:
+            (rotation if _is_rotation_stage(self._mmc, d) else regular).append(d)
 
         self._z_btns_layout.addStretch()
         for dev in regular:
@@ -653,11 +653,8 @@ class StagesControlWidget(QWidget):
 
     def _on_dial_step(self, device: str, delta: float) -> None:
         """Relative move from dial — uses setRelativePosition to avoid wrap ambiguity."""
-        print(f"[stage] setRelativePosition({device!r}, {delta:+.2f})")
-        try:
+        with suppress(Exception):
             self._mmc.setRelativePosition(device, delta)
-        except Exception as e:
-            print(f"[stage] setRelativePosition FAILED: {e}")
 
     def _stop_all(self) -> None:
         # Cancel any pending debounced dial move before stopping
