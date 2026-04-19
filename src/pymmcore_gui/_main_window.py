@@ -18,6 +18,8 @@ from pymmcore_gui._qt.QtCore import QSize, Qt
 from pymmcore_gui._qt.QtGui import (
     QAction,
     QCloseEvent,
+    QDragEnterEvent,
+    QDropEvent,
     QGuiApplication,
     QIcon,
     QPalette,
@@ -37,6 +39,7 @@ from pymmcore_gui._qt.QtWidgets import (
 from ._ndv_viewers import NDVViewersManager
 from ._notification_manager import NotificationManager
 from ._settings import Settings
+from ._array_viewer import MMArrayViewer, _read_tiff_with_scales
 from .actions import CoreAction, QCoreAction, WidgetAction, WidgetActionInfo
 from .actions._action_info import ActionInfo
 from .widgets._core_status_bar import CoreStatusBar
@@ -300,6 +303,54 @@ class MicroManagerGUI(QMainWindow):
         _gl = QOpenGLWidget(self)
         _gl.setFixedSize(0, 0)
         _gl.close()
+
+        self.setAcceptDrops(True)
+
+    # --------------------- Drag & Drop ---------------------
+    # -----------------------------------------------------------
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # type: ignore[override]
+        if event.mimeData().hasUrls() and any(
+            u.toLocalFile().lower().endswith((".tif", ".tiff"))
+            for u in event.mimeData().urls()
+        ):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dropEvent(self, event: QDropEvent) -> None:  # type: ignore[override]
+        tiff_paths = [
+            u.toLocalFile()
+            for u in event.mimeData().urls()
+            if u.toLocalFile().lower().endswith((".tif", ".tiff"))
+        ]
+        for path in tiff_paths:
+            self._open_tiff_viewer(path)
+        if tiff_paths:
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+    def _open_tiff_viewer(self, path: str) -> None:
+        """Open a TIFF file in a new docked viewer."""
+        from contextlib import suppress
+
+        arr, scales = _read_tiff_with_scales(path)
+        viewer = MMArrayViewer(arr)
+        if scales:
+            for axis, val in scales.items():
+                with suppress(Exception):
+                    viewer.display_model.scales[axis] = val
+
+        name = Path(path).name
+        q_widget = viewer.widget()
+        q_widget.setWindowTitle(name)
+
+        dw = CDockWidget(self.dock_manager, name, self)
+        dw._viewer = viewer  # keep a reference so it isn't garbage-collected
+        dw.setWidget(q_widget)
+        dw.setFeature(dw.DockWidgetFeature.DockWidgetFloatable, False)
+        self.dock_manager.addDockWidgetTabToArea(dw, self._central_dock_area)
 
     # --------------------- Properties ----------------------
 

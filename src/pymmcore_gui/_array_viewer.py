@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,16 @@ class MMArrayViewer(ndv.ArrayViewer):
             _add_save_button(self)
         with suppress(Exception):
             _add_roll_axes_button(self)
+
+    def _open_tiff(self, path: str) -> None:
+        """Load a TIFF file into the viewer, restoring physical-size scales."""
+        with suppress(Exception):
+            arr, scales = _read_tiff_with_scales(path)
+            self.data = arr
+            if scales:
+                for axis, val in scales.items():
+                    with suppress(Exception):
+                        self.display_model.scales[axis] = val
 
     def _roll_axes(self) -> None:
         """Cycle visible_axes through the three orthogonal ZYX views."""
@@ -182,6 +193,83 @@ def _add_roll_axes_button(viewer: MMArrayViewer) -> QPushButton:
     ndims_idx = btn_layout.indexOf(q_widget.ndims_btn)
     btn_layout.insertWidget(ndims_idx + 1, btn)
     return btn
+
+
+def _read_tiff_with_scales(path: str) -> tuple[np.ndarray, dict[str | int, float]]:
+    """Read a TIFF file and extract physical-size scales (in µm).
+
+    Returns the array and a dict that contains **both** string axis labels
+    (``"x"``, ``"y"``, ``"z"``) and integer axis indices.  String keys are
+    used by :py:meth:`MMArrayViewer._save_data`; integer keys are needed so
+    that ndv's ``_resolve_visible_scales`` can match them against the plain
+    numpy ``DataWrapper`` (which uses integer axis indices, not dim labels).
+    """
+    named: dict[str, float] = {}
+    axes = ""
+    with tifffile.TiffFile(path) as tif:
+        arr = tif.asarray()
+        if tif.series:
+            axes = tif.series[0].axes.upper()
+
+        if tif.is_ome and tif.ome_metadata:
+            with suppress(Exception):
+                root = ET.fromstring(tif.ome_metadata)
+                ns = root.tag.split("}")[0].lstrip("{") if "}" in root.tag else ""
+                ns_prefix = f"{{{ns}}}" if ns else ""
+                pixels = root.find(f".//{ns_prefix}Pixels")
+                if pixels is not None:
+                    for axis_name, attr in (
+                        ("x", "PhysicalSizeX"),
+                        ("y", "PhysicalSizeY"),
+                        ("z", "PhysicalSizeZ"),
+                    ):
+                        raw = pixels.get(attr)
+                        unit = pixels.get(f"{attr}Unit", "µm")
+                        if raw:
+                            val = _to_um(float(raw), unit)
+                            if val > 0:
+                                named[axis_name] = val
+
+        elif tif.pages:
+            with suppress(Exception):
+                tags = tif.pages[0].tags
+                x_res = tags.get(282)  # XResolution
+                y_res = tags.get(283)  # YResolution
+                res_unit_tag = tags.get(296)  # ResolutionUnit
+                # 1 = no unit, 2 = inch, 3 = cm
+                res_unit = int(res_unit_tag.value) if res_unit_tag else 2
+                unit_to_um = {1: 1.0, 2: 25400.0, 3: 10000.0}
+                factor = unit_to_um.get(res_unit, 1.0)
+                if x_res and x_res.value[0]:
+                    named["x"] = factor / (x_res.value[0] / x_res.value[1])
+                if y_res and y_res.value[0]:
+                    named["y"] = factor / (y_res.value[0] / y_res.value[1])
+
+    # Build combined dict: string keys (for _save_data) + integer keys (for
+    # ndv rendering on plain numpy arrays whose DataWrapper uses int indices).
+    scales: dict[str | int, float] = dict(named)
+    if axes:
+        for i, dim in enumerate(axes):
+            name = dim.lower()
+            if name in named:
+                scales[i] = named[name]
+
+    return arr, scales
+
+
+def _to_um(value: float, unit: str) -> float:
+    """Convert *value* from *unit* to micrometres."""
+    _CONV: dict[str, float] = {
+        "m": 1e6,
+        "cm": 1e4,
+        "mm": 1e3,
+        "µm": 1.0,
+        "um": 1.0,
+        "nm": 1e-3,
+        "pm": 1e-6,
+        "Å": 1e-4,
+    }
+    return value * _CONV.get(unit, 1.0)
 
 
 def _save_multiposition(
