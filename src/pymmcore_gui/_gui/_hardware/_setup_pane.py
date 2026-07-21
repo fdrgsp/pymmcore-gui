@@ -82,6 +82,7 @@ class DeviceSetupPane(QWidget):
     addCancelled = pyqtSignal()
     propertyChanged = pyqtSignal(object, str)  # (Property, new value)
     delayChanged = pyqtSignal(object, float)  # (Device, delay in ms)
+    renameRequested = pyqtSignal(object, str)  # (Device, new label)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -177,6 +178,19 @@ class DeviceSetupPane(QWidget):
             dev.library, dev.adapter_name, dev.device_type.name, dev.parent_label
         )
         self._add_description(dev.description)
+
+        # editable label — renaming reloads the device in the core
+        label_edit = QLineEdit(dev.name)
+
+        def _commit_rename() -> None:
+            if (new := label_edit.text().strip()) and new != dev.name:
+                self.renameRequested.emit(dev, new)
+
+        label_edit.editingFinished.connect(_commit_rename)
+        form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.addRow("Label:", label_edit)
+        self._body_layout.addLayout(form)
 
         if setup_props := [p for p in dev.properties if p.is_pre_init]:
             self._add_section("Setup properties")

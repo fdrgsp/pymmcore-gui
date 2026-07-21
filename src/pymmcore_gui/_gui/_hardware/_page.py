@@ -11,9 +11,10 @@ from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pymmcore_plus import CMMCorePlus, DeviceType
+from pymmcore_plus import CMMCorePlus, DeviceType, Keyword
 from pymmcore_plus.model import Device, Microscope
 
+from pymmcore_gui._gui._busy import BusyOverlay, busy
 from pymmcore_gui._gui._tab_page import TabPage
 from pymmcore_gui._qt.QtWidgets import (
     QFileDialog,
@@ -28,6 +29,8 @@ from ._setup_pane import DeviceSetupPane
 
 if TYPE_CHECKING:
     from pymmcore_plus.model import AvailableDevice, Property
+
+    from pymmcore_gui._qt.QtGui import QResizeEvent
 
 CFG_FILTER = "Micro-Manager config (*.cfg);;All files (*)"
 
@@ -51,6 +54,7 @@ class HardwareSetupPage(TabPage):
         self._available = AvailableDevicesPane()
         self._installed = InstalledDevicesPane()
         self._setup = DeviceSetupPane()
+        self._overlay = BusyOverlay(self)
 
         # available devices | setup & properties | installed devices
         self.left.add_widget(self._available, 1)
@@ -79,6 +83,7 @@ class HardwareSetupPage(TabPage):
         self._setup.addCancelled.connect(self._cancel_add)
         self._setup.propertyChanged.connect(self._on_property_changed)
         self._setup.delayChanged.connect(self._on_delay_changed)
+        self._setup.renameRequested.connect(self._rename_device)
 
         # A configuration may be loaded into the core *after* this page is
         # built (create_mmgui constructs the window before prompting for a
@@ -94,7 +99,7 @@ class HardwareSetupPage(TabPage):
         """Repopulate when a config is loaded into the core from anywhere."""
         # the widget may already be torn down on the C++ side
         with suppress(RuntimeError):
-            self.reload_model()
+            self._reload("Loading configuration…")
 
     # ── model ─────────────────────────────────────────────────────
 
@@ -105,10 +110,20 @@ class HardwareSetupPage(TabPage):
 
     def reload_model(self) -> None:
         """Rebuild the model from the current state of the core."""
-        self._cancel_add()
-        self._model = Microscope.create_from_core(self._core)
-        self._refresh_all()
+        # NOTE: no arguments — this is wired to QPushButton.clicked, which would
+        # otherwise pass its `checked` bool as the first parameter.
+        self._reload("Scanning device adapters…")
+
+    def _reload(self, message: str) -> None:
+        with busy(self._overlay, message):
+            self._cancel_add()
+            self._model = Microscope.create_from_core(self._core)
+            self._refresh_all()
         self._dirty = False
+
+    def resizeEvent(self, event: QResizeEvent | None) -> None:
+        super().resizeEvent(event)
+        self._overlay.setGeometry(self.rect())
 
     # ── config files ──────────────────────────────────────────────
 
@@ -117,10 +132,11 @@ class HardwareSetupPage(TabPage):
         if not self._confirm_discard("Start a new configuration?"):
             return
         self._cancel_add()
-        with suppress(Exception):
-            self._core.unloadAllDevices()
-        self._model = Microscope()
-        self._refresh_all()
+        with busy(self._overlay, "Starting a new configuration…"):
+            with suppress(Exception):
+                self._core.unloadAllDevices()
+            self._model = Microscope()
+            self._refresh_all()
         self._dirty = False
 
     def load_config(self) -> None:
@@ -140,16 +156,17 @@ class HardwareSetupPage(TabPage):
             self._warn(f"Failed to read {path}:\n\n{e}")
             return
 
-        with suppress(Exception):
-            self._core.unloadAllDevices()
         errors: dict[str, str] = {}
 
         def _on_fail(d: Device | Property, e: BaseException) -> None:
             errors.setdefault(d.name, str(e))
 
-        model.initialize(self._core, on_fail=_on_fail)
-        self._model = model
-        self._refresh_all()
+        with busy(self._overlay, f"Loading {Path(path).name}…"):
+            with suppress(Exception):
+                self._core.unloadAllDevices()
+            model.initialize(self._core, on_fail=_on_fail)
+            self._model = model
+            self._refresh_all()
         self._dirty = False
         if errors:
             listing = "\n".join(f"  • {n}: {m}" for n, m in errors.items())
@@ -372,6 +389,56 @@ class HardwareSetupPage(TabPage):
                 prop.apply_to_core(self._core)
         except Exception as e:
             self._warn(f"Failed to set {prop.name!r}:\n\n{e}")
+
+    def _rename_device(self, dev: Device, new_name: str) -> None:
+        """Relabel an installed device.
+
+        MMCore identifies devices by label, so (as the Java wizard does) the
+        device is unloaded and reloaded under the new name, then references to
+        the old name elsewhere in the model are repaired.
+        """
+        new_name = new_name.strip()
+        old_name = dev.name
+        if not new_name or new_name == old_name:
+            return
+
+        taken = {d.name for d in self._model.devices if d is not dev}
+        if new_name in taken or new_name in self._core.getLoadedDevices():
+            self._warn(f"A device labelled {new_name!r} already exists.")
+            self._setup.show_installed(dev, self._port_device_for(dev))
+            return
+
+        try:
+            with suppress(Exception):
+                dev.unload(self._core)
+            dev.name = new_name
+            dev.load(self._core)
+            if dev.parent_label:
+                self._core.setParentLabel(dev.name, dev.parent_label)
+            dev.initialize(self._core, apply_pre_init=True)
+        except Exception as e:
+            dev.name = old_name  # roll the model back to match the core
+            self._warn(f"Failed to rename {old_name!r}:\n\n{e}")
+            self._reload("Reloading after failed rename…")
+            return
+
+        # properties carry their owning device's name
+        for prop in dev.properties:
+            prop.device_name = new_name
+        # peripherals point at their hub, and port users at their serial device
+        for other in self._model.devices:
+            if other.parent_label == old_name:
+                other.parent_label = new_name
+                with suppress(Exception):
+                    self._core.setParentLabel(other.name, new_name)
+            if other.port == old_name:
+                with suppress(Exception):
+                    other.get_property(Keyword.Port).value = new_name
+
+        self._dirty = True
+        self._installed.set_devices(self._model.devices)
+        self._setup.show_installed(dev, self._port_device_for(dev))
+        self._status(f"Renamed {old_name} to {new_name}")
 
     def _on_delay_changed(self, dev: Device, delay_ms: float) -> None:
         dev.delay_ms = delay_ms

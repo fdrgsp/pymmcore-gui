@@ -99,9 +99,9 @@ class AvailableDevicesPane(QWidget):
         self._hub_children.setToolTip(
             "Uncheck to collapse each hub library down to just its hub device."
         )
-        # Default to showing everything: devices from a hub library often work
-        # standalone too, so hiding them would remove usable choices.
-        self._hub_children.setChecked(True)
+        # Collapsed by default (as the Java wizard does): a hub library is
+        # normally added via its hub, then its peripherals.
+        self._hub_children.setChecked(False)
         self._hub_children.toggled.connect(self._apply_filter)
 
         self._table = _DeviceTable(self.HEADERS)
