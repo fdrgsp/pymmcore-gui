@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pymmcore_plus import DeviceType
+
 from pymmcore_gui._gui._theme import theme, ui_font
 from pymmcore_gui._qt.QtCore import Qt, pyqtSignal
 from pymmcore_gui._qt.QtGui import QFont
@@ -83,6 +85,7 @@ class AvailableDevicesPane(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._devices: list[AvailableDevice] = []
+        self._hub_libraries: set[str] = set()
 
         self._filter = QLineEdit()
         self._filter.setPlaceholderText("Filter devices…")
@@ -93,6 +96,12 @@ class AvailableDevicesPane(QWidget):
         self._type.currentIndexChanged.connect(self._apply_filter)
 
         self._hub_children = QCheckBox("Show hub children")
+        self._hub_children.setToolTip(
+            "Uncheck to collapse each hub library down to just its hub device."
+        )
+        # Default to showing everything: devices from a hub library often work
+        # standalone too, so hiding them would remove usable choices.
+        self._hub_children.setChecked(True)
         self._hub_children.toggled.connect(self._apply_filter)
 
         self._table = _DeviceTable(self.HEADERS)
@@ -128,11 +137,40 @@ class AvailableDevicesPane(QWidget):
     # ── data ──────────────────────────────────────────────────────
 
     def set_devices(self, devices: Sequence[AvailableDevice]) -> None:
-        """Populate the pane with the model's available devices."""
-        self._devices = list(devices)
+        """Populate the pane with the model's available devices.
+
+        Devices are grouped by library with the hub first, so the intended
+        "add the hub, then pick its peripherals" flow is the obvious one.
+        """
+        self._devices = sorted(
+            devices,
+            key=lambda d: (
+                d.library.lower(),
+                d.device_type is not DeviceType.Hub,
+                d.adapter_name.lower(),
+            ),
+        )
+        # Mirror the Java wizard's "compact" list (MicroscopeModel.
+        # getAvailableDevicesCompact): a library that provides a hub offers its
+        # other devices as peripherals of that hub, not as standalone entries.
+        self._hub_libraries = {
+            d.library for d in self._devices if d.device_type is DeviceType.Hub
+        }
         self._rebuild_types()
         self._rebuild_table()
         self._apply_filter()
+
+    def _is_hub_child(self, dev: AvailableDevice) -> bool:
+        """Whether `dev` is reachable as a peripheral rather than on its own."""
+        if dev.library_hub is not None:
+            # discovered by querying an already-loaded hub
+            return True
+        # NOTE: pymmcore-plus never sets `library_hub` for devices reported by
+        # getAvailableDevices (it keys the hub lookup by adapter_name as well as
+        # library, which cannot match), so fall back to matching on library.
+        return (
+            dev.device_type is not DeviceType.Hub and dev.library in self._hub_libraries
+        )
 
     def _rebuild_types(self) -> None:
         current = self._type.currentData()
@@ -169,7 +207,7 @@ class AvailableDevicesPane(QWidget):
                 continue
             hidden = (
                 (dev_type is not None and dev.device_type is not dev_type)
-                or (dev.library_hub is not None and not show_children)
+                or (self._is_hub_child(dev) and not show_children)
                 or not self._matches(row, terms)
             )
             self._table.setRowHidden(row, hidden)
