@@ -65,8 +65,7 @@ class HardwareSetupPage(TabPage):
         for text, slot in (
             ("New", self.new_config),
             ("Load…", self.load_config),
-            ("Save", self.save_config),
-            ("Save As…", self.save_config_as),
+            ("Save…", self.save_config),
             ("Reload from core", self.reload_model),
         ):
             btn = QPushButton(text)
@@ -118,6 +117,10 @@ class HardwareSetupPage(TabPage):
         with busy(self._overlay, message):
             self._cancel_add()
             self._model = Microscope.create_from_core(self._core)
+            # create_from_core doesn't carry over the file the core was loaded
+            # from, which would otherwise leave Save with no target.
+            with suppress(Exception):
+                self._model.config_file = self._core.systemConfigurationFile() or ""
             self._refresh_all()
         self._dirty = False
 
@@ -173,14 +176,11 @@ class HardwareSetupPage(TabPage):
             self._warn(f"Some devices failed to initialize:\n\n{listing}")
 
     def save_config(self) -> None:
-        """Save to the model's current file, prompting if it has none."""
-        if not self._model.config_file:
-            self.save_config_as()
-            return
-        self._save_to(self._model.config_file)
+        """Save the configuration, always asking where.
 
-    def save_config_as(self) -> None:
-        """Save the configuration to a chosen .cfg file."""
+        Defaults to the file the config came from, so overwriting it is a
+        deliberate confirmation rather than a silent write.
+        """
         start = self._model.config_file or "MMConfig.cfg"
         path, _ = QFileDialog.getSaveFileName(
             self, "Save hardware configuration", start, CFG_FILTER
