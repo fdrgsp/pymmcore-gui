@@ -42,7 +42,6 @@ for ring_r in (300, 600, 900, 1200, 1500):
                 fill=random.choice([True, False]),
             )
         )
-
 # Scattered lines across the field
 for _ in range(80):
     x1 = random.uniform(-2000, 2000)
@@ -68,6 +67,6 @@ for qx, qy in [(800, 800), (-800, 800), (-800, -800), (800, -800)]:
 sample = Sample(objects)
 
 core = CMMCorePlus.instance()
-core.loadSystemConfiguration()
+# core.loadSystemConfiguration()
 with sample.patch(core):
-    create_mmgui(window_cls="pymmcore_gui._modern_gui.MainWindow", exec_app=True)
+    create_mmgui(window_cls="pymmcore_gui._gui.MainWindow", exec_app=True)
