@@ -46,6 +46,8 @@ class HardwareSetupPage(TabPage):
         self._model = Microscope()
         # device loaded into core but not yet initialized/committed to the model
         self._pending: Device | None = None
+        # serial device loaded on behalf of a pending device's "Port"
+        self._pending_port: Device | None = None
         self._selected_available: AvailableDevice | None = None
         # NOTE: tracked here rather than via Microscope.is_dirty(), which
         # currently reports True even immediately after mark_clean().
@@ -83,6 +85,7 @@ class HardwareSetupPage(TabPage):
         self._setup.propertyChanged.connect(self._on_property_changed)
         self._setup.delayChanged.connect(self._on_delay_changed)
         self._setup.renameRequested.connect(self._rename_device)
+        self._setup.portSelected.connect(self._on_port_selected)
 
         # A configuration may be loaded into the core *after* this page is
         # built (create_mmgui constructs the window before prompting for a
@@ -240,9 +243,7 @@ class HardwareSetupPage(TabPage):
         """Return the serial device backing `dev`'s "Port" property, if any."""
         if not (port := dev.port):
             return None
-        return next(
-            (d for d in self._model.available_serial_devices if d.name == port), None
-        )
+        return next((d for d in self._model.devices if d.name == port), None)
 
     # ── adding ────────────────────────────────────────────────────
 
@@ -282,16 +283,78 @@ class HardwareSetupPage(TabPage):
 
         self._pending = dev
         if any(p.is_pre_init for p in dev.properties):
-            self._setup.show_pending(dev)
+            self._setup.show_pending(dev, self._serial_choices())
         else:
             self._finish_add()
+
+    def _serial_choices(self) -> list[Device]:
+        """Serial devices offered for a "Port" property."""
+        return list(self._model.available_serial_devices)
+
+    def _on_port_selected(self, name: str, library: str) -> None:
+        """Load the chosen serial device so its settings can be configured.
+
+        MMCore only accepts a *loaded* serial device as a "Port" value, so the
+        port is loaded up front and initialized before the device that uses it.
+        """
+        if (dev := self._pending) is None:
+            return
+        self._unload_pending_port()
+
+        if name and library:
+            port = Device(
+                name=name,
+                library=library,
+                adapter_name=name,
+                device_type=DeviceType.Serial,
+            )
+            try:
+                if name not in self._core.getLoadedDevices():
+                    port.load(self._core)
+                port.update_from_core(self._core)
+                self._pending_port = port
+            except Exception as e:
+                self._warn(f"Failed to open port {name!r}:\n\n{e}")
+
+        with suppress(Exception):
+            dev.get_property(Keyword.Port).value = name
+
+        self._setup.show_pending(dev, self._serial_choices(), self._pending_port)
+
+    def _unload_pending_port(self) -> None:
+        """Drop a provisionally-loaded port device."""
+        if (port := self._pending_port) is None:
+            return
+        self._pending_port = None
+        if port not in self._model.devices:
+            with suppress(Exception):
+                port.unload(self._core)
 
     def _finish_add(self) -> None:
         """Initialize the pending device and commit it to the model."""
         if (dev := self._pending) is None:
             return
+        # The serial port must be configured and initialized BEFORE the device
+        # that uses it, or initialization can fail or hang.
+        if (port := self._pending_port) is not None:
+            try:
+                for prop in port.properties:
+                    if not prop.is_read_only:
+                        prop.apply_to_core(self._core, then_update=False)
+                self._core.initializeDevice(port.name)
+                port.initialized = True
+            except Exception as e:
+                self._warn(f"Failed to initialize port {port.name!r}:\n\n{e}")
+                return
+            if port not in self._model.devices:
+                self._model.devices.append(port)
+            self._pending_port = None
+
         try:
-            dev.initialize(self._core, apply_pre_init=True)
+            # reload first: a previous failed attempt can leave the device
+            # half-initialized in the core, so each try starts from a clean
+            # load (this is what the Java DeviceSetupDlg does too).
+            dev.initialize(self._core, reload=True, apply_pre_init=True)
         except Exception as e:
             self._warn(f"Failed to initialize {dev.name!r}:\n\n{e}")
             return
@@ -341,6 +404,7 @@ class HardwareSetupPage(TabPage):
         if (dev := self._pending) is None:
             return
         self._pending = None
+        self._unload_pending_port()
         with suppress(Exception):
             dev.unload(self._core)
         if self._selected_available is not None:

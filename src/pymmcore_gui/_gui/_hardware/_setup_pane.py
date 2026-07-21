@@ -9,7 +9,7 @@ from __future__ import annotations
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
-from pymmcore_plus import PropertyType
+from pymmcore_plus import Keyword, PropertyType
 
 from pymmcore_gui._gui._theme import theme
 from pymmcore_gui._qt.QtCore import Qt, pyqtSignal
@@ -83,6 +83,7 @@ class DeviceSetupPane(QWidget):
     propertyChanged = pyqtSignal(object, str)  # (Property, new value)
     delayChanged = pyqtSignal(object, float)  # (Device, delay in ms)
     renameRequested = pyqtSignal(object, str)  # (Device, new label)
+    portSelected = pyqtSignal(str, str)  # (serial adapter name, library)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -141,17 +142,35 @@ class DeviceSetupPane(QWidget):
         self._body_layout.addStretch()
         self._body_layout.addWidget(add_btn)
 
-    def show_pending(self, dev: Device) -> None:
-        """Device loaded but not yet initialized — configure pre-init props."""
+    def show_pending(
+        self,
+        dev: Device,
+        serial_devices: Sequence[Device] = (),
+        port_device: Device | None = None,
+    ) -> None:
+        """Device loaded but not yet initialized — configure pre-init props.
+
+        If the device declares a "Port" property, `serial_devices` populates the
+        port chooser and `port_device` (once loaded) contributes its own serial
+        settings.
+        """
         self._reset(dev.name)
-        self._add_info(dev.library, dev.adapter_name, dev.device_type.name)
+        self._add_info(
+            dev.library, dev.adapter_name, dev.device_type.name, dev.parent_label
+        )
 
         pre_init = [p for p in dev.properties if p.is_pre_init]
         if pre_init:
-            self._body_layout.addWidget(QLabel("Pre-initialization settings:"))
-            self._add_properties(pre_init)
+            self._add_section("Setup properties")
+            self._add_properties(pre_init, serial_devices)
         else:  # pragma: no cover - page adds directly in this case
             self._body_layout.addWidget(QLabel("No pre-initialization settings."))
+
+        if port_device is not None:
+            self._add_section(f"Serial port — {port_device.name}")
+            self._add_properties(
+                [p for p in port_device.properties if not p.is_read_only]
+            )
 
         row = QHBoxLayout()
         cancel = QPushButton("Cancel")
@@ -258,17 +277,45 @@ class DeviceSetupPane(QWidget):
         desc.setEnabled(False)
         self._body_layout.addWidget(desc)
 
-    def _add_properties(self, props: Sequence[Property]) -> None:
+    def _add_properties(
+        self, props: Sequence[Property], serial_devices: Sequence[Device] = ()
+    ) -> None:
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
         form.setSpacing(theme().sp_xxs)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         for prop in props:
-            editor = _editor_for(
-                prop, lambda value, p=prop: self.propertyChanged.emit(p, value)
-            )
+            editor: QWidget
+            if prop.name == Keyword.Port and serial_devices:
+                editor = self._port_chooser(prop, serial_devices)
+            else:
+                editor = _editor_for(
+                    prop, lambda value, p=prop: self.propertyChanged.emit(p, value)
+                )
             form.addRow(f"{prop.name}:", editor)
         self._body_layout.addLayout(form)
+
+    def _port_chooser(
+        self, prop: Property, serial_devices: Sequence[Device]
+    ) -> QComboBox:
+        """Combo of available serial devices.
+
+        MMCore only offers *loaded* serial devices as allowed values for "Port",
+        so the choices come from the model's available devices instead.
+        """
+        combo = QComboBox()
+        combo.addItem("", "")
+        for dev in serial_devices:
+            combo.addItem(dev.adapter_name, dev.library)
+        if prop.value:
+            combo.setCurrentText(str(prop.value))
+        # connect after populating so seeding the value doesn't emit
+        combo.currentIndexChanged.connect(
+            lambda _i: self.portSelected.emit(
+                combo.currentText(), combo.currentData() or ""
+            )
+        )
+        return combo
 
 
 def _clear_layout(layout: QLayout) -> None:
