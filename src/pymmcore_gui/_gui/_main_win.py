@@ -27,6 +27,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 
+from ._configurations import ConfigurationsPage
 from ._hardware import HardwareSetupPage
 from ._tab_page import TabPage
 from ._theme import (
@@ -205,7 +206,8 @@ class MainWindow(QMainWindow):
         # ── central stack: one page per tab ───────────────────────
         self._stack = QStackedWidget()
         self._stack.addWidget(HardwareSetupPage(self._mmc))
-        for _ in self.TAB_LABELS[1:]:
+        self._stack.addWidget(ConfigurationsPage(self._mmc))
+        for _ in self.TAB_LABELS[2:]:
             self._stack.addWidget(TabPage())
         self.setCentralWidget(self._stack)
 

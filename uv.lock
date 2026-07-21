@@ -2162,7 +2162,7 @@ cli = [
 
 [[package]]
 name = "pymmcore-widgets"
-version = "0.11.0"
+version = "0.12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pymmcore-plus", extra = ["cli"] },
@@ -2173,9 +2173,9 @@ dependencies = [
     { name = "useq-schema" },
     { name = "vispy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/62/49/c1ed713cc7b8634416f87bb995524b49af2dedf353da06d7f6404ad544df/pymmcore_widgets-0.11.0.tar.gz", hash = "sha256:10f6538b7c9a6e106c220a32078bc2034ea65a640e4c8af58f935f3d2f883ccc", size = 232453, upload-time = "2026-02-21T17:07:46.425Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d0/b0/bd4e2ab2f8001fbfe62eab646e70bcc3501db0182a6b82872f4b2e3027c1/pymmcore_widgets-0.12.1.tar.gz", hash = "sha256:b3c6a3909b9535093cebe454543f40eaeed658cea6752d1d7cc8adb9845ffc42", size = 277556, upload-time = "2026-03-27T23:40:16.427Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3a/7c/bccdac00bed11fc445915ed6afce436434ec779614212a783b7956691b40/pymmcore_widgets-0.11.0-py3-none-any.whl", hash = "sha256:0d2df3fbb7818c20e470d4397dd1ba820dff0e116760d903b956922eca42ba3e", size = 254790, upload-time = "2026-02-21T17:07:44.419Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/36/cb61600c61e23712948583614afb72b141a2976af34ef96626fa66984494/pymmcore_widgets-0.12.1-py3-none-any.whl", hash = "sha256:9e569b7a3f68615f73e5472028c1f51defd266bc2069aeb0a7eb2048394ee592", size = 295575, upload-time = "2026-03-27T23:40:14.598Z" },
 ]
 
 [[package]]
