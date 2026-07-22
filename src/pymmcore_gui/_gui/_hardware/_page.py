@@ -557,8 +557,13 @@ class HardwareSetupPage(TabPage):
     def _seed_hardware_sizes(self) -> None:
         """Split the page in half: available devices | installed-over-settings.
 
-        Sizes are proportional, so the halves scale with the window; the hidden
-        right dock gets 0.
+        Equal stretch factors keep the two halves balanced as the window
+        resizes (TabPage defaults the center to grow and the docks to stay
+        fixed, which would otherwise skew the split). The hidden right dock
+        gets 0.
         """
+        self._h_split.setStretchFactor(0, 1)  # available devices
+        self._h_split.setStretchFactor(1, 1)  # installed-over-settings column
+        self._h_split.setStretchFactor(2, 0)  # hidden right dock
         self._h_split.setSizes([500, 500, 0])
         self._detail_split.setSizes([500, 500])

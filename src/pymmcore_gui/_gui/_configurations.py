@@ -72,7 +72,8 @@ class _GroupEditorTab(QWidget):
                         self._core.defineConfig(
                             group.name,
                             preset_name,
-                            s.device.name,
+                            # the device LABEL, not s.device.name (adapter name)
+                            s.device.label,
                             s.property_name,
                             s.value,
                         )
