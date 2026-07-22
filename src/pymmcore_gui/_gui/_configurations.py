@@ -27,6 +27,7 @@ from pymmcore_gui._qt.QtWidgets import (
 )
 
 from ._tab_page import TabPage
+from ._theme import theme
 
 if TYPE_CHECKING:
     from pymmcore_gui._qt.QtGui import QShowEvent
@@ -44,7 +45,9 @@ class _GroupEditorTab(QWidget):
         self._save_btn.setProperty("variant", "primary")
         self._save_btn.clicked.connect(self.save)
 
+        m = theme().sp_md
         row = QHBoxLayout()
+        row.setContentsMargins(m, m, m, m)
         row.addStretch()
         row.addWidget(self._save_btn)
 
@@ -102,6 +105,8 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
         for btn in self.findChildren(QPushButton):
             if btn.text() == "Apply and Close":
                 btn.setText("Apply")
+                # match the group editor's "Save to core" button
+                btn.setProperty("variant", "primary")
             elif btn.text() == "Cancel":
                 btn.hide()
         # bridge the widget's internal edit signals to a public `changed` one
