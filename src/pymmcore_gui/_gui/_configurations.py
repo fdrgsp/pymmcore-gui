@@ -17,7 +17,6 @@ from pymmcore_widgets import (
 
 from pymmcore_gui._qt.QtCore import QTimer, pyqtSignal
 from pymmcore_gui._qt.QtWidgets import (
-    QHBoxLayout,
     QMessageBox,
     QPushButton,
     QTabWidget,
@@ -27,7 +26,6 @@ from pymmcore_gui._qt.QtWidgets import (
 
 from ._busy import BusyOverlay, busy
 from ._tab_page import TabPage
-from ._theme import theme
 
 SAVING_MSG = "Saving configuration to core…"
 
@@ -36,9 +34,7 @@ if TYPE_CHECKING:
 
 
 class _GroupEditorTab(QWidget):
-    """A ConfigGroupsEditor with buttons to save to the core or to a file."""
-
-    saveToFileRequested = pyqtSignal()
+    """A ConfigGroupsEditor adapted for embedding in the configurations page."""
 
     def __init__(self, core: CMMCorePlus, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -46,28 +42,9 @@ class _GroupEditorTab(QWidget):
         self.editor = ConfigGroupsEditor.create_from_core(core)
         self._overlay = BusyOverlay(self)
 
-        self._save_btn = QPushButton("Save to core")
-        self._save_btn.setProperty("variant", "primary")
-        self._save_btn.clicked.connect(self.save)
-
-        self._save_file_btn = QPushButton("Save to file…")
-        self._save_file_btn.setToolTip(
-            "Save the full configuration (hardware, groups, pixel sizes) to a "
-            ".cfg file (also saves to the core)"
-        )
-        self._save_file_btn.clicked.connect(lambda: self.saveToFileRequested.emit())
-
-        m = theme().sp_md
-        row = QHBoxLayout()
-        row.setContentsMargins(m, m, m, m)
-        row.addStretch()
-        row.addWidget(self._save_btn)
-        row.addWidget(self._save_file_btn)
-
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.editor, 1)
-        layout.addLayout(row)
 
     def save(self) -> None:
         """Replace the core's config groups with the editor's contents."""
@@ -124,12 +101,8 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
         self._suppress_close = False
         self._overlay = BusyOverlay(self)
         for btn in self.findChildren(QPushButton):
-            if btn.text() == "Apply and Close":
-                # this already writes the pixel configs to the core; match the
-                # group editor's button in both label and style
-                btn.setText("Save to core")
-                btn.setProperty("variant", "primary")
-            elif btn.text() == "Cancel":
+            if btn.text() in {"Apply and Close", "Cancel"}:
+                # Save actions live in the page toolbar when embedded.
                 btn.hide()
         # bridge the widget's internal edit signals to a public `changed` one
         for attr in ("_px_table", "_affine_table", "_props_selector"):
@@ -184,24 +157,32 @@ class ConfigurationsPage(TabPage):
         self.right.hide()
         self.bottom.hide()
 
-        # "Save to core" (per editor) only updates the live core; this persists
-        # the whole configuration to a .cfg so edits survive a reload.
-        self._save_file_btn = QPushButton("Save to file…")
-        self._save_file_btn.setToolTip(
-            "Save the full configuration (hardware, groups, pixel sizes) to a "
-            ".cfg file"
+        self._save_core_btn = QPushButton("Save to core")
+        self._save_core_btn.setProperty("variant", "primary")
+        self._save_core_btn.setToolTip(
+            "Apply edits from the selected configuration tab to the live core"
         )
-        self._save_file_btn.clicked.connect(lambda: self.saveToFileRequested.emit())
+        self._save_core_btn.clicked.connect(self.commit_current_to_core)
+        self.toolbar.add_widget(self._save_core_btn)
+
+        self._save_file_btn = QPushButton("Save to file…")
+        self._save_file_btn.setProperty("variant", "primary")
+        self._save_file_btn.setToolTip(
+            "Apply edits from the selected configuration tab to the live core, "
+            "then save the full configuration to a .cfg file"
+        )
+        self._save_file_btn.clicked.connect(self.saveToFileRequested.emit)
         self.toolbar.add_widget(self._save_file_btn)
         self.toolbar.add_stretch()
 
-        # unsaved-changes tracking. `_suppress` (a depth counter, so nested
-        # refresh/commit stay guarded) keeps programmatic refreshes from being
-        # mistaken for user edits.
-        self._dirty = False
+        # Track the editors independently: saving the selected tab must not
+        # silently mark changes in the other tab as persisted. `_suppress` is a
+        # depth counter so nested refresh/commit operations remain guarded.
+        self._group_dirty = False
+        self._pixel_dirty = False
         self._suppress = 0
-        self._group_editor.configChanged.connect(self._mark_dirty)
-        self._pixel_config.changed.connect(self._mark_dirty)
+        self._group_editor.configChanged.connect(self._mark_group_dirty)
+        self._pixel_config.changed.connect(self._mark_pixel_dirty)
 
         # a configuration may be loaded after this page is built
         self._core.events.systemConfigurationLoaded.connect(
@@ -211,11 +192,31 @@ class ConfigurationsPage(TabPage):
     # ── unsaved-changes API ───────────────────────────────────────
 
     def is_dirty(self) -> bool:
-        """Whether the group or pixel editors have uncommitted edits."""
-        return self._dirty
+        """Whether either editor has edits not yet persisted to a file."""
+        return self._group_dirty or self._pixel_dirty
 
     def mark_saved(self) -> None:
-        self._dirty = False
+        """Mark both editors as persisted to the configuration file."""
+        self._group_dirty = False
+        self._pixel_dirty = False
+
+    def mark_current_saved(self) -> None:
+        """Mark only the selected editor as persisted to the file."""
+        if self._tabs.currentWidget() is self._group_tab:
+            self._group_dirty = False
+        elif self._tabs.currentWidget() is self._pixel_config:
+            self._pixel_dirty = False
+
+    def commit_current_to_core(self) -> None:
+        """Write the selected editor's contents into the live core."""
+        self._suppress += 1
+        try:
+            if self._tabs.currentWidget() is self._group_tab:
+                self._group_tab.save()
+            elif self._tabs.currentWidget() is self._pixel_config:
+                self._pixel_config.apply()
+        finally:
+            self._suppress -= 1
 
     def commit_to_core(self) -> None:
         """Write the group and pixel editors' contents into the core."""
@@ -225,11 +226,14 @@ class ConfigurationsPage(TabPage):
             self._pixel_config.apply()
         finally:
             self._suppress -= 1
-        self._dirty = False
 
-    def _mark_dirty(self, *_: object) -> None:
+    def _mark_group_dirty(self, *_: object) -> None:
         if self._suppress == 0:
-            self._dirty = True
+            self._group_dirty = True
+
+    def _mark_pixel_dirty(self, *_: object) -> None:
+        if self._suppress == 0:
+            self._pixel_dirty = True
 
     def _on_system_config_loaded(self) -> None:
         """A whole new configuration was loaded — reload everything."""
@@ -237,7 +241,7 @@ class ConfigurationsPage(TabPage):
         with suppress(RuntimeError):
             self._refresh(reload_configs=True)
             # a freshly loaded config is the new clean baseline
-            self._dirty = False
+            self.mark_saved()
 
     def showEvent(self, event: QShowEvent | None) -> None:
         # Editing hardware on another tab loads devices into the core but does

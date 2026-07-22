@@ -215,8 +215,11 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(self._acquire)
         self.setCentralWidget(self._stack)
 
-        # "Save to file…" on the Configurations tab saves the whole config
-        self._configurations.saveToFileRequested.connect(self._save_all)
+        # The toolbar action commits its selected editor, then saves the whole
+        # configuration. Closing with unsaved changes still commits both.
+        self._configurations.saveToFileRequested.connect(
+            self._save_current_configuration
+        )
 
         self._mode_tabs.current_changed.connect(self._stack.setCurrentIndex)
         self._stack.setCurrentIndex(0)
@@ -285,6 +288,14 @@ class MainWindow(QMainWindow):
         self._configurations.commit_to_core()
         if self._hardware.save_config():
             self._configurations.mark_saved()
+            return True
+        return False
+
+    def _save_current_configuration(self) -> bool:
+        """Commit the selected configuration editor, then write the full .cfg."""
+        self._configurations.commit_current_to_core()
+        if self._hardware.save_config():
+            self._configurations.mark_current_saved()
             return True
         return False
 

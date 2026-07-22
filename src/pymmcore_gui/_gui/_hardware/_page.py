@@ -78,6 +78,7 @@ class HardwareSetupPage(TabPage):
             ("Reload from core", self.reload_model),
         ):
             btn = QPushButton(text)
+            btn.setProperty("variant", "primary")
             btn.clicked.connect(slot)
             self.toolbar.add_widget(btn)
         self.toolbar.add_stretch()
