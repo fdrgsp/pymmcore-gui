@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from pymmcore_plus import CMMCorePlus
 
-from pymmcore_gui._qt.QtCore import QEvent, QRectF, QSize, Qt, pyqtSignal
+from pymmcore_gui._qt.QtCore import QEvent, QRectF, QSize, Qt, QTimer, pyqtSignal
 from pymmcore_gui._qt.QtGui import (
     QCloseEvent,
     QEnterEvent,
@@ -215,8 +215,19 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(self._acquire)
         self.setCentralWidget(self._stack)
 
+        # "Save to file…" on the Configurations tab saves the whole config
+        self._configurations.saveToFileRequested.connect(self._save_all)
+
         self._mode_tabs.current_changed.connect(self._stack.setCurrentIndex)
         self._stack.setCurrentIndex(0)
+
+        # Start on Hardware, but jump to Acquire if a configuration is loaded at
+        # startup (e.g. `mmgui -c foo.cfg`). `_startup` is cleared once the event
+        # loop begins, so only pre-exec (startup) loads trigger the jump —
+        # configs loaded interactively later leave the current tab alone.
+        self._startup = True
+        QTimer.singleShot(0, self._end_startup)
+        self._mmc.events.systemConfigurationLoaded.connect(self._on_startup_config)
 
         if status_bar := self.statusBar():
             status_bar.showMessage("Ready")
@@ -227,6 +238,19 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(mods | Qt.Key.Key_Plus), self, zoom_in)  # type: ignore
         QShortcut(QKeySequence(mods | Qt.Key.Key_Minus), self, zoom_out)  # type: ignore
         QShortcut(QKeySequence(mods | Qt.Key.Key_0), self, reset_zoom)  # type: ignore
+
+    def _end_startup(self) -> None:
+        """Mark the window as past its startup phase (event loop has begun)."""
+        self._startup = False
+
+    def _on_startup_config(self) -> None:
+        """Land on the Acquire tab when a config is loaded at startup."""
+        if not self._startup:
+            return
+        self._startup = False
+        idx = self._stack.indexOf(self._acquire)
+        if idx >= 0:
+            self._mode_tabs._select(idx)
 
     def closeEvent(self, a0: QCloseEvent | None) -> None:
         """Offer to save hardware / group / pixel edits before closing."""

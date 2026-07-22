@@ -25,30 +25,44 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 
+from ._busy import BusyOverlay, busy
 from ._tab_page import TabPage
 from ._theme import theme
+
+SAVING_MSG = "Saving configuration to core…"
 
 if TYPE_CHECKING:
     from pymmcore_gui._qt.QtGui import QShowEvent
 
 
 class _GroupEditorTab(QWidget):
-    """A ConfigGroupsEditor with a Save button that writes back to the core."""
+    """A ConfigGroupsEditor with buttons to save to the core or to a file."""
+
+    saveToFileRequested = pyqtSignal()
 
     def __init__(self, core: CMMCorePlus, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._core = core
         self.editor = ConfigGroupsEditor.create_from_core(core)
+        self._overlay = BusyOverlay(self)
 
         self._save_btn = QPushButton("Save to core")
         self._save_btn.setProperty("variant", "primary")
         self._save_btn.clicked.connect(self.save)
+
+        self._save_file_btn = QPushButton("Save to file…")
+        self._save_file_btn.setToolTip(
+            "Save the full configuration (hardware, groups, pixel sizes) to a "
+            ".cfg file (also saves to the core)"
+        )
+        self._save_file_btn.clicked.connect(lambda: self.saveToFileRequested.emit())
 
         m = theme().sp_md
         row = QHBoxLayout()
         row.setContentsMargins(m, m, m, m)
         row.addStretch()
         row.addWidget(self._save_btn)
+        row.addWidget(self._save_file_btn)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -60,31 +74,38 @@ class _GroupEditorTab(QWidget):
         groups = list(self.editor.data())
         desired = {g.name for g in groups}
         try:
-            # drop groups the editor no longer has
-            for name in list(self._core.getAvailableConfigGroups()):
-                if name not in desired:
-                    self._core.deleteConfigGroup(name)
-            # redefine each edited group (delete first to clear stale presets)
-            for group in groups:
-                if group.name in self._core.getAvailableConfigGroups():
-                    self._core.deleteConfigGroup(group.name)
-                self._core.defineConfigGroup(group.name)
-                for preset_name, preset in group.presets.items():
-                    for s in preset.settings:
-                        self._core.defineConfig(
-                            group.name,
-                            preset_name,
-                            # the device LABEL, not s.device.name (adapter name)
-                            s.device.label,
-                            s.property_name,
-                            s.value,
-                        )
+            with busy(self._overlay, SAVING_MSG):
+                # drop groups the editor no longer has
+                for name in list(self._core.getAvailableConfigGroups()):
+                    if name not in desired:
+                        self._core.deleteConfigGroup(name)
+                # redefine each edited group (delete first to clear stale presets)
+                for group in groups:
+                    if group.name in self._core.getAvailableConfigGroups():
+                        self._core.deleteConfigGroup(group.name)
+                    self._core.defineConfigGroup(group.name)
+                    for preset in group.presets.values():
+                        for s in preset.settings:
+                            self._core.defineConfig(
+                                group.name,
+                                # preset.name, not the dict key — after a rename
+                                # the editor leaves the key stale (old name)
+                                preset.name,
+                                # the device LABEL, not s.device.name (adapter)
+                                s.device.label,
+                                s.property_name,
+                                s.value,
+                            )
         except Exception as e:
             QMessageBox.warning(
                 self, "Save configuration groups", f"Failed to save:\n\n{e}"
             )
             return
-        self._core.events.systemConfigurationLoaded.emit()
+        # NOTE: deliberately do NOT emit systemConfigurationLoaded here. Doing so
+        # reloads the editor from the core, which drops any preset that couldn't
+        # be persisted — MMCore has no concept of an empty preset (a preset only
+        # exists through its defineConfig settings). The editor stays the source
+        # of truth so in-progress (settings-less) presets aren't lost on save.
 
 
 class _EmbeddedPixelConfig(PixelConfigurationWidget):
@@ -101,6 +122,7 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
     ) -> None:
         super().__init__(parent, mmcore=mmcore)
         self._suppress_close = False
+        self._overlay = BusyOverlay(self)
         for btn in self.findChildren(QPushButton):
             if btn.text() == "Apply and Close":
                 # this already writes the pixel configs to the core; match the
@@ -124,7 +146,8 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
         # _on_apply ends by calling self.close(); keep the widget open instead.
         self._suppress_close = True
         try:
-            super()._on_apply()
+            with busy(self._overlay, SAVING_MSG):
+                super()._on_apply()
         finally:
             self._suppress_close = False
 
@@ -135,7 +158,11 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
 
 
 class ConfigurationsPage(TabPage):
-    """Sub-tabbed editors for device properties, config groups and pixel sizes."""
+    """Sub-tabbed editors for config groups and pixel sizes."""
+
+    # "Save to core" commits to the live core only; this asks the window to
+    # write the whole configuration (hardware + groups + pixel) to a .cfg.
+    saveToFileRequested = pyqtSignal()
 
     def __init__(
         self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
@@ -156,7 +183,17 @@ class ConfigurationsPage(TabPage):
         self.left.hide()
         self.right.hide()
         self.bottom.hide()
-        self.toolbar.hide()
+
+        # "Save to core" (per editor) only updates the live core; this persists
+        # the whole configuration to a .cfg so edits survive a reload.
+        self._save_file_btn = QPushButton("Save to file…")
+        self._save_file_btn.setToolTip(
+            "Save the full configuration (hardware, groups, pixel sizes) to a "
+            ".cfg file"
+        )
+        self._save_file_btn.clicked.connect(lambda: self.saveToFileRequested.emit())
+        self.toolbar.add_widget(self._save_file_btn)
+        self.toolbar.add_stretch()
 
         # unsaved-changes tracking. `_suppress` (a depth counter, so nested
         # refresh/commit stay guarded) keeps programmatic refreshes from being
