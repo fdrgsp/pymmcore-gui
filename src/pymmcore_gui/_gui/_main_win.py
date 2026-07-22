@@ -224,14 +224,6 @@ class MainWindow(QMainWindow):
         self._mode_tabs.current_changed.connect(self._stack.setCurrentIndex)
         self._stack.setCurrentIndex(0)
 
-        # Start on Hardware, but jump to Acquire if a configuration is loaded at
-        # startup (e.g. `mmgui -c foo.cfg`). `_startup` is cleared once the event
-        # loop begins, so only pre-exec (startup) loads trigger the jump —
-        # configs loaded interactively later leave the current tab alone.
-        self._startup = True
-        QTimer.singleShot(0, self._end_startup)
-        self._mmc.events.systemConfigurationLoaded.connect(self._on_startup_config)
-
         if status_bar := self.statusBar():
             status_bar.showMessage("Ready")
 
@@ -242,18 +234,20 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(mods | Qt.Key.Key_Minus), self, zoom_out)  # type: ignore
         QShortcut(QKeySequence(mods | Qt.Key.Key_0), self, reset_zoom)  # type: ignore
 
-    def _end_startup(self) -> None:
-        """Mark the window as past its startup phase (event loop has begun)."""
-        self._startup = False
+    def on_startup_configuration_loaded(self) -> None:
+        """Land on Acquire after the application loads its initial config."""
+        self._activate_acquire()
+        # Explicit -c loads finish before app.exec(). Repeat once the event loop
+        # starts so platform-specific window initialization cannot restore the
+        # initial Hardware selection afterward.
+        QTimer.singleShot(0, self._activate_acquire)
 
-    def _on_startup_config(self) -> None:
-        """Land on the Acquire tab when a config is loaded at startup."""
-        if not self._startup:
-            return
-        self._startup = False
+    def _activate_acquire(self) -> None:
+        """Keep the mode tab and its stacked page on Acquire."""
         idx = self._stack.indexOf(self._acquire)
         if idx >= 0:
             self._mode_tabs._select(idx)
+            self._stack.setCurrentIndex(idx)
 
     def closeEvent(self, a0: QCloseEvent | None) -> None:
         """Offer to save hardware / group / pixel edits before closing."""

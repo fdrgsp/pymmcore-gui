@@ -191,10 +191,12 @@ def create_mmgui(
         if mm_config:
             # if mm_config is a string, load that config
             win.mmcore.loadSystemConfiguration(mm_config)
+            _notify_startup_configuration_loaded(win)
         # otherwise, fall back to auto-loading / cli-based
         elif config := _decide_configuration(mm_config, win):
             try:
                 win.mmcore.loadSystemConfiguration(config)
+                _notify_startup_configuration_loaded(win)
             except Exception as e:  # pragma: no cover
                 warnings.warn(
                     f"Failed to load system configuration: {e}",
@@ -213,6 +215,13 @@ def create_mmgui(
     if exec_app:
         app.exec()
     return win
+
+
+def _notify_startup_configuration_loaded(win: WindowProtocol) -> None:
+    """Tell a window that its initial configuration loaded successfully."""
+    callback = getattr(win, "on_startup_configuration_loaded", None)
+    if callable(callback):
+        callback()
 
 
 def _close_splash_screen() -> None:  # pragma: no cover

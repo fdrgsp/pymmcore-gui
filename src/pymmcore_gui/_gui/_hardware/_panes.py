@@ -114,11 +114,6 @@ class AvailableDevicesPane(QWidget):
         self._add_btn.clicked.connect(self._emit_add)
 
         t = theme()
-        type_row = QHBoxLayout()
-        type_row.setSpacing(t.sp_xs)
-        type_row.addWidget(QLabel("Type:"))
-        type_row.addWidget(self._type, 1)
-
         bottom = QHBoxLayout()
         bottom.setSpacing(t.sp_xs)
         bottom.addWidget(self._hub_children)
@@ -130,7 +125,7 @@ class AvailableDevicesPane(QWidget):
         layout.setSpacing(t.sp_xs)
         layout.addWidget(pane_title("Available Devices"))
         layout.addWidget(self._filter)
-        layout.addLayout(type_row)
+        layout.addWidget(self._type)
         layout.addWidget(self._table, 1)
         layout.addLayout(bottom)
 
@@ -176,7 +171,7 @@ class AvailableDevicesPane(QWidget):
         current = self._type.currentData()
         self._type.blockSignals(True)
         self._type.clear()
-        self._type.addItem("All", None)
+        self._type.addItem("All Types", None)
         for dt in sorted({d.device_type for d in self._devices}, key=lambda d: d.name):
             self._type.addItem(dt.name, dt)
         if (idx := self._type.findData(current)) >= 0:

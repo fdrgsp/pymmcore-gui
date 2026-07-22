@@ -1,19 +1,82 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import Mock, patch
 
+from pymmcore_gui._app import LoadConfigDialog, create_mmgui
 from pymmcore_gui._gui._configurations import ConfigurationsPage
 from pymmcore_gui._gui._hardware import HardwareSetupPage
 from pymmcore_gui._gui._main_win import MainWindow
 from pymmcore_gui._gui._theme import set_theme
 from pymmcore_gui._gui._theme._dark import DARK_THEME
-from pymmcore_gui._qt.QtWidgets import QPushButton
+from pymmcore_gui._qt.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
     from pytestqt.qtbot import QtBot
+
+    from pymmcore_gui._settings import Settings
+
+
+def test_accepting_startup_config_selects_acquire(
+    mmcore: CMMCorePlus,
+    settings: Settings,
+    qtbot: QtBot,
+) -> None:
+    config = Path(__file__).with_name("test_config.cfg")
+    settings.last_config = config
+    settings.auto_load_last_config = None
+
+    def accept_after_processing_events(
+        _dialog: LoadConfigDialog,
+    ) -> QMessageBox.StandardButton:
+        # The real modal prompt runs a nested event loop before returning.
+        QApplication.processEvents()
+        return QMessageBox.StandardButton.Yes
+
+    with patch.object(LoadConfigDialog, "exec", accept_after_processing_events):
+        window = create_mmgui(
+            mm_config=None,
+            mmcore=mmcore,
+            install_sys_excepthook=False,
+            install_sentry=False,
+            exec_app=False,
+            window_cls=MainWindow,
+        )
+    assert isinstance(window, MainWindow)
+    qtbot.addWidget(window)
+
+    assert window._stack.currentWidget() is window._acquire
+    assert window._mode_tabs._tabs[2].active
+
+    # A config loaded later from inside the running UI must not force a tab switch.
+    window._mode_tabs._select(1)
+    mmcore.loadSystemConfiguration(str(config))
+    assert window._stack.currentWidget() is window._configurations
+
+
+def test_explicit_startup_config_selects_acquire(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+) -> None:
+    config = Path(__file__).with_name("test_config.cfg")
+    window = create_mmgui(
+        mm_config=config,
+        mmcore=mmcore,
+        install_sys_excepthook=False,
+        install_sentry=False,
+        exec_app=False,
+        window_cls=MainWindow,
+    )
+    assert isinstance(window, MainWindow)
+    qtbot.addWidget(window)
+
+    # `-c` reaches create_mmgui as an explicit mm_config before app.exec().
+    assert window._stack.currentWidget() is window._acquire
+    QApplication.processEvents()
+    assert window._stack.currentWidget() is window._acquire
 
 
 def test_hardware_toolbar_buttons_use_primary_style(
@@ -31,6 +94,10 @@ def test_hardware_toolbar_buttons_use_primary_style(
         "Reload from core",
     ]
     assert all(button.property("variant") == "primary" for button in buttons)
+    assert page._available._type.itemText(0) == "All Types"
+    assert not any(
+        label.text() == "Type:" for label in page._available.findChildren(QLabel)
+    )
 
 
 def test_configuration_save_buttons_are_in_toolbar(

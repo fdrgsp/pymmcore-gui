@@ -31,3 +31,19 @@ def test_settings(tmp_path: Path) -> None:
         result = runner.invoke(app, ["settings", "--reset"])
         assert result.exit_code == 0
         mock_reset.assert_called_once()
+
+
+def test_default_command_forwards_config_to_new_gui(tmp_path: Path) -> None:
+    config = tmp_path / "startup.cfg"
+    config.touch()
+    argv = ["mmgui", "-c", str(config)]
+
+    with (
+        patch("sys.argv", argv),
+        patch("pymmcore_gui.create_mmgui") as mock_create,
+    ):
+        result = runner.invoke(app, argv[1:])
+
+    assert result.exit_code == 0
+    assert mock_create.call_args.kwargs["mm_config"] == config.resolve()
+    assert mock_create.call_args.kwargs["window_cls"] == "pymmcore_gui._gui.MainWindow"
