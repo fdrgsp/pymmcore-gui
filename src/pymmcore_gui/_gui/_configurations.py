@@ -13,7 +13,6 @@ from pymmcore_plus import CMMCorePlus
 from pymmcore_widgets import (
     ConfigGroupsEditor,
     PixelConfigurationWidget,
-    PropertyBrowser,
 )
 
 from pymmcore_gui._qt.QtCore import QTimer, pyqtSignal
@@ -144,15 +143,11 @@ class ConfigurationsPage(TabPage):
         super().__init__(parent)
         self._core = mmcore or CMMCorePlus.instance()
 
-        # NOTE: PropertyBrowser is a QDialog upstream; parenting it into a
-        # layout makes it behave as a plain child widget (isWindow() is False).
-        self._property_browser = PropertyBrowser(mmcore=self._core)
         self._group_tab = _GroupEditorTab(self._core)
         self._group_editor = self._group_tab.editor
         self._pixel_config = _EmbeddedPixelConfig(mmcore=self._core)
 
         self._tabs = QTabWidget()
-        self._tabs.addTab(self._property_browser, "Property Browser")
         self._tabs.addTab(self._group_tab, "Group Editor")
         self._tabs.addTab(self._pixel_config, "Pixel Configuration")
 
@@ -239,16 +234,13 @@ class ConfigurationsPage(TabPage):
                 self._group_editor.update_from_core(
                     self._core, update_configs=reload_configs
                 )
-            # PropertyBrowser and PixelConfigurationWidget only rebuild on the
-            # core's systemConfigurationLoaded event and expose no public
-            # refresh, so invoke their internal rebuild directly (guarded
-            # against upstream renames).
-            for target, method in (
-                (self._property_browser._prop_table, "_rebuild_table"),
-                (self._pixel_config, "_on_sys_config_loaded"),
+            # PixelConfigurationWidget only rebuilds on the core's
+            # systemConfigurationLoaded event and exposes no public refresh, so
+            # invoke its internal rebuild directly (guarded against renames).
+            if callable(
+                fn := getattr(self._pixel_config, "_on_sys_config_loaded", None)
             ):
-                if callable(fn := getattr(target, method, None)):
-                    with suppress(Exception):
-                        fn()
+                with suppress(Exception):
+                    fn()
         finally:
             self._suppress -= 1

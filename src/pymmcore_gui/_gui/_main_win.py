@@ -29,9 +29,9 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 
+from ._acquire import AcquirePage
 from ._configurations import ConfigurationsPage
 from ._hardware import HardwareSetupPage
-from ._tab_page import TabPage
 from ._theme import (
     qcolor,
     reset_zoom,
@@ -209,10 +209,10 @@ class MainWindow(QMainWindow):
         self._stack = QStackedWidget()
         self._hardware = HardwareSetupPage(self._mmc)
         self._configurations = ConfigurationsPage(self._mmc)
+        self._acquire = AcquirePage(self._mmc)
         self._stack.addWidget(self._hardware)
         self._stack.addWidget(self._configurations)
-        for _ in self.TAB_LABELS[2:]:
-            self._stack.addWidget(TabPage())
+        self._stack.addWidget(self._acquire)
         self.setCentralWidget(self._stack)
 
         self._mode_tabs.current_changed.connect(self._stack.setCurrentIndex)
