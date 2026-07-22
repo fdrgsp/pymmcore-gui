@@ -16,7 +16,7 @@ from pymmcore_widgets import (
     PropertyBrowser,
 )
 
-from pymmcore_gui._qt.QtCore import pyqtSignal
+from pymmcore_gui._qt.QtCore import QTimer, pyqtSignal
 from pymmcore_gui._qt.QtWidgets import (
     QHBoxLayout,
     QMessageBox,
@@ -104,8 +104,9 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
         self._suppress_close = False
         for btn in self.findChildren(QPushButton):
             if btn.text() == "Apply and Close":
-                btn.setText("Apply")
-                # match the group editor's "Save to core" button
+                # this already writes the pixel configs to the core; match the
+                # group editor's button in both label and style
+                btn.setText("Save to core")
                 btn.setProperty("variant", "primary")
             elif btn.text() == "Cancel":
                 btn.hide()
@@ -212,8 +213,18 @@ class ConfigurationsPage(TabPage):
         # be stale. Refresh devices whenever this page is shown — but NOT the
         # config groups, or in-progress group edits would be clobbered on every
         # revisit.
+        #
+        # Defer to the next event-loop turn: rebuilding the property table
+        # synchronously here happens before the tab's geometry has settled on
+        # first show, leaving the table sized to a stale (narrow) width until
+        # the user switches sub-tabs. Deferring lets the layout settle first.
         super().showEvent(event)
-        self._refresh(reload_configs=False)
+        QTimer.singleShot(0, self._refresh_on_show)
+
+    def _refresh_on_show(self) -> None:
+        # the widget may already be torn down on the C++ side
+        with suppress(RuntimeError):
+            self._refresh(reload_configs=False)
 
     def refresh(self) -> None:
         """Re-read the editors from the current state of the core."""
