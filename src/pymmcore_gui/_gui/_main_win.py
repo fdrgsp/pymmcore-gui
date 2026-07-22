@@ -8,6 +8,7 @@ from pymmcore_plus import CMMCorePlus
 
 from pymmcore_gui._qt.QtCore import QEvent, QRectF, QSize, Qt, pyqtSignal
 from pymmcore_gui._qt.QtGui import (
+    QCloseEvent,
     QEnterEvent,
     QFont,
     QFontMetricsF,
@@ -20,6 +21,7 @@ from pymmcore_gui._qt.QtGui import (
 from pymmcore_gui._qt.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QStackedWidget,
@@ -205,8 +207,10 @@ class MainWindow(QMainWindow):
 
         # ── central stack: one page per tab ───────────────────────
         self._stack = QStackedWidget()
-        self._stack.addWidget(HardwareSetupPage(self._mmc))
-        self._stack.addWidget(ConfigurationsPage(self._mmc))
+        self._hardware = HardwareSetupPage(self._mmc)
+        self._configurations = ConfigurationsPage(self._mmc)
+        self._stack.addWidget(self._hardware)
+        self._stack.addWidget(self._configurations)
         for _ in self.TAB_LABELS[2:]:
             self._stack.addWidget(TabPage())
         self.setCentralWidget(self._stack)
@@ -223,6 +227,42 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(mods | Qt.Key.Key_Plus), self, zoom_in)  # type: ignore
         QShortcut(QKeySequence(mods | Qt.Key.Key_Minus), self, zoom_out)  # type: ignore
         QShortcut(QKeySequence(mods | Qt.Key.Key_0), self, reset_zoom)  # type: ignore
+
+    def closeEvent(self, a0: QCloseEvent | None) -> None:
+        """Offer to save hardware / group / pixel edits before closing."""
+        if self._hardware.is_dirty() or self._configurations.is_dirty():
+            choice = QMessageBox.question(
+                self,
+                "Unsaved changes",
+                "There are unsaved changes to the configuration "
+                "(hardware, groups or pixel sizes).\n\n"
+                "Save them to a .cfg file before closing?",
+                QMessageBox.StandardButton.Save
+                | QMessageBox.StandardButton.Discard
+                | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Save,
+            )
+            if choice == QMessageBox.StandardButton.Cancel:
+                if a0 is not None:
+                    a0.ignore()
+                return
+            if choice == QMessageBox.StandardButton.Save and not self._save_all():
+                # save was cancelled or failed — don't close
+                if a0 is not None:
+                    a0.ignore()
+                return
+        super().closeEvent(a0)
+
+    def _save_all(self) -> bool:
+        """Commit group/pixel edits to the core, then save everything to a .cfg.
+
+        Returns True if a file was written, False if cancelled or on error.
+        """
+        self._configurations.commit_to_core()
+        if self._hardware.save_config():
+            self._configurations.mark_saved()
+            return True
+        return False
 
     def _toggle_theme(self) -> None:
         self._is_dark = not self._is_dark

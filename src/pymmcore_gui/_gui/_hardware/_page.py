@@ -16,10 +16,12 @@ from pymmcore_plus.model import Device, Microscope
 
 from pymmcore_gui._gui._busy import BusyOverlay, busy
 from pymmcore_gui._gui._tab_page import TabPage
+from pymmcore_gui._qt.QtCore import Qt
 from pymmcore_gui._qt.QtWidgets import (
     QFileDialog,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QWidget,
 )
 
@@ -58,10 +60,15 @@ class HardwareSetupPage(TabPage):
         self._setup = DeviceSetupPane()
         self._overlay = BusyOverlay(self)
 
-        # available devices | setup & properties | installed devices
+        # available devices | (installed devices over device settings)
         self.left.add_widget(self._available, 1)
-        self.add_content_widget(self._setup)
-        self.right.add_widget(self._installed, 1)
+        self._detail_split = QSplitter(Qt.Orientation.Vertical)
+        self._detail_split.addWidget(self._installed)
+        self._detail_split.addWidget(self._setup)
+        self._detail_split.setStretchFactor(0, 1)
+        self._detail_split.setStretchFactor(1, 1)
+        self.add_content_widget(self._detail_split)
+        self.right.hide()
         self.bottom.hide()
 
         for text, slot in (
@@ -178,28 +185,42 @@ class HardwareSetupPage(TabPage):
             listing = "\n".join(f"  • {n}: {m}" for n, m in errors.items())
             self._warn(f"Some devices failed to initialize:\n\n{listing}")
 
-    def save_config(self) -> None:
+    def is_dirty(self) -> bool:
+        """Whether the hardware configuration has unsaved edits."""
+        return self._dirty
+
+    def save_config(self) -> bool:
         """Save the configuration, always asking where.
 
         Defaults to the file the config came from, so overwriting it is a
-        deliberate confirmation rather than a silent write.
+        deliberate confirmation rather than a silent write. Returns True if the
+        file was written, False if cancelled or on error.
         """
         start = self._model.config_file or "MMConfig.cfg"
         path, _ = QFileDialog.getSaveFileName(
             self, "Save hardware configuration", start, CFG_FILTER
         )
-        if path:
-            self._save_to(path)
+        if not path:
+            return False
+        return self._save_to(path)
 
-    def _save_to(self, path: str) -> None:
+    def _save_to(self, path: str) -> bool:
+        # Config groups and pixel-size configs are edited on the Configurations
+        # tab, which commits them to the live core. Pull those into the model so
+        # a saved .cfg captures hardware, groups and pixel sizes together.
+        with suppress(Exception):
+            self._model.update_config_groups_from_core(self._core)
+        with suppress(Exception):
+            self._model.update_pixel_sizes_from_core(self._core)
         try:
             self._model.save(path)
         except Exception as e:
             self._warn(f"Failed to save {path}:\n\n{e}")
-            return
+            return False
         self._model.config_file = str(path)
         self._dirty = False
         self._status(f"Saved {Path(path).name}")
+        return True
 
     def _confirm_discard(self, question: str) -> bool:
         """Ask before throwing away unsaved edits."""
@@ -534,5 +555,10 @@ class HardwareSetupPage(TabPage):
                 bar().showMessage(message, 5000)
 
     def _seed_hardware_sizes(self) -> None:
-        """Give the three panes a sensible initial split."""
-        self._h_split.setSizes([400, 520, 400])
+        """Split the page in half: available devices | installed-over-settings.
+
+        Sizes are proportional, so the halves scale with the window; the hidden
+        right dock gets 0.
+        """
+        self._h_split.setSizes([500, 500, 0])
+        self._detail_split.setSizes([500, 500])
