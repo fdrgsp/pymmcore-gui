@@ -387,6 +387,13 @@ class MicroscopeStyle(QProxyStyle):
             case PE.PE_IndicatorRadioButton:
                 self._draw_radio(option, painter, widget)
 
+            case PE.PE_PanelButtonTool:
+                # QToolButton frame. Fusion draws a beveled box here that
+                # clashes with our rounded QPushButton look; draw our own so
+                # tool buttons (toolbars, table action buttons, etc.) match.
+                # The base style still lays out the icon/text/menu-arrow.
+                self._draw_tool_button_frame(option, painter, widget)
+
             case _:
                 super().drawPrimitive(element, option, painter, widget)
 
@@ -555,6 +562,58 @@ class MicroscopeStyle(QProxyStyle):
                 flags |= int(Qt.TextFlag.TextHideMnemonic)
             enabled = bool(opt.state & QStyle.StateFlag.State_Enabled)
             self.drawItemText(p, r, flags, opt.palette, enabled, opt.text)
+
+    # ═══════════════════════════════════════════════════════════
+    # Tool Button
+    # ═══════════════════════════════════════════════════════════
+
+    def _draw_tool_button_frame(
+        self,
+        opt: QStyleOption,
+        p: QPainter,
+        widget: QWidget | None,
+    ) -> None:
+        """Draw a QToolButton frame matching the QPushButton look.
+
+        An auto-raise tool button (the default inside a QToolBar) reads as a
+        "ghost" button — transparent at rest, filling on hover. A non
+        auto-raise tool button reads as a "subtle" button — a resting fill and
+        border. A checked button gets the accent tint in both cases.
+        """
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pal = opt.palette
+        r = QRectF(opt.rect).adjusted(0.5, 0.5, -0.5, -0.5)
+
+        hovered = bool(opt.state & QStyle.StateFlag.State_MouseOver)
+        pressed = bool(opt.state & QStyle.StateFlag.State_Sunken)
+        checked = bool(opt.state & QStyle.StateFlag.State_On)
+        enabled = bool(opt.state & QStyle.StateFlag.State_Enabled)
+        autoraise = bool(opt.state & QStyle.StateFlag.State_AutoRaise)
+        accent = _get_accent(widget)
+
+        transparent = QColor(0, 0, 0, 0)
+        bg = border = transparent
+        if not enabled:
+            pass  # flat/transparent — the label is dimmed by the base style
+        elif checked:
+            bg, border = _with_alpha(accent, 38), _with_alpha(accent, 76)
+        elif pressed:
+            bg, border = _with_alpha(accent, 50), _with_alpha(accent, 76)
+        elif hovered:
+            bg = pal.color(QPalette.ColorRole.Midlight)
+            border = transparent if autoraise else pal.color(QPalette.ColorRole.Mid)
+        elif not autoraise:
+            bg = pal.color(QPalette.ColorRole.Button)
+            border = pal.color(QPalette.ColorRole.Mid)
+
+        if bg.alpha() > 0:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(bg))
+            p.drawRoundedRect(r, RADIUS, RADIUS)
+        if border.alpha() > 0:
+            p.setPen(QPen(border, 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(r, RADIUS, RADIUS)
 
     # ═══════════════════════════════════════════════════════════
     # Checkbox

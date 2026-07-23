@@ -15,7 +15,7 @@ import tifffile
 from superqt import QIconifyIcon
 
 from pymmcore_gui._qt.QtCore import QEvent, QObject, Qt
-from pymmcore_gui._qt.QtWidgets import QFileDialog, QPushButton
+from pymmcore_gui._qt.QtWidgets import QAbstractButton, QFileDialog, QPushButton
 from pymmcore_gui.actions.widget_actions import WidgetAction, _get_mm_main_window
 
 
@@ -62,6 +62,8 @@ class MMArrayViewer(ndv.ArrayViewer):
             _add_save_button(self)
         with suppress(Exception):
             _add_roll_axes_button(self)
+        with suppress(Exception):
+            _unstyle_buttons(widget)
 
     def _roll_axes(self) -> None:
         """Cycle visible axes through the three orthogonal ZYX views."""
@@ -148,6 +150,23 @@ class MMArrayViewer(ndv.ArrayViewer):
         idx = tuple(nd_index.get(i, slice(None)) for i in range(ndim))
         arr = np.asarray(self.data[idx])
         return arr if arr.size > 0 else None
+
+
+def _unstyle_buttons(widget: Any) -> None:
+    """Clear inline stylesheets ndv sets on individual buttons.
+
+    ndv gives a few buttons (e.g. the play/pause toggle) their own hardcoded
+    ``QPushButton {...}`` stylesheet. A widget-level stylesheet takes over
+    that widget's rendering entirely, bypassing the app's themed QStyle, so
+    those buttons look inconsistent with the rest of the GUI. Clearing it
+    here lets them fall back to the same themed style as every other button.
+    Only buttons are touched — other ndv widgets (e.g. the contrast-limits
+    slider) rely on their own stylesheet for correct display and are left
+    alone.
+    """
+    for btn in widget.findChildren(QAbstractButton):
+        if btn.styleSheet():
+            btn.setStyleSheet("")
 
 
 def _add_save_button(viewer: MMArrayViewer) -> QPushButton:
