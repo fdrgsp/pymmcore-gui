@@ -19,7 +19,12 @@ from pymmcore_gui._qt.QtWidgets import (
 from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
 
 from ._acquire_presets import AcquisitionPresetSelector
-from ._acquire_toolbar import ChannelPresetsBar, ShuttersBar, toolbar_separator
+from ._acquire_toolbar import (
+    ChannelPresetsBar,
+    ShuttersBar,
+    icon_only,
+    toolbar_separator,
+)
 from ._acquire_viewers import AcquireViewers
 from ._collapsible_panel import CollapsiblePanel
 from ._stage_controls import StageControls
@@ -76,8 +81,8 @@ class AcquirePage(TabPage):
         # toolbar: snap | live ‖ optical configs ‖ shutters … [ MDA | Properties ]
         self._channels = ChannelPresetsBar(self._core)
         self._shutters = ShuttersBar(self._core)
-        self.toolbar.add_widget(SnapButton(mmcore=self._core))
-        self.toolbar.add_widget(LiveButton(mmcore=self._core))
+        self.toolbar.add_widget(icon_only(SnapButton(mmcore=self._core), "Snap"))
+        self.toolbar.add_widget(icon_only(LiveButton(mmcore=self._core), "Live"))
         self.toolbar.add_widget(toolbar_separator())
         self.toolbar.add_widget(self._channels)
         self.toolbar.add_widget(toolbar_separator())

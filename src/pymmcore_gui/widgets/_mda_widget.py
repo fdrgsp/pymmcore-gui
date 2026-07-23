@@ -28,6 +28,18 @@ class MemoryMDAWidget(MDAWidget):
                 break
         combo.setCurrentText("ome-tiff")
 
+        # Run/Pause/Cancel/Save/Load default to the "ghost" variant (no
+        # visible box until hovered) — give them a persistently visible one,
+        # matching the rest of the app's action buttons.
+        for btn in (
+            self.control_btns.run_btn,
+            self.control_btns.pause_btn,
+            self.control_btns.cancel_btn,
+            self._save_button,
+            self._load_button,
+        ):
+            btn.setProperty("variant", "subtle")
+
     def prepare_mda(self) -> bool | str | Path | None:
         """Return a disk path or a scratch sink that supports live viewing."""
         output = super().prepare_mda()

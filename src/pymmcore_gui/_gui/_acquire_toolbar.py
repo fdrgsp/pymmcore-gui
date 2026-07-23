@@ -13,6 +13,7 @@ from pymmcore_plus import CMMCorePlus, DeviceType
 from pymmcore_widgets import ShuttersWidget
 
 from pymmcore_gui._qt.QtWidgets import (
+    QAbstractButton,
     QButtonGroup,
     QFrame,
     QHBoxLayout,
@@ -32,6 +33,25 @@ def toolbar_separator() -> QFrame:
     line.setFrameShape(QFrame.Shape.VLine)
     line.setFrameShadow(QFrame.Shadow.Plain)
     return line
+
+
+def icon_only(btn: QAbstractButton, tooltip: str) -> QAbstractButton:
+    """Strip a button's text label down to just its icon.
+
+    SnapButton/LiveButton set their own text (LiveButton even re-sets it
+    internally via ``_button_text_on``/``_button_text_off`` on every state
+    change, e.g. "Live" <-> "Stop") — patching those attributes too keeps the
+    label empty across state changes, not just at construction time. The
+    "subtle" variant gives the button a persistently visible box (rather than
+    only on hover), since an icon with no label is otherwise easy to miss.
+    """
+    btn.setText("")
+    for attr in ("_button_text_on", "_button_text_off"):
+        if hasattr(btn, attr):
+            setattr(btn, attr, "")
+    btn.setToolTip(tooltip)
+    btn.setProperty("variant", "subtle")
+    return btn
 
 
 def _clear(layout: QLayout) -> None:
@@ -140,4 +160,6 @@ class ShuttersBar(QWidget):
                 button_text_closed=shutter,
                 mmcore=self._core,
             )
+            # a persistently visible box, not just on hover — matches Snap/Live
+            widget.shutter_button.setProperty("variant", "subtle")
             self._layout.addWidget(widget)

@@ -97,6 +97,20 @@ class _GroupEditorTab(QWidget):
                                     s.property_name,
                                     s.value,
                                 )
+                    # deleteConfigGroup() above silently clears the core's
+                    # channel-group designation whenever it happens to target
+                    # the current channel group (MMCore has no concept of a
+                    # group's designation surviving its own deletion) — and
+                    # the editor's own reassignment (via its "Set Channel
+                    # Group" action) otherwise never reaches the core at all.
+                    # Restore it from the editor's marked group every save.
+                    channel_group = next(
+                        (g for g in groups if getattr(g, "is_channel_group", False)),
+                        None,
+                    )
+                    self._core.setChannelGroup(
+                        channel_group.name if channel_group else ""
+                    )
         except Exception as e:
             QMessageBox.warning(
                 self, "Save configuration groups", f"Failed to save:\n\n{e}"

@@ -153,13 +153,19 @@ class MMArrayViewer(ndv.ArrayViewer):
 
 
 def _unstyle_buttons(widget: Any) -> None:
-    """Clear inline stylesheets ndv sets on individual buttons.
+    """Normalize ndv's buttons to the app's themed button look.
 
     ndv gives a few buttons (e.g. the play/pause toggle) their own hardcoded
     ``QPushButton {...}`` stylesheet. A widget-level stylesheet takes over
     that widget's rendering entirely, bypassing the app's themed QStyle, so
     those buttons look inconsistent with the rest of the GUI. Clearing it
-    here lets them fall back to the same themed style as every other button.
+    lets them fall back to the same themed style as every other button.
+
+    Most of these are small icon-only buttons with no text label, which are
+    easy to miss under the default "ghost" variant (no visible box until
+    hovered) — the "subtle" variant gives them a persistently visible box
+    instead, matching Snap/Live/Shutters in the Acquire toolbar.
+
     Only buttons are touched — other ndv widgets (e.g. the contrast-limits
     slider) rely on their own stylesheet for correct display and are left
     alone.
@@ -167,6 +173,8 @@ def _unstyle_buttons(widget: Any) -> None:
     for btn in widget.findChildren(QAbstractButton):
         if btn.styleSheet():
             btn.setStyleSheet("")
+        if not btn.property("variant"):
+            btn.setProperty("variant", "subtle")
 
 
 def _add_save_button(viewer: MMArrayViewer) -> QPushButton:
