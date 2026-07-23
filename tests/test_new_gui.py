@@ -221,7 +221,6 @@ def test_hardware_toolbar_buttons_use_primary_style(
         "New",
         "Load…",
         "Save…",
-        "Reload from core",
     ]
     assert all(button.property("variant") == "primary" for button in buttons)
     assert page._available._type.itemText(0) == "All Types"

@@ -133,6 +133,7 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
     ) -> None:
         super().__init__(parent, mmcore=mmcore)
         self._suppress_close = False
+        self._suppress_changed = False
         self._overlay = BusyOverlay(self)
         for btn in self.findChildren(QPushButton):
             if btn.text() in {"Apply and Close", "Cancel"}:
@@ -143,7 +144,7 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
             owner = getattr(self, attr, None)
             if (sig := getattr(owner, "valueChanged", None)) is not None:
                 with suppress(Exception):
-                    sig.connect(self.changed)
+                    sig.connect(self._on_value_changed)
 
     def apply(self) -> None:
         """Apply the pixel configurations to the core (without closing)."""
@@ -157,6 +158,23 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
                 super()._on_apply()
         finally:
             self._suppress_close = False
+
+    def _on_px_table_selection_changed(self) -> None:
+        # Selecting a different resolution row makes upstream call
+        # _props_selector.setValue(...) purely to *display* that row's
+        # settings — but setValue() unconditionally emits valueChanged with
+        # no way to tell a display refresh apart from a genuine edit.
+        # Suppress our bridge for the duration so merely clicking a row
+        # doesn't mark this page dirty.
+        self._suppress_changed = True
+        try:
+            super()._on_px_table_selection_changed()
+        finally:
+            self._suppress_changed = False
+
+    def _on_value_changed(self, *_: object) -> None:
+        if not self._suppress_changed:
+            self.changed.emit()
 
     def close(self) -> bool:
         if self._suppress_close:

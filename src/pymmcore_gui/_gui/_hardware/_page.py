@@ -79,7 +79,6 @@ class HardwareSetupPage(TabPage):
             ("New", self.new_config),
             ("Load…", self.load_config),
             ("Save…", self.save_config),
-            ("Reload from core", self.reload_model),
         ):
             btn = QPushButton(text)
             btn.setProperty("variant", "primary")
