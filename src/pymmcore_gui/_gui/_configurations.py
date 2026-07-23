@@ -14,9 +14,12 @@ from pymmcore_widgets import (
     ConfigGroupsEditor,
     PixelConfigurationWidget,
 )
+from pymmcore_widgets._util import block_core
 
 from pymmcore_gui._qt.QtCore import QTimer, pyqtSignal
+from pymmcore_gui._qt.QtGui import QPalette
 from pymmcore_gui._qt.QtWidgets import (
+    QLabel,
     QMessageBox,
     QPushButton,
     QTabWidget,
@@ -26,6 +29,7 @@ from pymmcore_gui._qt.QtWidgets import (
 
 from ._busy import BusyOverlay, busy
 from ._tab_page import TabPage
+from ._theme import qcolor, theme
 
 SAVING_MSG = "Saving configuration to core…"
 
@@ -42,6 +46,14 @@ class _GroupEditorTab(QWidget):
         self.editor = ConfigGroupsEditor.create_from_core(core)
         self._overlay = BusyOverlay(self)
 
+        # ConfigGroupsEditor has its own internal "Apply" button (bottom-right,
+        # wired to an `applyRequested` signal we don't listen to). Our own
+        # "Save to core" toolbar button is the one save action; hide theirs so
+        # there's no dead, duplicate control.
+        for btn in self.editor.findChildren(QPushButton):
+            if btn.text() == "Apply":
+                btn.hide()
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.editor, 1)
@@ -52,27 +64,39 @@ class _GroupEditorTab(QWidget):
         desired = {g.name for g in groups}
         try:
             with busy(self._overlay, SAVING_MSG):
-                # drop groups the editor no longer has
-                for name in list(self._core.getAvailableConfigGroups()):
-                    if name not in desired:
-                        self._core.deleteConfigGroup(name)
-                # redefine each edited group (delete first to clear stale presets)
-                for group in groups:
-                    if group.name in self._core.getAvailableConfigGroups():
-                        self._core.deleteConfigGroup(group.name)
-                    self._core.defineConfigGroup(group.name)
-                    for preset in group.presets.values():
-                        for s in preset.settings:
-                            self._core.defineConfig(
-                                group.name,
-                                # preset.name, not the dict key — after a rename
-                                # the editor leaves the key stale (old name)
-                                preset.name,
-                                # the device LABEL, not s.device.name (adapter)
-                                s.device.label,
-                                s.property_name,
-                                s.value,
-                            )
+                # Suppress core events for the whole bulk rewrite. Without
+                # this, every single defineConfig() call below fires a live
+                # configDefined signal — and any OTHER widget reacting to
+                # that in real time (e.g. GroupPresetTableWidget in the
+                # Acquire sidebar) sees a group mid-rebuild, treats that
+                # incomplete snapshot as ground truth, and "helpfully"
+                # issues its own deleteConfigGroup()/defineConfig() calls —
+                # silently wiping properties this loop already wrote, or
+                # hasn't gotten to yet. Two independent listeners mutating
+                # the same live core concurrently was causing real data loss.
+                with block_core(self._core.events):
+                    # drop groups the editor no longer has
+                    for name in list(self._core.getAvailableConfigGroups()):
+                        if name not in desired:
+                            self._core.deleteConfigGroup(name)
+                    # redefine each group (delete first to clear stale presets)
+                    for group in groups:
+                        if group.name in self._core.getAvailableConfigGroups():
+                            self._core.deleteConfigGroup(group.name)
+                        self._core.defineConfigGroup(group.name)
+                        for preset in group.presets.values():
+                            for s in preset.settings:
+                                self._core.defineConfig(
+                                    group.name,
+                                    # preset.name, not the dict key — after a
+                                    # rename the editor leaves the key stale
+                                    preset.name,
+                                    # the device LABEL, not s.device.name
+                                    # (which is the adapter name)
+                                    s.device.label,
+                                    s.property_name,
+                                    s.value,
+                                )
         except Exception as e:
             QMessageBox.warning(
                 self, "Save configuration groups", f"Failed to save:\n\n{e}"
@@ -83,6 +107,16 @@ class _GroupEditorTab(QWidget):
         # be persisted — MMCore has no concept of an empty preset (a preset only
         # exists through its defineConfig settings). The editor stays the source
         # of truth so in-progress (settings-less) presets aren't lost on save.
+        #
+        # Other widgets (e.g. GroupPresetTableWidget) missed every event we
+        # just suppressed and are now stale; they already refresh defensively
+        # when their tab is shown (the same pattern used elsewhere in the app
+        # for cross-tab staleness).
+
+        # ConfigGroupsEditor tracks edits via its own QUndoStack but never marks
+        # it clean itself (that was the hidden "Apply" button's job). Do it here
+        # so undoStack().cleanChanged reflects *our* save action.
+        self.editor.undoStack().setClean()
 
 
 class _EmbeddedPixelConfig(PixelConfigurationWidget):
@@ -173,15 +207,34 @@ class ConfigurationsPage(TabPage):
         )
         self._save_file_btn.clicked.connect(self.saveToFileRequested.emit)
         self.toolbar.add_widget(self._save_file_btn)
+
+        self._dirty_label = QLabel()
+        pal = self._dirty_label.palette()
+        pal.setColor(QPalette.ColorRole.WindowText, qcolor(theme().status_amber))
+        self._dirty_label.setPalette(pal)
+        self._dirty_label.hide()
         self.toolbar.add_stretch()
+        self.toolbar.add_widget(self._dirty_label)
 
         # Track the editors independently: saving the selected tab must not
-        # silently mark changes in the other tab as persisted. `_suppress` is a
-        # depth counter so nested refresh/commit operations remain guarded.
+        # silently mark changes in the other tab as persisted.
+        #
+        # The group editor already tracks edits via its own QUndoStack, which
+        # is more accurate than watching for a "changed" signal — e.g. it
+        # correctly goes clean again if the user undoes back to the original
+        # state. It never marks itself clean on save though (that was the
+        # hidden "Apply" button's job) — _GroupEditorTab.save() does it now.
+        #
+        # Pixel Configuration has no such undo stack, so `_pixel_dirty` is
+        # still tracked manually from its bridged `changed` signal.
+        # `_suppress` is a depth counter guarding only that manual pixel path
+        # against our own programmatic refresh/commit calls.
         self._group_dirty = False
         self._pixel_dirty = False
         self._suppress = 0
-        self._group_editor.configChanged.connect(self._mark_group_dirty)
+        self._group_editor.undoStack().cleanChanged.connect(
+            self._on_group_clean_changed
+        )
         self._pixel_config.changed.connect(self._mark_pixel_dirty)
 
         # a configuration may be loaded after this page is built
@@ -197,15 +250,21 @@ class ConfigurationsPage(TabPage):
 
     def mark_saved(self) -> None:
         """Mark both editors as persisted to the configuration file."""
+        with suppress(Exception):
+            self._group_editor.undoStack().setClean()
         self._group_dirty = False
         self._pixel_dirty = False
+        self._update_dirty_label()
 
     def mark_current_saved(self) -> None:
         """Mark only the selected editor as persisted to the file."""
         if self._tabs.currentWidget() is self._group_tab:
+            with suppress(Exception):
+                self._group_editor.undoStack().setClean()
             self._group_dirty = False
         elif self._tabs.currentWidget() is self._pixel_config:
             self._pixel_dirty = False
+        self._update_dirty_label()
 
     def commit_current_to_core(self) -> None:
         """Write the selected editor's contents into the live core."""
@@ -227,13 +286,41 @@ class ConfigurationsPage(TabPage):
         finally:
             self._suppress -= 1
 
+    def _on_group_clean_changed(self, clean: bool) -> None:
+        """QUndoStack.cleanChanged — the accurate source for group-dirty state.
+
+        Unlike a plain "something changed" signal, this correctly goes clean
+        again if the user undoes back to the original state, not just on save.
+        """
+        self._group_dirty = not clean
+        self._update_dirty_label()
+
     def _mark_group_dirty(self, *_: object) -> None:
+        """Force the group tab dirty, bypassing the undo stack.
+
+        Used by tests that want to simulate an edit without driving the real
+        editor UI; real edits are tracked via _on_group_clean_changed instead.
+        """
         if self._suppress == 0:
             self._group_dirty = True
+            self._update_dirty_label()
 
     def _mark_pixel_dirty(self, *_: object) -> None:
         if self._suppress == 0:
             self._pixel_dirty = True
+            self._update_dirty_label()
+
+    def _update_dirty_label(self) -> None:
+        parts = []
+        if self._group_dirty:
+            parts.append("Group Editor")
+        if self._pixel_dirty:
+            parts.append("Pixel Configuration")
+        if parts:
+            self._dirty_label.setText(f"● Unsaved changes: {', '.join(parts)}")
+            self._dirty_label.show()
+        else:
+            self._dirty_label.hide()
 
     def _on_system_config_loaded(self) -> None:
         """A whole new configuration was loaded — reload everything."""
@@ -267,14 +354,23 @@ class ConfigurationsPage(TabPage):
         self._refresh(reload_configs=True)
 
     def _refresh(self, *, reload_configs: bool) -> None:
-        # programmatic refresh: don't let the resulting signals set the dirty
-        # flag (unless a real config was loaded, which is a genuine change)
+        # programmatic refresh: don't let the resulting signals set the pixel
+        # dirty flag (unless a real config was loaded, which is a genuine
+        # change). The group side doesn't need this guard — update_from_core's
+        # setData() doesn't touch the undo stack, so cleanChanged only ever
+        # fires from a genuine user edit.
         self._suppress += 1
         try:
             with suppress(Exception):
                 self._group_editor.update_from_core(
                     self._core, update_configs=reload_configs
                 )
+            if reload_configs:
+                # a full reload replaces the model wholesale — any undo
+                # history now refers to a superseded state, and the freshly
+                # loaded data is by definition the new clean baseline.
+                with suppress(Exception):
+                    self._group_editor.undoStack().clear()
             # PixelConfigurationWidget only rebuilds on the core's
             # systemConfigurationLoaded event and exposes no public refresh, so
             # invoke its internal rebuild directly (guarded against renames).

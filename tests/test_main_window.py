@@ -102,6 +102,7 @@ def test_ndv_viewers_in_main_window(gui: MicroManagerGUI) -> None:
             time_plan=useq.TIntervalLoops(interval=1, loops=2),  # pyright: ignore
             channels=["DAPI", "FITC"],  #  pyright: ignore
         ),
+        output="memory",
     )
     assert central_area.dockWidgetsCount() == 2
 
@@ -184,5 +185,6 @@ def test_mda(gui: MicroManagerGUI, qtbot: QtBot) -> None:
                 time_plan=useq.TIntervalLoops(interval=1, loops=2),  # pyright: ignore
                 channels=["DAPI", "FITC"],  #  pyright: ignore
             ),
+            output="memory",
         )
     assert vm._active_mda_viewer is not None

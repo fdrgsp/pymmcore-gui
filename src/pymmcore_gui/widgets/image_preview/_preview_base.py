@@ -41,12 +41,14 @@ class ImagePreviewBase(QWidget):
         ev.systemConfigurationLoaded.connect(self._on_system_config_loaded)
         ev.roiSet.connect(self._on_roi_set)
         ev.propertyChanged.connect(self._on_property_changed)
-        core.mda.events.sequenceStarted.connect(
-            lambda: setattr(self, "_is_mda_running", True)
+        self._mda_started_callback = lambda: setattr(
+            self, "_is_mda_running", True
         )
-        core.mda.events.sequenceFinished.connect(
-            lambda: setattr(self, "_is_mda_running", False)
+        self._mda_finished_callback = lambda: setattr(
+            self, "_is_mda_running", False
         )
+        core.mda.events.sequenceStarted.connect(self._mda_started_callback)
+        core.mda.events.sequenceFinished.connect(self._mda_finished_callback)
 
         self._mmc = core
 
@@ -54,13 +56,34 @@ class ImagePreviewBase(QWidget):
         """Detach this widget from events in `core`."""
         if self._mmc is None:
             return  # pragma: no cover
-        with suppress(Exception):
-            ev, self._mmc = self._mmc.events, None
-            ev.imageSnapped.disconnect(self._on_image_snapped)
-            ev.continuousSequenceAcquisitionStarted.disconnect(self._on_streaming_start)
-            ev.sequenceAcquisitionStarted.disconnect(self._on_streaming_start)
-            ev.sequenceAcquisitionStopped.disconnect(self._on_streaming_stop)
-            ev.exposureChanged.disconnect(self._on_exposure_changed)
+        core, self._mmc = self._mmc, None
+        if self._timer_id is not None:
+            self.killTimer(self._timer_id)
+            self._timer_id = None
+
+        ev = core.events
+        connections = (
+            (ev.imageSnapped, self._on_image_snapped),
+            (ev.continuousSequenceAcquisitionStarted, self._on_streaming_start),
+            (ev.sequenceAcquisitionStarted, self._on_streaming_start),
+            (ev.sequenceAcquisitionStopped, self._on_streaming_stop),
+            (ev.exposureChanged, self._on_exposure_changed),
+            (ev.systemConfigurationLoaded, self._on_system_config_loaded),
+            (ev.roiSet, self._on_roi_set),
+            (ev.propertyChanged, self._on_property_changed),
+            (
+                core.mda.events.sequenceStarted,
+                getattr(self, "_mda_started_callback", None),
+            ),
+            (
+                core.mda.events.sequenceFinished,
+                getattr(self, "_mda_finished_callback", None),
+            ),
+        )
+        for signal, callback in connections:
+            if callback is not None:
+                with suppress(Exception):
+                    signal.disconnect(callback)
 
     @abstractmethod
     def append(self, data: np.ndarray) -> None:

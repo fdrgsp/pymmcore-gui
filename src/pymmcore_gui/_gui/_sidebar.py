@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from enum import Enum, auto
 
-from pymmcore_gui._qt.QtCore import QEvent, QSize
+from pymmcore_gui._qt.QtCore import QEvent, QSize, Qt
 from pymmcore_gui._qt.QtGui import QPainter, QPaintEvent
 from pymmcore_gui._qt.QtWidgets import (
     QBoxLayout,
@@ -53,6 +53,10 @@ class Sidebar(QWidget):
             )
         else:
             self._layout = QVBoxLayout(self)
+            # Without this, a QVBoxLayout with no item claiming the extra
+            # space spreads it evenly across every margin/gap instead of
+            # packing widgets to the top (matches _modern_gui's Sidebar).
+            self._layout.setAlignment(Qt.AlignmentFlag.AlignTop)
             self.setSizePolicy(
                 QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding
             )

@@ -1,0 +1,233 @@
+"""Custom ndv.ArrayViewer subclass for pymmcore-gui.
+
+Adapted from the Christina viewer implementation.
+"""
+
+from __future__ import annotations
+
+from contextlib import suppress
+from pathlib import Path
+from typing import Any
+
+import ndv
+import numpy as np
+import tifffile
+from superqt import QIconifyIcon
+
+from pymmcore_gui._qt.QtCore import QEvent, QObject, Qt
+from pymmcore_gui._qt.QtWidgets import QFileDialog, QPushButton
+from pymmcore_gui.actions.widget_actions import WidgetAction, _get_mm_main_window
+
+
+class _KeyFilter(QObject):
+    def __init__(self, viewer: MMArrayViewer) -> None:
+        super().__init__()
+        self._viewer = viewer
+
+    def eventFilter(self, obj: QObject | None, event: QEvent | None) -> bool:
+        if event is None or obj is None:
+            return False
+
+        event_key = getattr(event, "key", lambda: None)
+        if event.type() == QEvent.Type.KeyPress and event_key() == Qt.Key.Key_M:
+            stats_key = getattr(WidgetAction, "STATS_TABLE", None)
+            if stats_key is not None and (main_win := _get_mm_main_window(obj)):
+                with suppress(KeyError):
+                    table = main_win.get_widget(stats_key)
+                    if (data := self._viewer._get_roi_data()) is not None:
+                        table.add_stats(data)
+            return True
+        return False
+
+
+_ORTHO_VIEWS = [("y", "x"), ("z", "x"), ("z", "y")]
+
+
+class MMArrayViewer(ndv.ArrayViewer):
+    """ArrayViewer with OME-TIFF saving and orthogonal-axis rotation."""
+
+    def __init__(self, data: Any = None, /, **kwargs: Any) -> None:
+        opts = kwargs.pop("viewer_options", None) or {}
+        opts.setdefault("show_roi_button", True)
+        kwargs["viewer_options"] = opts
+        super().__init__(data, **kwargs)
+
+        self._key_filter = _KeyFilter(self)
+        widget = self.widget()
+        widget.installEventFilter(self._key_filter)
+        if canvas := getattr(widget, "_canvas_widget", None):
+            canvas.installEventFilter(self._key_filter)
+
+        with suppress(Exception):
+            _add_save_button(self)
+        with suppress(Exception):
+            _add_roll_axes_button(self)
+
+    def _roll_axes(self) -> None:
+        """Cycle visible axes through the three orthogonal ZYX views."""
+        wrapper = self.data_wrapper
+        if wrapper is None:
+            return
+        keys = set(wrapper.sizes())
+        if not {"x", "y", "z"}.issubset(keys):
+            return
+
+        current = self.display_model.visible_axes
+        try:
+            idx = _ORTHO_VIEWS.index(current)  # type: ignore[arg-type]
+        except ValueError:
+            idx = 0
+        self.display_model.visible_axes = _ORTHO_VIEWS[(idx + 1) % len(_ORTHO_VIEWS)]
+
+    def _save_data(self) -> None:
+        """Save the viewer data as one or more OME-TIFF files."""
+        data = self.data
+        if data is None:
+            return
+
+        arr = np.asarray(data)
+        if arr.size == 0:
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self.widget(),
+            "Save Image",
+            "",
+            "OME-TIFF (*.ome.tif);;All Files (*)",
+        )
+        if not path:
+            return
+
+        sizes: dict[str, int] = {}
+        with suppress(Exception):
+            if wrapper := self.data_wrapper:
+                sizes = {str(key): value for key, value in wrapper.sizes().items()}
+
+        scales = self.display_model.scales
+        pixel_size_um = scales.get("x") or scales.get("y")
+        z_step_um = scales.get("z")
+        non_yx = [axis for axis in sizes if axis.lower() in "tcz"]
+        axes = "".join(axis.upper() for axis in non_yx) + "YX" if non_yx else ""
+
+        if sizes.get("p", 0) > 1:
+            _save_multiposition(
+                arr, sizes, path, pixel_size_um, z_step_um, axes
+            )
+        else:
+            if "p" in sizes:
+                p_idx = list(sizes).index("p")
+                arr = np.squeeze(arr, axis=p_idx)
+            _save_as_tiff(arr, path, pixel_size_um, z_step_um, axes)
+
+    def _get_roi_data(self) -> np.ndarray | None:
+        """Extract data under the current ROI bounding box."""
+        if self.data is None or (roi := self.roi) is None:
+            return None
+        bbox = roi.bounding_box
+        if bbox == ((0, 0), (0, 0)):
+            return None
+
+        try:
+            resolved = self._resolved
+        except AttributeError:
+            return None
+        if len(resolved.visible_axes) < 2:
+            return None
+
+        (x0, y0), (x1, y1) = bbox
+        x0i, y0i = max(int(np.floor(x0)), 0), max(int(np.floor(y0)), 0)
+        x1i, y1i = int(np.ceil(x1)), int(np.ceil(y1))
+        if x1i <= x0i or y1i <= y0i:
+            return None
+
+        nd_index = dict(resolved.current_index)
+        nd_index[resolved.visible_axes[-2]] = slice(y0i, y1i)
+        nd_index[resolved.visible_axes[-1]] = slice(x0i, x1i)
+
+        ndim = len(self.data.shape)
+        idx = tuple(nd_index.get(i, slice(None)) for i in range(ndim))
+        arr = np.asarray(self.data[idx])
+        return arr if arr.size > 0 else None
+
+
+def _add_save_button(viewer: MMArrayViewer) -> QPushButton:
+    q_widget = viewer.widget()
+    btn_layout = q_widget._btn_layout
+
+    btn = QPushButton(q_widget)
+    btn.setIcon(QIconifyIcon("mdi:content-save-outline"))
+    btn.setToolTip("Save as OME-TIFF")
+    btn.clicked.connect(viewer._save_data)
+
+    ndims_idx = btn_layout.indexOf(q_widget.ndims_btn)
+    btn_layout.insertWidget(ndims_idx + 1, btn)
+    return btn
+
+
+def _add_roll_axes_button(viewer: MMArrayViewer) -> QPushButton:
+    q_widget = viewer.widget()
+    btn_layout = q_widget._btn_layout
+
+    btn = QPushButton(q_widget)
+    btn.setIcon(QIconifyIcon("fluent:cube-rotate-20-regular"))
+    btn.setToolTip("Cycle orthogonal views")
+    btn.clicked.connect(viewer._roll_axes)
+
+    ndims_idx = btn_layout.indexOf(q_widget.ndims_btn)
+    btn_layout.insertWidget(ndims_idx + 1, btn)
+    return btn
+
+
+def _save_multiposition(
+    arr: Any,
+    sizes: dict[str, int],
+    path: str,
+    pixel_size_um: float | None,
+    z_step_um: float | None,
+    axes: str,
+) -> None:
+    """Save a multi-position array as one OME-TIFF per position."""
+    p_idx = list(sizes).index("p")
+    base = str(Path(path).with_suffix("").with_suffix(""))
+    for i in range(arr.shape[p_idx]):
+        _save_as_tiff(
+            np.take(arr, i, axis=p_idx),
+            f"{base}_p{i:03d}.ome.tif",
+            pixel_size_um,
+            z_step_um,
+            axes,
+        )
+
+
+def _save_as_tiff(
+    arr: Any,
+    path: str,
+    pixel_size_um: float | None = None,
+    z_step_um: float | None = None,
+    axes: str = "",
+) -> None:
+    """Save an array as OME-TIFF with physical-size metadata."""
+    array = np.asarray(arr)
+    metadata: dict[str, Any] = {}
+    if axes:
+        metadata["axes"] = axes
+    if pixel_size_um:
+        metadata.update(
+            {
+                "PhysicalSizeX": pixel_size_um,
+                "PhysicalSizeXUnit": "µm",
+                "PhysicalSizeY": pixel_size_um,
+                "PhysicalSizeYUnit": "µm",
+            }
+        )
+    if z_step_um:
+        metadata["PhysicalSizeZ"] = z_step_um
+        metadata["PhysicalSizeZUnit"] = "µm"
+
+    tifffile.imwrite(
+        path,
+        array,
+        ome=True,
+        photometric="minisblack",
+        metadata=metadata or None,
+    )

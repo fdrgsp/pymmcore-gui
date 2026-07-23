@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(QT_QPA_PLATFORM=offscreen uv run python -W ignore -c ' *)"
+    ]
+  }
+}

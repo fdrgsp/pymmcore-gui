@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import ndv
+import ndv.models
 from ndv.models import RingBuffer
 
+from pymmcore_gui._array_viewer import MMArrayViewer
 from pymmcore_gui._qt.QtWidgets import QApplication, QVBoxLayout, QWidget
 from pymmcore_gui.widgets.image_preview._preview_base import ImagePreviewBase
 
@@ -16,6 +17,10 @@ if TYPE_CHECKING:
     class QRenderWidget(rendercanvas.qt.QRenderWidget, QWidget): ...  # pyright: ignore [reportIncompatibleMethodOverride]
 
 
+# Live preview only needs the most recent frame.
+BUFFER_SIZE = 1
+
+
 class NDVPreview(ImagePreviewBase):
     def __init__(
         self,
@@ -25,8 +30,11 @@ class NDVPreview(ImagePreviewBase):
         use_with_mda: bool = False,
     ):
         super().__init__(parent, mmcore, use_with_mda=use_with_mda)
-        self._viewer = ndv.ArrayViewer()
+        px = (self._mmc.getPixelSizeUm() or None) if self._mmc else None
+        self._viewer = MMArrayViewer(scales=({"x": px, "y": px} if px else {}))
         self._buffer: RingBuffer | None = None
+        self._core_dtype: tuple[str, tuple[int, ...]] | None = None
+        self._is_rgb = False
         self.process_events_on_update = True
         qwdg = self._viewer.widget()
         qwdg.setParent(self)
@@ -36,11 +44,15 @@ class NDVPreview(ImagePreviewBase):
         layout.addWidget(qwdg)
 
     def append(self, data: np.ndarray) -> None:
-        if self._buffer is None:
-            self._setup_viewer()
+        needs_setup = self._buffer is None
+        if needs_setup:
+            self._init_buffer()
         if self._buffer is not None:
             self._buffer.append(data)
+            if needs_setup:
+                self._apply_viewer_settings()
             self._viewer.display_model.current_index.update({0: len(self._buffer) - 1})
+            self._viewer.data_wrapper.data_changed.emit()
             if self.process_events_on_update:
                 QApplication.processEvents()
 
@@ -68,26 +80,41 @@ class NDVPreview(ImagePreviewBase):
                 return (f"uint{bits}", shape)
         return None
 
-    def _setup_viewer(self) -> None:
-        # TODO: maybe we should let this continue if core_dtype != self.dtype_shape
+    def _init_buffer(self) -> None:
+        """Create a single-frame buffer without assigning it to the viewer."""
         if (core_dtype := self._get_core_dtype_shape()) is None:
             return  # pragma: no cover
 
         self._core_dtype = core_dtype
-        self._viewer.data = self._buffer = RingBuffer(
-            max_capacity=100, dtype=core_dtype
-        )
+        self._is_rgb = core_dtype[1][-1] == 3
+        self._buffer = RingBuffer(max_capacity=BUFFER_SIZE, dtype=core_dtype)
+
+    def _apply_viewer_settings(self) -> None:
+        """Assign the buffer and configure grayscale or RGB display."""
+        self._viewer.data = self._buffer
         self._viewer.display_model.visible_axes = (1, 2)
-        if core_dtype[1][-1] == 3:  # RGB
+        if self._is_rgb:
             self._viewer.display_model.channel_axis = 3
             self._viewer.display_model.channel_mode = ndv.models.ChannelMode.RGBA
         else:
             self._viewer.display_model.channel_mode = ndv.models.ChannelMode.GRAYSCALE
             self._viewer.display_model.channel_axis = None
 
+    def _setup_viewer(self) -> None:
+        """Rebuild and apply the buffer after a core shape change."""
+        self._init_buffer()
+        if self._buffer is not None:
+            self._apply_viewer_settings()
+
+    def _update_pixel_scales(self) -> None:
+        if self._mmc and (px := self._mmc.getPixelSizeUm()):
+            self._viewer.display_model.scales.update({"x": px, "y": px})
+
     def _on_system_config_loaded(self) -> None:
         self._setup_viewer()
+        self._update_pixel_scales()
 
     def _on_roi_set(self) -> None:
         """Reconfigure the viewer when a Camera ROI is set."""
         self._setup_viewer()
+        self._update_pixel_scales()

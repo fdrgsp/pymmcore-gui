@@ -69,4 +69,4 @@ sample = Sample(objects)
 core = CMMCorePlus.instance()
 # core.loadSystemConfiguration()
 with sample.patch(core):
-    create_mmgui(window_cls="pymmcore_gui._gui.MainWindow", exec_app=True)
+    create_mmgui(window_cls="pymmcore_gui._modern_gui.MainWindow", exec_app=True)

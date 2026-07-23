@@ -5,15 +5,26 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import Mock, patch
 
+import useq
+
+import pymmcore_gui._gui._acquire_viewers as acquire_viewers_module
 from pymmcore_gui._app import LoadConfigDialog, create_mmgui
+from pymmcore_gui._gui._acquire import AcquirePage
 from pymmcore_gui._gui._configurations import ConfigurationsPage
 from pymmcore_gui._gui._hardware import HardwareSetupPage
 from pymmcore_gui._gui._main_win import MainWindow
 from pymmcore_gui._gui._theme import set_theme
 from pymmcore_gui._gui._theme._dark import DARK_THEME
-from pymmcore_gui._qt.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton
+from pymmcore_gui._qt.QtWidgets import (
+    QApplication,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QWidget,
+)
 
 if TYPE_CHECKING:
+    import pytest
     from pymmcore_plus import CMMCorePlus
     from pytestqt.qtbot import QtBot
 
@@ -77,6 +88,125 @@ def test_explicit_startup_config_selects_acquire(
     assert window._stack.currentWidget() is window._acquire
     QApplication.processEvents()
     assert window._stack.currentWidget() is window._acquire
+
+
+def test_acquire_page_sidebar_layout(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    set_theme(DARK_THEME)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    assert page._viewers.count() == 1
+    assert page._viewers.tabText(0) == "Preview"
+    assert not page.left.isHidden()
+    assert not page.right.isHidden()
+    assert page._mda.prepare_mda() == "memory"
+    assert page._right_tabs.count() == 1
+    assert page._right_tabs.widget(0) is page._mda
+    assert page._right_tabs.tabText(0) == "MDA"
+    assert page._mda_btn.isChecked()
+    assert not page._props_btn.isChecked()
+
+    # Groups & Presets is the upstream GroupPresetTableWidget with its
+    # editing/save/load controls hidden — editing groups already lives on the
+    # Configurations tab, and saving/loading a .cfg on the Hardware tab.
+    hidden_buttons = {
+        page._presets.groups_add_btn,
+        page._presets.groups_remove_btn,
+        page._presets.groups_edit_btn,
+        page._presets.presets_add_btn,
+        page._presets.presets_remove_btn,
+        page._presets.presets_edit_btn,
+        page._presets.save_btn,
+        page._presets.load_btn,
+    }
+    assert all(button.isHidden() for button in hidden_buttons)
+    assert not page._presets.table_wdg.isHidden()
+
+    page._props_btn.click()
+    assert page._right_tabs.count() == 2
+    assert page._props_btn.isChecked()
+    assert page._right_tabs.currentWidget() is page._property_browser
+    assert page._right_tabs.tabText(1) == "Properties"
+    assert page._property_browser is not None
+    assert not page._property_browser.isWindow()
+
+    # Toggling a button removes and restores its corresponding tab.
+    page._props_btn.click()
+    assert page._right_tabs.count() == 1
+    assert not page._props_btn.isChecked()
+
+    page._props_btn.click()
+    page._mda_btn.click()
+    assert page._right_tabs.count() == 1
+    assert page._right_tabs.currentWidget() is page._property_browser
+    assert not page._mda_btn.isChecked()
+
+    page._mda_btn.click()
+    assert page._right_tabs.count() == 2
+    assert page._right_tabs.tabText(0) == "MDA"
+    assert page._right_tabs.tabText(1) == "Properties"
+
+    page._close_right_tab(0)
+    assert page._right_tabs.count() == 1
+    assert not page._mda_btn.isChecked()
+    assert page._props_btn.isChecked()
+
+    page._close_right_tab(0)
+    assert page._right_tabs.count() == 0
+    assert not page._props_btn.isChecked()
+    assert page.right.isHidden()
+
+    page._mda_btn.click()
+    assert page._right_tabs.count() == 1
+    assert page._right_tabs.currentWidget() is page._mda
+    assert not page.right.isHidden()
+
+
+def test_acquire_page_adds_sink_backed_mda_tab(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Emitter:
+        def emit(self) -> None:
+            pass
+
+    class FakeViewer:
+        def __init__(self, data: object, /, **kwargs: object) -> None:
+            self.data = data
+            self.kwargs = kwargs
+            self.display_model = SimpleNamespace(current_index={})
+            self.data_wrapper = SimpleNamespace(
+                dims_changed=Emitter(), data_changed=Emitter()
+            )
+            self._widget = QWidget()
+            self.closed = False
+
+        def widget(self) -> QWidget:
+            return self._widget
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(acquire_viewers_module, "MMArrayViewer", FakeViewer)
+    set_theme(DARK_THEME)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    mmcore.mda.run(useq.MDASequence(channels=["DAPI"]), output="memory")
+    qtbot.wait(20)
+
+    assert page._viewers.count() == 2
+    assert page._viewers.tabText(1).startswith("MDA ")
+    viewer = page._viewers.active_viewer
+    assert isinstance(viewer, FakeViewer)
+    assert viewer.data is not None
+
+    page._viewers._close_tab(1)
+    assert page._viewers.count() == 1
+    assert viewer.closed
 
 
 def test_hardware_toolbar_buttons_use_primary_style(

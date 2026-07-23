@@ -54,6 +54,10 @@ class HardwareSetupPage(TabPage):
         # NOTE: tracked here rather than via Microscope.is_dirty(), which
         # currently reports True even immediately after mark_clean().
         self._dirty = False
+        # True while new_config()/load_config() is rebuilding the core, so this
+        # page's own systemConfigurationLoaded handler doesn't redundantly
+        # rebuild a model it's already in the middle of constructing.
+        self._loading = False
 
         self._available = AvailableDevicesPane()
         self._installed = InstalledDevicesPane()
@@ -107,6 +111,10 @@ class HardwareSetupPage(TabPage):
 
     def _on_system_config_loaded(self) -> None:
         """Repopulate when a config is loaded into the core from anywhere."""
+        if self._loading:
+            # new_config()/load_config() already owns the current rebuild
+            # (and will emit this same event again once it's truly done).
+            return
         # the widget may already be torn down on the C++ side
         with suppress(RuntimeError):
             self._reload("Loading configuration…")
@@ -146,12 +154,27 @@ class HardwareSetupPage(TabPage):
         if not self._confirm_discard("Start a new configuration?"):
             return
         self._cancel_add()
-        with busy(self._overlay, "Starting a new configuration…"):
-            with suppress(Exception):
-                self._core.unloadAllDevices()
-            self._model = Microscope()
-            self._refresh_all()
-        self._dirty = False
+        self._loading = True
+        try:
+            with busy(self._overlay, "Starting a new configuration…"):
+                with suppress(Exception):
+                    self._core.unloadAllDevices()
+                # unloadAllDevices() only clears devices — config groups and
+                # pixel-size configs are independent of any device and would
+                # otherwise survive, now dangling on devices that no longer
+                # exist.
+                for name in list(self._core.getAvailableConfigGroups()):
+                    with suppress(Exception):
+                        self._core.deleteConfigGroup(name)
+                for name in list(self._core.getAvailablePixelSizeConfigs()):
+                    with suppress(Exception):
+                        self._core.deletePixelSizeConfig(name)
+                self._model = Microscope()
+                self._refresh_all()
+            self._dirty = False
+        finally:
+            self._loading = False
+        self._core.events.systemConfigurationLoaded.emit()
 
     def load_config(self) -> None:
         """Load a .cfg file into the model and into the core."""
@@ -175,13 +198,35 @@ class HardwareSetupPage(TabPage):
         def _on_fail(d: Device | Property, e: BaseException) -> None:
             errors.setdefault(d.name, str(e))
 
-        with busy(self._overlay, f"Loading {Path(path).name}…"):
-            with suppress(Exception):
-                self._core.unloadAllDevices()
-            model.initialize(self._core, on_fail=_on_fail)
-            self._model = model
-            self._refresh_all()
-        self._dirty = False
+        self._loading = True
+        try:
+            with busy(self._overlay, f"Loading {Path(path).name}…"):
+                with suppress(Exception):
+                    self._core.unloadAllDevices()
+                model.initialize(self._core, on_fail=_on_fail)
+                # Microscope.initialize() only replays devices — config groups
+                # and pixel-size configs must be pushed to the core
+                # separately, or a loaded .cfg silently arrives with none of
+                # its presets defined.
+                for group in model.config_groups.values():
+                    try:
+                        group.apply_to_core(self._core)
+                    except Exception as e:
+                        errors.setdefault(f"[group] {group.name}", str(e))
+                try:
+                    model.pixel_size_group.apply_to_core(self._core)
+                except Exception as e:
+                    errors.setdefault("[pixel sizes]", str(e))
+                self._model = model
+                self._refresh_all()
+            self._dirty = False
+        finally:
+            self._loading = False
+        # Let every other tab (Configurations, Acquire) know a full
+        # configuration is now in place — the same signal a native
+        # loadSystemConfiguration() would emit, so nothing here relies on
+        # unloadAllDevices()'s own (early, incomplete) firing of it.
+        self._core.events.systemConfigurationLoaded.emit()
         if errors:
             listing = "\n".join(f"  • {n}: {m}" for n, m in errors.items())
             self._warn(f"Some devices failed to initialize:\n\n{listing}")
