@@ -56,6 +56,13 @@ class _GroupEditorTab(QWidget):
         for btn in self.editor.findChildren(QPushButton):
             if btn.text() == "Apply":
                 btn.hide()
+        # It also has its own status icon/label next to that button ("Unsaved
+        # changes" / "No changes") -- redundant with our own toolbar dirty
+        # label, which already covers this editor and Pixel Configuration
+        # together. Hide both (guarded in case of a future rename upstream).
+        for attr in ("_status_icon", "_status_label"):
+            if (w := getattr(self.editor, attr, None)) is not None:
+                w.hide()
         unstyle_widgets(self.editor)
 
         layout = QVBoxLayout(self)

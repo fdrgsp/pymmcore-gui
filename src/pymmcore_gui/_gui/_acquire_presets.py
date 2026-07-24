@@ -63,41 +63,6 @@ PresetsWidget._on_new_group_preset = (  # type: ignore[method-assign]
 )
 
 
-def _no_destructive_group_resync(
-    self: GroupPresetTableWidget,
-    group: str,
-    preset: str,
-    device: str,
-    property: str,
-    value: str,
-) -> None:
-    """Refresh the table without ever deleting the group's data.
-
-    A second, independent instance of the same destructive-mutation pattern:
-    GroupPresetTableWidget's own `_on_new_group_preset` (also connected to
-    the core's `configDefined` signal) calls `deleteConfigGroup(group)`
-    whenever a configDefined event arrives for a group whose table row is
-    *currently* showing a single-property PropertyWidget cell -- meaning it
-    intends to "upgrade" that cell to a multi-preset PresetsWidget once a
-    second preset is defined. But it then redefines only the *one* preset
-    named in this specific event (from a fresh getConfigData() snapshot),
-    silently destroying every *other* preset the group may already have.
-    This doesn't need any UI action at all: `_populate_table()` alone
-    already rebuilds every row's cell widget by inspecting the group's
-    *current* preset count, so it displays correctly whether that count is
-    1 or many -- no group deletion was ever necessary to get there.
-    """
-    self._populate_table()
-
-
-# Patched the same way as PresetsWidget above, and for the same reason: the
-# bug lives on this class, wherever it's constructed, not in anything our
-# subclass below does with it.
-GroupPresetTableWidget._on_new_group_preset = (  # type: ignore[method-assign]
-    _no_destructive_group_resync
-)
-
-
 class AcquisitionPresetSelector(GroupPresetTableWidget):
     """The upstream group/preset table, with editing controls hidden.
 
@@ -105,6 +70,11 @@ class AcquisitionPresetSelector(GroupPresetTableWidget):
     Configurations tab, and saving/loading a whole .cfg already happens on
     the Hardware tab — this sidebar widget is only for quickly picking a
     preset during acquisition, so everything but the table itself is hidden.
+
+    Note: GroupPresetTableWidget's own `_on_config_defined` (connected to
+    the core's `configDefined` signal) used to call `deleteConfigGroup()`
+    reactively and lose data in the process -- that's fixed upstream now
+    (it just calls `_populate_table()`), so no patch is needed here anymore.
     """
 
     def __init__(
@@ -114,27 +84,8 @@ class AcquisitionPresetSelector(GroupPresetTableWidget):
 
         # hide each button directly (not just its wrapper row), so isHidden()
         # is unambiguous regardless of whether this widget has been shown
-        for btn in (
-            self.groups_add_btn,
-            self.groups_remove_btn,
-            self.groups_edit_btn,
-            self.presets_add_btn,
-            self.presets_remove_btn,
-            self.presets_edit_btn,
-            self.save_btn,
-            self.load_btn,
-        ):
+        for btn in (self.edit_groups_btn, self.save_btn, self.load_btn):
             btn.hide()
-
-        # also hide the two rows themselves, so their labels ("Group:",
-        # "Preset:") disappear along with the buttons rather than dangling
-        # with nothing next to them
-        if (layout := self.layout()) is not None:
-            for i in range(layout.count()):
-                item = layout.itemAt(i)
-                widget = item.widget() if item is not None else None
-                if widget is not None and widget is not self.table_wdg:
-                    widget.hide()
 
         # upstream hardcodes a 200px floor on the table so it reads well as a
         # standalone panel; here it lives in a collapsible sidebar panel that

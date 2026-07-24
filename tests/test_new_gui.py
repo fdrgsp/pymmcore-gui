@@ -112,12 +112,7 @@ def test_acquire_page_sidebar_layout(
     # editing/save/load controls hidden — editing groups already lives on the
     # Configurations tab, and saving/loading a .cfg on the Hardware tab.
     hidden_buttons = {
-        page._presets.groups_add_btn,
-        page._presets.groups_remove_btn,
-        page._presets.groups_edit_btn,
-        page._presets.presets_add_btn,
-        page._presets.presets_remove_btn,
-        page._presets.presets_edit_btn,
+        page._presets.edit_groups_btn,
         page._presets.save_btn,
         page._presets.load_btn,
     }

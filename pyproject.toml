@@ -63,6 +63,9 @@ dependencies = [
 [tool.uv]
 constraint-dependencies = ["chardet<6"]
 
+[tool.uv.sources]
+pymmcore-widgets = { git = "https://github.com/fdrgsp/pymmcore-widgets", rev = "main" }
+
 [dependency-groups]
 # should only be used after manually uninstalling PyQt6 and PyQt6Ads
 # uv sync --group pyside --no-install-package PyQt6 --no-install-package PyQt6Ads

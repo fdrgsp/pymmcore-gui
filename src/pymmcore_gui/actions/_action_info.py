@@ -63,12 +63,12 @@ class ActionInfo(BaseModel):
     checkable: bool = False
     checked: bool = False
     enabled: bool = True
-    icon: str | None | QIconType = None
+    icon: str | QIconType | None = None
     icon_text: str | None = None
     icon_visible_in_menu: bool | None = None
     menu_role: QAction.MenuRole | None = None
     priority: QAction.Priority | None = None
-    shortcut: str | None | QKeySequenceType = None
+    shortcut: str | QKeySequenceType | None = None
     shortcut_context: Qt.ShortcutContext | None = None
     shortcut_visible_in_context_menu: bool | None = None
     status_top: str | None = None

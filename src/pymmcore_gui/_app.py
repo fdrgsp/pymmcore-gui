@@ -93,7 +93,7 @@ class MMQApplication(QApplication):
 
 def create_mmgui(
     *,
-    mm_config: Path | str | None | Literal[False] = None,
+    mm_config: Path | str | Literal[False] | None = None,
     mmcore: CMMCorePlus | None = None,
     install_sys_excepthook: bool = True,
     install_sentry: bool = True,

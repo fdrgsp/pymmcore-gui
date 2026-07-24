@@ -11,7 +11,6 @@ from pymmcore_gui._qt.QtCore import (  # type: ignore[attr-defined]
     QPointF,
     QPropertyAnimation,
     QRect,
-    QSize,
     Qt,
     pyqtProperty,  # pyright: ignore
 )
