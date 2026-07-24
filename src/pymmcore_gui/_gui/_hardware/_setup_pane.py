@@ -316,7 +316,12 @@ class DeviceSetupPane(QWidget):
                 self.stateLabelChanged.emit(dev, item.row(), item.text())
 
         table.itemChanged.connect(_on_item_changed)
-        self._body_layout.addWidget(table)
+        # Give it priority over show_installed()'s trailing addStretch() (an
+        # unstretched widget leaves all leftover vertical space to that
+        # stretch instead, which reads fine when a "Timing" section follows
+        # but looks like a bug -- a small table over a big dead area -- when
+        # this is the last section, as it is for most state devices).
+        self._body_layout.addWidget(table, 1)
 
     def _add_properties(
         self, props: Sequence[Property], serial_devices: Sequence[Device] = ()
