@@ -281,8 +281,12 @@ def unstyle_widgets(widget: Any) -> None:
     box, rather than only on hover -- most are small icon-only buttons with
     no text label, easy to miss under the default "ghost" variant) and a
     pass through `ensure_visible_icon`.
+
+    ``widget`` itself is swept too (not just ``findChildren``), since the
+    offending stylesheet is sometimes on the third-party root -- e.g.
+    ConfigGroupsEditor sets one on itself.
     """
-    for w in widget.findChildren(QWidget):
+    for w in (widget, *widget.findChildren(QWidget)):
         if isinstance(w, QAbstractSlider):
             continue
         if w.styleSheet():

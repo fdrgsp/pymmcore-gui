@@ -28,6 +28,8 @@ from ._tab_page import TabPage
 if TYPE_CHECKING:
     from pymmcore_gui._qt.QtGui import QShowEvent
 
+_PRESETS_LABEL = "Groups and Presets"
+
 
 class AcquirePage(TabPage):
     """Acquisition controls with tabbed preview and MDA display."""
@@ -50,7 +52,7 @@ class AcquirePage(TabPage):
         self._right_tabs.setTabsClosable(True)
         self._right_tabs.tabCloseRequested.connect(self._close_right_tab)
 
-        self._right_tabs.addTab(self._presets, "Presets")
+        self._right_tabs.addTab(self._presets, _PRESETS_LABEL)
 
         self._mda = MemoryMDAWidget(mmcore=self._core)
         self._right_tabs.addTab(self._mda, "MDA")
@@ -75,7 +77,7 @@ class AcquirePage(TabPage):
         self.toolbar.add_widget(self._shutters)
         self.toolbar.add_stretch()
 
-        self._presets_btn = QPushButton("Presets")
+        self._presets_btn = QPushButton(_PRESETS_LABEL)
         self._presets_btn.setCheckable(True)
         self._presets_btn.setChecked(True)
         self._presets_btn.setToolTip("Show the group/preset selection tab")
@@ -99,7 +101,7 @@ class AcquirePage(TabPage):
         idx = self._right_tabs.indexOf(self._presets)
         if checked:
             if idx < 0:
-                idx = self._right_tabs.insertTab(0, self._presets, "Presets")
+                idx = self._right_tabs.insertTab(0, self._presets, _PRESETS_LABEL)
             self._right_tabs.setCurrentIndex(idx)
         elif idx >= 0:
             self._right_tabs.removeTab(idx)

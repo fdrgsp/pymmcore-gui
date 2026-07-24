@@ -157,7 +157,7 @@ def test_acquire_page_sidebar_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert page._right_tabs.count() == 2
     assert isinstance(page._right_tabs.tabBar(), ThemedTabBar)
     assert page._right_tabs.widget(0) is page._presets
-    assert page._right_tabs.tabText(0) == "Presets"
+    assert page._right_tabs.tabText(0) == "Groups and Presets"
     assert page._right_tabs.widget(1) is page._mda
     assert page._right_tabs.tabText(1) == "MDA"
     assert page._right_tabs.currentWidget() is page._mda
@@ -199,7 +199,7 @@ def test_acquire_page_sidebar_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     page._mda_btn.click()
     assert page._right_tabs.count() == 3
     assert page._right_tabs.tabText(0) == "MDA"
-    assert page._right_tabs.tabText(1) == "Presets"
+    assert page._right_tabs.tabText(1) == "Groups and Presets"
     assert page._right_tabs.tabText(2) == "Properties"
 
     page._close_right_tab(0)

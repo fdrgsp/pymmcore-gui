@@ -19,8 +19,9 @@ from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import unstyle_widgets
 from pymmcore_gui._qt.QtCore import QEvent, QTimer, pyqtSignal
-from pymmcore_gui._qt.QtGui import QPalette
+from pymmcore_gui._qt.QtGui import QFont, QPalette
 from pymmcore_gui._qt.QtWidgets import (
+    QAbstractSlider,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -68,6 +69,26 @@ class _GroupEditorTab(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.editor, 1)
+
+    def changeEvent(self, event: QEvent | None) -> None:
+        # ConfigGroupsEditor.__init__ calls self.setStyleSheet(...), and
+        # applying *any* stylesheet makes Qt resolve and *freeze* the font of
+        # the widget's whole subtree -- so it stops following later
+        # QApplication.setFont() changes, which is exactly how this app's zoom
+        # (Cmd+Shift+±) works. The frozen tree keeps whatever size was current
+        # when the stylesheet was first applied and never scales again.
+        #
+        # set_zoom() sets the new app font, then sends every widget a
+        # StyleChange event (which also re-freezes this subtree). Riding that
+        # same event, reset each descendant's font to a default-constructed
+        # (unresolved) QFont so it re-inherits the now-current app font --
+        # matching the pattern _toolbar.py / the dirty label already use to
+        # stay theme/zoom reactive.
+        if event is not None and event.type() == QEvent.Type.StyleChange:
+            for w in (self.editor, *self.editor.findChildren(QWidget)):
+                if not isinstance(w, QAbstractSlider):
+                    w.setFont(QFont())
+        super().changeEvent(event)
 
     def save(self) -> None:
         """Replace the core's config groups with the editor's contents."""
