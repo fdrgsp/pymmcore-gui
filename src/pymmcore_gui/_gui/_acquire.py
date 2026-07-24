@@ -8,14 +8,9 @@ from typing import TYPE_CHECKING
 from pymmcore_plus import CMMCorePlus
 from pymmcore_widgets import PropertyBrowser
 
-from pymmcore_gui._qt.QtCore import Qt, QTimer
-from pymmcore_gui._qt.QtWidgets import (
-    QPushButton,
-    QSizePolicy,
-    QSplitter,
-    QTabWidget,
-    QWidget,
-)
+from pymmcore_gui._array_viewer import unstyle_widgets
+from pymmcore_gui._qt.QtCore import QTimer
+from pymmcore_gui._qt.QtWidgets import QPushButton, QTabWidget, QWidget
 from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
 
 from ._acquire_presets import AcquisitionPresetSelector
@@ -27,8 +22,6 @@ from ._acquire_toolbar import (
     toolbar_separator,
 )
 from ._acquire_viewers import AcquireViewers
-from ._collapsible_panel import CollapsiblePanel
-from ._stage_controls import StageControls
 from ._tab_page import TabPage
 
 if TYPE_CHECKING:
@@ -45,23 +38,7 @@ class AcquirePage(TabPage):
         self._core = mmcore or CMMCorePlus.instance()
 
         self._presets = AcquisitionPresetSelector(mmcore=self._core)
-        presets_panel = CollapsiblePanel("Groups & Presets", expanded=True)
-        presets_panel.body_layout.addWidget(self._presets)
-
-        self._stages = StageControls(self._core)
-        stages_panel = CollapsiblePanel("Stages", expanded=True)
-        stages_panel.body_layout.addWidget(self._stages)
-
-        # a splitter (not a plain stack) so the user can drag to trade space
-        # between the two panels — e.g. shrink the mostly-empty group/preset
-        # table to give the stage controls more room
-        left_split = QSplitter(Qt.Orientation.Vertical)
-        left_split.addWidget(presets_panel)
-        left_split.addWidget(stages_panel)
-        left_split.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding
-        )
-        self.left.add_widget(left_split)
+        self.left.add_widget(self._presets, 1)
 
         self._right_tabs = QTabWidget()
         self._right_tabs.setDocumentMode(True)
@@ -120,6 +97,7 @@ class AcquirePage(TabPage):
                 # PropertyBrowser is a QDialog upstream. Adding it to QTabWidget
                 # reparents it as a regular embedded page.
                 browser = self._property_browser = PropertyBrowser(mmcore=self._core)
+                unstyle_widgets(browser)
             idx = self._right_tabs.indexOf(browser)
             if idx < 0:
                 idx = self._right_tabs.addTab(browser, "Properties")
@@ -150,7 +128,6 @@ class AcquirePage(TabPage):
         self._channels.refresh()
         self._shutters.refresh()
         self._presets.refresh()
-        self._stages.refresh_devices()
         if (
             self._property_browser is not None
             and self._right_tabs.indexOf(self._property_browser) >= 0

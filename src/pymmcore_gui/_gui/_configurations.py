@@ -16,6 +16,7 @@ from pymmcore_widgets import (
 )
 from pymmcore_widgets._util import block_core
 
+from pymmcore_gui._array_viewer import unstyle_widgets
 from pymmcore_gui._qt.QtCore import QTimer, pyqtSignal
 from pymmcore_gui._qt.QtGui import QPalette
 from pymmcore_gui._qt.QtWidgets import (
@@ -53,6 +54,7 @@ class _GroupEditorTab(QWidget):
         for btn in self.editor.findChildren(QPushButton):
             if btn.text() == "Apply":
                 btn.hide()
+        unstyle_widgets(self.editor)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -153,6 +155,7 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
             if btn.text() in {"Apply and Close", "Cancel"}:
                 # Save actions live in the page toolbar when embedded.
                 btn.hide()
+        unstyle_widgets(self)
         # bridge the widget's internal edit signals to a public `changed` one
         for attr in ("_px_table", "_affine_table", "_props_selector"):
             owner = getattr(self, attr, None)

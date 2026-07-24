@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from pymmcore_gui._array_viewer import ensure_visible_icon
 from pymmcore_gui._qt.QtCore import QCoreApplication, QEvent, QSize
 from pymmcore_gui._qt.QtGui import QFont, QGuiApplication
-from pymmcore_gui._qt.QtWidgets import QApplication, QStyle, QToolBar
+from pymmcore_gui._qt.QtWidgets import QAbstractButton, QApplication, QStyle, QToolBar
 
 from ._dark import DARK_THEME
 from ._fonts import mono_font, ui_font
@@ -102,6 +103,16 @@ def set_theme(t: Theme) -> None:
     app = QApplication.instance()
     if isinstance(app, QGuiApplication):
         app.setPalette(to_qpalette(t.palette))
+
+    # Re-evaluate every button's icon contrast against the new palette.
+    # ensure_visible_icon always re-derives from the button's stashed
+    # *original* icon, so this is safe to call repeatedly across any number
+    # of light/dark toggles -- without it, a dark-theme recolor would stay
+    # baked in (and turn invisible) after switching to light mode.
+    if isinstance(app, QApplication):
+        for w in app.allWidgets():
+            if isinstance(w, QAbstractButton):
+                ensure_visible_icon(w)
 
 
 def set_style(style: MicroscopeStyle) -> None:

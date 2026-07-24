@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 
 from pymmcore_widgets import MDAWidget
 
+from pymmcore_gui._array_viewer import unstyle_widgets
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -39,6 +41,14 @@ class MemoryMDAWidget(MDAWidget):
             self._load_button,
         ):
             btn.setProperty("variant", "subtle")
+
+        # All sub-tabs (Channels/Positions/Z/Time/Grid) are constructed
+        # eagerly by CoreMDATabs.create_subwidgets() during super().__init__,
+        # so one recursive sweep here reaches every descendant -- strips
+        # hardcoded stylesheets (e.g. useq_widgets' border-less spinboxes,
+        # gray range labels) and normalizes buttons the same way as
+        # everywhere else in the app.
+        unstyle_widgets(self)
 
     def prepare_mda(self) -> bool | str | Path | None:
         """Return a disk path or a scratch sink that supports live viewing."""

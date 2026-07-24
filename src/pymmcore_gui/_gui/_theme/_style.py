@@ -44,8 +44,10 @@ from pymmcore_gui._qt.QtWidgets import (
     QStyleOptionButton,
     QStyleOptionComboBox,
     QStyleOptionComplex,
+    QStyleOptionHeader,
     QStyleOptionSlider,
     QStyleOptionSpinBox,
+    QStyleOptionTab,
     QWidget,
 )
 
@@ -394,6 +396,11 @@ class MicroscopeStyle(QProxyStyle):
                 # The base style still lays out the icon/text/menu-arrow.
                 self._draw_tool_button_frame(option, painter, widget)
 
+            case PE.PE_FrameTabWidget:
+                # Suppress Fusion's beveled frame around a QTabWidget's page
+                # area -- flat content, consistent with the rest of the app.
+                painter.fillRect(option.rect, pal.color(QPalette.ColorRole.Window))
+
             case _:
                 super().drawPrimitive(element, option, painter, widget)
 
@@ -431,6 +438,17 @@ class MicroscopeStyle(QProxyStyle):
 
             case CE.CE_Splitter:
                 self._draw_splitter_handle(option, painter, widget)
+
+            case CE.CE_HeaderSection if isinstance(option, QStyleOptionHeader):
+                self._draw_header_section(option, painter, widget)
+
+            case CE.CE_HeaderEmptyArea:
+                painter.fillRect(
+                    option.rect, option.palette.color(QPalette.ColorRole.Button)
+                )
+
+            case CE.CE_TabBarTabShape if isinstance(option, QStyleOptionTab):
+                self._draw_tab_shape(option, painter, widget)
 
             case _:
                 super().drawControl(element, option, painter, widget)
@@ -1229,6 +1247,73 @@ class MicroscopeStyle(QProxyStyle):
             else:
                 for dy in (-6, 0, 6):
                     p.drawEllipse(QPointF(cx, cy + dy), dot_r, dot_r)
+
+    # ═══════════════════════════════════════════════════════════
+    # QHeaderView (table / tree column & row headers)
+    # ═══════════════════════════════════════════════════════════
+
+    def _draw_header_section(
+        self,
+        opt: QStyleOptionHeader,
+        p: QPainter,
+        widget: QWidget | None,
+    ) -> None:
+        """Flat header cell, replacing Fusion's palette-ignoring bevel.
+
+        Text/sort-arrow layout is left to the base style (CE_HeaderLabel),
+        which already reads the correct color from our palette.
+        """
+        pal = opt.palette
+        r = opt.rect
+        hovered = bool(opt.state & QStyle.StateFlag.State_MouseOver)
+        pressed = bool(opt.state & QStyle.StateFlag.State_Sunken)
+
+        if pressed:
+            bg = pal.color(QPalette.ColorRole.Midlight)
+        elif hovered:
+            bg = pal.color(QPalette.ColorRole.AlternateBase)
+        else:
+            bg = pal.color(QPalette.ColorRole.Button)
+
+        p.fillRect(r, bg)
+
+        p.setPen(self._border_color())
+        p.drawLine(r.bottomLeft(), r.bottomRight())
+        p.drawLine(r.topRight(), r.bottomRight())
+
+        self.drawControl(QStyle.ControlElement.CE_HeaderLabel, opt, p, widget)
+
+    # ═══════════════════════════════════════════════════════════
+    # QTabBar
+    # ═══════════════════════════════════════════════════════════
+
+    def _draw_tab_shape(
+        self,
+        opt: QStyleOptionTab,
+        p: QPainter,
+        widget: QWidget | None,
+    ) -> None:
+        """Flat tab: selected tab gets an accent underline, unselected is bare.
+
+        Text layout is left to the base style (CE_TabBarTabLabel), which
+        already reads the correct color from our palette.
+        """
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pal = opt.palette
+        r = opt.rect
+        selected = bool(opt.state & QStyle.StateFlag.State_Selected)
+        hovered = bool(opt.state & QStyle.StateFlag.State_MouseOver)
+
+        if selected:
+            p.fillRect(r, pal.color(QPalette.ColorRole.Base))
+        elif hovered:
+            p.fillRect(r, pal.color(QPalette.ColorRole.Midlight))
+
+        if selected:
+            p.setPen(QPen(pal.color(QPalette.ColorRole.Highlight), 2))
+        else:
+            p.setPen(self._border_color())
+        p.drawLine(r.bottomLeft(), r.bottomRight())
 
 
 # ═══════════════════════════════════════════════════════════════

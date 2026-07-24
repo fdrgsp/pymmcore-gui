@@ -16,7 +16,14 @@ from superqt import QIconifyIcon
 
 from pymmcore_gui._qt.QtCore import QEvent, QObject, QSize, Qt
 from pymmcore_gui._qt.QtGui import QColor, QIcon, QPainter, QPalette
-from pymmcore_gui._qt.QtWidgets import QAbstractButton, QFileDialog, QPushButton
+from pymmcore_gui._qt.QtWidgets import (
+    QAbstractButton,
+    QAbstractSlider,
+    QApplication,
+    QFileDialog,
+    QPushButton,
+    QWidget,
+)
 from pymmcore_gui.actions.widget_actions import WidgetAction, _get_mm_main_window
 
 # icons this dark (or darker) are effectively invisible against a dark
@@ -72,7 +79,7 @@ class MMArrayViewer(ndv.ArrayViewer):
         with suppress(Exception):
             _add_roll_axes_button(self)
         with suppress(Exception):
-            _unstyle_buttons(widget)
+            unstyle_widgets(widget)
 
     def _roll_axes(self) -> None:
         """Cycle visible axes through the three orthogonal ZYX views."""
@@ -196,6 +203,9 @@ def _recolor_icon(icon: QIcon, color: QColor) -> QIcon:
     return new_icon
 
 
+_ORIGINAL_ICON_PROPERTY = "_pymmcore_gui_original_icon"
+
+
 def ensure_visible_icon(btn: QAbstractButton) -> None:
     """Recolor a button's icon if it's a too-dark gray to see against its background.
 
@@ -206,10 +216,21 @@ def ensure_visible_icon(btn: QAbstractButton) -> None:
     luminance to the button's background; a meaningfully-colored icon (e.g. a
     green/magenta/red state indicator) is left alone even if it happens to be
     on the darker side, since its hue still reads fine against a dark bg.
+
+    Re-callable any time the theme changes (light <-> dark): the button's
+    *original* icon is stashed on first call and every subsequent call
+    re-evaluates from that pristine copy, never from an already-recolored
+    one -- otherwise a dark-theme recolor (e.g. tinted white) would get
+    baked in permanently and turn invisible again after switching to light
+    mode, since a static pixmap doesn't know the theme changed.
     """
-    icon = btn.icon()
-    if icon.isNull():
-        return
+    icon = btn.property(_ORIGINAL_ICON_PROPERTY)
+    if icon is None:
+        icon = btn.icon()
+        if icon.isNull():
+            return
+        btn.setProperty(_ORIGINAL_ICON_PROPERTY, icon)
+
     size = btn.iconSize()
     if not size.isValid() or size.isEmpty():
         sizes = icon.availableSizes()
@@ -219,40 +240,57 @@ def ensure_visible_icon(btn: QAbstractButton) -> None:
         return
     r, g, b = rgb
     if max(r, g, b) - min(r, g, b) > _MAX_ICON_GRAYSCALE_SPREAD:
-        return  # has real hue -- not the "invisible black icon" case
+        btn.setIcon(icon)  # has real hue -- always show the original
+        return
     lum = 0.299 * r + 0.587 * g + 0.114 * b
-    pal = btn.palette()
+    # QApplication.palette(), not btn.palette(): right after
+    # QApplication.setPalette() the *application* palette is updated
+    # immediately, but an already-constructed widget's own .palette() is
+    # only refreshed once its queued PaletteChange event is processed --
+    # reading it synchronously (as the theme-change sweep does) would still
+    # see the *previous* theme's colors.
+    pal = QApplication.palette() if QApplication.instance() else btn.palette()
     bg_lum = _luminance(pal.color(QPalette.ColorRole.Window))
     if abs(lum - bg_lum) < _MIN_ICON_BG_CONTRAST:
         btn.setIcon(_recolor_icon(icon, pal.color(QPalette.ColorRole.WindowText)))
+    else:
+        btn.setIcon(icon)  # original already contrasts fine against this bg
 
 
-def _unstyle_buttons(widget: Any) -> None:
-    """Normalize ndv's buttons to the app's themed button look.
+def unstyle_widgets(widget: Any) -> None:
+    """Normalize third-party widgets to the app's themed look.
 
-    ndv gives a few buttons (e.g. the play/pause toggle) their own hardcoded
-    ``QPushButton {...}`` stylesheet. A widget-level stylesheet takes over
-    that widget's rendering entirely, bypassing the app's themed QStyle, so
-    those buttons look inconsistent with the rest of the GUI. Clearing it
-    lets them fall back to the same themed style as every other button.
+    Third-party code sometimes hardcodes a one-off ``setStyleSheet(...)``
+    (e.g. ndv's play/pause button, or useq_widgets' border-less table
+    spinboxes and gray range labels) -- and not always directly on the
+    styled leaf widget: several cases apply a type-selector rule (e.g.
+    ``"QLabel {...}"``) to a *wrapper* container instead, relying on Qt's
+    stylesheet cascade to reach the actual descendant. A stylesheet anywhere
+    in that chain takes over rendering for whatever properties it sets,
+    bypassing the app's themed QStyle entirely, so clearing only specific
+    leaf types misses these. Walking every descendant and clearing
+    unconditionally catches both cases.
 
-    Most of these are small icon-only buttons with no text label, which are
-    easy to miss under the default "ghost" variant (no visible box until
-    hovered) — the "subtle" variant gives them a persistently visible box
-    instead, matching Snap/Live/Shutters in the Acquire toolbar. Icons that
-    are too dark to see against that box are recolored (see
-    `ensure_visible_icon`).
+    The one deliberate exception is `QAbstractSlider` (covers `QSlider` and
+    superqt's `QLabeledSlider`/`QLabeledRangeSlider` family): ndv's
+    contrast-limits slider sets a stylesheet that defines its actual
+    groove/handle rendering and handle-label color, which is functional, not
+    cosmetic, and would look broken if cleared.
 
-    Only buttons are touched — other ndv widgets (e.g. the contrast-limits
-    slider) rely on their own stylesheet for correct display and are left
-    alone.
+    Buttons additionally get the "subtle" variant (a persistently visible
+    box, rather than only on hover -- most are small icon-only buttons with
+    no text label, easy to miss under the default "ghost" variant) and a
+    pass through `ensure_visible_icon`.
     """
-    for btn in widget.findChildren(QAbstractButton):
-        if btn.styleSheet():
-            btn.setStyleSheet("")
-        if not btn.property("variant"):
-            btn.setProperty("variant", "subtle")
-        ensure_visible_icon(btn)
+    for w in widget.findChildren(QWidget):
+        if isinstance(w, QAbstractSlider):
+            continue
+        if w.styleSheet():
+            w.setStyleSheet("")
+        if isinstance(w, QAbstractButton):
+            if not w.property("variant"):
+                w.setProperty("variant", "subtle")
+            ensure_visible_icon(w)
 
 
 def _add_save_button(viewer: MMArrayViewer) -> QPushButton:
