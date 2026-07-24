@@ -96,6 +96,7 @@ class HardwareSetupPage(TabPage):
         self._setup.propertyChanged.connect(self._on_property_changed)
         self._setup.delayChanged.connect(self._on_delay_changed)
         self._setup.renameRequested.connect(self._rename_device)
+        self._setup.stateLabelChanged.connect(self._on_state_label_changed)
         self._setup.portSelected.connect(self._on_port_selected)
 
         # A configuration may be loaded into the core *after* this page is
@@ -575,6 +576,23 @@ class HardwareSetupPage(TabPage):
         self._dirty = True
         with suppress(Exception):
             self._core.setDeviceDelayMs(dev.name, delay_ms)
+
+    def _on_state_label_changed(self, dev: Device, state: int, label: str) -> None:
+        """Rename one position of a state device (filter wheel, turret, ...)."""
+        label = label.strip()
+        if not label or (state < len(dev.labels) and dev.labels[state] == label):
+            return
+        old_labels = dev.labels
+        dev.set_label(state, label)
+        try:
+            self._core.defineStateLabel(dev.name, state, label)
+        except Exception as e:
+            dev.labels = old_labels  # roll the model back to match the core
+            self._warn(f"Failed to set label for state {state}:\n\n{e}")
+            self._setup.show_installed(dev, self._port_device_for(dev))
+            return
+        self._dirty = True
+        self._status(f"Renamed state {state} of {dev.name} to {label!r}")
 
     # ── helpers ───────────────────────────────────────────────────
 

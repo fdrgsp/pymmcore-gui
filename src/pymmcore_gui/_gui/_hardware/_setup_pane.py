@@ -9,7 +9,7 @@ from __future__ import annotations
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
-from pymmcore_plus import Keyword, PropertyType
+from pymmcore_plus import DeviceType, Keyword, PropertyType
 
 from pymmcore_gui._gui._theme import theme
 from pymmcore_gui._qt.QtCore import Qt, pyqtSignal
@@ -25,6 +25,8 @@ from pymmcore_gui._qt.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -83,6 +85,7 @@ class DeviceSetupPane(QWidget):
     propertyChanged = pyqtSignal(object, str)  # (Property, new value)
     delayChanged = pyqtSignal(object, float)  # (Device, delay in ms)
     renameRequested = pyqtSignal(object, str)  # (Device, new label)
+    stateLabelChanged = pyqtSignal(object, int, str)  # (Device, state, new label)
     portSelected = pyqtSignal(str, str)  # (serial adapter name, library)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -219,6 +222,13 @@ class DeviceSetupPane(QWidget):
             none_lbl.setEnabled(False)
             self._body_layout.addWidget(none_lbl)
 
+        # State devices (filter wheels, objective turrets, ...) have discrete
+        # positions that can be given friendly names — e.g. an objective
+        # turret's positions named "10X"/"20X"/"40X" instead of "State-0" etc.
+        if dev.device_type == DeviceType.StateDevice and dev.labels:
+            self._add_section("State Labels")
+            self._add_state_labels(dev)
+
         # a device with a "Port" is configured through that serial device
         if port_device is not None:
             self._add_section(f"Serial port — {port_device.name}")
@@ -276,6 +286,37 @@ class DeviceSetupPane(QWidget):
         desc.setWordWrap(True)
         desc.setEnabled(False)
         self._body_layout.addWidget(desc)
+
+    def _add_state_labels(self, dev: Device) -> None:
+        """Editable State/Label table for a state device."""
+        table = QTableWidget(len(dev.labels), 2)
+        table.setHorizontalHeaderLabels(["State", "Label"])
+        if (hdr := table.horizontalHeader()) is not None:
+            hdr.setStretchLastSection(True)
+        if (vh := table.verticalHeader()) is not None:
+            vh.setVisible(False)
+        table.setEditTriggers(
+            QTableWidget.EditTrigger.DoubleClicked
+            | QTableWidget.EditTrigger.EditKeyPressed
+        )
+
+        # populate without emitting itemChanged for the initial (unedited) values
+        table.blockSignals(True)
+        try:
+            for state, label in enumerate(dev.labels):
+                state_item = QTableWidgetItem(str(state))
+                state_item.setFlags(state_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                table.setItem(state, 0, state_item)
+                table.setItem(state, 1, QTableWidgetItem(label))
+        finally:
+            table.blockSignals(False)
+
+        def _on_item_changed(item: QTableWidgetItem) -> None:
+            if item.column() == 1:
+                self.stateLabelChanged.emit(dev, item.row(), item.text())
+
+        table.itemChanged.connect(_on_item_changed)
+        self._body_layout.addWidget(table)
 
     def _add_properties(
         self, props: Sequence[Property], serial_devices: Sequence[Device] = ()
