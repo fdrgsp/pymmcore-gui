@@ -5,7 +5,13 @@ from typing import TYPE_CHECKING
 from pymmcore_gui._array_viewer import ensure_visible_icon
 from pymmcore_gui._qt.QtCore import QCoreApplication, QEvent, QSize
 from pymmcore_gui._qt.QtGui import QFont, QGuiApplication
-from pymmcore_gui._qt.QtWidgets import QAbstractButton, QApplication, QStyle, QToolBar
+from pymmcore_gui._qt.QtWidgets import (
+    QAbstractButton,
+    QAbstractScrollArea,
+    QApplication,
+    QStyle,
+    QToolBar,
+)
 
 from ._dark import DARK_THEME
 from ._fonts import mono_font, ui_font
@@ -101,31 +107,38 @@ def set_theme(t: Theme) -> None:
     if _current_style is not None:
         _view = ScaledThemeView(t, _current_style)
     app = QApplication.instance()
+    pal = to_qpalette(t.palette)
     if isinstance(app, QGuiApplication):
-        app.setPalette(to_qpalette(t.palette))
+        app.setPalette(pal)
 
     if isinstance(app, QApplication) and _current_style is not None:
         # set_zoom() sends every widget a StyleChange event and forces a
         # relayout -- set_style() (first-ever call only) already relies on
         # this to make the *initial* theme take effect. A *later* toggle
-        # (this branch) needs the exact same forced refresh: without it,
+        # (this branch) needs the same forced refresh for sizing/spacing.
+        set_zoom(_current_style.zoom_factor)
+
         # QApplication.setPalette() above updates the application-wide
         # palette immediately, but an already-constructed widget's own
         # .palette() only catches up once Qt actually re-polishes it --
-        # which, empirically, doesn't reliably happen from setPalette()
-        # alone for widgets nested a few layers deep (e.g. a useq_widgets
-        # table's viewport keeps showing the *previous* theme's colors
-        # indefinitely otherwise). Re-applying the same zoom factor is a
-        # no-op for sizing and just piggybacks on the refresh it already does.
-        set_zoom(_current_style.zoom_factor)
-
-        # Re-evaluate every button's icon contrast against the new palette.
-        # ensure_visible_icon always re-derives from the button's stashed
-        # *original* icon, so this is safe to call repeatedly across any
-        # number of light/dark toggles -- without it, a dark-theme recolor
-        # would stay baked in (and turn invisible) after switching to light.
+        # and empirically, neither setPalette() nor set_zoom()'s
+        # StyleChange dispatch reliably triggers that for QAbstractItemView
+        # subclasses (tables/trees/lists -- e.g. ConfigGroupsEditor's tree
+        # and preset table, or a useq_widgets data table's viewport keep
+        # showing the *previous* theme's colors indefinitely otherwise).
+        # Force it directly on every widget rather than depending on Qt's
+        # own (here, unreliable) propagation.
         for w in app.allWidgets():
+            w.setPalette(pal)
+            if isinstance(w, QAbstractScrollArea) and (vp := w.viewport()) is not None:
+                vp.setPalette(pal)
             if isinstance(w, QAbstractButton):
+                # Re-evaluate icon contrast against the new palette.
+                # ensure_visible_icon always re-derives from the button's
+                # stashed *original* icon, so this is safe to call
+                # repeatedly across any number of toggles -- without it, a
+                # dark-theme recolor would stay baked in (and turn
+                # invisible) after switching to light mode.
                 ensure_visible_icon(w)
 
 

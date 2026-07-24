@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from typing import TYPE_CHECKING
 
 from pymmcore_widgets import GroupPresetTableWidget
@@ -16,36 +15,51 @@ if TYPE_CHECKING:
     from pymmcore_gui._qt.QtWidgets import QWidget
 
 
-def _no_presets_to_strip(self: PresetsWidget, preset: str) -> list[tuple[str, str]]:
-    return []
+def _refresh_only_new_group_preset(
+    self: PresetsWidget,
+    group: str,
+    preset: str,
+    device: str,
+    property: str,
+    value: str,
+) -> None:
+    """Refresh the combo without validating/"fixing" the group's data.
+
+    PresetsWidget's own `_on_new_group_preset` (connected to the core's
+    `configDefined` signal, and also called directly -- for every *other*
+    preset in the group -- from `_delete_presets_with_different_properties()`
+    at construction time) treats the group's *first* preset as the one true
+    baseline: any preset with a different property *set* gets its extras
+    silently deleted (`deleteConfig` + redefine without them), and any preset
+    with a different property *count* gets a `UserWarning`, in both
+    directions (missing or extra).
+
+    Both reactions are wrong for a legitimate, intentional per-preset
+    override (e.g. a different camera for just one channel) -- a real,
+    supported Micro-Manager config pattern, not a mistake to "fix". Worse,
+    `configDefined` fires once per (device, property, value) triple, and
+    MMCore's own C++ config-file loader defines a preset's properties one at
+    a time with no way for us to suppress that -- so reloading a config from
+    the Hardware tab was reacting to every single *incomplete, mid-load*
+    snapshot as if it were the final preset, both corrupting data (before
+    `_find_dev_prop_to_remove` was neutered below) and flooding a cascade of
+    "missing properties" warnings (one per property, shrinking as the reload
+    caught up) even after.
+
+    None of this validation is needed: the widget's only real job here is
+    keeping its combo box in sync with the core, which `_refresh()` alone
+    already does correctly by reading the group's *current* state directly,
+    regardless of how many properties any preset happens to have.
+    """
+    if group == self._group:
+        self._refresh()
 
 
-# PresetsWidget (constructed internally, one per multi-preset config group, by
-# GroupPresetTableWidget's table -- including our own AcquisitionPresetSelector
-# below) treats any (device, property) pair that isn't present in *every*
-# other preset of the same group as a mistake, and silently deletes it -- both
-# once at construction time and again on every live configDefined event. That
-# is wrong for a legitimate, intentional per-preset override (e.g. a different
-# camera for just one channel), a real, supported Micro-Manager config
-# pattern. Confirmed this silently strips such an override just from loading
-# a config and mounting this widget -- no editing involved. Patched on the
-# class itself (not just our subclass) since the bug lives in PresetsWidget
-# wherever it's constructed, not in anything we do with it.
-PresetsWidget._find_dev_prop_to_remove = _no_presets_to_strip  # type: ignore[method-assign]
-
-# Same root cause, a separate (non-destructive) symptom: _on_new_group_preset
-# also warns whenever a preset's property *count* differs from the group's
-# first preset, then reports "missing" properties as the *set difference*
-# (baseline - preset). For a preset that has one *extra* property (the same
-# legitimate per-preset override as above), that difference is empty, so the
-# message is always the literally-nonsensical "missing the following
-# properties: []." No data is touched in this branch -- only the message is
-# wrong -- so this is a plain warnings filter, not a behavior patch.
-warnings.filterwarnings(
-    "ignore",
-    message=r".*preset is missing the following properties: \[\]\.$",
-    category=UserWarning,
-    module=r"pymmcore_widgets\.control\._presets_widget",
+# Patched on the class itself (not just wrapped where we construct it),
+# since PresetsWidget is built internally by GroupPresetTableWidget's table
+# -- including our own AcquisitionPresetSelector below -- not by us directly.
+PresetsWidget._on_new_group_preset = (  # type: ignore[method-assign]
+    _refresh_only_new_group_preset
 )
 
 
