@@ -6,12 +6,13 @@ from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from pymmcore_plus import CMMCorePlus
-from pymmcore_widgets import PropertyBrowser, StageExplorer
+from pymmcore_widgets import PropertyBrowser
 
 from pymmcore_gui._array_viewer import unstyle_widgets
 from pymmcore_gui._qt.QtCore import QTimer
 from pymmcore_gui._qt.QtWidgets import QPushButton, QTabWidget, QWidget
 from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
+from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 
 from ._acquire_presets import AcquisitionPresetSelector
 from ._acquire_toolbar import (
@@ -26,6 +27,8 @@ from ._tab_bar import ThemedTabBar
 from ._tab_page import TabPage
 
 if TYPE_CHECKING:
+    from useq import Position
+
     from pymmcore_gui._qt.QtGui import QShowEvent
 
 _PRESETS_LABEL = "Groups and Presets"
@@ -61,7 +64,7 @@ class AcquirePage(TabPage):
         self._property_browser: PropertyBrowser | None = None
         self.right.add_widget(self._right_tabs, 1)
 
-        # Center content is itself split into two tabs: "Viewer" (the live
+        # Center content is itself split into two tabs: "Viewer" (a lazy snap
         # preview + one viewer per MDA run) and "Explorer" (a stage-explorer
         # map). The Viewer tab keeps its own inner Preview/MDA tab bar.
         self._content_tabs = QTabWidget()
@@ -71,8 +74,8 @@ class AcquirePage(TabPage):
         self._viewers = AcquireViewers(self._core)
         self._content_tabs.addTab(self._viewers, "Viewer")
 
-        self._explorer = StageExplorer(mmcore=self._core)
-        unstyle_widgets(self._explorer)
+        self._explorer = ThemedStageExplorer(mmcore=self._core)
+        self._explorer.sendToMDARequested.connect(self._on_explorer_positions)
         self._content_tabs.addTab(self._explorer, "Explorer")
 
         self.add_content_widget(self._content_tabs)
@@ -82,8 +85,12 @@ class AcquirePage(TabPage):
         # toolbar: snap|live ‖ optical configs ‖ shutters … [Presets|MDA|Properties]
         self._channels = ChannelPresetsBar(self._core)
         self._shutters = ShuttersBar(self._core)
-        self.toolbar.add_widget(SnapButton(mmcore=self._core))
-        self.toolbar.add_widget(LiveButton(mmcore=self._core))
+        self._snap_btn = SnapButton(mmcore=self._core)
+        self._snap_btn.snapRequested.connect(self._viewers.ensure_preview)
+        self.toolbar.add_widget(self._snap_btn)
+        self._live_btn = LiveButton(mmcore=self._core)
+        self._live_btn.liveStartedRequested.connect(self._viewers.ensure_preview)
+        self.toolbar.add_widget(self._live_btn)
         self.toolbar.add_widget(toolbar_separator())
         self.toolbar.add_widget(self._channels)
         self.toolbar.add_widget(toolbar_separator())
@@ -115,6 +122,18 @@ class AcquirePage(TabPage):
         self._props_btn.setToolTip("Open the device property browser tab")
         self._props_btn.toggled.connect(self._toggle_properties)
         self.toolbar.add_widget(self._props_btn)
+
+    def _on_explorer_positions(self, positions: list[Position], replace: bool) -> None:
+        """Transfer Stage Explorer regions into the MDA position table."""
+        existing = [] if replace else list(self._mda.stage_positions.value())
+        self._mda.stage_positions.setValue([*existing, *positions])
+
+        # Make the result immediately visible even if the MDA tab was closed.
+        self._mda_btn.setChecked(True)
+        if (idx := self._right_tabs.indexOf(self._mda)) < 0:
+            self._toggle_mda(True)
+            idx = self._right_tabs.indexOf(self._mda)
+        self._right_tabs.setCurrentIndex(idx)
 
     def _toggle_presets(self, checked: bool) -> None:
         idx = self._right_tabs.indexOf(self._presets)
@@ -168,11 +187,11 @@ class AcquirePage(TabPage):
         if visible:
             self._h_split.setSizes([0, 900, 520])
 
-    def showEvent(self, event: QShowEvent | None) -> None:
+    def showEvent(self, a0: QShowEvent | None) -> None:
         # Devices added on the Hardware tab load into the core but don't fire
         # systemConfigurationLoaded, so the toolbar bars (and property table)
         # would be stale. Re-scan the core whenever this tab is shown.
-        super().showEvent(event)
+        super().showEvent(a0)
         self._channels.refresh()
         self._shutters.refresh()
         self._presets.refresh()

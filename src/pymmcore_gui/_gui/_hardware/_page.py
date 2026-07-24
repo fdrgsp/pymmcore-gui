@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from pymmcore_plus import CMMCorePlus, DeviceType, Keyword
 from pymmcore_plus.model import Device, Microscope
@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from pymmcore_plus.model import AvailableDevice, Property
 
     from pymmcore_gui._qt.QtGui import QResizeEvent
+    from pymmcore_gui._qt.QtWidgets import QStatusBar
 
 CFG_FILTER = "Micro-Manager config (*.cfg);;All files (*)"
 
@@ -142,8 +143,8 @@ class HardwareSetupPage(TabPage):
             self._refresh_all()
         self._dirty = False
 
-    def resizeEvent(self, event: QResizeEvent | None) -> None:
-        super().resizeEvent(event)
+    def resizeEvent(self, a0: QResizeEvent | None) -> None:
+        super().resizeEvent(a0)
         self._overlay.setGeometry(self.rect())
 
     # ── config files ──────────────────────────────────────────────
@@ -162,12 +163,14 @@ class HardwareSetupPage(TabPage):
                 # pixel-size configs are independent of any device and would
                 # otherwise survive, now dangling on devices that no longer
                 # exist.
-                for name in list(self._core.getAvailableConfigGroups()):
+                for group_name in list(self._core.getAvailableConfigGroups()):
                     with suppress(Exception):
-                        self._core.deleteConfigGroup(name)
-                for name in list(self._core.getAvailablePixelSizeConfigs()):
+                        self._core.deleteConfigGroup(group_name)
+                for pixel_config_name in list(
+                    self._core.getAvailablePixelSizeConfigs()
+                ):
                     with suppress(Exception):
-                        self._core.deletePixelSizeConfig(name)
+                        self._core.deletePixelSizeConfig(pixel_config_name)
                 self._model = Microscope()
                 self._refresh_all()
             self._dirty = False
@@ -186,49 +189,23 @@ class HardwareSetupPage(TabPage):
             return
 
         self._cancel_add()
-        try:
-            model = Microscope.create_from_config(path)
-        except Exception as e:
-            self._warn(f"Failed to read {path}:\n\n{e}")
-            return
-
-        errors: dict[str, str] = {}
-
-        def _on_fail(d: Device | Property, e: BaseException) -> None:
-            errors.setdefault(d.name, str(e))
-
         self._loading = True
         try:
             with busy(self._overlay, f"Loading {Path(path).name}…"):
-                with suppress(Exception):
-                    self._core.unloadAllDevices()
-                model.initialize(self._core, on_fail=_on_fail)
-                # Microscope.initialize() only replays devices — config groups
-                # and pixel-size configs must be pushed to the core
-                # separately, or a loaded .cfg silently arrives with none of
-                # its presets defined.
-                for group in model.config_groups.values():
-                    try:
-                        group.apply_to_core(self._core)
-                    except Exception as e:
-                        errors.setdefault(f"[group] {group.name}", str(e))
-                try:
-                    model.pixel_size_group.apply_to_core(self._core)
-                except Exception as e:
-                    errors.setdefault("[pixel sizes]", str(e))
-                self._model = model
+                # MMCore's native loader implements the complete .cfg
+                # semantics, including System/Startup, Core device roles,
+                # and commands newer than pymmcore-plus's editable model
+                # parser.  Once the live system is correct, mirror it into
+                # the model used by this page.
+                self._core.loadSystemConfiguration(path)
+                self._model = Microscope.create_from_core(self._core)
+                self._model.config_file = path
                 self._refresh_all()
             self._dirty = False
+        except Exception as e:
+            self._warn(f"Failed to load {path}:\n\n{e}")
         finally:
             self._loading = False
-        # Let every other tab (Configurations, Acquire) know a full
-        # configuration is now in place — the same signal a native
-        # loadSystemConfiguration() would emit, so nothing here relies on
-        # unloadAllDevices()'s own (early, incomplete) firing of it.
-        self._core.events.systemConfigurationLoaded.emit()
-        if errors:
-            listing = "\n".join(f"  • {n}: {m}" for n, m in errors.items())
-            self._warn(f"Some devices failed to initialize:\n\n{listing}")
 
     def is_dirty(self) -> bool:
         """Whether the hardware configuration has unsaved edits."""
@@ -614,7 +591,7 @@ class HardwareSetupPage(TabPage):
         win = self.window()
         if (bar := getattr(win, "statusBar", None)) and callable(bar):
             with suppress(Exception):
-                bar().showMessage(message, 5000)
+                cast("QStatusBar", bar()).showMessage(message, 5000)
 
     def _seed_hardware_sizes(self) -> None:
         """Split the page in half: available devices | installed-over-settings.

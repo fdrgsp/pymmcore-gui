@@ -32,18 +32,19 @@ class ThemedTabBar(QTabBar):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover)
 
-    def paintEvent(self, event: QPaintEvent | None) -> None:
+    def paintEvent(self, a0: QPaintEvent | None) -> None:
         painter = QStylePainter(self)
         style = self.style()
         if style is None:
             painter.end()
-            super().paintEvent(event)
+            super().paintEvent(a0)
             return
 
         selected: QStyleOptionTab | None = None
         for index in range(self.count()):
             option = QStyleOptionTab()
             self.initStyleOption(option, index)
+            self._position_tab_buttons(style, option, index)
             if option.state & QStyle.StateFlag.State_Selected:
                 selected = option
             else:
@@ -53,6 +54,27 @@ class ThemedTabBar(QTabBar):
         # shape and underline are not covered by a neighboring tab.
         if selected is not None:
             self._draw_tab(style, selected, painter)
+
+    def _position_tab_buttons(
+        self,
+        style: QStyle,
+        option: QStyleOptionTab,
+        index: int,
+    ) -> None:
+        """Keep native tab buttons aligned with scrolled tab geometry."""
+        sides = (
+            (
+                QTabBar.ButtonPosition.LeftSide,
+                QStyle.SubElement.SE_TabBarTabLeftButton,
+            ),
+            (
+                QTabBar.ButtonPosition.RightSide,
+                QStyle.SubElement.SE_TabBarTabRightButton,
+            ),
+        )
+        for side, element in sides:
+            if button := self.tabButton(index, side):
+                button.setGeometry(style.subElementRect(element, option, self))
 
     def _draw_tab(
         self,

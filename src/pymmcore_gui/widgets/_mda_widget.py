@@ -5,9 +5,16 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from pymmcore_widgets import MDAWidget
+from pymmcore_widgets.useq_widgets._positions import MDAButton
+from superqt.iconify import QIconifyIcon
 
-from pymmcore_gui._array_viewer import unstyle_widgets
-from pymmcore_gui._qt.QtCore import Qt
+from pymmcore_gui._array_viewer import (
+    ensure_visible_icon,
+    set_source_icon,
+    unstyle_widgets,
+)
+from pymmcore_gui._gui._theme import qcolor, theme
+from pymmcore_gui._qt.QtCore import QEvent, Qt
 from pymmcore_gui._qt.QtWidgets import QGridLayout
 
 if TYPE_CHECKING:
@@ -74,9 +81,7 @@ def _align_bounds_grid(bounds: CoreXYBoundsControl) -> None:
 class MemoryMDAWidget(MDAWidget):
     """Christina-style MDA editor with a viewable memory-sink fallback."""
 
-    def __init__(
-        self, mmcore: CMMCorePlus, parent: QWidget | None = None
-    ) -> None:
+    def __init__(self, mmcore: CMMCorePlus, parent: QWidget | None = None) -> None:
         super().__init__(parent=parent, mmcore=mmcore)
         combo = self.save_info._writer_combo
         for idx in range(combo.count()):
@@ -115,9 +120,87 @@ class MemoryMDAWidget(MDAWidget):
         for table_widget in (self.channels, self.stage_positions, self.time_plan):
             model = table_widget.table().model()
             if model is not None:
-                model.rowsInserted.connect(lambda *_: unstyle_widgets(self))
+                model.rowsInserted.connect(self._on_table_rows_inserted)
+
+        # Upstream replaces Pause/Resume icons whenever acquisition state
+        # changes. Re-apply our semantic colors after those runtime swaps.
+        self._mmc.mda.events.sequencePauseToggled.connect(self._apply_themed_icons)
+        self._mmc.mda.events.sequenceFinished.connect(self._apply_themed_icons)
+        self._connect_position_icon_updates()
+        self._apply_themed_icons()
 
         _align_bounds_grid(self.grid_plan._core_xy_bounds)
+
+    def _on_table_rows_inserted(self, *_: object) -> None:
+        """Theme cell widgets that are constructed only when a row is added."""
+        unstyle_widgets(self)
+        self._connect_position_icon_updates()
+        self._apply_themed_icons()
+
+    def _connect_position_icon_updates(self) -> None:
+        """Keep per-position sub-sequence icons themed after value changes."""
+        for btn in self.findChildren(MDAButton):
+            if btn.property("_pymmcore_gui_icon_colors_connected"):
+                continue
+            btn.setProperty("_pymmcore_gui_icon_colors_connected", True)
+            btn.valueChanged.connect(self._apply_themed_icons)
+
+    def _apply_themed_icons(self, *_: object) -> None:
+        """Apply the app's semantic green/red to every MDA action icon."""
+        green = qcolor(theme().status_green).name()
+        red = qcolor(theme().status_red).name()
+
+        controls = self.control_btns
+        set_source_icon(
+            controls.run_btn,
+            QIconifyIcon("mdi:play-circle-outline", color=green),
+        )
+        pause_glyph = (
+            "mdi:play-circle-outline"
+            if controls.pause_btn.text() == "Resume"
+            else "mdi:pause-circle-outline"
+        )
+        set_source_icon(
+            controls.pause_btn,
+            QIconifyIcon(pause_glyph, color=green),
+        )
+        set_source_icon(
+            controls.cancel_btn,
+            QIconifyIcon("mdi:stop-circle-outline", color=red),
+        )
+
+        for table in (self.channels, self.stage_positions, self.time_plan):
+            table.act_add_row.setIcon(QIconifyIcon("mdi:plus-thick", color=green))
+            table.act_remove_row.setIcon(
+                QIconifyIcon("mdi:close-box-outline", color=red)
+            )
+            table.act_clear.setIcon(
+                QIconifyIcon("mdi:close-box-multiple-outline", color=red)
+            )
+
+        for btn in self.findChildren(MDAButton):
+            configured = not btn.clear_btn.isHidden()
+            seq_icon = (
+                QIconifyIcon("mdi:axis-arrow", color=green)
+                if configured
+                else QIconifyIcon("mdi:axis")
+            )
+            set_source_icon(btn.seq_btn, seq_icon)
+            ensure_visible_icon(btn.seq_btn)
+            set_source_icon(
+                btn.clear_btn,
+                QIconifyIcon("mdi:close-circle", color=red),
+            )
+
+    def changeEvent(self, a0: QEvent | None) -> None:
+        """Recreate semantic icons when switching between light and dark themes."""
+        super().changeEvent(a0)
+        if (
+            a0 is not None
+            and a0.type() == QEvent.Type.StyleChange
+            and hasattr(self, "control_btns")
+        ):
+            self._apply_themed_icons()
 
     def prepare_mda(self) -> bool | str | Path | None:
         """Return a disk path or a scratch sink that supports live viewing."""

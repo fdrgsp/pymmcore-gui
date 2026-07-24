@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 from pymmcore_gui._array_viewer import MMArrayViewer
 from pymmcore_gui._ndv_viewers import _add_follow_lock_button, _extract_scales
 from pymmcore_gui._qt.QtCore import QObject, QTimer, Signal
-from pymmcore_gui._qt.QtWidgets import QTabBar, QTabWidget, QWidget
+from pymmcore_gui._qt.QtWidgets import QTabWidget, QWidget
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
 
 from ._tab_bar import ThemedTabBar
@@ -47,15 +47,13 @@ class _ViewerRecord:
 
 
 class AcquireViewers(QTabWidget):
-    """Preview plus one sink-backed viewer tab for each MDA run."""
+    """Lazy snap preview plus one sink-backed viewer tab for each MDA run."""
 
     _sequenceStarted = Signal(object, object)
     _frameReady = Signal(object, object, object)
     _sequenceFinished = Signal(object)
 
-    def __init__(
-        self, mmcore: CMMCorePlus, parent: QWidget | None = None
-    ) -> None:
+    def __init__(self, mmcore: CMMCorePlus, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._core = mmcore
         self._records: dict[QWidget, _ViewerRecord] = {}
@@ -69,13 +67,7 @@ class AcquireViewers(QTabWidget):
         self.setTabsClosable(True)
         self.tabCloseRequested.connect(self._close_tab)
 
-        self.preview = NDVPreview(mmcore=self._core, parent=self)
-        preview_idx = self.addTab(self.preview, "Preview")
-        # The preview is a permanent workspace; only completed/active MDA tabs close.
-        if tab_bar := self.tabBar():
-            tab_bar.setTabButton(
-                preview_idx, QTabBar.ButtonPosition.RightSide, None
-            )
+        self.preview: NDVPreview | None = None
 
         # pymmcore-plus MDA events may be emitted by the acquisition thread.
         # Re-emitting through QObject signals guarantees that all QWidget and ndv
@@ -93,14 +85,20 @@ class AcquireViewers(QTabWidget):
         events.sequenceFinished.connect(self._sequence_finished_callback)
         self.destroyed.connect(self._disconnect)
 
+    def ensure_preview(self) -> NDVPreview:
+        """Create and select the snap preview if it is not already open."""
+        if self.preview is None:
+            self.preview = NDVPreview(mmcore=self._core, parent=self)
+            self.insertTab(0, self.preview, "Preview")
+        self.setCurrentWidget(self.preview)
+        return self.preview
+
     @property
     def active_viewer(self) -> ndv.ArrayViewer | None:
         """Return the viewer following the current MDA, if any."""
         return self._active_viewer
 
-    def _on_sequence_started(
-        self, sequence: MDASequence, meta: SummaryMetaV1
-    ) -> None:
+    def _on_sequence_started(self, sequence: MDASequence, meta: SummaryMetaV1) -> None:
         """Create a viewer backed by the acquisition's live sink view."""
         self._active_viewer = None
         self._active_widget = None
@@ -167,7 +165,15 @@ class AcquireViewers(QTabWidget):
 
     def _close_tab(self, index: int) -> None:
         widget = self.widget(index)
-        if widget is None or widget is self.preview:
+        if widget is None:
+            return
+
+        preview = self.preview
+        if preview is not None and widget is preview:
+            preview.detach()
+            self.preview = None
+            self.removeTab(index)
+            preview.deleteLater()
             return
 
         record = self._records.pop(widget, None)
@@ -199,4 +205,6 @@ class AcquireViewers(QTabWidget):
         self._records.clear()
         self._active_viewer = None
         self._active_widget = None
-        self.preview.detach()
+        if self.preview is not None:
+            self.preview.detach()
+            self.preview = None

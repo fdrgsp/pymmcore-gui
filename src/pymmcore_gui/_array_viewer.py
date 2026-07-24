@@ -40,14 +40,14 @@ class _KeyFilter(QObject):
         super().__init__()
         self._viewer = viewer
 
-    def eventFilter(self, obj: QObject | None, event: QEvent | None) -> bool:
-        if event is None or obj is None:
+    def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
+        if a1 is None or a0 is None:
             return False
 
-        event_key = getattr(event, "key", lambda: None)
-        if event.type() == QEvent.Type.KeyPress and event_key() == Qt.Key.Key_M:
+        event_key = getattr(a1, "key", lambda: None)
+        if a1.type() == QEvent.Type.KeyPress and event_key() == Qt.Key.Key_M:
             stats_key = getattr(WidgetAction, "STATS_TABLE", None)
-            if stats_key is not None and (main_win := _get_mm_main_window(obj)):
+            if stats_key is not None and (main_win := _get_mm_main_window(a0)):
                 with suppress(KeyError):
                     table = main_win.get_widget(stats_key)
                     if (data := self._viewer._get_roi_data()) is not None:
@@ -128,9 +128,7 @@ class MMArrayViewer(ndv.ArrayViewer):
         axes = "".join(axis.upper() for axis in non_yx) + "YX" if non_yx else ""
 
         if sizes.get("p", 0) > 1:
-            _save_multiposition(
-                arr, sizes, path, pixel_size_um, z_step_um, axes
-            )
+            _save_multiposition(arr, sizes, path, pixel_size_um, z_step_um, axes)
         else:
             if "p" in sizes:
                 p_idx = list(sizes).index("p")
@@ -204,6 +202,12 @@ def _recolor_icon(icon: QIcon, color: QColor) -> QIcon:
 
 
 _ORIGINAL_ICON_PROPERTY = "_pymmcore_gui_original_icon"
+
+
+def set_source_icon(btn: QAbstractButton, icon: QIcon) -> None:
+    """Set a button icon and remember it as the source for theme recoloring."""
+    btn.setProperty(_ORIGINAL_ICON_PROPERTY, icon)
+    btn.setIcon(icon)
 
 
 def ensure_visible_icon(btn: QAbstractButton) -> None:

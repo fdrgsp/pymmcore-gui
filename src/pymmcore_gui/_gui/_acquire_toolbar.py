@@ -19,7 +19,7 @@ from superqt.iconify import QIconifyIcon
 from superqt.utils import create_worker
 
 from pymmcore_gui._array_viewer import ensure_visible_icon
-from pymmcore_gui._qt.QtCore import QEvent, QSize
+from pymmcore_gui._qt.QtCore import QEvent, QSize, Signal
 from pymmcore_gui._qt.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -53,6 +53,8 @@ def _clear(layout: QLayout) -> None:
 class SnapButton(QPushButton):
     """Icon-only snap button, wired directly to ``core.snap()``."""
 
+    snapRequested = Signal()
+
     def __init__(
         self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
     ) -> None:
@@ -84,6 +86,9 @@ class SnapButton(QPushButton):
         self.setEnabled(bool(self._core.getCameraDevice()))
 
     def _snap(self) -> None:
+        # Emitted synchronously so a lazy preview can subscribe to the core's
+        # imageSnapped signal before the worker performs the first snap.
+        self.snapRequested.emit()
         core = self._core
         if core.isSequenceRunning():
             core.stopSequenceAcquisition()
@@ -93,9 +98,7 @@ class SnapButton(QPushButton):
             # signals -- emit them explicitly so listeners stay in sync.
             autoshutter = core.getAutoShutter()
             if autoshutter:
-                core.events.propertyChanged.emit(
-                    core.getShutterDevice(), "State", True
-                )
+                core.events.propertyChanged.emit(core.getShutterDevice(), "State", True)
             core.snap()
             if autoshutter:
                 core.events.propertyChanged.emit(
@@ -113,6 +116,8 @@ class SnapButton(QPushButton):
 
 class LiveButton(QPushButton):
     """Icon-only live-toggle button, wired directly to core sequence control."""
+
+    liveStartedRequested = Signal()
 
     def __init__(
         self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
@@ -140,6 +145,9 @@ class LiveButton(QPushButton):
         if self._core.isSequenceRunning():
             self._core.stopSequenceAcquisition()
         else:
+            # Give a lazy preview time to attach to the streaming signals
+            # before the core starts emitting frames.
+            self.liveStartedRequested.emit()
             self._core.startContinuousSequenceAcquisition()
 
     def _on_started(self, *_: object) -> None:
