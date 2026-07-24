@@ -6,7 +6,7 @@ from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from pymmcore_plus import CMMCorePlus
-from pymmcore_widgets import LiveButton, PropertyBrowser, SnapButton
+from pymmcore_widgets import PropertyBrowser
 
 from pymmcore_gui._qt.QtCore import Qt, QTimer
 from pymmcore_gui._qt.QtWidgets import (
@@ -21,8 +21,9 @@ from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
 from ._acquire_presets import AcquisitionPresetSelector
 from ._acquire_toolbar import (
     ChannelPresetsBar,
+    LiveButton,
     ShuttersBar,
-    icon_only,
+    SnapButton,
     toolbar_separator,
 )
 from ._acquire_viewers import AcquireViewers
@@ -81,8 +82,8 @@ class AcquirePage(TabPage):
         # toolbar: snap | live ‖ optical configs ‖ shutters … [ MDA | Properties ]
         self._channels = ChannelPresetsBar(self._core)
         self._shutters = ShuttersBar(self._core)
-        self.toolbar.add_widget(icon_only(SnapButton(mmcore=self._core), "Snap"))
-        self.toolbar.add_widget(icon_only(LiveButton(mmcore=self._core), "Live"))
+        self.toolbar.add_widget(SnapButton(mmcore=self._core))
+        self.toolbar.add_widget(LiveButton(mmcore=self._core))
         self.toolbar.add_widget(toolbar_separator())
         self.toolbar.add_widget(self._channels)
         self.toolbar.add_widget(toolbar_separator())

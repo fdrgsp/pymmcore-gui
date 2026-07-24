@@ -1,19 +1,26 @@
-"""Acquire-tab toolbar pieces: optical-config presets and shutters.
+"""Acquire-tab toolbar pieces: snap/live, optical-config presets, shutters.
 
-Snap and Live come straight from ``pymmcore_widgets`` (``SnapButton`` /
-``LiveButton``); these two widgets cover the parts that need a themed,
-QPushButton-based look consistent with the rest of the GUI.
+Snap and Live are built in-house rather than wrapping ``pymmcore_widgets``'
+``SnapButton``/``LiveButton`` directly: those hardcode their own text,
+30px icon size, and text-swapping behaviour in ways that fought this app's
+"icon-only, persistently-boxed" toolbar style. The core-facing logic they
+wrap (snap-with-shutter, live start/stop) is a handful of lines, so owning it
+directly gives full control over appearance without post-hoc patching.
 """
 
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from pymmcore_plus import CMMCorePlus, DeviceType
 from pymmcore_widgets import ShuttersWidget
+from superqt.iconify import QIconifyIcon
+from superqt.utils import create_worker
 
+from pymmcore_gui._array_viewer import ensure_visible_icon
+from pymmcore_gui._qt.QtCore import QSize
 from pymmcore_gui._qt.QtWidgets import (
-    QAbstractButton,
     QButtonGroup,
     QFrame,
     QHBoxLayout,
@@ -26,6 +33,8 @@ from ._theme import theme
 if TYPE_CHECKING:
     from pymmcore_gui._qt.QtWidgets import QLayout
 
+_ICON_SIZE = QSize(20, 20)
+
 
 def toolbar_separator() -> QFrame:
     """A thin vertical divider for grouping toolbar sections."""
@@ -35,29 +44,115 @@ def toolbar_separator() -> QFrame:
     return line
 
 
-def icon_only(btn: QAbstractButton, tooltip: str) -> QAbstractButton:
-    """Strip a button's text label down to just its icon.
-
-    SnapButton/LiveButton set their own text (LiveButton even re-sets it
-    internally via ``_button_text_on``/``_button_text_off`` on every state
-    change, e.g. "Live" <-> "Stop") — patching those attributes too keeps the
-    label empty across state changes, not just at construction time. The
-    "subtle" variant gives the button a persistently visible box (rather than
-    only on hover), since an icon with no label is otherwise easy to miss.
-    """
-    btn.setText("")
-    for attr in ("_button_text_on", "_button_text_off"):
-        if hasattr(btn, attr):
-            setattr(btn, attr, "")
-    btn.setToolTip(tooltip)
-    btn.setProperty("variant", "subtle")
-    return btn
-
-
 def _clear(layout: QLayout) -> None:
     while layout.count():
         if (item := layout.takeAt(0)) and (w := item.widget()):
             w.deleteLater()
+
+
+class SnapButton(QPushButton):
+    """Icon-only snap button, wired directly to ``core.snap()``."""
+
+    def __init__(
+        self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
+    ) -> None:
+        super().__init__(parent)
+        self._core = mmcore or CMMCorePlus.instance()
+
+        self.setIcon(QIconifyIcon("mdi:camera-outline", color="green"))
+        self.setIconSize(_ICON_SIZE)
+        self.setToolTip("Snap")
+        self.setProperty("variant", "subtle")
+        self.clicked.connect(self._snap)
+
+        self._core.events.systemConfigurationLoaded.connect(self._on_config_loaded)
+        self.destroyed.connect(self._disconnect)
+        self._on_config_loaded()
+
+    def _on_config_loaded(self, *_: object) -> None:
+        self.setEnabled(bool(self._core.getCameraDevice()))
+
+    def _snap(self) -> None:
+        core = self._core
+        if core.isSequenceRunning():
+            core.stopSequenceAcquisition()
+
+        def snap_with_shutter() -> None:
+            # Not all shutter devices reliably send their own open/close
+            # signals -- emit them explicitly so listeners stay in sync.
+            autoshutter = core.getAutoShutter()
+            if autoshutter:
+                core.events.propertyChanged.emit(
+                    core.getShutterDevice(), "State", True
+                )
+            core.snap()
+            if autoshutter:
+                core.events.propertyChanged.emit(
+                    core.getShutterDevice(), "State", False
+                )
+
+        create_worker(snap_with_shutter, _start_thread=True)
+
+    def _disconnect(self) -> None:
+        with suppress(RuntimeError, TypeError):
+            self._core.events.systemConfigurationLoaded.disconnect(
+                self._on_config_loaded
+            )
+
+
+class LiveButton(QPushButton):
+    """Icon-only live-toggle button, wired directly to core sequence control."""
+
+    def __init__(
+        self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
+    ) -> None:
+        super().__init__(parent)
+        self._core = mmcore or CMMCorePlus.instance()
+
+        self.setCheckable(True)
+        self.setIconSize(_ICON_SIZE)
+        self.setProperty("variant", "subtle")
+        self._set_running(False)
+        self.clicked.connect(self._toggle)
+
+        ev = self._core.events
+        ev.systemConfigurationLoaded.connect(self._on_config_loaded)
+        ev.continuousSequenceAcquisitionStarted.connect(self._on_started)
+        ev.sequenceAcquisitionStopped.connect(self._on_stopped)
+        self.destroyed.connect(self._disconnect)
+        self._on_config_loaded()
+
+    def _on_config_loaded(self, *_: object) -> None:
+        self.setEnabled(bool(self._core.getCameraDevice()))
+
+    def _toggle(self) -> None:
+        if self._core.isSequenceRunning():
+            self._core.stopSequenceAcquisition()
+        else:
+            self._core.startContinuousSequenceAcquisition()
+
+    def _on_started(self, *_: object) -> None:
+        self._set_running(True)
+
+    def _on_stopped(self, *_: object) -> None:
+        self._set_running(False)
+
+    def _set_running(self, running: bool) -> None:
+        with suppress(RuntimeError):
+            self.setChecked(running)
+        if running:
+            self.setIcon(QIconifyIcon("mdi:video-off-outline", color="magenta"))
+            self.setToolTip("Stop")
+        else:
+            self.setIcon(QIconifyIcon("mdi:video-outline", color="green"))
+            self.setToolTip("Live")
+
+    def _disconnect(self) -> None:
+        with suppress(RuntimeError, TypeError):
+            ev = self._core.events
+            ev.systemConfigurationLoaded.disconnect(self._on_config_loaded)
+            ev.continuousSequenceAcquisitionStarted.disconnect(self._on_started)
+            ev.sequenceAcquisitionStopped.disconnect(self._on_stopped)
 
 
 class ChannelPresetsBar(QWidget):
@@ -162,4 +257,5 @@ class ShuttersBar(QWidget):
             )
             # a persistently visible box, not just on hover — matches Snap/Live
             widget.shutter_button.setProperty("variant", "subtle")
+            ensure_visible_icon(widget.shutter_button)
             self._layout.addWidget(widget)

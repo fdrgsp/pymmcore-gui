@@ -14,9 +14,18 @@ import numpy as np
 import tifffile
 from superqt import QIconifyIcon
 
-from pymmcore_gui._qt.QtCore import QEvent, QObject, Qt
+from pymmcore_gui._qt.QtCore import QEvent, QObject, QSize, Qt
+from pymmcore_gui._qt.QtGui import QColor, QIcon, QPainter, QPalette
 from pymmcore_gui._qt.QtWidgets import QAbstractButton, QFileDialog, QPushButton
 from pymmcore_gui.actions.widget_actions import WidgetAction, _get_mm_main_window
+
+# icons this dark (or darker) are effectively invisible against a dark
+# theme's background and get recolored; see `ensure_visible_icon`.
+_MIN_ICON_BG_CONTRAST = 60
+# icons with channels further apart than this have real hue (e.g. green,
+# magenta) and are left alone regardless of luminance -- only a near-gray
+# icon (small spread) is treated as the "hardcoded black" bug.
+_MAX_ICON_GRAYSCALE_SPREAD = 30
 
 
 class _KeyFilter(QObject):
@@ -152,6 +161,72 @@ class MMArrayViewer(ndv.ArrayViewer):
         return arr if arr.size > 0 else None
 
 
+def _luminance(color: QColor) -> float:
+    return 0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue()
+
+
+def _icon_avg_rgb(icon: QIcon, size: QSize) -> tuple[float, float, float] | None:
+    """Average (r, g, b) of an icon's opaque pixels, or None if fully transparent."""
+    image = icon.pixmap(size).toImage()
+    r_total = g_total = b_total = 0.0
+    count = 0
+    for y in range(image.height()):
+        for x in range(image.width()):
+            pixel = image.pixelColor(x, y)
+            if pixel.alpha() > 32:
+                r_total += pixel.red()
+                g_total += pixel.green()
+                b_total += pixel.blue()
+                count += 1
+    if not count:
+        return None
+    return (r_total / count, g_total / count, b_total / count)
+
+
+def _recolor_icon(icon: QIcon, color: QColor) -> QIcon:
+    """Return a copy of `icon` with every opaque pixel recolored to `color`."""
+    new_icon = QIcon()
+    for size in icon.availableSizes() or [QSize(24, 24)]:
+        pixmap = icon.pixmap(size)
+        painter = QPainter(pixmap)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(pixmap.rect(), color)
+        painter.end()
+        new_icon.addPixmap(pixmap)
+    return new_icon
+
+
+def ensure_visible_icon(btn: QAbstractButton) -> None:
+    """Recolor a button's icon if it's a too-dark gray to see against its background.
+
+    Several third-party buttons (ndv in particular) hardcode a dark gray icon
+    color with no theme awareness, meant for a light background — against
+    this app's dark theme they're nearly invisible. This only touches icons
+    that are themselves close to grayscale (no real hue) *and* close in
+    luminance to the button's background; a meaningfully-colored icon (e.g. a
+    green/magenta/red state indicator) is left alone even if it happens to be
+    on the darker side, since its hue still reads fine against a dark bg.
+    """
+    icon = btn.icon()
+    if icon.isNull():
+        return
+    size = btn.iconSize()
+    if not size.isValid() or size.isEmpty():
+        sizes = icon.availableSizes()
+        size = sizes[0] if sizes else QSize(24, 24)
+    rgb = _icon_avg_rgb(icon, size)
+    if rgb is None:
+        return
+    r, g, b = rgb
+    if max(r, g, b) - min(r, g, b) > _MAX_ICON_GRAYSCALE_SPREAD:
+        return  # has real hue -- not the "invisible black icon" case
+    lum = 0.299 * r + 0.587 * g + 0.114 * b
+    pal = btn.palette()
+    bg_lum = _luminance(pal.color(QPalette.ColorRole.Window))
+    if abs(lum - bg_lum) < _MIN_ICON_BG_CONTRAST:
+        btn.setIcon(_recolor_icon(icon, pal.color(QPalette.ColorRole.WindowText)))
+
+
 def _unstyle_buttons(widget: Any) -> None:
     """Normalize ndv's buttons to the app's themed button look.
 
@@ -164,7 +239,9 @@ def _unstyle_buttons(widget: Any) -> None:
     Most of these are small icon-only buttons with no text label, which are
     easy to miss under the default "ghost" variant (no visible box until
     hovered) — the "subtle" variant gives them a persistently visible box
-    instead, matching Snap/Live/Shutters in the Acquire toolbar.
+    instead, matching Snap/Live/Shutters in the Acquire toolbar. Icons that
+    are too dark to see against that box are recolored (see
+    `ensure_visible_icon`).
 
     Only buttons are touched — other ndv widgets (e.g. the contrast-limits
     slider) rely on their own stylesheet for correct display and are left
@@ -175,6 +252,7 @@ def _unstyle_buttons(widget: Any) -> None:
             btn.setStyleSheet("")
         if not btn.property("variant"):
             btn.setProperty("variant", "subtle")
+        ensure_visible_icon(btn)
 
 
 def _add_save_button(viewer: MMArrayViewer) -> QPushButton:
