@@ -87,7 +87,6 @@ class HardwareSetupPage(TabPage):
         self.toolbar.add_stretch()
 
         self._available.deviceSelected.connect(self._on_available_selected)
-        self._available.addRequested.connect(self._on_add_shortcut)
         self._installed.deviceSelected.connect(self._on_installed_selected)
         self._installed.removeRequested.connect(self._on_remove_requested)
         self._setup.addRequested.connect(self._begin_add)
@@ -299,11 +298,16 @@ class HardwareSetupPage(TabPage):
         if dev is None:
             self._setup.show_empty()
         else:
+            # Only one of the two lists represents what the setup pane is
+            # showing at any given time -- clear the other so its own
+            # (stale) selection highlight doesn't imply otherwise.
+            self._installed.clear_selection()
             self._setup.show_available(dev, self._suggest_label(dev))
 
     def _on_installed_selected(self, dev: Device | None) -> None:
         if self._pending is not None or dev is None:
             return
+        self._available.clear_selection()
         self._setup.show_installed(dev, self._port_device_for(dev))
 
     def _port_device_for(self, dev: Device) -> Device | None:
@@ -313,11 +317,6 @@ class HardwareSetupPage(TabPage):
         return next((d for d in self._model.devices if d.name == port), None)
 
     # ── adding ────────────────────────────────────────────────────
-
-    def _on_add_shortcut(self, dev: AvailableDevice) -> None:
-        """Add button / double-click in the available list."""
-        self._selected_available = dev
-        self._begin_add(self._suggest_label(dev))
 
     def _begin_add(self, label: str) -> None:
         """Load the selected device so its pre-init properties can be set."""

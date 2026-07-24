@@ -78,7 +78,6 @@ class AvailableDevicesPane(QWidget):
     """Left pane: every device offered by the installed device adapters."""
 
     deviceSelected = pyqtSignal(object)  # AvailableDevice | None
-    addRequested = pyqtSignal(object)  # AvailableDevice
 
     HEADERS = ("Module", "Adapter", "Type")
 
@@ -106,28 +105,20 @@ class AvailableDevicesPane(QWidget):
 
         self._table = _DeviceTable(self.HEADERS)
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
-        self._table.cellDoubleClicked.connect(lambda *_: self._emit_add())
-
-        self._add_btn = QPushButton("Add")
-        self._add_btn.setProperty("variant", "primary")
-        self._add_btn.setEnabled(False)
-        self._add_btn.clicked.connect(self._emit_add)
 
         t = theme()
-        bottom = QHBoxLayout()
-        bottom.setSpacing(t.sp_xs)
-        bottom.addWidget(self._hub_children)
-        bottom.addStretch()
-        bottom.addWidget(self._add_btn)
+        type_row = QHBoxLayout()
+        type_row.setSpacing(t.sp_xs)
+        type_row.addWidget(self._type, 1)
+        type_row.addWidget(self._hub_children)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(t.sp_xs)
         layout.addWidget(pane_title("Available Devices"))
         layout.addWidget(self._filter)
-        layout.addWidget(self._type)
+        layout.addLayout(type_row)
         layout.addWidget(self._table, 1)
-        layout.addLayout(bottom)
 
     # ── data ──────────────────────────────────────────────────────
 
@@ -219,14 +210,12 @@ class AvailableDevicesPane(QWidget):
 
     # ── selection ─────────────────────────────────────────────────
 
-    def _on_selection_changed(self) -> None:
-        dev = self._table.selected_object()
-        self._add_btn.setEnabled(dev is not None)
-        self.deviceSelected.emit(dev)
+    def clear_selection(self) -> None:
+        """Deselect whatever row is currently selected, if any."""
+        self._table.clearSelection()
 
-    def _emit_add(self) -> None:
-        if (dev := self._table.selected_object()) is not None:
-            self.addRequested.emit(dev)
+    def _on_selection_changed(self) -> None:
+        self.deviceSelected.emit(self._table.selected_object())
 
 
 class InstalledDevicesPane(QWidget):
@@ -281,6 +270,10 @@ class InstalledDevicesPane(QWidget):
             if (item := self._table.item(row, 0)) and item.text() == name:
                 self._table.selectRow(row)
                 return
+
+    def clear_selection(self) -> None:
+        """Deselect whatever row is currently selected, if any."""
+        self._table.clearSelection()
 
     def _on_selection_changed(self) -> None:
         dev = self._table.selected_object()
