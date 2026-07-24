@@ -38,8 +38,11 @@ class AcquirePage(TabPage):
         super().__init__(parent)
         self._core = mmcore or CMMCorePlus.instance()
 
+        # Nothing lives in the left sidebar any more (Group/Preset moved to
+        # the right, alongside MDA/Properties, below) -- keep it hidden.
+        self.left.hide()
+
         self._presets = AcquisitionPresetSelector(mmcore=self._core)
-        self.left.add_widget(self._presets, 1)
 
         self._right_tabs = QTabWidget()
         self._right_tabs.setTabBar(ThemedTabBar(self._right_tabs))
@@ -47,8 +50,11 @@ class AcquirePage(TabPage):
         self._right_tabs.setTabsClosable(True)
         self._right_tabs.tabCloseRequested.connect(self._close_right_tab)
 
+        self._right_tabs.addTab(self._presets, "Presets")
+
         self._mda = MemoryMDAWidget(mmcore=self._core)
         self._right_tabs.addTab(self._mda, "MDA")
+        self._right_tabs.setCurrentWidget(self._mda)
 
         self._property_browser: PropertyBrowser | None = None
         self.right.add_widget(self._right_tabs, 1)
@@ -56,9 +62,9 @@ class AcquirePage(TabPage):
         self._viewers = AcquireViewers(self._core)
         self.add_content_widget(self._viewers)
         self.bottom.hide()
-        self._h_split.setSizes([420, 800, 520])
+        self._h_split.setSizes([0, 900, 520])
 
-        # toolbar: snap | live ‖ optical configs ‖ shutters … [ MDA | Properties ]
+        # toolbar: snap|live ‖ optical configs ‖ shutters … [Presets|MDA|Properties]
         self._channels = ChannelPresetsBar(self._core)
         self._shutters = ShuttersBar(self._core)
         self.toolbar.add_widget(SnapButton(mmcore=self._core))
@@ -68,6 +74,13 @@ class AcquirePage(TabPage):
         self.toolbar.add_widget(toolbar_separator())
         self.toolbar.add_widget(self._shutters)
         self.toolbar.add_stretch()
+
+        self._presets_btn = QPushButton("Presets")
+        self._presets_btn.setCheckable(True)
+        self._presets_btn.setChecked(True)
+        self._presets_btn.setToolTip("Show the group/preset selection tab")
+        self._presets_btn.toggled.connect(self._toggle_presets)
+        self.toolbar.add_widget(self._presets_btn)
 
         self._mda_btn = QPushButton("MDA")
         self._mda_btn.setCheckable(True)
@@ -81,6 +94,16 @@ class AcquirePage(TabPage):
         self._props_btn.setToolTip("Open the device property browser tab")
         self._props_btn.toggled.connect(self._toggle_properties)
         self.toolbar.add_widget(self._props_btn)
+
+    def _toggle_presets(self, checked: bool) -> None:
+        idx = self._right_tabs.indexOf(self._presets)
+        if checked:
+            if idx < 0:
+                idx = self._right_tabs.insertTab(0, self._presets, "Presets")
+            self._right_tabs.setCurrentIndex(idx)
+        elif idx >= 0:
+            self._right_tabs.removeTab(idx)
+        self._update_right_sidebar()
 
     def _toggle_mda(self, checked: bool) -> None:
         idx = self._right_tabs.indexOf(self._mda)
@@ -111,7 +134,9 @@ class AcquirePage(TabPage):
 
     def _close_right_tab(self, index: int) -> None:
         widget = self._right_tabs.widget(index)
-        if widget is self._mda:
+        if widget is self._presets:
+            self._presets_btn.setChecked(False)
+        elif widget is self._mda:
             self._mda_btn.setChecked(False)
         elif widget is self._property_browser:
             self._props_btn.setChecked(False)
@@ -120,7 +145,7 @@ class AcquirePage(TabPage):
         visible = self._right_tabs.count() > 0
         self.right.setVisible(visible)
         if visible:
-            self._h_split.setSizes([360, 800, 520])
+            self._h_split.setSizes([0, 900, 520])
 
     def showEvent(self, event: QShowEvent | None) -> None:
         # Devices added on the Hardware tab load into the core but don't fire

@@ -149,13 +149,19 @@ def test_acquire_page_sidebar_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert page._viewers.count() == 1
     assert isinstance(page._viewers.tabBar(), ThemedTabBar)
     assert page._viewers.tabText(0) == "Preview"
-    assert not page.left.isHidden()
+    # Group/Preset selection lives in the right sidebar now (as a tab,
+    # alongside MDA/Properties); the left sidebar has nothing left in it.
+    assert page.left.isHidden()
     assert not page.right.isHidden()
     assert page._mda.prepare_mda() == "memory"
-    assert page._right_tabs.count() == 1
+    assert page._right_tabs.count() == 2
     assert isinstance(page._right_tabs.tabBar(), ThemedTabBar)
-    assert page._right_tabs.widget(0) is page._mda
-    assert page._right_tabs.tabText(0) == "MDA"
+    assert page._right_tabs.widget(0) is page._presets
+    assert page._right_tabs.tabText(0) == "Presets"
+    assert page._right_tabs.widget(1) is page._mda
+    assert page._right_tabs.tabText(1) == "MDA"
+    assert page._right_tabs.currentWidget() is page._mda
+    assert page._presets_btn.isChecked()
     assert page._mda_btn.isChecked()
     assert not page._props_btn.isChecked()
 
@@ -171,36 +177,43 @@ def test_acquire_page_sidebar_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert not page._presets.table_wdg.isHidden()
 
     page._props_btn.click()
-    assert page._right_tabs.count() == 2
+    assert page._right_tabs.count() == 3
     assert page._props_btn.isChecked()
     assert page._right_tabs.currentWidget() is page._property_browser
-    assert page._right_tabs.tabText(1) == "Properties"
+    assert page._right_tabs.tabText(2) == "Properties"
     assert page._property_browser is not None
     assert not page._property_browser.isWindow()
 
     # Toggling a button removes and restores its corresponding tab.
     page._props_btn.click()
-    assert page._right_tabs.count() == 1
+    assert page._right_tabs.count() == 2
     assert not page._props_btn.isChecked()
 
     page._props_btn.click()
     page._mda_btn.click()
-    assert page._right_tabs.count() == 1
+    assert page._right_tabs.count() == 2
     assert page._right_tabs.currentWidget() is page._property_browser
     assert not page._mda_btn.isChecked()
 
+    # Re-enabling inserts back at the front of the tab bar.
     page._mda_btn.click()
-    assert page._right_tabs.count() == 2
+    assert page._right_tabs.count() == 3
     assert page._right_tabs.tabText(0) == "MDA"
-    assert page._right_tabs.tabText(1) == "Properties"
+    assert page._right_tabs.tabText(1) == "Presets"
+    assert page._right_tabs.tabText(2) == "Properties"
 
     page._close_right_tab(0)
-    assert page._right_tabs.count() == 1
+    assert page._right_tabs.count() == 2
     assert not page._mda_btn.isChecked()
     assert page._props_btn.isChecked()
 
     page._close_right_tab(0)
+    assert page._right_tabs.count() == 1
+    assert not page._presets_btn.isChecked()
+
+    page._close_right_tab(0)
     assert page._right_tabs.count() == 0
+    assert not page._props_btn.isChecked()
     assert not page._props_btn.isChecked()
     assert page.right.isHidden()
 
