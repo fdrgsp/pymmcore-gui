@@ -6,9 +6,8 @@ from typing import TYPE_CHECKING, Any
 
 from pymmcore_plus import DeviceType
 
-from pymmcore_gui._gui._theme import theme, ui_font
+from pymmcore_gui._gui._theme import theme
 from pymmcore_gui._qt.QtCore import Qt, pyqtSignal
-from pymmcore_gui._qt.QtGui import QFont
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -31,10 +30,8 @@ if TYPE_CHECKING:
 
 
 def pane_title(text: str) -> QLabel:
-    """Bold section heading used at the top of each pane."""
-    lbl = QLabel(text)
-    lbl.setFont(ui_font(11, QFont.Weight.DemiBold))
-    return lbl
+    """Return the section heading used at the top of each pane."""
+    return QLabel(text)
 
 
 class _DeviceTable(QTableWidget):

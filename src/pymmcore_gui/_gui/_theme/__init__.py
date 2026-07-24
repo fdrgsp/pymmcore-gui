@@ -14,7 +14,7 @@ from pymmcore_gui._qt.QtWidgets import (
 )
 
 from ._dark import DARK_THEME
-from ._fonts import mono_font, ui_font
+from ._fonts import UI_FONT_SIZE_PT, UI_FONT_WEIGHT, mono_font, ui_font
 from ._light import LIGHT_THEME
 from ._qt import color_to_qcolor, to_qpalette
 from ._scaled_view import ScaledThemeView
@@ -36,6 +36,8 @@ if TYPE_CHECKING:
 __all__ = [
     "DARK_THEME",
     "LIGHT_THEME",
+    "UI_FONT_SIZE_PT",
+    "UI_FONT_WEIGHT",
     "ZOOM_STEPS",
     "Brush",
     "Color",
@@ -68,8 +70,6 @@ __all__ = [
 _current_theme: Theme = DARK_THEME
 _current_style: MicroscopeStyle | None = None
 _view: ScaledThemeView | None = None
-_base_font_pt: float = 0.0
-
 ZOOM_STEPS = (0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0)
 _DEFAULT_ZOOM = 1.25
 _zoom_index: int = ZOOM_STEPS.index(_DEFAULT_ZOOM)
@@ -143,12 +143,9 @@ def set_theme(t: Theme) -> None:
 
 
 def set_style(style: MicroscopeStyle) -> None:
-    """Register the app style and capture the base font size."""
-    global _current_style, _view, _base_font_pt
+    """Register the app style and apply the default zoom."""
+    global _current_style, _view
     _current_style = style
-    app = QApplication.instance()
-    if isinstance(app, QApplication):
-        _base_font_pt = app.font().pointSizeF()
     _view = ScaledThemeView(_current_theme, style)
     set_zoom(_DEFAULT_ZOOM)
 
@@ -172,7 +169,8 @@ def set_zoom(factor: float) -> None:
 
     # Pillar 2: scale app font
     font = QFont(app.font())
-    font.setPointSizeF(_base_font_pt * factor)
+    font.setPointSizeF(UI_FONT_SIZE_PT * factor)
+    font.setWeight(UI_FONT_WEIGHT)
     app.setFont(font)
 
     # Pillar 3: icon sizes on caching widgets

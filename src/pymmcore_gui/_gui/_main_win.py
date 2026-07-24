@@ -10,7 +10,6 @@ from pymmcore_gui._qt.QtCore import QEvent, QRectF, QSize, Qt, QTimer, pyqtSigna
 from pymmcore_gui._qt.QtGui import (
     QCloseEvent,
     QEnterEvent,
-    QFont,
     QFontMetricsF,
     QKeySequence,
     QMouseEvent,
@@ -67,7 +66,7 @@ class ModeTab(QWidget):
 
     def sizeHint(self) -> QSize:
         t = theme()
-        fm = QFontMetricsF(ui_font(11, QFont.Weight.Medium))
+        fm = QFontMetricsF(ui_font())
         w = int(fm.horizontalAdvance(self._label)) + t.sp_lg * 2
         return QSize(w, t.scaled(self._BASE_HEIGHT))
 
@@ -98,7 +97,7 @@ class ModeTab(QWidget):
         else:
             text_color = qcolor(t.text_secondary)
 
-        p.setFont(ui_font(11, QFont.Weight.Medium))
+        p.setFont(ui_font())
         p.setPen(text_color)
         p.drawText(
             QRectF(0, 0, w, h - underline_h),

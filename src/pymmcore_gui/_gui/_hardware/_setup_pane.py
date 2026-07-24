@@ -13,7 +13,6 @@ from pymmcore_plus import DeviceType, Keyword, PropertyType
 
 from pymmcore_gui._gui._theme import theme
 from pymmcore_gui._qt.QtCore import Qt, pyqtSignal
-from pymmcore_gui._qt.QtGui import QFont
 from pymmcore_gui._qt.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -31,7 +30,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 
-from ._panes import pane_title, ui_font
+from ._panes import pane_title
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -259,10 +258,8 @@ class DeviceSetupPane(QWidget):
         _clear_layout(self._body_layout)
 
     def _add_section(self, title: str) -> None:
-        """Bold sub-heading separating groups of settings."""
-        lbl = QLabel(title)
-        lbl.setFont(ui_font(10, QFont.Weight.DemiBold))
-        self._body_layout.addWidget(lbl)
+        """Add a sub-heading separating groups of settings."""
+        self._body_layout.addWidget(QLabel(title))
 
     def _add_info(
         self, module: str, adapter: str, dev_type: str, parent: str = ""

@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 from pymmcore_gui._qt.QtCore import Qt
-from pymmcore_gui._qt.QtGui import QFont, QPainter, QPaintEvent
+from pymmcore_gui._qt.QtGui import QPainter, QPaintEvent
 from pymmcore_gui._qt.QtWidgets import QApplication, QWidget
 
 from ._theme import qcolor, theme, ui_font
@@ -50,7 +50,7 @@ class BusyOverlay(QWidget):
         backdrop = qcolor(t.bg_deepest)
         backdrop.setAlpha(200)
         p.fillRect(self.rect(), backdrop)
-        p.setFont(ui_font(13, QFont.Weight.DemiBold))
+        p.setFont(ui_font())
         p.setPen(qcolor(t.text_primary))
         p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._message)
         p.end()

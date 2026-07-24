@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
@@ -14,7 +15,13 @@ from pymmcore_gui._gui._configurations import ConfigurationsPage
 from pymmcore_gui._gui._hardware import HardwareSetupPage
 from pymmcore_gui._gui._main_win import MainWindow
 from pymmcore_gui._gui._tab_bar import ThemedTabBar
-from pymmcore_gui._gui._theme import set_theme
+from pymmcore_gui._gui._theme import (
+    UI_FONT_SIZE_PT,
+    UI_FONT_WEIGHT,
+    set_theme,
+    theme,
+    ui_font,
+)
 from pymmcore_gui._gui._theme._dark import DARK_THEME
 from pymmcore_gui._qt.QtGui import QPalette
 from pymmcore_gui._qt.QtWidgets import (
@@ -25,6 +32,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QTabWidget,
     QWidget,
 )
+from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
 
 if TYPE_CHECKING:
     import pytest
@@ -93,9 +101,47 @@ def test_explicit_startup_config_selects_acquire(
     assert window._stack.currentWidget() is window._acquire
 
 
-def test_acquire_page_sidebar_layout(
-    mmcore: CMMCorePlus, qtbot: QtBot
+def test_new_gui_uses_one_application_font(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
 ) -> None:
+    set_theme(DARK_THEME)
+    roots = (
+        HardwareSetupPage(mmcore),
+        ConfigurationsPage(mmcore),
+        MemoryMDAWidget(mmcore),
+    )
+    for root in roots:
+        qtbot.addWidget(root)
+
+    app_font = QApplication.font()
+    expected_size = UI_FONT_SIZE_PT * theme().zoom_factor
+    assert math.isclose(app_font.pointSizeF(), expected_size)
+    assert app_font.weight() == UI_FONT_WEIGHT
+
+    painted_font = ui_font()
+    assert painted_font.family() == app_font.family()
+    assert math.isclose(painted_font.pointSizeF(), expected_size)
+    assert painted_font.weight() == UI_FONT_WEIGHT
+
+    mismatches: list[str] = []
+    for root in roots:
+        for widget in (root, *root.findChildren(QWidget)):
+            font = widget.font()
+            if (
+                font.family() != app_font.family()
+                or not math.isclose(font.pointSizeF(), expected_size)
+                or font.weight() != UI_FONT_WEIGHT
+            ):
+                mismatches.append(
+                    f"{type(widget).__name__}: "
+                    f"{font.family()} {font.pointSizeF()}pt weight={font.weight()}"
+                )
+
+    assert not mismatches, "\n".join(mismatches)
+
+
+def test_acquire_page_sidebar_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     set_theme(DARK_THEME)
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
