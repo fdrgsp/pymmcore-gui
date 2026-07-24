@@ -19,7 +19,7 @@ from superqt.iconify import QIconifyIcon
 from superqt.utils import create_worker
 
 from pymmcore_gui._array_viewer import ensure_visible_icon
-from pymmcore_gui._qt.QtCore import QSize
+from pymmcore_gui._qt.QtCore import QEvent, QSize
 from pymmcore_gui._qt.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -28,7 +28,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 
-from ._theme import theme
+from ._theme import qcolor, theme
 
 if TYPE_CHECKING:
     from pymmcore_gui._qt.QtWidgets import QLayout
@@ -59,7 +59,7 @@ class SnapButton(QPushButton):
         super().__init__(parent)
         self._core = mmcore or CMMCorePlus.instance()
 
-        self.setIcon(QIconifyIcon("mdi:camera-outline", color="green"))
+        self._apply_icon()
         self.setIconSize(_ICON_SIZE)
         self.setToolTip("Snap")
         self.setProperty("variant", "subtle")
@@ -68,6 +68,17 @@ class SnapButton(QPushButton):
         self._core.events.systemConfigurationLoaded.connect(self._on_config_loaded)
         self.destroyed.connect(self._disconnect)
         self._on_config_loaded()
+
+    def _apply_icon(self) -> None:
+        color = qcolor(theme().status_green).name()
+        self.setIcon(QIconifyIcon("mdi:camera-outline", color=color))
+
+    def changeEvent(self, e: QEvent | None) -> None:
+        # status_green differs between light/dark themes -- a static icon
+        # set once at construction would go stale after a theme toggle.
+        if e is not None and e.type() == QEvent.Type.StyleChange:
+            self._apply_icon()
+        super().changeEvent(e)
 
     def _on_config_loaded(self, *_: object) -> None:
         self.setEnabled(bool(self._core.getCameraDevice()))
@@ -144,8 +155,18 @@ class LiveButton(QPushButton):
             self.setIcon(QIconifyIcon("mdi:video-off-outline", color="magenta"))
             self.setToolTip("Stop")
         else:
-            self.setIcon(QIconifyIcon("mdi:video-outline", color="green"))
+            color = qcolor(theme().status_green).name()
+            self.setIcon(QIconifyIcon("mdi:video-outline", color=color))
             self.setToolTip("Live")
+
+    def changeEvent(self, e: QEvent | None) -> None:
+        # status_green differs between light/dark themes -- re-derive the
+        # idle icon's color from whichever theme is now active. The running
+        # (magenta) icon isn't theme-derived, so no re-render needed there.
+        is_style_change = e is not None and e.type() == QEvent.Type.StyleChange
+        if is_style_change and not self.isChecked():
+            self._set_running(False)
+        super().changeEvent(e)
 
     def _disconnect(self) -> None:
         with suppress(RuntimeError, TypeError):
@@ -234,6 +255,16 @@ class ShuttersBar(QWidget):
         """Re-scan the core (e.g. after devices change on another tab)."""
         self._refresh()
 
+    def changeEvent(self, a0: QEvent | None) -> None:
+        # ShuttersWidget bakes its open-shutter icon's color in at
+        # construction time (upstream), so a mere StyleChange event can't
+        # refresh it in place -- rebuild from scratch, picking up the now-
+        # active theme's status_green the same way a real device-list change
+        # already does.
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
+            self._refresh()
+        super().changeEvent(a0)
+
     def _refresh(self, *_: object) -> None:
         _clear(self._layout)
         shutters = self._core.getLoadedDevicesOfType(DeviceType.ShutterDevice)
@@ -247,12 +278,14 @@ class ShuttersBar(QWidget):
             ),
             reverse=True,
         )
+        open_color = qcolor(theme().status_green).name()
         for idx, shutter in enumerate(ordered):
             widget = ShuttersWidget(
                 shutter,
                 autoshutter=idx == len(ordered) - 1,
                 button_text_open=shutter,
                 button_text_closed=shutter,
+                icon_color_open=open_color,
                 mmcore=self._core,
             )
             # a persistently visible box, not just on hover — matches Snap/Live

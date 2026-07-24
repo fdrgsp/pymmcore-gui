@@ -211,7 +211,11 @@ def _button_colors(
             return (_with_alpha(accent, 38), _with_alpha(accent, 76), accent)
 
         case "danger":
-            red = QColor(0xEF, 0x53, 0x50)
+            # Late import avoids a circular ref (_theme/__init__.py imports
+            # MicroscopeStyle from this module).
+            from . import qcolor, theme
+
+            red = qcolor(theme().status_red)
             if pressed:
                 return (red, red, QColor(0xFF, 0xFF, 0xFF))
             if hovered:
@@ -447,6 +451,13 @@ class MicroscopeStyle(QProxyStyle):
                 # Suppress Fusion's beveled frame around a QTabWidget's page
                 # area -- flat content, consistent with the rest of the app.
                 painter.fillRect(option.rect, pal.color(QPalette.ColorRole.Window))
+
+            case PE.PE_IndicatorTabClose:
+                # Fusion bakes this into a fixed reddish-orange square that
+                # never changes with the active theme (same color in light
+                # and dark mode) -- draw our own flat glyph in the theme's
+                # actual status-red instead, matching every other red icon.
+                self._draw_tab_close(option, painter, widget)
 
             case _:
                 super().drawPrimitive(element, option, painter, widget)
@@ -1375,6 +1386,39 @@ class MicroscopeStyle(QProxyStyle):
         else:
             p.setPen(self._border_color())
         p.drawLine(r.bottomLeft(), r.bottomRight())
+
+    def _draw_tab_close(
+        self,
+        opt: QStyleOption,
+        p: QPainter,
+        widget: QWidget | None,
+    ) -> None:
+        """Flat 'x' glyph in the theme's status-red for a tab's close button.
+
+        Late import avoids a circular ref (_theme/__init__.py imports
+        MicroscopeStyle from this module).
+        """
+        from . import qcolor, theme
+
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        hovered = bool(opt.state & QStyle.StateFlag.State_MouseOver)
+        pressed = bool(opt.state & QStyle.StateFlag.State_Sunken)
+        red = qcolor(theme().status_red)
+        r = QRectF(opt.rect)
+
+        if pressed or hovered:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(_with_alpha(red, 90 if pressed else 60))
+            p.drawEllipse(r)
+
+        pen = QPen(red, max(1.2, r.width() * 0.09))
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        inset = r.adjusted(
+            r.width() * 0.3, r.height() * 0.3, -r.width() * 0.3, -r.height() * 0.3
+        )
+        p.drawLine(inset.topLeft(), inset.bottomRight())
+        p.drawLine(inset.topRight(), inset.bottomLeft())
 
 
 # ═══════════════════════════════════════════════════════════════
