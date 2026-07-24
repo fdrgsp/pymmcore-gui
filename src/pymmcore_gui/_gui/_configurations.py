@@ -444,5 +444,13 @@ class ConfigurationsPage(TabPage):
             ):
                 with suppress(Exception):
                     fn()
+                    # The rebuild replaces every row's cell widget (fresh
+                    # TableDoubleSpinBox instances) with the upstream default
+                    # stylesheet intact -- the one-time sweep in
+                    # _EmbeddedPixelConfig.__init__ only ever covered the rows
+                    # that existed at construction, so anything rebuilt here
+                    # (every time this page is shown, or on a config reload)
+                    # would otherwise keep a stale, theme-unaware appearance.
+                    unstyle_widgets(self._pixel_config)
         finally:
             self._suppress -= 1
