@@ -91,7 +91,27 @@ class AcquisitionPresetSelector(GroupPresetTableWidget):
         # standalone panel; here it lives in a collapsible sidebar panel that
         # needs to shrink to just its header when collapsed
         self.table_wdg.setMinimumHeight(0)
+        self._fix_row_height()
         unstyle_widgets(self)
+
+    def _fix_row_height(self) -> None:
+        """Undo upstream's hardcoded, non-zoom-aware row height.
+
+        _MainTable (the table_wdg here) sets its vertical header to a fixed
+        24px per row -- a raw pixel constant that doesn't scale with our
+        theme's zoom factor and, at this app's default zoom, is even smaller
+        than the row's own cell widgets (a PresetsWidget/PropertyWidget
+        combo) actually want. Every other table in the app (including this
+        same GroupPresetTableWidget's own preset table on the Configurations
+        tab) just leaves the vertical header at Qt's default, which sizes
+        each row from its content's sizeHint() -- and that content is itself
+        already zoom-aware, since it's built from the (zoom-scaled) app
+        font. Switch to that same "let content decide" policy instead of
+        replacing one hardcoded constant with another.
+        """
+        if (vh := self.table_wdg.verticalHeader()) is not None:
+            vh.setSectionResizeMode(vh.ResizeMode.ResizeToContents)
+        self.table_wdg.resizeRowsToContents()
 
     def refresh(self) -> None:
         """Re-scan the core for config groups/presets.
@@ -103,5 +123,7 @@ class AcquisitionPresetSelector(GroupPresetTableWidget):
         self._populate_table()
         # _populate_table() rebuilds every row's cell widget from scratch
         # (fresh PresetsWidget/PropertyWidget instances) -- re-sweep so new
-        # cells get themed too, not just the ones present at construction.
+        # cells get themed too, not just the ones present at construction,
+        # and recompute row heights for the same reason.
         unstyle_widgets(self)
+        self._fix_row_height()
