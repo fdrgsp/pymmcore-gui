@@ -134,21 +134,34 @@ class AcquirePage(TabPage):
         ):
             QTimer.singleShot(0, self._refresh_property_browser)
 
-        # A startup sequence that jumps straight to this page (e.g.
-        # confirming "load last config" at launch) can show it for the very
-        # first time before the app's QProxyStyle has been fully polished
-        # into its widgets -- the toolbar's shutter buttons and the
-        # Preview/MDA tab bars render with the platform's native look until
-        # something forces Qt to re-evaluate their style (any later tab
-        # add/remove does it, which is why toggling the MDA/Properties
-        # buttons "fixes" it). Force that re-evaluation directly, the same
-        # way set_zoom() already does app-wide on every theme/zoom change,
-        # scoped here to just this page.
+        # A startup sequence that jumps straight to this page (e.g. `mmgui -c
+        # <cfg>`, or confirming "load last config" at launch) can show it for
+        # the very first time before the platform has actually finished
+        # mapping the top-level window -- the toolbar's shutter buttons and
+        # the Preview/MDA tab bars render with the platform's native look
+        # until something forces Qt to fully re-evaluate their style (any
+        # later tab add/remove does it, which is why toggling the
+        # MDA/Properties buttons, or snapping, "fixes" it). A bare
+        # StyleChange event sent synchronously from inside this very
+        # showEvent wasn't enough -- this page hasn't actually finished
+        # becoming visible yet at this exact point (the same class of "not
+        # settled on first show" issue ConfigurationsPage.showEvent already
+        # works around by deferring its own refresh). Defer to the next
+        # event-loop turn, and force a real unpolish/polish cycle -- stronger
+        # than a StyleChange event alone -- on every descendant.
+        QTimer.singleShot(0, self._repolish_after_show)
+
+    def _repolish_after_show(self) -> None:
+        style = self.style()
         for w in (self, *self.findChildren(QWidget)):
             if layout := w.layout():
                 layout.invalidate()
+            if style is not None:
+                style.unpolish(w)
+                style.polish(w)
             QCoreApplication.sendEvent(w, QEvent(QEvent.Type.StyleChange))
             w.updateGeometry()
+            w.update()
         if layout := self.layout():
             layout.activate()
 
