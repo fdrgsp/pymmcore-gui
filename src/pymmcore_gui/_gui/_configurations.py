@@ -15,11 +15,13 @@ from pymmcore_widgets import (
     PixelConfigurationWidget,
 )
 from pymmcore_widgets._util import block_core
+from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import unstyle_widgets
-from pymmcore_gui._qt.QtCore import QTimer, pyqtSignal
+from pymmcore_gui._qt.QtCore import QEvent, QTimer, pyqtSignal
 from pymmcore_gui._qt.QtGui import QPalette
 from pymmcore_gui._qt.QtWidgets import (
+    QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -243,10 +245,15 @@ class ConfigurationsPage(TabPage):
         self._save_file_btn.clicked.connect(self.saveToFileRequested.emit)
         self.toolbar.add_widget(self._save_file_btn)
 
-        self._dirty_label = QLabel()
-        pal = self._dirty_label.palette()
-        pal.setColor(QPalette.ColorRole.WindowText, qcolor(theme().status_amber))
-        self._dirty_label.setPalette(pal)
+        self._dirty_icon = QLabel()
+        self._dirty_text = QLabel()
+        self._dirty_label = QWidget()
+        dirty_layout = QHBoxLayout(self._dirty_label)
+        dirty_layout.setContentsMargins(0, 0, 0, 0)
+        dirty_layout.setSpacing(4)
+        dirty_layout.addWidget(self._dirty_icon)
+        dirty_layout.addWidget(self._dirty_text)
+        self._apply_dirty_style()
         self._dirty_label.hide()
         self.toolbar.add_stretch()
         self.toolbar.add_widget(self._dirty_label)
@@ -352,10 +359,33 @@ class ConfigurationsPage(TabPage):
         if self._pixel_dirty:
             parts.append("Pixel Configuration")
         if parts:
-            self._dirty_label.setText(f"● Unsaved changes: {', '.join(parts)}")
+            self._dirty_text.setText(f"Unsaved changes: {', '.join(parts)}")
             self._dirty_label.show()
         else:
             self._dirty_label.hide()
+
+    def _apply_dirty_style(self) -> None:
+        """(Re)apply the amber warning icon/color from the *current* theme.
+
+        A theme toggle overwrites every widget's QPalette wholesale (see
+        set_theme()'s app.allWidgets() sweep in _gui/_theme/__init__.py),
+        which would silently reset this label back to the default
+        WindowText color. changeEvent() below re-runs this on every
+        StyleChange, which set_zoom() (always called by set_theme()) sends
+        to every widget — the same mechanism _toolbar.py/_sidebar.py rely on.
+        """
+        color = qcolor(theme().status_amber)
+        icon = QIconifyIcon("mdi:alert", color=color.name())
+        size = self._dirty_text.fontMetrics().height()
+        self._dirty_icon.setPixmap(icon.pixmap(size, size))
+        pal = self._dirty_text.palette()
+        pal.setColor(QPalette.ColorRole.WindowText, color)
+        self._dirty_text.setPalette(pal)
+
+    def changeEvent(self, event: QEvent | None) -> None:
+        if event is not None and event.type() == QEvent.Type.StyleChange:
+            self._apply_dirty_style()
+        super().changeEvent(event)
 
     def _on_system_config_loaded(self) -> None:
         """A whole new configuration was loaded — reload everything."""

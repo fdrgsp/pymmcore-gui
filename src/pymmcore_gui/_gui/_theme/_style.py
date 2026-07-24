@@ -23,6 +23,8 @@ Usage:
 
 from __future__ import annotations
 
+from superqt.iconify import QIconifyIcon
+
 from pymmcore_gui._qt.QtCore import QPointF, QRect, QRectF, QSize, Qt
 from pymmcore_gui._qt.QtGui import (
     QBrush,
@@ -31,9 +33,11 @@ from pymmcore_gui._qt.QtGui import (
     QPainterPath,
     QPalette,
     QPen,
+    QPixmap,
 )
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractSpinBox,
+    QApplication,
     QComboBox,
     QFrame,
     QProxyStyle,
@@ -49,6 +53,41 @@ from pymmcore_gui._qt.QtWidgets import (
     QStyleOptionSpinBox,
     QStyleOptionTab,
     QWidget,
+)
+
+# ═══════════════════════════════════════════════════════════════
+# Work around a superqt/PyQt6 crash in QIconifyIcon's network-failure
+# fallback (e.g. offline, DNS hiccup, icon CDN blocked by a lab firewall).
+#
+# QIconifyIcon._draw_text_fallback() (superqt/iconify/__init__.py) calls
+# ``style.standardPixmap(icon)`` with only one argument when fetching an
+# icon's SVG fails. PyQt6 fills in a default for the missing ``opt``
+# argument when calling QStyle.standardPixmap() directly, but that default
+# isn't honored when the call dispatches through a QProxyStyle override
+# (which MicroscopeStyle below is, and which raises the same "TypeError:
+# not enough arguments" on a bare, unmodified QProxyStyle too — this isn't
+# specific to our style, any QProxyStyle-based app hits it). Passing
+# ``opt=None`` explicitly works identically on both QStyle and QProxyStyle,
+# so this is a drop-in fix, not a behavior change -- without it, any
+# transient icon-fetch failure anywhere in the app crashes instead of
+# quietly drawing the intended "?" fallback pixmap.
+# ═══════════════════════════════════════════════════════════════
+
+
+def _iconify_fallback_pixmap(self: QIconifyIcon, key: tuple[str, ...]) -> None:
+    if style := QApplication.style():
+        pixmap = style.standardPixmap(QStyle.StandardPixmap.SP_MessageBoxQuestion, None)
+    else:
+        pixmap = QPixmap(18, 18)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "?")
+        painter.end()
+    self.addPixmap(pixmap)
+
+
+QIconifyIcon._draw_text_fallback = (  # type: ignore[method-assign]
+    _iconify_fallback_pixmap
 )
 
 # ═══════════════════════════════════════════════════════════════

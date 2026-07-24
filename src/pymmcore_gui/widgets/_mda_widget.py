@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from pymmcore_widgets import MDAWidget
 
 from pymmcore_gui._array_viewer import unstyle_widgets
+from pymmcore_gui._qt.QtCore import Qt
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -61,6 +62,21 @@ class MemoryMDAWidget(MDAWidget):
             model = table_widget.table().model()
             if model is not None:
                 model.rowsInserted.connect(lambda *_: unstyle_widgets(self))
+
+        # The Grid tab's "Absolute Bounds" page (CoreXYBoundsControl) packs a
+        # Fixed-size-policy icon-button grid next to the Left/Top/Right/Bottom
+        # QFormLayout fields in a plain QHBoxLayout with no alignment flags.
+        # That's fine at the control's own sizeHint, but it lives inside
+        # GridPlanWidget's QStackedWidget, which stretches every page to fill
+        # the full stack area -- Qt then vertically centers the Fixed-policy
+        # icon grid while the QFormLayout naturally top-anchors, so the two
+        # drift apart whenever the stack is taller than this page needs.
+        bounds = self.grid_plan._core_xy_bounds
+        if (bounds_layout := bounds.layout()) is not None:
+            for i in range(bounds_layout.count()):
+                item = bounds_layout.itemAt(i)
+                if item is not None and (w := item.widget()) is not None:
+                    bounds_layout.setAlignment(w, Qt.AlignmentFlag.AlignTop)
 
     def prepare_mda(self) -> bool | str | Path | None:
         """Return a disk path or a scratch sink that supports live viewing."""
