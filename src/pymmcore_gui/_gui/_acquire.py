@@ -6,7 +6,7 @@ from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from pymmcore_plus import CMMCorePlus
-from pymmcore_widgets import PropertyBrowser
+from pymmcore_widgets import PropertyBrowser, StageExplorer
 
 from pymmcore_gui._array_viewer import unstyle_widgets
 from pymmcore_gui._qt.QtCore import QTimer
@@ -61,8 +61,21 @@ class AcquirePage(TabPage):
         self._property_browser: PropertyBrowser | None = None
         self.right.add_widget(self._right_tabs, 1)
 
+        # Center content is itself split into two tabs: "Viewer" (the live
+        # preview + one viewer per MDA run) and "Explorer" (a stage-explorer
+        # map). The Viewer tab keeps its own inner Preview/MDA tab bar.
+        self._content_tabs = QTabWidget()
+        self._content_tabs.setTabBar(ThemedTabBar(self._content_tabs))
+        self._content_tabs.setDocumentMode(True)
+
         self._viewers = AcquireViewers(self._core)
-        self.add_content_widget(self._viewers)
+        self._content_tabs.addTab(self._viewers, "Viewer")
+
+        self._explorer = StageExplorer(mmcore=self._core)
+        unstyle_widgets(self._explorer)
+        self._content_tabs.addTab(self._explorer, "Explorer")
+
+        self.add_content_widget(self._content_tabs)
         self.bottom.hide()
         self._h_split.setSizes([0, 900, 520])
 
