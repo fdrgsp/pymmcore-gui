@@ -213,6 +213,10 @@ class ChannelPresetsBar(QWidget):
         current = self._core.getCurrentConfig(ch_group)
         for preset in self._core.getAvailableConfigs(ch_group):
             btn = QPushButton(preset)
+            # "subtle" = a persistently visible box (not just on hover, which
+            # is the default "ghost"), matching Snap/Live/Shutters and the
+            # rest of the app's toolbar buttons.
+            btn.setProperty("variant", "subtle")
             btn.setCheckable(True)
             btn.setChecked(preset == current)
             btn.clicked.connect(

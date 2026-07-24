@@ -77,7 +77,11 @@ class AcquirePage(TabPage):
         self.toolbar.add_widget(self._shutters)
         self.toolbar.add_stretch()
 
+        # "subtle" = a persistently visible box (rather than the default
+        # "ghost", which is borderless until hovered), matching Snap/Live/
+        # Shutters and the channel-preset buttons.
         self._presets_btn = QPushButton(_PRESETS_LABEL)
+        self._presets_btn.setProperty("variant", "subtle")
         self._presets_btn.setCheckable(True)
         self._presets_btn.setChecked(True)
         self._presets_btn.setToolTip("Show the group/preset selection tab")
@@ -85,6 +89,7 @@ class AcquirePage(TabPage):
         self.toolbar.add_widget(self._presets_btn)
 
         self._mda_btn = QPushButton("MDA")
+        self._mda_btn.setProperty("variant", "subtle")
         self._mda_btn.setCheckable(True)
         self._mda_btn.setChecked(True)
         self._mda_btn.setToolTip("Show the multi-dimensional acquisition tab")
@@ -92,6 +97,7 @@ class AcquirePage(TabPage):
         self.toolbar.add_widget(self._mda_btn)
 
         self._props_btn = QPushButton("Properties")
+        self._props_btn.setProperty("variant", "subtle")
         self._props_btn.setCheckable(True)
         self._props_btn.setToolTip("Open the device property browser tab")
         self._props_btn.toggled.connect(self._toggle_properties)
