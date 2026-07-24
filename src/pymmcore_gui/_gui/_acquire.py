@@ -9,7 +9,7 @@ from pymmcore_plus import CMMCorePlus
 from pymmcore_widgets import PropertyBrowser
 
 from pymmcore_gui._array_viewer import unstyle_widgets
-from pymmcore_gui._qt.QtCore import QTimer
+from pymmcore_gui._qt.QtCore import QCoreApplication, QEvent, QTimer
 from pymmcore_gui._qt.QtWidgets import QPushButton, QTabWidget, QWidget
 from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
 
@@ -133,6 +133,24 @@ class AcquirePage(TabPage):
             and self._right_tabs.indexOf(self._property_browser) >= 0
         ):
             QTimer.singleShot(0, self._refresh_property_browser)
+
+        # A startup sequence that jumps straight to this page (e.g.
+        # confirming "load last config" at launch) can show it for the very
+        # first time before the app's QProxyStyle has been fully polished
+        # into its widgets -- the toolbar's shutter buttons and the
+        # Preview/MDA tab bars render with the platform's native look until
+        # something forces Qt to re-evaluate their style (any later tab
+        # add/remove does it, which is why toggling the MDA/Properties
+        # buttons "fixes" it). Force that re-evaluation directly, the same
+        # way set_zoom() already does app-wide on every theme/zoom change,
+        # scoped here to just this page.
+        for w in (self, *self.findChildren(QWidget)):
+            if layout := w.layout():
+                layout.invalidate()
+            QCoreApplication.sendEvent(w, QEvent(QEvent.Type.StyleChange))
+            w.updateGeometry()
+        if layout := self.layout():
+            layout.activate()
 
     def _refresh_property_browser(self) -> None:
         # PropertyBrowser exposes no public refresh; rebuild its table directly
