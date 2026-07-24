@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import useq
 from pymmcore_widgets import MDAWidget
+from pymmcore_widgets.mda._core_mda import _MDAControlButtons
+from pymmcore_widgets.useq_widgets._positions import NULL_SEQUENCE, MDAButton
+from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import unstyle_widgets
-from pymmcore_gui._qt.QtCore import Qt
+from pymmcore_gui._gui._theme import qcolor, theme
+from pymmcore_gui._qt.QtCore import QEvent, Qt
 from pymmcore_gui._qt.QtWidgets import QGridLayout
 
 if TYPE_CHECKING:
@@ -17,6 +22,102 @@ if TYPE_CHECKING:
     from pymmcore_widgets.mda._xy_bounds import CoreXYBoundsControl
 
     from pymmcore_gui._qt.QtWidgets import QWidget
+
+
+# ═══════════════════════════════════════════════════════════════
+# Upstream hardcodes its own literal color at nearly every run/pause/
+# cancel/add/remove/clear icon site across MDAWidget and its Channels/
+# Positions/Time sub-tables -- and no two of them actually agree with each
+# other ("green", "lime", "#3A3", "#C33", "red", ...), let alone with this
+# app's theme. Each one is patched at its exact source (the method that
+# decides the icon, not a color-guessing sweep over existing pixmaps) so
+# every "this is a go/success action" icon becomes theme().status_green and
+# every "this is a stop/danger action" icon becomes theme().status_red.
+# ═══════════════════════════════════════════════════════════════
+
+
+def _themed_set_value(self: MDAButton, value: useq.MDASequence | dict | None) -> None:
+    """Replaces MDAButton.setValue -- same logic, theme-derived colors.
+
+    Position rows in the MDA widget's Positions table each get one of these
+    for an optional per-position sub-sequence. Patched here (not swept
+    per-row) so it also stays correct for any *future* edit made through
+    the popup dialog, not just the icon's state at row-creation time.
+    """
+    if isinstance(value, dict):
+        value = useq.MDASequence(**value)
+    elif value and not isinstance(value, useq.MDASequence):
+        raise TypeError(f"Expected useq.MDASequence, got {type(value)}")
+    old_val, self._value = getattr(self, "_value", None), value
+
+    # Unconditional (not just on change) so this also corrects clear_btn's
+    # hardcoded-red icon the first time setValue(None) runs from __init__.
+    red = qcolor(theme().status_red).name()
+    self.clear_btn.setIcon(QIconifyIcon("mdi:close-circle", color=red))
+
+    if old_val != value:
+        if value and value != NULL_SEQUENCE:
+            green = qcolor(theme().status_green).name()
+            self.seq_btn.setIcon(QIconifyIcon("mdi:axis-arrow", color=green))
+            self.clear_btn.show()
+        else:
+            self.seq_btn.setIcon(QIconifyIcon("mdi:axis"))
+            self.clear_btn.hide()
+        self.valueChanged.emit()
+
+
+MDAButton.setValue = _themed_set_value  # type: ignore[method-assign]
+
+
+def _themed_on_mda_paused(self: _MDAControlButtons, paused: bool) -> None:
+    """Replaces _MDAControlButtons._on_mda_paused -- theme-derived colors.
+
+    This is the method upstream uses to swap pause_btn's icon between
+    "paused" (play/resume) and "running" (pause) -- patched here so every
+    pause/resume toggle during a real run re-derives from the *current*
+    theme, not just the icon set once at construction.
+    """
+    color = qcolor(theme().status_green).name()
+    if paused:
+        self.pause_btn.setIcon(QIconifyIcon("mdi:play-circle-outline", color=color))
+        self.pause_btn.setText("Resume")
+    else:
+        self.pause_btn.setIcon(QIconifyIcon("mdi:pause-circle-outline", color=color))
+        self.pause_btn.setText("Pause")
+
+
+_MDAControlButtons._on_mda_paused = (  # type: ignore[method-assign]
+    _themed_on_mda_paused
+)
+
+
+def _apply_mda_theme_colors(widget: MemoryMDAWidget) -> None:
+    """(Re)apply status colors to every icon patched/overridden above.
+
+    Covers what the two whole-method patches above don't reach on their
+    own: the run/cancel buttons (their icon is only ever set once, at
+    construction, with no method controlling it later) and each table's
+    toolbar actions (same: set once, never revisited). Called once at
+    construction and again on every theme change (see changeEvent below).
+    """
+    green = qcolor(theme().status_green).name()
+    red = qcolor(theme().status_red).name()
+
+    control = widget.control_btns
+    control.run_btn.setIcon(QIconifyIcon("mdi:play-circle-outline", color=green))
+    control.cancel_btn.setIcon(QIconifyIcon("mdi:stop-circle-outline", color=red))
+    # pause_btn toggles between two icons/labels at runtime (see
+    # _themed_on_mda_paused) -- reapply whichever one is currently shown.
+    _themed_on_mda_paused(control, control.pause_btn.text() == "Resume")
+
+    for table_widget in (widget.channels, widget.stage_positions, widget.time_plan):
+        table_widget.act_add_row.setIcon(QIconifyIcon("mdi:plus-thick", color=green))
+        table_widget.act_remove_row.setIcon(
+            QIconifyIcon("mdi:close-box-outline", color=red)
+        )
+        table_widget.act_clear.setIcon(
+            QIconifyIcon("mdi:close-box-multiple-outline", color=red)
+        )
 
 
 def _align_bounds_grid(bounds: CoreXYBoundsControl) -> None:
@@ -118,8 +219,19 @@ class MemoryMDAWidget(MDAWidget):
                 model.rowsInserted.connect(lambda *_: unstyle_widgets(self))
 
         _align_bounds_grid(self.grid_plan._core_xy_bounds)
+        _apply_mda_theme_colors(self)
 
     def prepare_mda(self) -> bool | str | Path | None:
         """Return a disk path or a scratch sink that supports live viewing."""
         output = super().prepare_mda()
         return "memory" if output is None else output
+
+    def changeEvent(self, a0: QEvent | None) -> None:
+        # status_green/status_red differ between light/dark themes -- the
+        # icons _apply_mda_theme_colors sets are otherwise only ever
+        # (re)computed at construction or on a real state change (run/pause/
+        # stop), so a mere theme toggle would leave them showing stale
+        # colors from whichever theme was active when this widget was built.
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
+            _apply_mda_theme_colors(self)
+        super().changeEvent(a0)
