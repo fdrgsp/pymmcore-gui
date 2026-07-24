@@ -5,11 +5,30 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from pymmcore_widgets import GroupPresetTableWidget
+from pymmcore_widgets.control._presets_widget import PresetsWidget
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
 
     from pymmcore_gui._qt.QtWidgets import QWidget
+
+
+def _no_presets_to_strip(self: PresetsWidget, preset: str) -> list[tuple[str, str]]:
+    return []
+
+
+# PresetsWidget (constructed internally, one per multi-preset config group, by
+# GroupPresetTableWidget's table -- including our own AcquisitionPresetSelector
+# below) treats any (device, property) pair that isn't present in *every*
+# other preset of the same group as a mistake, and silently deletes it -- both
+# once at construction time and again on every live configDefined event. That
+# is wrong for a legitimate, intentional per-preset override (e.g. a different
+# camera for just one channel), a real, supported Micro-Manager config
+# pattern. Confirmed this silently strips such an override just from loading
+# a config and mounting this widget -- no editing involved. Patched on the
+# class itself (not just our subclass) since the bug lives in PresetsWidget
+# wherever it's constructed, not in anything we do with it.
+PresetsWidget._find_dev_prop_to_remove = _no_presets_to_strip  # type: ignore[method-assign]
 
 
 class AcquisitionPresetSelector(GroupPresetTableWidget):
