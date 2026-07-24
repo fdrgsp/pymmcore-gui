@@ -13,13 +13,16 @@ from pymmcore_gui._gui._acquire import AcquirePage
 from pymmcore_gui._gui._configurations import ConfigurationsPage
 from pymmcore_gui._gui._hardware import HardwareSetupPage
 from pymmcore_gui._gui._main_win import MainWindow
+from pymmcore_gui._gui._tab_bar import ThemedTabBar
 from pymmcore_gui._gui._theme import set_theme
 from pymmcore_gui._gui._theme._dark import DARK_THEME
+from pymmcore_gui._qt.QtGui import QPalette
 from pymmcore_gui._qt.QtWidgets import (
     QApplication,
     QLabel,
     QMessageBox,
     QPushButton,
+    QTabWidget,
     QWidget,
 )
 
@@ -98,11 +101,13 @@ def test_acquire_page_sidebar_layout(
     qtbot.addWidget(page)
 
     assert page._viewers.count() == 1
+    assert isinstance(page._viewers.tabBar(), ThemedTabBar)
     assert page._viewers.tabText(0) == "Preview"
     assert not page.left.isHidden()
     assert not page.right.isHidden()
     assert page._mda.prepare_mda() == "memory"
     assert page._right_tabs.count() == 1
+    assert isinstance(page._right_tabs.tabBar(), ThemedTabBar)
     assert page._right_tabs.widget(0) is page._mda
     assert page._right_tabs.tabText(0) == "MDA"
     assert page._mda_btn.isChecked()
@@ -157,6 +162,43 @@ def test_acquire_page_sidebar_layout(
     assert page._right_tabs.count() == 1
     assert page._right_tabs.currentWidget() is page._mda
     assert not page.right.isHidden()
+
+
+def test_themed_tab_bar_keeps_style_after_reinserting_tab(qtbot: QtBot) -> None:
+    set_theme(DARK_THEME)
+    tabs = QTabWidget()
+    bar = ThemedTabBar(tabs)
+    tabs.setTabBar(bar)
+    tabs.setTabsClosable(True)
+    page = QWidget()
+    tabs.addTab(page, "MDA")
+    tabs.resize(320, 180)
+    tabs.show()
+    qtbot.addWidget(tabs)
+
+    palette = QApplication.palette()
+    expected_colors = (
+        palette.color(QPalette.ColorRole.Highlight),
+        palette.color(QPalette.ColorRole.WindowText),
+    )
+
+    def rendered_colors() -> set[tuple[int, int, int]]:
+        image = bar.grab().toImage()
+        return {
+            image.pixelColor(x, y).getRgb()[:3]
+            for y in range(image.height())
+            for x in range(image.width())
+        }
+
+    for _ in range(5):
+        QApplication.processEvents()
+        colors = rendered_colors()
+        assert all(
+            (color.red(), color.green(), color.blue()) in colors
+            for color in expected_colors
+        )
+        tabs.removeTab(0)
+        tabs.insertTab(0, page, "MDA")
 
 
 def test_acquire_page_adds_sink_backed_mda_tab(

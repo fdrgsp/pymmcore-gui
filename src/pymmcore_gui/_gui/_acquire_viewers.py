@@ -12,6 +12,8 @@ from pymmcore_gui._qt.QtCore import QObject, QTimer, Signal
 from pymmcore_gui._qt.QtWidgets import QTabBar, QTabWidget, QWidget
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
 
+from ._tab_bar import ThemedTabBar
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -62,6 +64,7 @@ class AcquireViewers(QTabWidget):
         self._follow_acquisition = True
         self._connected = True
 
+        self.setTabBar(ThemedTabBar(self))
         self.setDocumentMode(True)
         self.setTabsClosable(True)
         self.tabCloseRequested.connect(self._close_tab)

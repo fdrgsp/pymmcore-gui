@@ -9,7 +9,7 @@ from pymmcore_plus import CMMCorePlus
 from pymmcore_widgets import PropertyBrowser
 
 from pymmcore_gui._array_viewer import unstyle_widgets
-from pymmcore_gui._qt.QtCore import QCoreApplication, QEvent, QTimer
+from pymmcore_gui._qt.QtCore import QTimer
 from pymmcore_gui._qt.QtWidgets import QPushButton, QTabWidget, QWidget
 from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
 
@@ -22,6 +22,7 @@ from ._acquire_toolbar import (
     toolbar_separator,
 )
 from ._acquire_viewers import AcquireViewers
+from ._tab_bar import ThemedTabBar
 from ._tab_page import TabPage
 
 if TYPE_CHECKING:
@@ -41,6 +42,7 @@ class AcquirePage(TabPage):
         self.left.add_widget(self._presets, 1)
 
         self._right_tabs = QTabWidget()
+        self._right_tabs.setTabBar(ThemedTabBar(self._right_tabs))
         self._right_tabs.setDocumentMode(True)
         self._right_tabs.setTabsClosable(True)
         self._right_tabs.tabCloseRequested.connect(self._close_right_tab)
@@ -133,37 +135,6 @@ class AcquirePage(TabPage):
             and self._right_tabs.indexOf(self._property_browser) >= 0
         ):
             QTimer.singleShot(0, self._refresh_property_browser)
-
-        # A startup sequence that jumps straight to this page (e.g. `mmgui -c
-        # <cfg>`, or confirming "load last config" at launch) can show it for
-        # the very first time before the platform has actually finished
-        # mapping the top-level window -- the toolbar's shutter buttons and
-        # the Preview/MDA tab bars render with the platform's native look
-        # until something forces Qt to fully re-evaluate their style (any
-        # later tab add/remove does it, which is why toggling the
-        # MDA/Properties buttons, or snapping, "fixes" it). A bare
-        # StyleChange event sent synchronously from inside this very
-        # showEvent wasn't enough -- this page hasn't actually finished
-        # becoming visible yet at this exact point (the same class of "not
-        # settled on first show" issue ConfigurationsPage.showEvent already
-        # works around by deferring its own refresh). Defer to the next
-        # event-loop turn, and force a real unpolish/polish cycle -- stronger
-        # than a StyleChange event alone -- on every descendant.
-        QTimer.singleShot(0, self._repolish_after_show)
-
-    def _repolish_after_show(self) -> None:
-        style = self.style()
-        for w in (self, *self.findChildren(QWidget)):
-            if layout := w.layout():
-                layout.invalidate()
-            if style is not None:
-                style.unpolish(w)
-                style.polish(w)
-            QCoreApplication.sendEvent(w, QEvent(QEvent.Type.StyleChange))
-            w.updateGeometry()
-            w.update()
-        if layout := self.layout():
-            layout.activate()
 
     def _refresh_property_browser(self) -> None:
         # PropertyBrowser exposes no public refresh; rebuild its table directly
