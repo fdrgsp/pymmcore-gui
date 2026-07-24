@@ -50,6 +50,18 @@ class MemoryMDAWidget(MDAWidget):
         # everywhere else in the app.
         unstyle_widgets(self)
 
+        # Channels/Positions/Time are tables: each row is a fresh cell widget
+        # built on demand (e.g. the Positions row's black "mdi:axis" Sub-
+        # Sequence button, or the row's spinboxes), created only when a row
+        # is actually added -- long after the sweep above already ran. Without
+        # this, a row added interactively is never covered by any sweep at
+        # all until the next light/dark toggle (which only revisits icons,
+        # not stylesheets).
+        for table_widget in (self.channels, self.stage_positions, self.time_plan):
+            model = table_widget.table().model()
+            if model is not None:
+                model.rowsInserted.connect(lambda *_: unstyle_widgets(self))
+
     def prepare_mda(self) -> bool | str | Path | None:
         """Return a disk path or a scratch sink that supports live viewing."""
         output = super().prepare_mda()

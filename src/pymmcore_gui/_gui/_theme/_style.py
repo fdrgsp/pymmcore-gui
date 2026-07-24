@@ -326,6 +326,14 @@ class MicroscopeStyle(QProxyStyle):
             # Ensure minimum button height and horizontal padding
             s.setHeight(max(s.height(), 26))
             s.setWidth(s.width() + 8)
+        elif type == QStyle.ContentsType.CT_ComboBox:
+            # Fusion's own CT_ComboBox width computation reserves space for
+            # *its* default arrow glyph, not the wider one _draw_combobox
+            # paints (COMBO_ARROW_W) -- without correcting for the
+            # difference, the text can be measured as fitting when it will
+            # actually be clipped by our wider arrow at paint time (e.g. a
+            # combo box defaulting to "composite" showed as "composit").
+            s.setWidth(s.width() + round(COMBO_ARROW_W * self._zoom))
         return s
 
     # ── Primitive Elements ──
@@ -556,19 +564,30 @@ class MicroscopeStyle(QProxyStyle):
         # Icon
         if not opt.icon.isNull():
             icon_size = opt.iconSize
-            icon_rect = QRect(
-                r.left() + 8,
-                r.top() + (r.height() - icon_size.height()) // 2,
-                icon_size.width(),
-                icon_size.height(),
-            )
+            if opt.text:
+                # Icon + text: pin the icon to the left, text fills the rest.
+                icon_rect = QRect(
+                    r.left() + 8,
+                    r.top() + (r.height() - icon_size.height()) // 2,
+                    icon_size.width(),
+                    icon_size.height(),
+                )
+                r = QRect(
+                    icon_rect.right() + 4,
+                    r.top(),
+                    r.width() - icon_rect.width() - 12,
+                    r.height(),
+                )
+            else:
+                # Icon-only: nothing to justify against on the right, so
+                # center it in the button instead of pinning it to the left.
+                icon_rect = QRect(
+                    r.left() + (r.width() - icon_size.width()) // 2,
+                    r.top() + (r.height() - icon_size.height()) // 2,
+                    icon_size.width(),
+                    icon_size.height(),
+                )
             opt.icon.paint(p, icon_rect)
-            r = QRect(
-                icon_rect.right() + 4,
-                r.top(),
-                r.width() - icon_rect.width() - 12,
-                r.height(),
-            )
 
         # Text — drawItemText processes the '&' mnemonic (e.g. "&Yes" → "Yes"),
         # honoring the platform's underline-shortcut style hint.
@@ -1258,10 +1277,15 @@ class MicroscopeStyle(QProxyStyle):
         p: QPainter,
         widget: QWidget | None,
     ) -> None:
-        """Flat header cell, replacing Fusion's palette-ignoring bevel.
+        """Flat header cell background, replacing Fusion's palette-ignoring bevel.
 
-        Text/sort-arrow layout is left to the base style (CE_HeaderLabel),
-        which already reads the correct color from our palette.
+        Only the background/border are drawn here. QHeaderView::paintSection
+        calls CE_HeaderSection and CE_HeaderLabel as two separate, independent
+        steps (unlike CE_PushButton, which is expected to draw its own label)
+        -- Qt already invokes CE_HeaderLabel on its own right after this
+        returns. An earlier version of this method also delegated to it
+        explicitly, which drew the label a second time on top of Qt's own
+        pass and showed up as doubled/smeared header text.
         """
         pal = opt.palette
         r = opt.rect
@@ -1280,8 +1304,6 @@ class MicroscopeStyle(QProxyStyle):
         p.setPen(self._border_color())
         p.drawLine(r.bottomLeft(), r.bottomRight())
         p.drawLine(r.topRight(), r.bottomRight())
-
-        self.drawControl(QStyle.ControlElement.CE_HeaderLabel, opt, p, widget)
 
     # ═══════════════════════════════════════════════════════════
     # QTabBar

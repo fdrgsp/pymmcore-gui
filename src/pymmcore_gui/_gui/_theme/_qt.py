@@ -66,7 +66,20 @@ def to_qpalette(palette: Palette) -> QPalette:
         for role, fname in ROLE_TO_FIELD.items():
             brush = getattr(group, fname)
             if brush is None:
-                continue
+                # An unset role means "inherit" (see ColorGroup's docstring),
+                # but leaving it unset on the QPalette doesn't actually
+                # inherit anything -- Qt fills the gap with its own built-in
+                # default, which matches neither theme. E.g. both themes'
+                # `disabled` group only defines muted *text* roles, relying
+                # on this fallback for every background role (Base, Window,
+                # Button, ...) -- without it, a widget that's ever disabled
+                # (even transiently, e.g. an unchecked tab's content in
+                # useq_widgets) shows Qt's default light gray regardless of
+                # theme. Fall back to the *active* group, which always
+                # defines the complete set.
+                brush = getattr(palette.active, fname)
+                if brush is None:
+                    continue
             qr = QPalette.ColorRole(role.value)
             if isinstance(brush, Color):
                 qpal.setColor(qg, qr, color_to_qcolor(brush))

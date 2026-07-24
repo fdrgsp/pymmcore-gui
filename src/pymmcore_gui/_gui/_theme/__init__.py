@@ -104,12 +104,26 @@ def set_theme(t: Theme) -> None:
     if isinstance(app, QGuiApplication):
         app.setPalette(to_qpalette(t.palette))
 
-    # Re-evaluate every button's icon contrast against the new palette.
-    # ensure_visible_icon always re-derives from the button's stashed
-    # *original* icon, so this is safe to call repeatedly across any number
-    # of light/dark toggles -- without it, a dark-theme recolor would stay
-    # baked in (and turn invisible) after switching to light mode.
-    if isinstance(app, QApplication):
+    if isinstance(app, QApplication) and _current_style is not None:
+        # set_zoom() sends every widget a StyleChange event and forces a
+        # relayout -- set_style() (first-ever call only) already relies on
+        # this to make the *initial* theme take effect. A *later* toggle
+        # (this branch) needs the exact same forced refresh: without it,
+        # QApplication.setPalette() above updates the application-wide
+        # palette immediately, but an already-constructed widget's own
+        # .palette() only catches up once Qt actually re-polishes it --
+        # which, empirically, doesn't reliably happen from setPalette()
+        # alone for widgets nested a few layers deep (e.g. a useq_widgets
+        # table's viewport keeps showing the *previous* theme's colors
+        # indefinitely otherwise). Re-applying the same zoom factor is a
+        # no-op for sizing and just piggybacks on the refresh it already does.
+        set_zoom(_current_style.zoom_factor)
+
+        # Re-evaluate every button's icon contrast against the new palette.
+        # ensure_visible_icon always re-derives from the button's stashed
+        # *original* icon, so this is safe to call repeatedly across any
+        # number of light/dark toggles -- without it, a dark-theme recolor
+        # would stay baked in (and turn invisible) after switching to light.
         for w in app.allWidgets():
             if isinstance(w, QAbstractButton):
                 ensure_visible_icon(w)
