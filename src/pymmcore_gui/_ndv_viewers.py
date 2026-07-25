@@ -227,6 +227,7 @@ def _add_follow_lock_button(ndv_viewer: ndv.ArrayViewer, manager: Any) -> None:
     """Add the Christina follow-acquisition toggle to an ndv viewer."""
     from superqt import QIconifyIcon
 
+    from pymmcore_gui._array_viewer import ensure_visible_icon, set_source_icon
     from pymmcore_gui._qt.QtWidgets import QPushButton
 
     q_widget = ndv_viewer.widget()
@@ -241,16 +242,25 @@ def _add_follow_lock_button(ndv_viewer: ndv.ArrayViewer, manager: Any) -> None:
     # "subtle" look), so it never picks up that variant on its own -- set it
     # explicitly or this renders with Qt's native (blue) checked style.
     btn.setProperty("variant", "subtle")
-    btn.setIcon(QIconifyIcon("mdi:lock-open-variant-outline"))
+
+    def _set_icon(glyph: str) -> None:
+        # QIconifyIcon renders these mdi glyphs near-black; the other viewer
+        # buttons only look right because unstyle_widgets ran ensure_visible_icon
+        # on them. This button missed that sweep, so recolor it ourselves (and
+        # re-stash the source so theme changes re-derive correctly).
+        set_source_icon(btn, QIconifyIcon(glyph))
+        ensure_visible_icon(btn)
+
+    _set_icon("mdi:lock-open-variant-outline")
     btn.setToolTip("Lock sliders (don't follow acquisition)")
     mgr_ref = weakref.ref(manager)
 
     def _toggled(locked: bool) -> None:
         if locked:
-            btn.setIcon(QIconifyIcon("mdi:lock-outline"))
+            _set_icon("mdi:lock-outline")
             btn.setToolTip("Unlock sliders (follow acquisition)")
         else:
-            btn.setIcon(QIconifyIcon("mdi:lock-open-variant-outline"))
+            _set_icon("mdi:lock-open-variant-outline")
             btn.setToolTip("Lock sliders (don't follow acquisition)")
         if mgr := mgr_ref():
             mgr._follow_acquisition = not locked
