@@ -191,10 +191,16 @@ class AcquirePage(TabPage):
         # Devices added on the Hardware tab load into the core but don't fire
         # systemConfigurationLoaded, so the toolbar bars (and property table)
         # would be stale. Re-scan the core whenever this tab is shown.
+        #
+        # The MDA channel table needs this too: config groups edited on the
+        # Configurations tab are written inside a block_core() block that emits
+        # no signals (see ConfigurationsPage.save), so its channel-group and
+        # light-source columns can't learn about those edits any other way.
         super().showEvent(a0)
         self._channels.refresh()
         self._shutters.refresh()
         self._presets.refresh()
+        self._mda.channels.refresh()
         if (
             self._property_browser is not None
             and self._right_tabs.indexOf(self._property_browser) >= 0

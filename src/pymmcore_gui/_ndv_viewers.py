@@ -101,9 +101,7 @@ class NDVViewersManager(QObject):
         self._is_mda_running = True
         view = self._runner.get_view()
         self._active_mda_viewer = (
-            self._create_ndv_viewer(view, sequence, meta)
-            if view is not None
-            else None
+            self._create_ndv_viewer(view, sequence, meta) if view is not None else None
         )
 
     def _on_frame_ready(
@@ -225,9 +223,7 @@ class _StreamSignalBridge(QObject):
     dimsChanged = Signal()
 
 
-def _add_follow_lock_button(
-    ndv_viewer: ndv.ArrayViewer, manager: Any
-) -> None:
+def _add_follow_lock_button(ndv_viewer: ndv.ArrayViewer, manager: Any) -> None:
     """Add the Christina follow-acquisition toggle to an ndv viewer."""
     from superqt import QIconifyIcon
 
@@ -240,6 +236,11 @@ def _add_follow_lock_button(
 
     btn = QPushButton(q_widget)
     btn.setCheckable(True)
+    # this button is added after MMArrayViewer.__init__'s unstyle_widgets()
+    # sweep (which is what gives the other viewer buttons their flat
+    # "subtle" look), so it never picks up that variant on its own -- set it
+    # explicitly or this renders with Qt's native (blue) checked style.
+    btn.setProperty("variant", "subtle")
     btn.setIcon(QIconifyIcon("mdi:lock-open-variant-outline"))
     btn.setToolTip("Lock sliders (don't follow acquisition)")
     mgr_ref = weakref.ref(manager)
