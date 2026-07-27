@@ -44,7 +44,7 @@ class BusyOverlay(QWidget):
     def stop(self) -> None:
         self.hide()
 
-    def paintEvent(self, event: QPaintEvent | None) -> None:
+    def paintEvent(self, a0: QPaintEvent | None) -> None:
         p = QPainter(self)
         t = theme()
         backdrop = qcolor(t.bg_deepest)

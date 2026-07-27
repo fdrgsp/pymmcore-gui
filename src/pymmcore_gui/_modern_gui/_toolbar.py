@@ -44,7 +44,7 @@ class TabToolBar(QWidget):
 
     # ── painting ──────────────────────────────────────────────────
 
-    def paintEvent(self, event: QPaintEvent | None) -> None:
+    def paintEvent(self, a0: QPaintEvent | None) -> None:
         p = QPainter(self)
         t = theme()
         p.fillRect(self.rect(), qcolor(t.bg_raised))
@@ -53,8 +53,8 @@ class TabToolBar(QWidget):
         p.drawLine(0, y, self.width(), y)
         p.end()
 
-    def changeEvent(self, event: QEvent | None) -> None:
-        if event is not None and event.type() == QEvent.Type.StyleChange:
+    def changeEvent(self, a0: QEvent | None) -> None:
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
             self._apply_metrics()
             self.update()
-        super().changeEvent(event)
+        super().changeEvent(a0)

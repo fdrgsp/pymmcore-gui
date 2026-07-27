@@ -39,6 +39,7 @@ if TYPE_CHECKING:
         def __init__(self, *, mmcore: CMMCorePlus | None = None) -> None: ...
         @property
         def mmcore(self) -> CMMCorePlus: ...
+        def show(self) -> None: ...
 
 
 APP_NAME = "pyMM"
@@ -99,7 +100,7 @@ def create_mmgui(
     install_sentry: bool = True,
     exec_app: bool = True,
     window_cls: type[WindowProtocol] | str | None = None,
-) -> MicroManagerGUI:
+) -> WindowProtocol:
     """Initialize the pymmcore-gui application and Main Window.
 
     This is the primary way to start pymmcore-gui.  (It is also called by
@@ -185,8 +186,8 @@ def create_mmgui(
         # if a string was passed, try to import that as the window class
         module_name, class_name = window_cls.rsplit(".", 1)
         module = importlib.import_module(module_name)
-        window_cls = getattr(module, class_name)
-    if not issubclass(window_cls, QMainWindow):  # type: ignore
+        window_cls = cast("type[WindowProtocol]", getattr(module, class_name))
+    if not issubclass(window_cls, QMainWindow):
         raise TypeError(f"{window_cls} is not a subclass of QMainWindow")
 
     win = window_cls(mmcore=mmcore)

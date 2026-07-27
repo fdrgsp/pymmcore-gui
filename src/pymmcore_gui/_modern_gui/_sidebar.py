@@ -96,7 +96,7 @@ class Sidebar(QWidget):
 
     # ── painting ──────────────────────────────────────────────────
 
-    def paintEvent(self, event: QPaintEvent | None) -> None:
+    def paintEvent(self, a0: QPaintEvent | None) -> None:
         p = QPainter(self)
         t = theme()
         p.fillRect(self.rect(), qcolor(t.bg_base))
@@ -110,9 +110,9 @@ class Sidebar(QWidget):
             p.drawLine(0, 0, w, 0)
         p.end()
 
-    def changeEvent(self, event: QEvent | None) -> None:
-        if event is not None and event.type() == QEvent.Type.StyleChange:
+    def changeEvent(self, a0: QEvent | None) -> None:
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
             self._apply_metrics()
             self.updateGeometry()
             self.update()
-        super().changeEvent(event)
+        super().changeEvent(a0)

@@ -70,7 +70,7 @@ class _GroupEditorTab(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.editor, 1)
 
-    def changeEvent(self, event: QEvent | None) -> None:
+    def changeEvent(self, a0: QEvent | None) -> None:
         # ConfigGroupsEditor.__init__ calls self.setStyleSheet(...), and
         # applying *any* stylesheet makes Qt resolve and *freeze* the font of
         # the widget's whole subtree -- so it stops following later
@@ -84,11 +84,11 @@ class _GroupEditorTab(QWidget):
         # (unresolved) QFont so it re-inherits the now-current app font --
         # matching the pattern _toolbar.py / the dirty label already use to
         # stay theme/zoom reactive.
-        if event is not None and event.type() == QEvent.Type.StyleChange:
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
             for w in (self.editor, *self.editor.findChildren(QWidget)):
                 if not isinstance(w, QAbstractSlider):
                     w.setFont(QFont())
-        super().changeEvent(event)
+        super().changeEvent(a0)
 
     def save(self) -> None:
         """Replace the core's config groups with the editor's contents."""
@@ -410,10 +410,10 @@ class ConfigurationsPage(TabPage):
         pal.setColor(QPalette.ColorRole.WindowText, color)
         self._dirty_text.setPalette(pal)
 
-    def changeEvent(self, event: QEvent | None) -> None:
-        if event is not None and event.type() == QEvent.Type.StyleChange:
+    def changeEvent(self, a0: QEvent | None) -> None:
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
             self._apply_dirty_style()
-        super().changeEvent(event)
+        super().changeEvent(a0)
 
     def _on_system_config_loaded(self) -> None:
         """A whole new configuration was loaded — reload everything."""
@@ -423,7 +423,7 @@ class ConfigurationsPage(TabPage):
             # a freshly loaded config is the new clean baseline
             self.mark_saved()
 
-    def showEvent(self, event: QShowEvent | None) -> None:
+    def showEvent(self, a0: QShowEvent | None) -> None:
         # Editing hardware on another tab loads devices into the core but does
         # not fire systemConfigurationLoaded, so these editors would otherwise
         # be stale. Refresh devices whenever this page is shown — but NOT the
@@ -434,7 +434,7 @@ class ConfigurationsPage(TabPage):
         # synchronously here happens before the tab's geometry has settled on
         # first show, leaving the table sized to a stale (narrow) width until
         # the user switches sub-tabs. Deferring lets the layout settle first.
-        super().showEvent(event)
+        super().showEvent(a0)
         QTimer.singleShot(0, self._refresh_on_show)
 
     def _refresh_on_show(self) -> None:

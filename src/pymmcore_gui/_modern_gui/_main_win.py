@@ -82,7 +82,7 @@ class ModeTab(QWidget):
         self._active = val
         self.update()
 
-    def paintEvent(self, event: QPaintEvent | None) -> None:
+    def paintEvent(self, a0: QPaintEvent | None) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         t = theme()
@@ -122,12 +122,12 @@ class ModeTab(QWidget):
         self._hovered = True
         self.update()
 
-    def leaveEvent(self, event: QEvent | None) -> None:
+    def leaveEvent(self, a0: QEvent | None) -> None:
         self._hovered = False
         self.update()
 
-    def mousePressEvent(self, event: QMouseEvent | None) -> None:
-        if event is not None and event.button() == Qt.MouseButton.LeftButton:
+    def mousePressEvent(self, a0: QMouseEvent | None) -> None:
+        if a0 is not None and a0.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
 
 
@@ -160,12 +160,12 @@ class ModeTabBar(QWidget):
             tab.active = i == index
         self.current_changed.emit(index)
 
-    def changeEvent(self, event: QEvent | None) -> None:
-        if event is not None and event.type() == QEvent.Type.StyleChange:
+    def changeEvent(self, a0: QEvent | None) -> None:
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
             t = theme()
             if lay := self.layout():
                 lay.setContentsMargins(t.sp_sm, 0, 0, 0)
-        super().changeEvent(event)
+        super().changeEvent(a0)
 
 
 class MainWindow(QMainWindow):

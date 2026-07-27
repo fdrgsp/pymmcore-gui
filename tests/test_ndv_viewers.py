@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import ndv
 import useq
@@ -14,6 +14,7 @@ from pymmcore_gui._qt.QtWidgets import QApplication, QWidget
 
 if TYPE_CHECKING:
     import pytest
+    from ndv.models import ArrayDisplayModel
     from pymmcore_plus import CMMCorePlus
     from pytestqt.qtbot import QtBot
 
@@ -30,7 +31,9 @@ class _FakeViewer(ndv.ArrayViewer):
     def __init__(self, data: object = None, /, **kwargs: object) -> None:
         self._fake_data = data
         self.kwargs = kwargs
-        self._fake_display_model = SimpleNamespace(current_index={})
+        self._fake_display_model: SimpleNamespace | ArrayDisplayModel = SimpleNamespace(
+            current_index={}
+        )
         self._fake_data_wrapper = SimpleNamespace(
             dims_changed=_Emitter(), data_changed=_Emitter()
         )
@@ -40,9 +43,17 @@ class _FakeViewer(ndv.ArrayViewer):
     def data(self) -> object:
         return self._fake_data
 
+    @data.setter
+    def data(self, data: object) -> None:
+        self._fake_data = data
+
     @property
-    def display_model(self) -> SimpleNamespace:
-        return self._fake_display_model
+    def display_model(self) -> ArrayDisplayModel:
+        return cast("ArrayDisplayModel", self._fake_display_model)
+
+    @display_model.setter
+    def display_model(self, model: ArrayDisplayModel) -> None:
+        self._fake_display_model = model
 
     @property
     def data_wrapper(self) -> SimpleNamespace:

@@ -434,7 +434,7 @@ def test_channel_property_selector_lists_all_runtime_numeric_sliders(
     assert all(
         label == f"{device} · {prop}" for label, (device, prop) in choices.items()
     )
-    assert channels.show_intensity.text() == "Show Property"
+    assert channels.show_light_source.text() == "Show Property"
 
     table = channels.table()
     property_col = table.indexOf(channels._light_source_column)

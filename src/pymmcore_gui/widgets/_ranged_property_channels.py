@@ -46,8 +46,8 @@ class RangedPropertyChannelTable(CoreConnectedChannelTable):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(rows, mmcore, parent)
-        self.show_intensity.setText("Show Property")
-        self.show_intensity.setToolTip(
+        self.show_light_source.setText("Show Property")
+        self.show_light_source.setToolTip(
             "Set one writable numeric device property with limits per channel.\n"
             "The selected Property and Value are applied during MDA, Snap, and Live."
         )

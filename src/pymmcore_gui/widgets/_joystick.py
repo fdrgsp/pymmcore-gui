@@ -73,25 +73,25 @@ class JoystickWidget(QWidget):
 
     # ---- mouse handling ----
 
-    def mousePressEvent(self, ev: QMouseEvent) -> None:
-        if ev.button() == Qt.MouseButton.LeftButton:
+    def mousePressEvent(self, a0: QMouseEvent | None) -> None:
+        if a0 is not None and a0.button() == Qt.MouseButton.LeftButton:
             self._dragging = True
-            self._update_knob(ev.position())
-        super().mousePressEvent(ev)
+            self._update_knob(a0.position())
+        super().mousePressEvent(a0)
 
-    def mouseMoveEvent(self, ev: QMouseEvent) -> None:
-        if self._dragging:
-            self._update_knob(ev.position())
-        super().mouseMoveEvent(ev)
+    def mouseMoveEvent(self, a0: QMouseEvent | None) -> None:
+        if self._dragging and a0 is not None:
+            self._update_knob(a0.position())
+        super().mouseMoveEvent(a0)
 
-    def mouseReleaseEvent(self, ev: QMouseEvent) -> None:
-        if ev.button() == Qt.MouseButton.LeftButton:
+    def mouseReleaseEvent(self, a0: QMouseEvent | None) -> None:
+        if a0 is not None and a0.button() == Qt.MouseButton.LeftButton:
             self._dragging = False
             self._knob_pos = QPointF(0, 0)
             self.update()
             self.deflectionChanged.emit(0.0, 0.0)
             self.released.emit()
-        super().mouseReleaseEvent(ev)
+        super().mouseReleaseEvent(a0)
 
     def _update_knob(self, global_pos: QPointF) -> None:
         rel = global_pos - self._center
@@ -102,7 +102,7 @@ class JoystickWidget(QWidget):
 
     # ---- painting ----
 
-    def paintEvent(self, ev: QPaintEvent) -> None:
+    def paintEvent(self, a0: QPaintEvent | None) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         center = self._center

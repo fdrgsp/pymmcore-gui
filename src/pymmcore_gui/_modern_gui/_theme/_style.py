@@ -357,25 +357,29 @@ class MicroscopeStyle(QProxyStyle):
 
     # ── Size Hints ──
 
-    def sizeFromContents(
+    # PyQt6-stubs names these params differently on QProxyStyle (type/option/
+    # size) than on its own ancestors QCommonStyle/QStyle (ct/opt/
+    # contentsSize) -- mypy checks the latter, pyright the former, so no
+    # single set of names satisfies both.
+    def sizeFromContents(  # pyright: ignore [reportIncompatibleMethodOverride]
         self,
-        type: QStyle.ContentsType,
-        option: QStyleOption | None,
-        size: QSize,
-        widget: QWidget | None,
+        ct: QStyle.ContentsType,
+        opt: QStyleOption | None,
+        contentsSize: QSize,
+        widget: QWidget | None = None,
     ) -> QSize:
-        s = super().sizeFromContents(type, option, size, widget)
-        if type == QStyle.ContentsType.CT_PushButton:
+        s = super().sizeFromContents(ct, opt, contentsSize, widget)
+        if ct == QStyle.ContentsType.CT_PushButton:
             # Ensure minimum button height and horizontal padding
             s.setHeight(max(s.height(), 26))
             s.setWidth(s.width() + 8)
-        elif type == QStyle.ContentsType.CT_ComboBox:
+        elif ct == QStyle.ContentsType.CT_ComboBox:
             # Fusion's own CT_ComboBox width computation reserves space for
             # *its* default arrow glyph, not the wider one _draw_combobox
             # paints (COMBO_ARROW_W) -- without correcting for the
             # difference, the text can be measured as fitting when it will
             # actually be clipped by our wider arrow at paint time (e.g. a
-            # combo box defaulting to "composite" showed as "composit").
+            # combo box defaulting to "composite" showed as "compost").
             s.setWidth(s.width() + round(COMBO_ARROW_W * self._zoom))
         return s
 

@@ -332,9 +332,11 @@ class DeviceSetupPane(QWidget):
             if prop.name == Keyword.Port and serial_devices:
                 editor = self._port_chooser(prop, serial_devices)
             else:
-                editor = _editor_for(
-                    prop, lambda value, p=prop: self.propertyChanged.emit(p, value)
-                )
+
+                def _on_change(value: str, p: Property = prop) -> None:
+                    self.propertyChanged.emit(p, value)
+
+                editor = _editor_for(prop, _on_change)
             form.addRow(f"{prop.name}:", editor)
         self._body_layout.addLayout(form)
 

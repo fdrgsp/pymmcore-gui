@@ -185,7 +185,9 @@ class AvailableDevicesPane(QWidget):
 
         for row in range(self._table.rowCount()):
             item = self._table.item(row, 0)
-            dev: AvailableDevice = item.data(Qt.ItemDataRole.UserRole) if item else None
+            dev: AvailableDevice | None = (
+                item.data(Qt.ItemDataRole.UserRole) if item else None
+            )
             if dev is None:  # pragma: no cover
                 continue
             hidden = (
