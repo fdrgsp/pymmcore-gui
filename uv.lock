@@ -2998,8 +2998,8 @@ cli = [
 
 [[package]]
 name = "pymmcore-widgets"
-version = "0.1.dev438+g8247917d1"
-source = { git = "https://github.com/fdrgsp/pymmcore-widgets?rev=cite#8247917d1298907682fad25eb884bc96ce9b7541" }
+version = "0.1.dev440+gc52ddfd12"
+source = { git = "https://github.com/fdrgsp/pymmcore-widgets?rev=cite#c52ddfd122e78eecf3182f2036d174edb7220bbb" }
 dependencies = [
     { name = "pymmcore-plus", extra = ["cli"] },
     { name = "pyopengl", marker = "sys_platform == 'darwin'" },

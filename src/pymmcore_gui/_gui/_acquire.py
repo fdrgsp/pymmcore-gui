@@ -16,7 +16,6 @@ from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 
 from ._acquire_presets import AcquisitionPresetSelector
 from ._acquire_toolbar import (
-    ChannelPresetsBar,
     LiveButton,
     ShuttersBar,
     SnapButton,
@@ -80,8 +79,7 @@ class AcquirePage(TabPage):
         self.bottom.hide()
         self._h_split.setSizes([_MDA_PANEL_WIDTH, 900, _RIGHT_PANEL_WIDTH])
 
-        # toolbar: snap|live ‖ optical configs ‖ shutters … [Presets|Properties]
-        self._channels = ChannelPresetsBar(self._core)
+        # toolbar: snap|live ‖ shutters … [Presets|Properties]
         self._shutters = ShuttersBar(self._core)
         self._snap_btn = SnapButton(mmcore=self._core)
         self._snap_btn.snapRequested.connect(self._mda.apply_active_channel_for_capture)
@@ -93,8 +91,6 @@ class AcquirePage(TabPage):
         )
         self._live_btn.liveStartedRequested.connect(self._viewers.ensure_preview)
         self.toolbar.add_widget(self._live_btn)
-        self.toolbar.add_widget(toolbar_separator())
-        self.toolbar.add_widget(self._channels)
         self.toolbar.add_widget(toolbar_separator())
         self.toolbar.add_widget(self._shutters)
         self.toolbar.add_stretch()
@@ -173,9 +169,8 @@ class AcquirePage(TabPage):
         # The MDA channel table needs this too: config groups edited on the
         # Configurations tab are written inside a block_core() block that emits
         # no signals (see ConfigurationsPage.save), so its channel-group and
-        # light-source columns can't learn about those edits any other way.
+        # ranged-property columns can't learn about those edits any other way.
         super().showEvent(a0)
-        self._channels.refresh()
         self._shutters.refresh()
         self._presets.refresh()
         self._mda.refresh_channel_table()

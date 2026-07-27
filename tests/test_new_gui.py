@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 import useq
+from pymmcore_plus import PropertyType
 from pymmcore_widgets import MDAWidget as UpstreamMDAWidget
 from pymmcore_widgets.useq_widgets._positions import MDAButton
 
@@ -179,6 +180,10 @@ def test_acquire_page_sidebar_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert page._right_tabs.currentWidget() is page._presets
     assert page._presets_btn.isChecked()
     assert not page._props_btn.isChecked()
+    assert not hasattr(page, "_channels")
+    assert not {
+        button.text() for button in page.toolbar.findChildren(QPushButton)
+    }.intersection(mmcore.getAvailableConfigs(mmcore.getChannelGroup()))
 
     assert [section.title for section in tabs.sections] == [
         "Channels",
@@ -405,6 +410,43 @@ def test_selecting_channel_row_applies_only_its_core_config(
     assert mmcore.getCurrentConfig("Channel") == first
 
 
+def test_channel_property_selector_lists_all_runtime_numeric_sliders(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    mda = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(mda)
+    channels = mda.channels
+
+    expected = {
+        (str(device), str(prop))
+        for device, prop in mmcore.iterProperties(
+            property_type=(PropertyType.Integer, PropertyType.Float),
+            has_limits=True,
+            is_read_only=False,
+            as_object=False,
+        )
+        if not mmcore.isPropertyPreInit(device, prop)
+    }
+    choices = channels.lightSources()
+
+    assert set(choices.values()) == expected
+    assert choices
+    assert all(
+        label == f"{device} · {prop}" for label, (device, prop) in choices.items()
+    )
+    assert channels.show_intensity.text() == "Show Property"
+
+    table = channels.table()
+    property_col = table.indexOf(channels._light_source_column)
+    value_col = table.indexOf(channels.INTENSITY)
+    property_header = table.horizontalHeaderItem(property_col)
+    value_header = table.horizontalHeaderItem(value_col)
+    assert property_header is not None
+    assert value_header is not None
+    assert property_header.text() == "Property"
+    assert value_header.text() == "Value"
+
+
 def test_collapsible_mda_round_trips_all_original_widgets(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
@@ -489,7 +531,7 @@ def test_collapsible_mda_round_trips_all_original_widgets(
     )
 
     source_group = "_slider_test"
-    source_device, source_property = mda.channels.lightSources()[source_group]
+    source_device, source_property = "Camera", "TestProperty1"
     intensity = mmcore.getPropertyUpperLimit(source_device, source_property)
     mda.channels.setLightSourceVisible(True)
     mda.channels.setChannelProperties(
@@ -508,7 +550,9 @@ def test_collapsible_mda_round_trips_all_original_widgets(
     mda.channels.setLightSourceVisible(False)
     mda.setValue(with_properties)
     assert mda.channels.lightSourceVisible()
-    assert mda.channels.channelProperties()[0]["value"] == pytest.approx(intensity)
+    restored_property = mda.channels.channelProperties()[0]
+    assert restored_property["group"] == "Camera · TestProperty1"
+    assert restored_property["value"] == pytest.approx(intensity)
 
     tabs.setChecked("z", False)
     assert result.z_plan == z_plan
@@ -780,8 +824,12 @@ def test_snap_and_live_apply_the_active_channel_capture_settings(
 
     table = channels.table()
     table.setCurrentCell(0, table.indexOf(channels._config_column))
-    source_group = "_slider_test"
-    source_device, source_property = channels.lightSources()[source_group]
+    source_device, source_property = "Camera", "TestProperty1"
+    source_group = next(
+        label
+        for label, pair in channels.lightSources().items()
+        if pair == (source_device, source_property)
+    )
     intensity = mmcore.getPropertyUpperLimit(source_device, source_property)
     channels.setLightSourceVisible(True)
     channels.setChannelProperties(
@@ -835,6 +883,112 @@ def test_snap_and_live_apply_the_active_channel_capture_settings(
     assert captured[1:] == pytest.approx((exposure, intensity))
     page._live_btn.click()
     assert not mmcore.isSequenceRunning()
+
+
+def test_switching_channel_rows_during_live_applies_all_capture_settings(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakePreview(QWidget):
+        def __init__(
+            self,
+            mmcore: CMMCorePlus,
+            parent: QWidget | None = None,
+        ) -> None:
+            super().__init__(parent)
+
+        def detach(self) -> None:
+            pass
+
+    monkeypatch.setattr(acquire_viewers_module, "NDVPreview", FakePreview)
+
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    channels = page._mda.channels
+    configs = tuple(mmcore.getAvailableConfigs("Channel"))
+    selected_configs = (configs[0], configs[-1])
+    exposures = (11.5, 37.5)
+    page._mda.setValue(
+        useq.MDASequence(
+            channels=tuple(
+                useq.Channel(group="Channel", config=config, exposure=exposure)
+                for config, exposure in zip(selected_configs, exposures, strict=True)
+            )
+        )
+    )
+
+    source_device, source_property = "Camera", "TestProperty1"
+    source_group = next(
+        label
+        for label, pair in channels.lightSources().items()
+        if pair == (source_device, source_property)
+    )
+    property_values = (
+        mmcore.getPropertyLowerLimit(source_device, source_property),
+        mmcore.getPropertyUpperLimit(source_device, source_property),
+    )
+    channels.setLightSourceVisible(True)
+    channels.setChannelProperties(
+        [
+            {
+                "channel_index": row,
+                "config": config,
+                "group": source_group,
+                "device": source_device,
+                "property": source_property,
+                "value": value,
+            }
+            for row, (config, value) in enumerate(
+                zip(selected_configs, property_values, strict=True)
+            )
+        ]
+    )
+
+    def capture_settings() -> tuple[str, float, float]:
+        return (
+            mmcore.getCurrentConfig("Channel"),
+            mmcore.getExposure(),
+            float(mmcore.getProperty(source_device, source_property)),
+        )
+
+    table = channels.table()
+    config_col = table.indexOf(channels._config_column)
+    table.setCurrentCell(0, config_col)
+    mmcore.setExposure(5)
+    mmcore.setProperty(source_device, source_property, property_values[1])
+
+    live_started: list[None] = []
+    live_stopped: list[None] = []
+    mmcore.events.continuousSequenceAcquisitionStarted.connect(
+        lambda *_: live_started.append(None)
+    )
+    mmcore.events.sequenceAcquisitionStopped.connect(
+        lambda *_: live_stopped.append(None)
+    )
+
+    page._live_btn.click()
+    try:
+        assert mmcore.isSequenceRunning()
+        assert len(live_started) == 1
+        assert not live_stopped
+        current = capture_settings()
+        assert current[0] == selected_configs[0]
+        assert current[1:] == pytest.approx((exposures[0], property_values[0]))
+
+        table.setCurrentCell(1, config_col)
+        QApplication.processEvents()
+
+        assert table.currentRow() == 1
+        assert mmcore.isSequenceRunning()
+        assert len(live_started) == 1
+        assert not live_stopped
+        current = capture_settings()
+        assert current[0] == selected_configs[1]
+        assert current[1:] == pytest.approx((exposures[1], property_values[1]))
+    finally:
+        if mmcore.isSequenceRunning():
+            mmcore.stopSequenceAcquisition()
 
 
 def test_themed_tab_bar_keeps_style_after_reinserting_tab(qtbot: QtBot) -> None:

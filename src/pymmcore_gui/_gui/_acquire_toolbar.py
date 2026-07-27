@@ -1,4 +1,4 @@
-"""Acquire-tab toolbar pieces: snap/live, optical-config presets, shutters.
+"""Acquire-tab toolbar pieces: snap/live and shutters.
 
 Snap and Live are built in-house rather than wrapping ``pymmcore_widgets``'
 ``SnapButton``/``LiveButton`` directly: those hardcode their own text,
@@ -21,7 +21,6 @@ from superqt.utils import create_worker
 from pymmcore_gui._array_viewer import ensure_visible_icon
 from pymmcore_gui._qt.QtCore import QEvent, QSize, Signal
 from pymmcore_gui._qt.QtWidgets import (
-    QButtonGroup,
     QFrame,
     QHBoxLayout,
     QPushButton,
@@ -184,65 +183,6 @@ class LiveButton(QPushButton):
             ev.systemConfigurationLoaded.disconnect(self._on_config_loaded)
             ev.continuousSequenceAcquisitionStarted.disconnect(self._on_started)
             ev.sequenceAcquisitionStopped.disconnect(self._on_stopped)
-
-
-class ChannelPresetsBar(QWidget):
-    """Row of checkable buttons for the presets of the current channel group.
-
-    Mirrors the legacy ``OCToolBar`` behaviour with themed QPushButtons.
-    """
-
-    def __init__(
-        self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
-    ) -> None:
-        super().__init__(parent)
-        self._core = mmcore or CMMCorePlus.instance()
-
-        self._layout = QHBoxLayout(self)
-        self._layout.setContentsMargins(0, 0, 0, 0)
-        self._layout.setSpacing(theme().sp_xxs)
-        self._group = QButtonGroup(self)
-        self._group.setExclusive(True)
-
-        ev = self._core.events
-        ev.systemConfigurationLoaded.connect(self._refresh)
-        ev.configGroupChanged.connect(self._refresh)
-        ev.channelGroupChanged.connect(self._refresh)
-        ev.configSet.connect(self._on_config_set)
-        ev.propertyChanged.connect(self._on_property_changed)
-        self._refresh()
-
-    def refresh(self) -> None:
-        """Re-scan the core (e.g. after devices change on another tab)."""
-        self._refresh()
-
-    def _refresh(self, *_: object) -> None:
-        _clear(self._layout)
-        if not (ch_group := self._core.getChannelGroup()):
-            return
-        current = self._core.getCurrentConfig(ch_group)
-        for preset in self._core.getAvailableConfigs(ch_group):
-            btn = QPushButton(preset)
-            # "subtle" = a persistently visible box (not just on hover, which
-            # is the default "ghost"), matching Snap/Live/Shutters and the
-            # rest of the app's toolbar buttons.
-            btn.setProperty("variant", "subtle")
-            btn.setCheckable(True)
-            btn.setChecked(preset == current)
-            btn.clicked.connect(
-                lambda _c=False, p=preset, g=ch_group: self._core.setConfig(g, p)
-            )
-            self._group.addButton(btn)
-            self._layout.addWidget(btn)
-
-    def _on_config_set(self, group: str, config: str) -> None:
-        if group == self._core.getChannelGroup():
-            for btn in self._group.buttons():
-                btn.setChecked(btn.text() == config)
-
-    def _on_property_changed(self, device: str, prop: str, _value: str) -> None:
-        if device == "Core" and prop == "ChannelGroup":
-            self._refresh()
 
 
 class ShuttersBar(QWidget):

@@ -18,6 +18,8 @@ from pymmcore_gui._gui._theme import qcolor, theme
 from pymmcore_gui._qt.QtCore import QEvent, QModelIndex, QObject, QSize, Qt, QTimer
 from pymmcore_gui._qt.QtWidgets import QComboBox, QGridLayout, QWidget
 
+from ._ranged_property_channels import RangedPropertyCollapsibleCoreMDATabs
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -85,6 +87,9 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
     this subclass only adds the app theme, semantic icons, the channel-selection
     core bridge, and the memory-sink output fallback.
     """
+
+    def _create_tab_widget(self) -> CollapsibleCoreMDATabs:
+        return RangedPropertyCollapsibleCoreMDATabs(None, self._mmc)
 
     def __init__(self, mmcore: CMMCorePlus, parent: QWidget | None = None) -> None:
         self._restoring_sequence = False
@@ -225,7 +230,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
     def _schedule_channel_editor_filters(self, *_: object) -> None:
         # columnsInserted fires from insertColumn(), before DataTable.addColumn()
         # has populated that column's cell widgets. Install after the insertion
-        # event has completed so newly rebuilt config/light-source columns are
+        # event has completed so newly rebuilt config/property columns are
         # included.
         QTimer.singleShot(0, self._install_channel_editor_filters)
 
@@ -312,7 +317,10 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         ):
             return
 
-        self._apply_channel_row_to_core(current.row())
+        self._apply_channel_row_to_core(
+            current.row(),
+            include_capture_settings=self._mmc.isSequenceRunning(),
+        )
 
     def apply_active_channel_for_capture(self) -> bool:
         """Apply the active row's channel, exposure, and property before imaging.
@@ -357,7 +365,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
 
             if include_capture_settings:
                 # Ensure any device delays from the selected optical preset have
-                # completed before exposure/light-source settings and imaging.
+                # completed before exposure/property settings and imaging.
                 self._mmc.waitForConfig(group, config)
 
                 if channel.exposure is not None:
@@ -365,7 +373,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
                     if camera := self._mmc.getCameraDevice():
                         self._mmc.waitForDevice(camera)
 
-                # Although today's table exposes one light-source property per
+                # Although today's table exposes one ranged property per
                 # channel, iterate all matching entries so this remains correct if
                 # the upstream model later permits multiple ranged properties.
                 for entry in self.channels.channelProperties(exclude_unchecked=False):
