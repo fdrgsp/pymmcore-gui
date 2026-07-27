@@ -86,12 +86,14 @@ class SnapButton(QPushButton):
         self.setEnabled(bool(self._core.getCameraDevice()))
 
     def _snap(self) -> None:
-        # Emitted synchronously so a lazy preview can subscribe to the core's
-        # imageSnapped signal before the worker performs the first snap.
-        self.snapRequested.emit()
         core = self._core
         if core.isSequenceRunning():
             core.stopSequenceAcquisition()
+
+        # Emitted synchronously after stopping any live sequence so listeners can
+        # safely apply the active channel's capture settings and a lazy preview can
+        # subscribe before the worker performs the first snap.
+        self.snapRequested.emit()
 
         def snap_with_shutter() -> None:
             # Not all shutter devices reliably send their own open/close

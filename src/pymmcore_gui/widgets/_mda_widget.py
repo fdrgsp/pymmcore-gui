@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from pymmcore_widgets import MDAWidget
+from pymmcore_widgets import MDAWidgetCollapsible
+from pymmcore_widgets.mda import CollapsibleCoreMDATabs, SectionMetrics
 from pymmcore_widgets.useq_widgets._positions import MDAButton
 from superqt.iconify import QIconifyIcon
 
@@ -14,16 +15,15 @@ from pymmcore_gui._array_viewer import (
     unstyle_widgets,
 )
 from pymmcore_gui._gui._theme import qcolor, theme
-from pymmcore_gui._qt.QtCore import QEvent, Qt
-from pymmcore_gui._qt.QtWidgets import QGridLayout
+from pymmcore_gui._qt.QtCore import QEvent, QModelIndex, QObject, QSize, Qt, QTimer
+from pymmcore_gui._qt.QtWidgets import QComboBox, QGridLayout, QWidget
 
 if TYPE_CHECKING:
     from pathlib import Path
 
+    import useq
     from pymmcore_plus import CMMCorePlus
     from pymmcore_widgets.mda._xy_bounds import CoreXYBoundsControl
-
-    from pymmcore_gui._qt.QtWidgets import QWidget
 
 
 def _align_bounds_grid(bounds: CoreXYBoundsControl) -> None:
@@ -78,11 +78,19 @@ def _align_bounds_grid(bounds: CoreXYBoundsControl) -> None:
     )
 
 
-class MemoryMDAWidget(MDAWidget):
-    """Christina-style MDA editor with a viewable memory-sink fallback."""
+class MemoryMDAWidget(MDAWidgetCollapsible):
+    """Collapsible-sections MDA editor with a viewable memory-sink fallback.
+
+    The sectioned presentation now lives upstream in ``MDAWidgetCollapsible``;
+    this subclass only adds the app theme, semantic icons, the channel-selection
+    core bridge, and the memory-sink output fallback.
+    """
 
     def __init__(self, mmcore: CMMCorePlus, parent: QWidget | None = None) -> None:
+        self._restoring_sequence = False
+        self._applying_channel_config = False
         super().__init__(parent=parent, mmcore=mmcore)
+        self._apply_theme_metrics()
         combo = self.save_info._writer_combo
         for idx in range(combo.count()):
             if combo.itemText(idx) == "tiff-sequence":
@@ -109,6 +117,11 @@ class MemoryMDAWidget(MDAWidget):
         # gray range labels) and normalizes buttons the same way as
         # everywhere else in the app.
         unstyle_widgets(self)
+        # unstyle_widgets clears every stylesheet, including the one the upstream
+        # Saving section installs to hide the embedded QGroupBox's native header
+        # and indicator. Re-apply it here (and after each row insert below).
+        self._collapsible_tabs().apply_save_body_style()
+        self._apply_table_toolbar_icon_size()
 
         # Channels/Positions/Time are tables: each row is a fresh cell widget
         # built on demand (e.g. the Positions row's black "mdi:axis" Sub-
@@ -128,14 +141,310 @@ class MemoryMDAWidget(MDAWidget):
         self._mmc.mda.events.sequenceFinished.connect(self._apply_themed_icons)
         self._connect_position_icon_updates()
         self._apply_themed_icons()
+        self._connect_channel_selection()
 
         _align_bounds_grid(self.grid_plan._core_xy_bounds)
 
     def _on_table_rows_inserted(self, *_: object) -> None:
         """Theme cell widgets that are constructed only when a row is added."""
         unstyle_widgets(self)
+        self._collapsible_tabs().apply_save_body_style()
+        self._install_channel_editor_filters()
         self._connect_position_icon_updates()
         self._apply_themed_icons()
+
+    def setValue(self, value: useq.MDASequence) -> None:
+        """Restore an MDA sequence without applying a selected row to the core."""
+        selected = self._selected_channel_identity()
+        selected_row = self.channels.table().currentRow()
+        self._restoring_sequence = True
+        try:
+            super().setValue(value)
+            self._restore_channel_selection(selected, selected_row)
+        finally:
+            self._restoring_sequence = False
+        self._collapsible_tabs().refresh_summaries()
+
+    def refresh_channel_table(self) -> None:
+        """Refresh core-backed channel choices without changing microscope state."""
+        channels = self.channels
+        table = channels.table()
+        selected = self._selected_channel_identity()
+        selected_row = table.currentRow()
+        values = channels.value(exclude_unchecked=False)
+        properties = channels.channelProperties(exclude_unchecked=False)
+        light_sources_visible = channels.lightSourceVisible()
+
+        selector_col = table._get_selector_col()
+        selector = table.columnInfo(selector_col)
+        checked = (
+            [
+                selector.isChecked(table, row, selector_col)
+                for row in range(table.rowCount())
+            ]
+            if selector is not None
+            else []
+        )
+
+        self._restoring_sequence = True
+        try:
+            channels.refresh()
+            channels.setValue(values)
+            channels.setLightSourceVisible(light_sources_visible)
+            channels.setChannelProperties(properties)
+
+            selector_col = table._get_selector_col()
+            if (selector := table.columnInfo(selector_col)) is not None:
+                for row, is_checked in enumerate(checked):
+                    check_state = (
+                        Qt.CheckState.Checked if is_checked else Qt.CheckState.Unchecked
+                    )
+                    selector.setCheckState(
+                        table,
+                        row,
+                        selector_col,
+                        cast("bool", check_state),
+                    )
+            self._restore_channel_selection(selected, selected_row)
+        finally:
+            self._restoring_sequence = False
+        self._collapsible_tabs().refresh_summaries()
+
+    def _connect_channel_selection(self) -> None:
+        table = self.channels.table()
+        selection_model = table.selectionModel()
+        if selection_model is None:  # pragma: no cover
+            return
+        selection_model.currentRowChanged.connect(self._on_channel_row_selected)
+        table.clicked.connect(self._on_channel_row_selected)
+        model = table.model()
+        if model is not None:
+            model.columnsInserted.connect(self._schedule_channel_editor_filters)
+        self._install_channel_editor_filters()
+
+    def _schedule_channel_editor_filters(self, *_: object) -> None:
+        # columnsInserted fires from insertColumn(), before DataTable.addColumn()
+        # has populated that column's cell widgets. Install after the insertion
+        # event has completed so newly rebuilt config/light-source columns are
+        # included.
+        QTimer.singleShot(0, self._install_channel_editor_filters)
+
+    def _install_channel_editor_filters(self) -> None:
+        """Make interaction with any channel-cell editor activate its row.
+
+        QTableWidget does not receive mouse events handled by cell widgets such as
+        the channel combo and exposure spin box. Installing the filter on every
+        editor and descendant lets those normal editing interactions also establish
+        the table's single active/current row without stealing focus from the editor.
+        """
+        table = self.channels.table()
+        config_col = table.indexOf(self.channels._config_column)
+        for row in range(table.rowCount()):
+            for col in range(table.columnCount()):
+                cell = table.cellWidget(row, col)
+                if cell is None:
+                    continue
+                editors = (cell, *cell.findChildren(QWidget))
+                for editor in editors:
+                    if not editor.property("_pymmcore_gui_channel_row_filter"):
+                        editor.installEventFilter(self)
+                        editor.setProperty("_pymmcore_gui_channel_row_filter", True)
+
+                if col != config_col:
+                    continue
+                combos = ((cell,) if isinstance(cell, QComboBox) else ()) + tuple(
+                    cell.findChildren(QComboBox)
+                )
+                for combo in combos:
+                    if combo.property("_pymmcore_gui_channel_combo_connected"):
+                        continue
+                    combo.setProperty("_pymmcore_gui_channel_combo_connected", True)
+                    # activated is user-only.  currentTextChanged would also fire
+                    # while loading/refreshing an MDA and could move hardware.
+                    combo.activated.connect(self._on_channel_combo_activated)
+
+    def _channel_index_for_editor(self, editor: QObject | None) -> QModelIndex:
+        if not isinstance(editor, QWidget):
+            return QModelIndex()
+        table = self.channels.table()
+        model = table.model()
+        if model is None:  # pragma: no cover
+            return QModelIndex()
+        for row in range(table.rowCount()):
+            for col in range(table.columnCount()):
+                cell = table.cellWidget(row, col)
+                if cell is editor or (cell is not None and cell.isAncestorOf(editor)):
+                    return model.index(row, col)
+        return QModelIndex()
+
+    def _activate_channel_index(self, index: QModelIndex) -> None:
+        """Select/highlight ``index``'s row and apply its current config."""
+        if not index.isValid() or self._restoring_sequence:
+            return
+        table = self.channels.table()
+        previous_row = table.currentRow()
+        table.setCurrentCell(index.row(), index.column())
+        table.selectRow(index.row())
+        # A row change is handled synchronously by currentRowChanged. Re-apply
+        # explicitly for another cell in the same row, most importantly after a
+        # user changes that row's channel combo.
+        if previous_row == index.row():
+            self._on_channel_row_selected(index)
+
+    def _on_channel_combo_activated(self, *_: object) -> None:
+        self._activate_channel_index(self._channel_index_for_editor(self.sender()))
+
+    def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
+        if a1 is not None and a1.type() in (
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.FocusIn,
+        ):
+            index = self._channel_index_for_editor(a0)
+            if index.isValid():
+                self._activate_channel_index(index)
+        return super().eventFilter(a0, a1)
+
+    def _on_channel_row_selected(self, current: QModelIndex, *_: object) -> None:
+        if (
+            self._restoring_sequence
+            or self._applying_channel_config
+            or not current.isValid()
+        ):
+            return
+
+        self._apply_channel_row_to_core(current.row())
+
+    def apply_active_channel_for_capture(self) -> bool:
+        """Apply the active row's channel, exposure, and property before imaging.
+
+        The acquisition checkbox is intentionally ignored: it controls inclusion in
+        an MDA, while the table's current row is the independent live/snap selection.
+        """
+        return self._apply_channel_row_to_core(
+            self.channels.table().currentRow(),
+            include_capture_settings=True,
+        )
+
+    def _apply_channel_row_to_core(
+        self, row: int, *, include_capture_settings: bool = False
+    ) -> bool:
+        if self._restoring_sequence or self._applying_channel_config:
+            return False
+
+        channels = self.channels.value(exclude_unchecked=False)
+        if not 0 <= row < len(channels):
+            return False
+
+        channel = channels[row]
+        config = str(channel.config or "")
+        if not config:
+            return False
+
+        available_groups = set(self._mmc.getAvailableConfigGroups())
+        group = str(channel.group or "")
+        current_channel_group = self._mmc.getChannelGroup()
+        if not group or (group == "Channel" and group not in available_groups):
+            group = current_channel_group
+        if not group or group not in available_groups:
+            return False
+        if config not in self._mmc.getAvailableConfigs(group):
+            return False
+
+        self._applying_channel_config = True
+        try:
+            if self._mmc.getCurrentConfig(group) != config:
+                self._mmc.setConfig(group, config)
+
+            if include_capture_settings:
+                # Ensure any device delays from the selected optical preset have
+                # completed before exposure/light-source settings and imaging.
+                self._mmc.waitForConfig(group, config)
+
+                if channel.exposure is not None:
+                    self._mmc.setExposure(float(channel.exposure))
+                    if camera := self._mmc.getCameraDevice():
+                        self._mmc.waitForDevice(camera)
+
+                # Although today's table exposes one light-source property per
+                # channel, iterate all matching entries so this remains correct if
+                # the upstream model later permits multiple ranged properties.
+                for entry in self.channels.channelProperties(exclude_unchecked=False):
+                    if entry["channel_index"] != row:
+                        continue
+                    device = entry["device"]
+                    prop = entry["property"]
+                    self._mmc.setProperty(device, prop, entry["value"])
+                    self._mmc.waitForDevice(device)
+        finally:
+            self._applying_channel_config = False
+        return True
+
+    def _selected_channel_identity(self) -> tuple[str, str] | None:
+        row = self.channels.table().currentRow()
+        channels = self.channels.value(exclude_unchecked=False)
+        if not 0 <= row < len(channels):
+            return None
+        channel = channels[row]
+        return str(channel.group or ""), str(channel.config or "")
+
+    def _restore_channel_selection(
+        self,
+        identity: tuple[str, str] | None,
+        preferred_row: int = -1,
+    ) -> None:
+        if identity is None:
+            return
+        table = self.channels.table()
+        config_col = table.indexOf(self.channels._config_column)
+        channels = self.channels.value(exclude_unchecked=False)
+        if 0 <= preferred_row < len(channels):
+            channel = channels[preferred_row]
+            candidate = str(channel.group or ""), str(channel.config or "")
+            if candidate == identity:
+                table.setCurrentCell(preferred_row, max(0, config_col))
+                return
+        for row, channel in enumerate(channels):
+            candidate = str(channel.group or ""), str(channel.config or "")
+            if candidate == identity:
+                table.setCurrentCell(row, max(0, config_col))
+                return
+
+    def _collapsible_tabs(self) -> CollapsibleCoreMDATabs:
+        return self.tabs
+
+    def _apply_table_toolbar_icon_size(self) -> None:
+        """Shrink the axis-table toolbars to the app's compact action-icon size.
+
+        Upstream ``DataTableWidget`` hardcodes a 22px toolbar icon size, and the
+        app's zoom pass makes every ``QToolBar`` even larger
+        (``PM_ToolBarIconSize``) — both bigger than the toolbar actions the user
+        sees elsewhere in Acquire. Match those instead (≈20px at the default
+        zoom), scaled with the theme. Re-applied on theme/zoom changes from
+        ``changeEvent`` because the app-wide pass would otherwise reset it.
+        """
+        icon = theme().scaled(16)
+        size = QSize(icon, icon)
+        for table in (self.channels, self.stage_positions, self.time_plan):
+            table.toolBar().setIconSize(size)
+
+    def _apply_theme_metrics(self) -> None:
+        """Feed the app's zoom-scaled spacing into the upstream sections."""
+        t = theme()
+        self.set_section_metrics(
+            SectionMetrics(
+                header_height=t.row_height,
+                disclosure_width=t.scaled(24),
+                header_spacing=t.sp_xxs,
+                body_margin_h=t.sp_sm,
+                body_margin_top=t.sp_xs,
+                body_margin_bottom=t.sp_sm,
+                body_spacing=t.sp_sm,
+                content_spacing=t.sp_xxs,
+                footer_margin_h=t.sp_sm,
+                footer_margin_top=t.sp_xs,
+                footer_margin_bottom=t.sp_sm,
+            )
+        )
 
     def _connect_position_icon_updates(self) -> None:
         """Keep per-position sub-sequence icons themed after value changes."""
@@ -193,7 +502,7 @@ class MemoryMDAWidget(MDAWidget):
             )
 
     def changeEvent(self, a0: QEvent | None) -> None:
-        """Recreate semantic icons when switching between light and dark themes."""
+        """Re-theme icons and rescale section spacing after a style/zoom change."""
         super().changeEvent(a0)
         if (
             a0 is not None
@@ -201,6 +510,8 @@ class MemoryMDAWidget(MDAWidget):
             and hasattr(self, "control_btns")
         ):
             self._apply_themed_icons()
+            self._apply_theme_metrics()
+            self._apply_table_toolbar_icon_size()
 
     def prepare_mda(self) -> bool | str | Path | None:
         """Return a disk path or a scratch sink that supports live viewing."""

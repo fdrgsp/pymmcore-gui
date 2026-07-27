@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import math
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import Mock, patch
 
+import pytest
 import useq
+from pymmcore_widgets import MDAWidget as UpstreamMDAWidget
 from pymmcore_widgets.useq_widgets._positions import MDAButton
 
 import pymmcore_gui._gui._acquire_toolbar as acquire_toolbar_module
@@ -28,10 +31,11 @@ from pymmcore_gui._gui._theme import (
 )
 from pymmcore_gui._gui._theme._dark import DARK_THEME
 from pymmcore_gui._gui._theme._light import LIGHT_THEME
-from pymmcore_gui._qt.QtCore import QSize
+from pymmcore_gui._qt.QtCore import QSize, Qt
 from pymmcore_gui._qt.QtGui import QIcon, QPalette
 from pymmcore_gui._qt.QtWidgets import (
     QApplication,
+    QComboBox,
     QFileDialog,
     QLabel,
     QMessageBox,
@@ -47,7 +51,6 @@ from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    import pytest
     from pymmcore_plus import CMMCorePlus
     from pytestqt.qtbot import QtBot
 
@@ -159,25 +162,61 @@ def test_acquire_page_sidebar_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     set_theme(DARK_THEME)
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
+    tabs = page._mda._collapsible_tabs()
 
     assert page._viewers.count() == 0
     assert page._viewers.preview is None
     assert isinstance(page._viewers.tabBar(), ThemedTabBar)
-    # Group/Preset selection lives in the right sidebar now (as a tab,
-    # alongside MDA/Properties); the left sidebar has nothing left in it.
-    assert page.left.isHidden()
+    assert not page.left.isHidden()
+    assert page._mda.parentWidget() is page.left
+    assert not page._mda.isHidden()
     assert not page.right.isHidden()
     assert page._mda.prepare_mda() == "memory"
-    assert page._right_tabs.count() == 2
+    assert page._right_tabs.count() == 1
     assert isinstance(page._right_tabs.tabBar(), ThemedTabBar)
     assert page._right_tabs.widget(0) is page._presets
     assert page._right_tabs.tabText(0) == "Groups and Presets"
-    assert page._right_tabs.widget(1) is page._mda
-    assert page._right_tabs.tabText(1) == "MDA"
-    assert page._right_tabs.currentWidget() is page._mda
+    assert page._right_tabs.currentWidget() is page._presets
     assert page._presets_btn.isChecked()
-    assert page._mda_btn.isChecked()
     assert not page._props_btn.isChecked()
+
+    assert [section.title for section in tabs.sections] == [
+        "Channels",
+        "Positions",
+        "Grid / Tile Scan",
+        "Z Stack",
+        "Time Series",
+        "Saving",
+        "Settings",
+    ]
+    assert tabs.section("c").content_widget is page._mda.channels
+    assert tabs.section("p").content_widget is page._mda.stage_positions
+    assert tabs.section("g").content_widget is page._mda.grid_plan
+    assert tabs.section("z").content_widget is page._mda.z_plan
+    assert tabs.section("t").content_widget is page._mda.time_plan
+    assert tabs.saving_section.content_widget is page._mda.save_info
+    assert tabs.saving_section is tabs.sections[-2]
+    assert tabs.settings_section is tabs.sections[-1]
+    tab_bar = tabs.tabBar()
+    assert tab_bar is not None and tab_bar.isHidden()
+
+    channels_section = tabs.section("c")
+    assert channels_section.expanded
+    assert channels_section.checked
+    channels_section.set_expanded(False)
+    assert channels_section.checked
+    assert not channels_section.content_visible
+    channels_section.set_checked(False)
+    assert not channels_section.checked
+    assert not channels_section.expanded
+    channels_section.set_checked(True)
+
+    assert tabs.saving_section.summary == "Memory only"
+    assert not tabs.saving_section.checked
+    tabs.saving_section.set_checked(True)
+    assert page._mda.save_info.isChecked()
+    tabs.saving_section.set_checked(False)
+    assert not page._mda.save_info.isChecked()
 
     # Groups & Presets is the upstream GroupPresetTableWidget with its
     # editing/save/load controls hidden — editing groups already lives on the
@@ -191,49 +230,32 @@ def test_acquire_page_sidebar_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert not page._presets.table_wdg.isHidden()
 
     page._props_btn.click()
-    assert page._right_tabs.count() == 3
+    assert page._right_tabs.count() == 2
     assert page._props_btn.isChecked()
     assert page._right_tabs.currentWidget() is page._property_browser
-    assert page._right_tabs.tabText(2) == "Properties"
+    assert page._right_tabs.tabText(1) == "Properties"
     assert page._property_browser is not None
     assert not page._property_browser.isWindow()
 
     # Toggling a button removes and restores its corresponding tab.
     page._props_btn.click()
-    assert page._right_tabs.count() == 2
+    assert page._right_tabs.count() == 1
     assert not page._props_btn.isChecked()
 
     page._props_btn.click()
-    page._mda_btn.click()
-    assert page._right_tabs.count() == 2
-    assert page._right_tabs.currentWidget() is page._property_browser
-    assert not page._mda_btn.isChecked()
-
-    # Re-enabling inserts back at the front of the tab bar.
-    page._mda_btn.click()
-    assert page._right_tabs.count() == 3
-    assert page._right_tabs.tabText(0) == "MDA"
-    assert page._right_tabs.tabText(1) == "Groups and Presets"
-    assert page._right_tabs.tabText(2) == "Properties"
-
-    page._close_right_tab(0)
-    assert page._right_tabs.count() == 2
-    assert not page._mda_btn.isChecked()
-    assert page._props_btn.isChecked()
-
     page._close_right_tab(0)
     assert page._right_tabs.count() == 1
     assert not page._presets_btn.isChecked()
+    assert page._props_btn.isChecked()
 
     page._close_right_tab(0)
     assert page._right_tabs.count() == 0
     assert not page._props_btn.isChecked()
-    assert not page._props_btn.isChecked()
     assert page.right.isHidden()
 
-    page._mda_btn.click()
+    page._presets_btn.click()
     assert page._right_tabs.count() == 1
-    assert page._right_tabs.currentWidget() is page._mda
+    assert page._right_tabs.currentWidget() is page._presets
     assert not page.right.isHidden()
 
 
@@ -291,6 +313,396 @@ def test_snap_opens_closable_preview(
     assert replacement.frames == 1
 
 
+def test_selecting_channel_row_applies_only_its_core_config(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    set_theme(DARK_THEME)
+    mda = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(mda)
+    channels = mda.channels
+    presets = tuple(mmcore.getAvailableConfigs("Channel"))
+    first = presets[0]
+    mda.setValue(
+        useq.MDASequence(
+            channels=tuple(
+                useq.Channel(
+                    group="Channel",
+                    config=config,
+                    exposure=12.5 + index,
+                )
+                for index, config in enumerate(presets)
+            )
+        )
+    )
+
+    mmcore.setConfig("Channel", first)
+    mmcore.setExposure(8)
+    table = channels.table()
+    config_column = table.indexOf(channels._config_column)
+    for row, preset in enumerate(presets):
+        table.setCurrentCell(row, config_column)
+        QApplication.processEvents()
+        assert mmcore.getCurrentConfig("Channel") == preset
+
+    assert mmcore.getExposure() == pytest.approx(8)
+    assert channels.value(exclude_unchecked=False)[1].exposure == pytest.approx(13.5)
+
+    # Embedded editors consume their own mouse events, but interacting with any
+    # of them must still establish and visibly select the active channel row.
+    exposure_column = table.indexOf(channels.EXPOSURE)
+    exposure_editor = table.cellWidget(1, exposure_column)
+    assert exposure_editor is not None
+    table.setCurrentCell(0, config_column)
+    mmcore.setConfig("Channel", first)
+    qtbot.mouseClick(  # type: ignore[no-untyped-call]
+        exposure_editor, Qt.MouseButton.LeftButton
+    )
+    assert table.currentRow() == 1
+    assert {index.row() for index in table.selectedIndexes()} == {1}
+    assert mmcore.getCurrentConfig("Channel") == presets[1]
+
+    # A programmatic combo update is hardware-neutral, while a user activation
+    # applies the newly selected preset even though the current row did not change.
+    config_cell = table.cellWidget(1, config_column)
+    assert config_cell is not None
+    config_combo = config_cell.findChild(QComboBox)
+    assert config_combo is not None
+    config_combo.setCurrentText(first)
+    QApplication.processEvents()
+    assert mmcore.getCurrentConfig("Channel") == presets[1]
+    config_combo.activated.emit(config_combo.currentIndex())
+    QApplication.processEvents()
+    assert table.currentRow() == 1
+    assert mmcore.getCurrentConfig("Channel") == first
+
+    table.clearChecks()
+    mda.refresh_channel_table()
+    assert channels.value() == ()
+    assert len(channels.value(exclude_unchecked=False)) == len(presets)
+    table.checkAllRows()
+
+    table.setCurrentCell(1, config_column)
+    mmcore.setConfig("Channel", first)
+    mda.refresh_channel_table()
+    assert table.currentRow() == 1
+    assert mmcore.getCurrentConfig("Channel") == first
+
+    # Rebuilding/restoring the table preserves the selected row but must not
+    # re-apply that row's preset to the microscope.
+    mda.setValue(mda.value())
+    assert table.currentRow() == 1
+    assert mmcore.getCurrentConfig("Channel") == first
+
+    model = table.model()
+    assert model is not None
+    invalid_index = model.index(0, config_column)
+    with patch.object(
+        channels,
+        "value",
+        return_value=(useq.Channel(group="missing", config="unknown", exposure=1),),
+    ):
+        mda._on_channel_row_selected(invalid_index)
+    assert mmcore.getCurrentConfig("Channel") == first
+
+
+def test_collapsible_mda_round_trips_all_original_widgets(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    set_theme(DARK_THEME)
+    mmcore.setAutoFocusDevice("Autofocus")
+    mda = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(mda)
+    tabs = mda._collapsible_tabs()
+    reference = UpstreamMDAWidget(mmcore=mmcore)
+    qtbot.addWidget(reference)
+    z_plan = useq.ZRangeAround(range=4, step=1)
+    time_plan = useq.TIntervalLoops(interval=timedelta(seconds=2), loops=3)
+    grid_plan = useq.GridRowsColumns(rows=2, columns=3)
+    positions = (
+        useq.AbsolutePosition(
+            x=10,
+            y=20,
+            z=3,
+            name="Site 1",
+            sequence=useq.MDASequence(
+                channels=(useq.Channel(config="Cy5", exposure=9),)
+            ),
+        ),
+    )
+    channels = (
+        useq.Channel(
+            group="Channel",
+            config="DAPI",
+            exposure=12.5,
+            acquire_every=2,
+            do_stack=False,
+            z_offset=1.5,
+        ),
+        useq.Channel(group="Channel", config="FITC", exposure=27),
+    )
+    source = useq.MDASequence(
+        axis_order=tuple("tpgzc"),
+        channels=channels,
+        stage_positions=positions,
+        grid_plan=grid_plan,
+        z_plan=z_plan,
+        time_plan=time_plan,
+        autofocus_plan=useq.AxesBasedAF(axes=("p", "t")),
+        keep_shutter_open_across=("z", "t"),
+        metadata={
+            "pymmcore_widgets": {
+                "save_dir": "/tmp",
+                "save_name": "roundtrip.ome.tif",
+                "format": "ome-tiff",
+                "should_save": True,
+            }
+        },
+    )
+
+    reference.setValue(source)
+    mda.setValue(source)
+    reference_result = reference.value()
+    result = mda.value()
+
+    assert result == reference_result
+    assert result.channels == channels
+    assert result.stage_positions == positions
+    assert isinstance(result.grid_plan, useq.GridRowsColumns)
+    assert result.grid_plan.rows == grid_plan.rows
+    assert result.grid_plan.columns == grid_plan.columns
+    assert result.z_plan == z_plan
+    assert result.time_plan == time_plan
+    assert result.autofocus_plan is not None
+    assert result.autofocus_plan.axes == ("p", "t")
+    assert result.keep_shutter_open_across == ("z", "t")
+    assert all(tabs.isChecked(axis) for axis in "cpgzt")
+    assert tabs.saving_section.checked
+    assert tabs.saving_section is tabs.sections[-2]
+    assert mda.save_info.save_name.text() == "roundtrip.ome.tif"
+
+    channel_table = mda.channels.table()
+    assert not channel_table.isColumnHidden(
+        channel_table.indexOf(mda.channels.ACQUIRE_EVERY)
+    )
+    assert not channel_table.isColumnHidden(
+        channel_table.indexOf(mda.channels.DO_STACK)
+    )
+
+    source_group = "_slider_test"
+    source_device, source_property = mda.channels.lightSources()[source_group]
+    intensity = mmcore.getPropertyUpperLimit(source_device, source_property)
+    mda.channels.setLightSourceVisible(True)
+    mda.channels.setChannelProperties(
+        [
+            {
+                "channel_index": 0,
+                "config": "DAPI",
+                "group": source_group,
+                "device": source_device,
+                "property": source_property,
+                "value": intensity,
+            }
+        ]
+    )
+    with_properties = mda.value()
+    mda.channels.setLightSourceVisible(False)
+    mda.setValue(with_properties)
+    assert mda.channels.lightSourceVisible()
+    assert mda.channels.channelProperties()[0]["value"] == pytest.approx(intensity)
+
+    tabs.setChecked("z", False)
+    assert result.z_plan == z_plan
+    assert mda.value().z_plan is None
+    assert channel_table.isColumnHidden(channel_table.indexOf(mda.channels.DO_STACK))
+
+
+def test_collapsible_mda_preserves_per_position_af_offsets(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Per-position autofocus offsets survive the sectioned Positions editor.
+
+    The offset lives on each position's sub-sequence ``autofocus_plan`` and is
+    edited through the upstream table's AF column + "Set AF Offset per Position"
+    toggle. This guards that parity once the legacy widget is removed (Phase 6).
+    """
+    set_theme(DARK_THEME)
+    mmcore.setAutoFocusDevice("Autofocus")
+    mda = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(mda)
+
+    positions = (
+        useq.AbsolutePosition(
+            x=1,
+            y=2,
+            z=3,
+            name="P1",
+            sequence=useq.MDASequence(
+                autofocus_plan=useq.AxesBasedAF(
+                    autofocus_motor_offset=42.0, axes=("p",)
+                )
+            ),
+        ),
+        useq.AbsolutePosition(
+            x=5,
+            y=6,
+            z=7,
+            name="P2",
+            sequence=useq.MDASequence(
+                autofocus_plan=useq.AxesBasedAF(
+                    autofocus_motor_offset=-13.0, axes=("p",)
+                )
+            ),
+        ),
+    )
+    mda.setValue(useq.MDASequence(stage_positions=positions))
+
+    assert mda.stage_positions.af_per_position.isChecked()
+    restored = mda.value().stage_positions
+    assert restored == positions
+    seq0 = restored[0].sequence
+    assert seq0 is not None and seq0.autofocus_plan is not None
+    assert seq0.autofocus_plan.autofocus_motor_offset == 42.0
+    seq1 = restored[1].sequence
+    assert seq1 is not None and seq1.autofocus_plan is not None
+    assert seq1.autofocus_plan.autofocus_motor_offset == -13.0
+
+
+def test_collapsible_mda_retains_saving_and_execution_controls(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    tmp_path: Path,
+) -> None:
+    set_theme(DARK_THEME)
+    mda = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(mda)
+    tabs = mda._collapsible_tabs()
+
+    requested = tmp_path / "experiment.ome.tif"
+    requested.touch()
+    mda.save_info.setValue(
+        {
+            "save_dir": str(tmp_path),
+            "save_name": requested.name,
+            "format": "ome-tiff",
+            "should_save": True,
+        }
+    )
+    assert tabs.saving_section.checked
+    assert tabs.saving_section is tabs.sections[-2]
+    assert mda.prepare_mda() == tmp_path / "experiment_001.ome.tif"
+
+    sequence = mda.value()
+    for suffix in (".yaml", ".json"):
+        settings_path = tmp_path / f"mda-settings{suffix}"
+        mda.save(settings_path)
+        restored = MemoryMDAWidget(mmcore)
+        qtbot.addWidget(restored)
+        restored.load(settings_path)
+        assert restored.value().channels == sequence.channels
+        assert restored.save_info.value() == mda.save_info.value()
+
+    channel_checkbox = tabs.section("c").checkbox
+    assert channel_checkbox is not None
+    mmcore.mda.events.sequenceStarted.emit(sequence, {})
+    assert not channel_checkbox.isEnabled()
+    assert not mda.channels.isEnabled()
+    assert mda.control_btns.cancel_btn.isEnabled()
+    assert mda.control_btns.run_btn.isHidden()
+    assert not mda.control_btns.pause_btn.isHidden()
+    assert not mda.control_btns.cancel_btn.isHidden()
+
+    mmcore.mda.events.sequenceFinished.emit(sequence)
+    assert channel_checkbox.isEnabled()
+    assert mda.channels.isEnabled()
+    assert not mda.control_btns.run_btn.isHidden()
+    assert mda.control_btns.pause_btn.isHidden()
+    assert mda.control_btns.cancel_btn.isHidden()
+
+
+def test_collapsible_mda_runs_disk_backed_acquisition(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    tmp_path: Path,
+) -> None:
+    set_theme(DARK_THEME)
+    mda = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(mda)
+    mda.setValue(
+        useq.MDASequence(
+            channels=(useq.Channel(group="Channel", config="DAPI", exposure=1),)
+        )
+    )
+    destination = tmp_path / "acquisition.ome.tif"
+    mda.save_info.setValue(destination)
+
+    with qtbot.waitSignal(mmcore.mda.events.sequenceFinished, timeout=10_000):
+        mda.run_mda()
+
+    assert destination.is_file()
+
+    mda.save_info.setChecked(False)
+    with qtbot.waitSignal(mmcore.mda.events.sequenceFinished, timeout=10_000):
+        mda.run_mda()
+    assert mda.control_btns.run_btn.isEnabled()
+
+
+def test_collapsible_mda_disables_every_editor_during_acquisition(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """All sections — axes, Saving, Settings — lock during a run and unlock after.
+
+    Extends the channels-only assertion: ``set_editor_enabled`` must sweep every
+    axis section, the Settings body, and the Saving section so nothing stays
+    editable while an acquisition is in flight.
+    """
+    set_theme(DARK_THEME)
+    mda = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(mda)
+    tabs = mda._collapsible_tabs()
+
+    # Turn every optional axis on so their editors are expected to be enabled
+    # while idle, and therefore disabled during the run.
+    for axis in "pgzt":
+        tabs.setChecked(axis, True)
+    tabs.saving_section.set_checked(True)
+
+    axis_widgets = {
+        "c": mda.channels,
+        "p": mda.stage_positions,
+        "g": mda.grid_plan,
+        "z": mda.z_plan,
+        "t": mda.time_plan,
+    }
+    sequence = mda.value()
+
+    mmcore.mda.events.sequenceStarted.emit(sequence, {})
+    for axis, widget in axis_widgets.items():
+        section = tabs.section(axis)
+        assert section.checkbox is not None
+        assert not section.checkbox.isEnabled(), f"{axis} checkbox stayed enabled"
+        assert not widget.isEnabled(), f"{axis} editor stayed enabled"
+    assert not tabs.settings_section._body.isEnabled()
+    assert tabs.saving_section.checkbox is not None
+    assert not tabs.saving_section.checkbox.isEnabled()
+    assert not mda.save_info.isEnabled()
+    # Footer: only Pause/Cancel are actionable while running.
+    assert mda.control_btns.run_btn.isHidden()
+    assert mda.control_btns.pause_btn.isEnabled()
+    assert mda.control_btns.cancel_btn.isEnabled()
+
+    mmcore.mda.events.sequenceFinished.emit(sequence)
+    for axis, widget in axis_widgets.items():
+        section = tabs.section(axis)
+        assert section.checkbox is not None
+        assert section.checkbox.isEnabled(), f"{axis} checkbox stayed disabled"
+        assert widget.isEnabled(), f"{axis} editor stayed disabled"
+    assert tabs.settings_section._body.isEnabled()
+    assert tabs.saving_section.checkbox.isEnabled()
+    assert mda.save_info.isEnabled()
+    assert not mda.control_btns.run_btn.isHidden()
+    assert mda.control_btns.cancel_btn.isHidden()
+
+
 def test_live_opens_preview_before_streaming(
     mmcore: CMMCorePlus,
     qtbot: QtBot,
@@ -329,6 +741,98 @@ def test_live_opens_preview_before_streaming(
     assert preview.streaming_started == 1
     assert mmcore.isSequenceRunning()
 
+    page._live_btn.click()
+    assert not mmcore.isSequenceRunning()
+
+
+def test_snap_and_live_apply_the_active_channel_capture_settings(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakePreview(QWidget):
+        def __init__(
+            self,
+            mmcore: CMMCorePlus,
+            parent: QWidget | None = None,
+        ) -> None:
+            super().__init__(parent)
+
+        def detach(self) -> None:
+            pass
+
+    def run_worker_now(func: Callable[[], None], **_: object) -> None:
+        func()
+
+    monkeypatch.setattr(acquire_viewers_module, "NDVPreview", FakePreview)
+    monkeypatch.setattr(acquire_toolbar_module, "create_worker", run_worker_now)
+
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    channels = page._mda.channels
+    config = tuple(mmcore.getAvailableConfigs("Channel"))[-1]
+    exposure = 23.5
+    page._mda.setValue(
+        useq.MDASequence(
+            channels=(useq.Channel(group="Channel", config=config, exposure=exposure),)
+        )
+    )
+
+    table = channels.table()
+    table.setCurrentCell(0, table.indexOf(channels._config_column))
+    source_group = "_slider_test"
+    source_device, source_property = channels.lightSources()[source_group]
+    intensity = mmcore.getPropertyUpperLimit(source_device, source_property)
+    channels.setLightSourceVisible(True)
+    channels.setChannelProperties(
+        [
+            {
+                "channel_index": 0,
+                "config": config,
+                "group": source_group,
+                "device": source_device,
+                "property": source_property,
+                "value": intensity,
+            }
+        ]
+    )
+
+    first_config = next(iter(mmcore.getAvailableConfigs("Channel")))
+    baseline_intensity = mmcore.getPropertyLowerLimit(source_device, source_property)
+
+    def reset_core() -> None:
+        mmcore.setConfig("Channel", first_config)
+        mmcore.setExposure(5)
+        mmcore.setProperty(source_device, source_property, baseline_intensity)
+
+    def capture_settings() -> tuple[str, float, float]:
+        return (
+            mmcore.getCurrentConfig("Channel"),
+            mmcore.getExposure(),
+            float(mmcore.getProperty(source_device, source_property)),
+        )
+
+    snapped: list[tuple[str, float, float]] = []
+    mmcore.events.imageSnapped.connect(lambda: snapped.append(capture_settings()))
+    reset_core()
+    page._snap_btn.click()
+    assert snapped[0][0] == config
+    assert snapped[0][1:] == pytest.approx((exposure, intensity))
+    captured = capture_settings()
+    assert captured[0] == config
+    assert captured[1:] == pytest.approx((exposure, intensity))
+
+    started: list[tuple[str, float, float]] = []
+    mmcore.events.continuousSequenceAcquisitionStarted.connect(
+        lambda: started.append(capture_settings())
+    )
+    reset_core()
+    page._live_btn.click()
+    assert started[0][0] == config
+    assert started[0][1:] == pytest.approx((exposure, intensity))
+    captured = capture_settings()
+    assert captured[0] == config
+    assert captured[1:] == pytest.approx((exposure, intensity))
     page._live_btn.click()
     assert not mmcore.isSequenceRunning()
 
@@ -516,7 +1020,7 @@ def test_stage_explorer_style_and_mda_link(mmcore: CMMCorePlus, qtbot: QtBot) ->
     first = useq.AbsolutePosition(x=10, y=20, name="ROI 1")
     explorer.sendToMDARequested.emit([first], True)
     assert list(page._mda.stage_positions.value()) == [first]
-    assert page._right_tabs.currentWidget() is page._mda
+    assert page._mda._collapsible_tabs().section("p").expanded
 
     second = useq.AbsolutePosition(x=30, y=40, name="ROI 2")
     explorer.sendToMDARequested.emit([second], False)

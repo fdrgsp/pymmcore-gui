@@ -32,6 +32,8 @@ if TYPE_CHECKING:
     from pymmcore_gui._qt.QtGui import QShowEvent
 
 _PRESETS_LABEL = "Groups and Presets"
+_MDA_PANEL_WIDTH = 700
+_RIGHT_PANEL_WIDTH = 420
 
 
 class AcquirePage(TabPage):
@@ -43,11 +45,10 @@ class AcquirePage(TabPage):
         super().__init__(parent)
         self._core = mmcore or CMMCorePlus.instance()
 
-        # Nothing lives in the left sidebar any more (Group/Preset moved to
-        # the right, alongside MDA/Properties, below) -- keep it hidden.
-        self.left.hide()
-
         self._presets = AcquisitionPresetSelector(mmcore=self._core)
+        self._mda = MemoryMDAWidget(mmcore=self._core)
+        self.left.add_widget(self._mda, 1)
+        self.left.setMinimumWidth(_MDA_PANEL_WIDTH)
 
         self._right_tabs = QTabWidget()
         self._right_tabs.setTabBar(ThemedTabBar(self._right_tabs))
@@ -56,10 +57,7 @@ class AcquirePage(TabPage):
         self._right_tabs.tabCloseRequested.connect(self._close_right_tab)
 
         self._right_tabs.addTab(self._presets, _PRESETS_LABEL)
-
-        self._mda = MemoryMDAWidget(mmcore=self._core)
-        self._right_tabs.addTab(self._mda, "MDA")
-        self._right_tabs.setCurrentWidget(self._mda)
+        self._right_tabs.setCurrentWidget(self._presets)
 
         self._property_browser: PropertyBrowser | None = None
         self.right.add_widget(self._right_tabs, 1)
@@ -80,15 +78,19 @@ class AcquirePage(TabPage):
 
         self.add_content_widget(self._content_tabs)
         self.bottom.hide()
-        self._h_split.setSizes([0, 900, 520])
+        self._h_split.setSizes([_MDA_PANEL_WIDTH, 900, _RIGHT_PANEL_WIDTH])
 
-        # toolbar: snap|live ‖ optical configs ‖ shutters … [Presets|MDA|Properties]
+        # toolbar: snap|live ‖ optical configs ‖ shutters … [Presets|Properties]
         self._channels = ChannelPresetsBar(self._core)
         self._shutters = ShuttersBar(self._core)
         self._snap_btn = SnapButton(mmcore=self._core)
+        self._snap_btn.snapRequested.connect(self._mda.apply_active_channel_for_capture)
         self._snap_btn.snapRequested.connect(self._viewers.ensure_preview)
         self.toolbar.add_widget(self._snap_btn)
         self._live_btn = LiveButton(mmcore=self._core)
+        self._live_btn.liveStartedRequested.connect(
+            self._mda.apply_active_channel_for_capture
+        )
         self._live_btn.liveStartedRequested.connect(self._viewers.ensure_preview)
         self.toolbar.add_widget(self._live_btn)
         self.toolbar.add_widget(toolbar_separator())
@@ -108,14 +110,6 @@ class AcquirePage(TabPage):
         self._presets_btn.toggled.connect(self._toggle_presets)
         self.toolbar.add_widget(self._presets_btn)
 
-        self._mda_btn = QPushButton("MDA")
-        self._mda_btn.setProperty("variant", "subtle")
-        self._mda_btn.setCheckable(True)
-        self._mda_btn.setChecked(True)
-        self._mda_btn.setToolTip("Show the multi-dimensional acquisition tab")
-        self._mda_btn.toggled.connect(self._toggle_mda)
-        self.toolbar.add_widget(self._mda_btn)
-
         self._props_btn = QPushButton("Properties")
         self._props_btn.setProperty("variant", "subtle")
         self._props_btn.setCheckable(True)
@@ -127,29 +121,13 @@ class AcquirePage(TabPage):
         """Transfer Stage Explorer regions into the MDA position table."""
         existing = [] if replace else list(self._mda.stage_positions.value())
         self._mda.stage_positions.setValue([*existing, *positions])
-
-        # Make the result immediately visible even if the MDA tab was closed.
-        self._mda_btn.setChecked(True)
-        if (idx := self._right_tabs.indexOf(self._mda)) < 0:
-            self._toggle_mda(True)
-            idx = self._right_tabs.indexOf(self._mda)
-        self._right_tabs.setCurrentIndex(idx)
+        self._mda._collapsible_tabs().section("p").set_expanded(True)
 
     def _toggle_presets(self, checked: bool) -> None:
         idx = self._right_tabs.indexOf(self._presets)
         if checked:
             if idx < 0:
                 idx = self._right_tabs.insertTab(0, self._presets, _PRESETS_LABEL)
-            self._right_tabs.setCurrentIndex(idx)
-        elif idx >= 0:
-            self._right_tabs.removeTab(idx)
-        self._update_right_sidebar()
-
-    def _toggle_mda(self, checked: bool) -> None:
-        idx = self._right_tabs.indexOf(self._mda)
-        if checked:
-            if idx < 0:
-                idx = self._right_tabs.insertTab(0, self._mda, "MDA")
             self._right_tabs.setCurrentIndex(idx)
         elif idx >= 0:
             self._right_tabs.removeTab(idx)
@@ -176,8 +154,6 @@ class AcquirePage(TabPage):
         widget = self._right_tabs.widget(index)
         if widget is self._presets:
             self._presets_btn.setChecked(False)
-        elif widget is self._mda:
-            self._mda_btn.setChecked(False)
         elif widget is self._property_browser:
             self._props_btn.setChecked(False)
 
@@ -185,7 +161,9 @@ class AcquirePage(TabPage):
         visible = self._right_tabs.count() > 0
         self.right.setVisible(visible)
         if visible:
-            self._h_split.setSizes([0, 900, 520])
+            self._h_split.setSizes([_MDA_PANEL_WIDTH, 900, _RIGHT_PANEL_WIDTH])
+        else:
+            self._h_split.setSizes([_MDA_PANEL_WIDTH, 900, 0])
 
     def showEvent(self, a0: QShowEvent | None) -> None:
         # Devices added on the Hardware tab load into the core but don't fire
@@ -200,7 +178,7 @@ class AcquirePage(TabPage):
         self._channels.refresh()
         self._shutters.refresh()
         self._presets.refresh()
-        self._mda.channels.refresh()
+        self._mda.refresh_channel_table()
         if (
             self._property_browser is not None
             and self._right_tabs.indexOf(self._property_browser) >= 0

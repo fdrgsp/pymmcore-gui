@@ -59,6 +59,34 @@ def settings() -> Iterator[Settings]:
         yield settings
 
 
+# install the _gui theme/style before every test that has a QApplication
+@pytest.fixture(autouse=True)
+def _init_gui_theme() -> None:
+    """Guarantee the ``_gui`` theme is initialized for every test.
+
+    ``_gui`` widgets — and the shared ``MemoryMDAWidget``/``ThemedStageExplorer``
+    used by the legacy main window — call ``theme()`` during construction, which
+    raises ``RuntimeError`` unless ``set_theme()`` has run (it installs the
+    ``MicroscopeStyle`` and the process-wide scaled-theme view). Only
+    ``test_new_gui.py`` calls it explicitly, so a test that builds those widgets
+    from another file (e.g. ``test_main_window.py``) used to pass or fail purely
+    on collection order. Initializing here removes that dependency and gives
+    every test a deterministic dark-theme baseline; tests that need a specific
+    theme still call ``set_theme`` themselves.
+
+    This deliberately does *not* depend on the ``qapp`` fixture: forcing a
+    ``QApplication`` into existence would break tests that assert none exists yet
+    (e.g. ``test_app.test_main_app``). Any test that builds widgets pulls in the
+    session-scoped ``qapp`` first, so it is already present when this runs.
+    """
+    from pymmcore_gui._qt.QtWidgets import QApplication
+
+    if QApplication.instance() is not None:
+        from pymmcore_gui._gui._theme import DARK_THEME, set_theme
+
+        set_theme(DARK_THEME)
+
+
 @pytest.fixture()
 def check_leaks(request: FixtureRequest, qapp: QApplication) -> Iterator[None]:
     """Run after each test to ensure no widgets have been left around.
