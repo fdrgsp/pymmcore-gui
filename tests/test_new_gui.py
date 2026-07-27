@@ -41,7 +41,6 @@ from pymmcore_gui._qt.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
-    QStyle,
     QTabBar,
     QTabWidget,
     QToolButton,
@@ -1157,9 +1156,9 @@ def test_stage_explorer_style_and_mda_link(mmcore: CMMCorePlus, qtbot: QtBot) ->
     explorer = page._explorer
     toolbar = explorer.toolBar()
 
-    style = explorer.style()
-    assert style is not None
-    expected_size = style.pixelMetric(QStyle.PixelMetric.PM_ToolBarIconSize)
+    # Matches the rest of the app's action buttons (Snap/Live/etc.), not the
+    # native QStyle's (larger) PM_ToolBarIconSize.
+    expected_size = theme().scaled(20)
     assert toolbar.iconSize() == QSize(expected_size, expected_size)
     tool_buttons = [
         button
@@ -1170,6 +1169,7 @@ def test_stage_explorer_style_and_mda_link(mmcore: CMMCorePlus, qtbot: QtBot) ->
     assert all(not button.autoRaise() for button in tool_buttons)
     assert all(button.property("variant") == "subtle" for button in tool_buttons)
     assert explorer._contrast_slider._slider.styleSheet() == ""
+    assert not toolbar.stop_scan_action.icon().isNull()
 
     first = useq.AbsolutePosition(x=10, y=20, name="ROI 1")
     explorer.sendToMDARequested.emit([first], True)

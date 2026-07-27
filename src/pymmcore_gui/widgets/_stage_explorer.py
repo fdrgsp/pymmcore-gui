@@ -14,7 +14,7 @@ from pymmcore_gui._array_viewer import (
 )
 from pymmcore_gui._modern_gui._theme import qcolor, theme
 from pymmcore_gui._qt.QtCore import QEvent, QSize, Signal
-from pymmcore_gui._qt.QtWidgets import QMessageBox, QStyle, QToolButton
+from pymmcore_gui._qt.QtWidgets import QMessageBox, QToolButton
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
@@ -63,9 +63,14 @@ class ThemedStageExplorer(StageExplorer):
         toolbar = self.toolBar()
         toolbar.setMovable(False)
         toolbar.setContentsMargins(0, 0, theme().sp_xs, 0)
-        if style := self.style():
-            metric = style.pixelMetric(QStyle.PixelMetric.PM_ToolBarIconSize)
-            toolbar.setIconSize(QSize(metric, metric))
+        # Match the rest of the app's action buttons (Snap/Live/etc, see
+        # _acquire_toolbar.py's _icon_size()) rather than the native QStyle's
+        # PM_ToolBarIconSize, which renders noticeably larger (30px vs 20px).
+        # Scaled with the theme -- this is re-applied on every StyleChange
+        # (below), which is also when the app's zoom pass would otherwise
+        # reset every QToolBar's icon size back to PM_ToolBarIconSize.
+        icon_size = theme().scaled(20)
+        toolbar.setIconSize(QSize(icon_size, icon_size))
 
         # QToolBar normally makes its buttons auto-raise (ghost style). The
         # rest of this app's action buttons use the persistent subtle frame.
@@ -85,6 +90,14 @@ class ThemedStageExplorer(StageExplorer):
         button = self.toolBar().widgetForAction(self._send_to_mda_action)
         if isinstance(button, QToolButton):
             set_source_icon(button, icon)
+
+        red = qcolor(theme().status_red).name()
+        stop_action = self.toolBar().stop_scan_action
+        stop_icon = QIconifyIcon("bi:sign-stop", color=red)
+        stop_action.setIcon(stop_icon)
+        stop_button = self.toolBar().widgetForAction(stop_action)
+        if isinstance(stop_button, QToolButton):
+            set_source_icon(stop_button, stop_icon)
 
     def _on_send_to_mda_fallback(self) -> None:
         """Provide the cite-branch behavior for older installed releases."""

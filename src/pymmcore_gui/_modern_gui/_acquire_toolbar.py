@@ -32,7 +32,11 @@ from ._theme import qcolor, theme
 if TYPE_CHECKING:
     from pymmcore_gui._qt.QtWidgets import QLayout
 
-_ICON_SIZE = QSize(20, 20)
+
+def _icon_size() -> QSize:
+    """The app's compact action-icon size, scaled with the current zoom."""
+    size = theme().scaled(20)
+    return QSize(size, size)
 
 
 def toolbar_separator() -> QFrame:
@@ -61,7 +65,7 @@ class SnapButton(QPushButton):
         self._core = mmcore or CMMCorePlus.instance()
 
         self._apply_icon()
-        self.setIconSize(_ICON_SIZE)
+        self.setIconSize(_icon_size())
         self.setToolTip("Snap")
         self.setProperty("variant", "subtle")
         self.clicked.connect(self._snap)
@@ -76,9 +80,13 @@ class SnapButton(QPushButton):
 
     def changeEvent(self, e: QEvent | None) -> None:
         # status_green differs between light/dark themes -- a static icon
-        # set once at construction would go stale after a theme toggle.
+        # set once at construction would go stale after a theme toggle. The
+        # icon size is re-applied here too since it's zoom-scaled and this
+        # button (a QPushButton, not a QToolBar) isn't touched by the app's
+        # zoom pass over QToolBar instances.
         if e is not None and e.type() == QEvent.Type.StyleChange:
             self._apply_icon()
+            self.setIconSize(_icon_size())
         super().changeEvent(e)
 
     def _on_config_loaded(self, *_: object) -> None:
@@ -127,7 +135,7 @@ class LiveButton(QPushButton):
         self._core = mmcore or CMMCorePlus.instance()
 
         self.setCheckable(True)
-        self.setIconSize(_ICON_SIZE)
+        self.setIconSize(_icon_size())
         self.setProperty("variant", "subtle")
         self._set_running(False)
         self.clicked.connect(self._toggle)
@@ -172,9 +180,14 @@ class LiveButton(QPushButton):
         # status_green differs between light/dark themes -- re-derive the
         # idle icon's color from whichever theme is now active. The running
         # (magenta) icon isn't theme-derived, so no re-render needed there.
+        # The icon size is re-applied too since it's zoom-scaled and this
+        # button (a QPushButton, not a QToolBar) isn't touched by the app's
+        # zoom pass over QToolBar instances.
         is_style_change = e is not None and e.type() == QEvent.Type.StyleChange
-        if is_style_change and not self.isChecked():
-            self._set_running(False)
+        if is_style_change:
+            if not self.isChecked():
+                self._set_running(False)
+            self.setIconSize(_icon_size())
         super().changeEvent(e)
 
     def _disconnect(self) -> None:
@@ -240,6 +253,7 @@ class ShuttersBar(QWidget):
                 button_text_open=shutter,
                 button_text_closed=shutter,
                 icon_color_open=open_color,
+                icon_size=theme().scaled(20),
                 mmcore=self._core,
             )
             # a persistently visible box, not just on hover — matches Snap/Live
