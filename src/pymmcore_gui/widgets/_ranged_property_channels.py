@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pymmcore_plus import CMMCorePlus, PropertyType
+from pymmcore_plus import PropertyType
 from pymmcore_widgets.mda import (
     ChannelProperty,
     CollapsibleCoreMDATabs,
@@ -15,8 +15,6 @@ from superqt.utils import signals_blocked
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
-
-    from pymmcore_gui._qt.QtWidgets import QWidget
 
 
 _PROPERTY_SEPARATOR = " · "
@@ -38,20 +36,6 @@ class RangedPropertyChannelTable(CoreConnectedChannelTable):
     The existing upstream storage keys and methods are deliberately retained so
     previously saved channel-property metadata remains compatible.
     """
-
-    def __init__(
-        self,
-        rows: int = 0,
-        mmcore: CMMCorePlus | None = None,
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(rows, mmcore, parent)
-        self.show_light_source.setText("Show Property")
-        self.show_light_source.setToolTip(
-            "Set one writable numeric device property with limits per channel.\n"
-            "The selected Property and Value are applied during MDA, Snap, and Live."
-        )
-        self._rename_property_headers()
 
     def rangedProperties(self) -> Mapping[str, tuple[str, str]]:
         """Return ``{display label: (device, property)}`` for available choices."""
@@ -88,14 +72,13 @@ class RangedPropertyChannelTable(CoreConnectedChannelTable):
             table.removeColumn(property_col)
             self._light_source_column = ComboColumn(
                 key=self.LIGHT_SOURCE.key,
-                header="Property",
+                header=self.LIGHT_SOURCE.header,
                 default="",
                 allowed_values=("", *self._light_sources),
             )
             table.addColumn(self._light_source_column, property_col)
             self._apply_light_source_visibility()
             self._sync_intensity_widgets(force=True)
-        self._rename_property_headers()
         self.valueChanged.emit()
 
     def setChannelProperties(self, value: Iterable[ChannelProperty]) -> None:
@@ -120,15 +103,6 @@ class RangedPropertyChannelTable(CoreConnectedChannelTable):
                 )
             )
         super().setChannelProperties(normalized)
-
-    def _rename_property_headers(self) -> None:
-        table = self.table()
-        property_col = table.indexOf(self._light_source_column)
-        value_col = table.indexOf(self.INTENSITY)
-        if property_col >= 0 and (item := table.horizontalHeaderItem(property_col)):
-            item.setText("Property")
-        if value_col >= 0 and (item := table.horizontalHeaderItem(value_col)):
-            item.setText("Value")
 
 
 class RangedPropertyCollapsibleCoreMDATabs(CollapsibleCoreMDATabs):

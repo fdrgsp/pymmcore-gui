@@ -434,7 +434,7 @@ def test_channel_property_selector_lists_all_runtime_numeric_sliders(
     assert all(
         label == f"{device} · {prop}" for label, (device, prop) in choices.items()
     )
-    assert channels.show_light_source.text() == "Show Property"
+    assert channels.show_light_source.text() == "Show Light Source"
 
     table = channels.table()
     property_col = table.indexOf(channels._light_source_column)
@@ -443,8 +443,8 @@ def test_channel_property_selector_lists_all_runtime_numeric_sliders(
     value_header = table.horizontalHeaderItem(value_col)
     assert property_header is not None
     assert value_header is not None
-    assert property_header.text() == "Property"
-    assert value_header.text() == "Value"
+    assert property_header.text() == "Light Source"
+    assert value_header.text() == "Intensity"
 
 
 def test_collapsible_mda_round_trips_all_original_widgets(
