@@ -16,9 +16,12 @@ from pymmcore_gui._array_viewer import (
 )
 from pymmcore_gui._modern_gui._theme import qcolor, theme
 from pymmcore_gui._qt.QtCore import QEvent, QModelIndex, QObject, QSize, Qt, QTimer
-from pymmcore_gui._qt.QtWidgets import QComboBox, QGridLayout, QWidget
+from pymmcore_gui._qt.QtWidgets import QComboBox, QDoubleSpinBox, QGridLayout, QWidget
 
-from ._ranged_property_channels import RangedPropertyCollapsibleCoreMDATabs
+from ._ranged_property_channels import (
+    CURRENT_CHANNEL_COLUMN,
+    RangedPropertyCollapsibleCoreMDATabs,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -26,6 +29,8 @@ if TYPE_CHECKING:
     import useq
     from pymmcore_plus import CMMCorePlus
     from pymmcore_widgets.mda._xy_bounds import CoreXYBoundsControl
+
+    from ._ranged_property_channels import RangedPropertyChannelTable
 
 
 def _align_bounds_grid(bounds: CoreXYBoundsControl) -> None:
@@ -90,6 +95,15 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
 
     def _create_tab_widget(self) -> CollapsibleCoreMDATabs:
         return RangedPropertyCollapsibleCoreMDATabs(None, self._mmc)
+
+    # ----------- Override type hints in superclass -----------
+    # _create_tab_widget above always installs a RangedPropertyChannelTable,
+    # which adds activeRow/setActiveRow to the upstream CoreConnectedChannelTable
+    # interface; narrow the property's declared return type to match.
+
+    @property
+    def channels(self) -> RangedPropertyChannelTable:
+        return cast("RangedPropertyChannelTable", super().channels)
 
     def __init__(self, mmcore: CMMCorePlus, parent: QWidget | None = None) -> None:
         self._restoring_sequence = False
@@ -161,7 +175,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
     def setValue(self, value: useq.MDASequence) -> None:
         """Restore an MDA sequence without applying a selected row to the core."""
         selected = self._selected_channel_identity()
-        selected_row = self.channels.table().currentRow()
+        selected_row = self.channels.activeRow()
         self._restoring_sequence = True
         try:
             super().setValue(value)
@@ -175,7 +189,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         channels = self.channels
         table = channels.table()
         selected = self._selected_channel_identity()
-        selected_row = table.currentRow()
+        selected_row = channels.activeRow()
         values = channels.value(exclude_unchecked=False)
         properties = channels.channelProperties(exclude_unchecked=False)
         light_sources_visible = channels.lightSourceVisible()
@@ -220,19 +234,23 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         selection_model = table.selectionModel()
         if selection_model is None:  # pragma: no cover
             return
-        selection_model.currentRowChanged.connect(self._on_channel_row_selected)
-        table.clicked.connect(self._on_channel_row_selected)
+        # Hardware fires only from a click on the ● column here; the Config
+        # combo's own activation (connected in _install_channel_editor_filters)
+        # is the other trigger.
+        table.clicked.connect(self._on_channel_cell_clicked)
+        # QAbstractItemView syncs currentIndex to whichever cell widget last
+        # took focus (e.g. clicking into the Exposure/Intensity spin box) --
+        # entirely internal to Qt, so it can't be stopped by filtering mouse or
+        # focus events. Snap it back to the active row whenever that happens.
+        selection_model.currentRowChanged.connect(self._on_table_current_row_changed)
         model = table.model()
         if model is not None:
             model.columnsInserted.connect(self._schedule_channel_editor_filters)
         self._install_channel_editor_filters()
 
         # Reverse sync: when the active preset changes on the core from
-        # anywhere else (setConfig, the Groups & Presets table, etc.), reflect
-        # it here by selecting the matching channel row. Selection then runs
-        # the same path a manual click does, so exposure/intensity follow the
-        # existing just-in-time rule (applied while a sequence runs / at the
-        # next capture, not on idle selection).
+        # anywhere else (setConfig, the Groups & Presets table, etc.), update
+        # the ● indicator and select the matching row to reflect the new state.
         self._mmc.events.configSet.connect(self._on_core_config_set)
 
     def _schedule_channel_editor_filters(self, *_: object) -> None:
@@ -243,38 +261,49 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         QTimer.singleShot(0, self._install_channel_editor_filters)
 
     def _install_channel_editor_filters(self) -> None:
-        """Make interaction with any channel-cell editor activate its row.
+        """Wire up the two ways to move hardware, and the live-apply editors.
 
-        QTableWidget does not receive mouse events handled by cell widgets such as
-        the channel combo and exposure spin box. Installing the filter on every
-        editor and descendant lets those normal editing interactions also establish
-        the table's single active/current row without stealing focus from the editor.
+        A row's Config combo `activated` signal (user-only; a programmatic
+        `currentTextChanged` during a sequence restore/refresh must not move
+        hardware) applies that channel, same as clicking the ● column. A row's
+        Exposure/Intensity spin box `editingFinished` pushes a live edit of the
+        *active* row to hardware (see _on_channel_value_committed) but never
+        moves the row highlight -- see _on_table_current_row_changed, which
+        undoes Qt's own focus-driven selection change for every other column.
         """
         table = self.channels.table()
         config_col = table.indexOf(self.channels._config_column)
+        exposure_col = table.indexOf(self.channels.EXPOSURE)
+        intensity_col = table.indexOf(self.channels.INTENSITY)
         for row in range(table.rowCount()):
             for col in range(table.columnCount()):
                 cell = table.cellWidget(row, col)
                 if cell is None:
                     continue
-                editors = (cell, *cell.findChildren(QWidget))
-                for editor in editors:
-                    if not editor.property("_pymmcore_gui_channel_row_filter"):
-                        editor.installEventFilter(self)
-                        editor.setProperty("_pymmcore_gui_channel_row_filter", True)
 
-                if col != config_col:
-                    continue
-                combos = ((cell,) if isinstance(cell, QComboBox) else ()) + tuple(
-                    cell.findChildren(QComboBox)
-                )
-                for combo in combos:
-                    if combo.property("_pymmcore_gui_channel_combo_connected"):
+                if col == config_col:
+                    combos = ((cell,) if isinstance(cell, QComboBox) else ()) + tuple(
+                        cell.findChildren(QComboBox)
+                    )
+                    for combo in combos:
+                        if combo.property("_pymmcore_gui_channel_combo_connected"):
+                            continue
+                        combo.setProperty("_pymmcore_gui_channel_combo_connected", True)
+                        # activated is user-only.  currentTextChanged would also
+                        # fire while loading/refreshing an MDA and could move
+                        # hardware.
+                        combo.activated.connect(self._on_channel_combo_activated)
+                elif col in (exposure_col, intensity_col) and isinstance(
+                    cell, QDoubleSpinBox
+                ):
+                    if cell.property("_pymmcore_gui_channel_value_connected"):
                         continue
-                    combo.setProperty("_pymmcore_gui_channel_combo_connected", True)
-                    # activated is user-only.  currentTextChanged would also fire
-                    # while loading/refreshing an MDA and could move hardware.
-                    combo.activated.connect(self._on_channel_combo_activated)
+                    cell.setProperty("_pymmcore_gui_channel_value_connected", True)
+                    # editingFinished is user-only (Enter or focus-out) and, unlike
+                    # valueChanged, never fires from a programmatic setValue() --
+                    # e.g. while restoring a sequence or re-ranging the intensity
+                    # spin box for a new light source.
+                    cell.editingFinished.connect(self._on_channel_value_committed)
 
     def _channel_index_for_editor(self, editor: QObject | None) -> QModelIndex:
         if not isinstance(editor, QWidget):
@@ -290,80 +319,96 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
                     return model.index(row, col)
         return QModelIndex()
 
-    def _activate_channel_index(self, index: QModelIndex) -> None:
-        """Select/highlight ``index``'s row and apply its current config."""
+    def _on_channel_combo_activated(self, *_: object) -> None:
+        """Apply a channel to the microscope: the Config combo also moves hardware.
+
+        The only two ways to change what's active on the microscope are clicking
+        the ● column and picking a new value in a row's Config combo. Both go
+        through _on_channel_row_selected, so the row highlight (via setActiveRow)
+        follows in exactly the same way either way.
+        """
+        self._on_channel_row_selected(self._channel_index_for_editor(self.sender()))
+
+    def _on_channel_cell_clicked(self, index: QModelIndex) -> None:
+        """Apply a channel to the microscope only when the ● column is clicked."""
         if not index.isValid() or self._restoring_sequence:
             return
-        table = self.channels.table()
-        previous_row = table.currentRow()
-        table.setCurrentCell(index.row(), index.column())
-        table.selectRow(index.row())
-        # A row change is handled synchronously by currentRowChanged. Re-apply
-        # explicitly for another cell in the same row, most importantly after a
-        # user changes that row's channel combo.
-        if previous_row == index.row():
-            self._on_channel_row_selected(index)
+        current_col = self.channels.table().indexOf(CURRENT_CHANNEL_COLUMN)
+        if index.column() != current_col:
+            return
+        self._on_channel_row_selected(index)
 
-    def _on_channel_combo_activated(self, *_: object) -> None:
-        self._activate_channel_index(self._channel_index_for_editor(self.sender()))
+    def _on_channel_value_committed(self, *_: object) -> None:
+        """Push a live-edited exposure/intensity value to the microscope.
 
-    def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
-        if a1 is not None and a1.type() in (
-            QEvent.Type.MouseButtonPress,
-            QEvent.Type.FocusIn,
-        ):
-            index = self._channel_index_for_editor(a0)
-            if index.isValid():
-                self._activate_channel_index(index)
-        return super().eventFilter(a0, a1)
+        Fires when the user finishes editing the active row's Exposure or
+        Intensity spin box (Enter or focus-out). Only while a sequence (live) is
+        running: idle edits still follow the just-in-time rule and only take
+        effect at the next capture. Edits to a row other than the active one
+        never move hardware -- they just update the table for later use.
+        """
+        if self._restoring_sequence or self._applying_channel_config:
+            return
+        if not self._mmc.isSequenceRunning():
+            return
+        index = self._channel_index_for_editor(self.sender())
+        if not index.isValid() or index.row() != self.channels.activeRow():
+            return
+        self._apply_channel_row_to_core(index.row(), include_capture_settings=True)
+
+    def _on_table_current_row_changed(
+        self, current: QModelIndex, previous: QModelIndex
+    ) -> None:
+        """Snap the row highlight back to the active row if anything else moved it.
+
+        QAbstractItemView makes a cell widget's row "current" as soon as that
+        widget gains keyboard focus -- e.g. simply clicking into the Exposure or
+        Intensity spin box -- entirely internal to Qt, so it can't be stopped by
+        filtering mouse or focus events. Undo that drift immediately (before any
+        repaint, so there's no visible flicker) so the highlighted row always
+        matches setActiveRow and nothing else. A legitimate change (the ● column
+        or the Config combo, both via setActiveRow) already left the active row
+        equal to ``current``, so this is a no-op for those -- and re-asserting
+        via setActiveRow (rather than duplicating its table calls here) means
+        this converges after one bounce instead of looping.
+        """
+        active = self.channels.activeRow()
+        if current.row() != active:
+            self.channels.setActiveRow(active)
 
     def _on_channel_row_selected(self, current: QModelIndex, *_: object) -> None:
+        """Activate a channel on the microscope and update the ● indicator.
+
+        Called when the user clicks the ● indicator column, and exposed for
+        programmatic use (e.g. during tests and sequence-running channel switches).
+        """
         if (
             self._restoring_sequence
             or self._applying_channel_config
             or not current.isValid()
         ):
             return
-
+        row = current.row()
+        self.channels.setActiveRow(row)
         self._apply_channel_row_to_core(
-            current.row(),
+            row,
             include_capture_settings=self._mmc.isSequenceRunning(),
         )
 
     def _on_core_config_set(self, group: str, preset: str) -> None:
-        """Select the channel row matching a preset activated on the core.
+        """Select the matching row when the active preset changes on the core.
 
-        Fires from ``configSet`` whenever the active preset changes anywhere
-        (setConfig, the Groups & Presets table, ...). Guarded against the
-        table->core path (``_applying_channel_config``) so a selection we
-        pushed to the core ourselves doesn't loop back, and against sequence
-        restore. Only the channel group is mirrored -- other config groups
-        (objective, etc.) have no row in this table.
+        Fires from ``configSet`` whenever any config changes (e.g. from the
+        Groups & Presets table, not just this widget). Only the channel group
+        is mirrored — other config groups (objective, etc.) are ignored.
+        Guarded against the table→core path so we don't loop. setActiveRow
+        handles both the ● indicator and the row highlight.
         """
         if self._applying_channel_config or self._restoring_sequence:
             return
         if group != self._mmc.getChannelGroup():
             return
-        selected = self._selected_channel_identity()
-        if selected is not None and selected[1] == preset:
-            return  # the current row already represents this preset
-        table = self.channels.table()
-        row = self._find_channel_row(preset)
-        if row < 0:
-            # The active channel isn't in the table -- clear the selection so a
-            # stale row doesn't imply it is. Clearing yields an invalid current
-            # index, which _on_channel_row_selected ignores, so the core is not
-            # touched.
-            table.clearSelection()
-            if (selection_model := table.selectionModel()) is not None:
-                selection_model.clearCurrentIndex()
-            return
-        # Selecting the row runs _on_channel_row_selected, exactly as a manual
-        # click would: it re-applies the (already-current) config as a no-op
-        # and applies exposure/intensity only under the usual conditions.
-        config_col = table.indexOf(self.channels._config_column)
-        table.setCurrentCell(row, max(0, config_col))
-        table.selectRow(row)
+        self.channels.setActiveRow(self._find_channel_row(preset))
 
     def _find_channel_row(self, preset: str) -> int:
         """Row whose channel config == ``preset``, preferring a checked one."""
@@ -388,7 +433,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         an MDA, while the table's current row is the independent live/snap selection.
         """
         return self._apply_channel_row_to_core(
-            self.channels.table().currentRow(),
+            self.channels.activeRow(),
             include_capture_settings=True,
         )
 
@@ -447,7 +492,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         return True
 
     def _selected_channel_identity(self) -> tuple[str, str] | None:
-        row = self.channels.table().currentRow()
+        row = self.channels.activeRow()
         channels = self.channels.value(exclude_unchecked=False)
         if not 0 <= row < len(channels):
             return None
@@ -459,21 +504,20 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         identity: tuple[str, str] | None,
         preferred_row: int = -1,
     ) -> None:
+        """Restore the ● row (and its highlight, via setActiveRow) after a rebuild."""
         if identity is None:
             return
-        table = self.channels.table()
-        config_col = table.indexOf(self.channels._config_column)
         channels = self.channels.value(exclude_unchecked=False)
         if 0 <= preferred_row < len(channels):
             channel = channels[preferred_row]
             candidate = str(channel.group or ""), str(channel.config or "")
             if candidate == identity:
-                table.setCurrentCell(preferred_row, max(0, config_col))
+                self.channels.setActiveRow(preferred_row)
                 return
         for row, channel in enumerate(channels):
             candidate = str(channel.group or ""), str(channel.config or "")
             if candidate == identity:
-                table.setCurrentCell(row, max(0, config_col))
+                self.channels.setActiveRow(row)
                 return
 
     def _collapsible_tabs(self) -> CollapsibleCoreMDATabs:
