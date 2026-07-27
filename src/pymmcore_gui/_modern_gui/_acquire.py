@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from useq import Position
 
     from pymmcore_gui._qt.QtGui import QShowEvent
+    from pymmcore_gui.widgets._mm_console import MMConsole
 
 _PRESETS_LABEL = "Groups and Presets"
 _MDA_PANEL_MIN_WIDTH = 100
@@ -63,6 +64,7 @@ class AcquirePage(TabPage):
         self._right_tabs.setCurrentWidget(self._presets)
 
         self._property_browser: PropertyBrowser | None = None
+        self._console: MMConsole | None = None
         self.right.add_widget(self._right_tabs, 1)
         self.right.setMinimumWidth(_RIGHT_PANEL_MIN_WIDTH)
 
@@ -120,6 +122,13 @@ class AcquirePage(TabPage):
         self._props_btn.toggled.connect(self._toggle_properties)
         self.toolbar.add_widget(self._props_btn)
 
+        self._console_btn = QPushButton("Console")
+        self._console_btn.setProperty("variant", "subtle")
+        self._console_btn.setCheckable(True)
+        self._console_btn.setToolTip("Open an IPython console tab")
+        self._console_btn.toggled.connect(self._toggle_console)
+        self.toolbar.add_widget(self._console_btn)
+
     def _on_explorer_positions(self, positions: list[Position], replace: bool) -> None:
         """Transfer Stage Explorer regions into the MDA position table."""
         existing = [] if replace else list(self._mda.stage_positions.value())
@@ -153,12 +162,29 @@ class AcquirePage(TabPage):
             self._right_tabs.removeTab(idx)
         self._update_right_sidebar()
 
+    def _toggle_console(self, checked: bool) -> None:
+        console = self._console
+        if checked:
+            if console is None:
+                from pymmcore_gui.widgets._mm_console import MMConsole
+
+                console = self._console = MMConsole(mmcore=self._core)
+            idx = self._right_tabs.indexOf(console)
+            if idx < 0:
+                idx = self._right_tabs.addTab(console, "Console")
+            self._right_tabs.setCurrentIndex(idx)
+        elif console is not None and (idx := self._right_tabs.indexOf(console)) >= 0:
+            self._right_tabs.removeTab(idx)
+        self._update_right_sidebar()
+
     def _close_right_tab(self, index: int) -> None:
         widget = self._right_tabs.widget(index)
         if widget is self._presets:
             self._presets_btn.setChecked(False)
         elif widget is self._property_browser:
             self._props_btn.setChecked(False)
+        elif widget is self._console:
+            self._console_btn.setChecked(False)
 
     def _update_right_sidebar(self) -> None:
         visible = self._right_tabs.count() > 0

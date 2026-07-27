@@ -28,6 +28,7 @@ except ImportError:
 
 if TYPE_CHECKING:
     from ipykernel.inprocess.ipkernel import InProcessInteractiveShell, InProcessKernel
+    from pymmcore_plus import CMMCorePlus
     from qtconsole.rich_jupyter_widget import RichJupyterWidget
 
     from pymmcore_gui._qt.QtCore import QObject
@@ -48,8 +49,14 @@ class _FakeCfg:
 class MMConsole(QtConsole):
     """A Qt widget for an IPython console, providing access to UI components."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        mmcore: CMMCorePlus | None = None,
+    ) -> None:
         super().__init__(parent=parent)
+        self._mmc = mmcore
 
         cast("QWidget", self).setWindowTitle("Python kernel")
         self.set_default_style(colors="linux")
@@ -89,11 +96,11 @@ class MMConsole(QtConsole):
             "useq": useq,
             "np": numpy,
         }
-        mmc = None
+        mmc = self._mmc
         for wdg in QApplication.topLevelWidgets():
             if wdg.objectName() == "MicroManagerGUI":
                 default_vars["window"] = wdg
-                mmc = getattr(wdg, "mmc", None)
+                mmc = mmc or getattr(wdg, "mmc", None)
                 break
 
         mmc = mmc or pymmcore_plus.CMMCorePlus.instance()

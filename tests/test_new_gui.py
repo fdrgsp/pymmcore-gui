@@ -338,9 +338,10 @@ def test_selecting_channel_row_applies_only_its_core_config(
     qtbot.waitExposed(mda)
     channels = mda.channels
     presets = tuple(mmcore.getAvailableConfigs("Channel"))
-    assert len(presets) >= 3
+    assert len(presets) >= 4
     first = presets[0]
     other_preset = presets[2]
+    third_preset = presets[3]
     mda.setValue(
         useq.MDASequence(
             channels=tuple(
@@ -401,17 +402,40 @@ def test_selecting_channel_row_applies_only_its_core_config(
     assert mmcore.getCurrentConfig("Channel") == presets[2]
     mmcore.setConfig("Channel", first)  # reset for the next section
 
-    # The Config combo is the other way (besides the ● column) to move hardware:
-    # a plain programmatic text change (currentTextChanged only, as during a
-    # sequence restore/refresh) stays hardware-neutral, but a user activation
-    # (the `activated` signal) applies the newly picked preset immediately.
+    # The Config combo is the other way (besides the ● column) to move
+    # hardware -- but only for the row that's already active. Activating a
+    # DIFFERENT row's combo just updates that row's stored channel; it never
+    # applies anything or changes which row is active.
+    assert channels.activeRow() == 0
+    other_row_cell = table.cellWidget(1, config_column)
+    assert other_row_cell is not None
+    other_row_combo = other_row_cell.findChild(QComboBox)
+    assert other_row_combo is not None
+    other_row_combo.setCurrentText(third_preset)
+    other_row_combo.activated.emit(other_row_combo.currentIndex())
+    QApplication.processEvents()
+    assert channels.activeRow() == 0  # unchanged -- row 1 isn't the active row
+    assert table.currentRow() == 0  # unchanged
+    assert mmcore.getCurrentConfig("Channel") == first  # unchanged
+
+    # Make row 1 active first (as the user would, via the ● column) -- its
+    # stored config (third_preset, set above) is applied on activation.
+    mda._on_channel_row_selected(model.index(1, 0))
+    assert channels.activeRow() == 1
+    assert mmcore.getCurrentConfig("Channel") == third_preset
+
+    # Now that row 1 IS the active row, a user activation of its own Config
+    # combo (the `activated` signal) applies the newly picked preset
+    # immediately, same as clicking the ● column. A plain programmatic text
+    # change (currentTextChanged only, as during a sequence restore/refresh)
+    # still stays hardware-neutral.
     config_cell = table.cellWidget(1, config_column)
     assert config_cell is not None
     config_combo = config_cell.findChild(QComboBox)
     assert config_combo is not None
     config_combo.setCurrentText(other_preset)
     QApplication.processEvents()
-    assert mmcore.getCurrentConfig("Channel") == first  # no hardware change yet
+    assert mmcore.getCurrentConfig("Channel") == third_preset  # no hardware change yet
     config_combo.activated.emit(config_combo.currentIndex())
     QApplication.processEvents()
     assert table.currentRow() == 1

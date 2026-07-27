@@ -320,14 +320,19 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         return QModelIndex()
 
     def _on_channel_combo_activated(self, *_: object) -> None:
-        """Apply a channel to the microscope: the Config combo also moves hardware.
+        """Apply a channel to the microscope, same as clicking the ● column.
 
-        The only two ways to change what's active on the microscope are clicking
-        the ● column and picking a new value in a row's Config combo. Both go
-        through _on_channel_row_selected, so the row highlight (via setActiveRow)
-        follows in exactly the same way either way.
+        Only for the *active* row, though: picking a new value in a row that
+        ISN'T already active just updates that row's stored channel for later
+        use -- it doesn't move hardware or change which row is active.
+        Otherwise, switching which channel is loaded on the microscope while
+        merely reconfiguring some other row (e.g. typing a new value into a
+        row below the active one) would be a surprising side effect.
         """
-        self._on_channel_row_selected(self._channel_index_for_editor(self.sender()))
+        index = self._channel_index_for_editor(self.sender())
+        if not index.isValid() or index.row() != self.channels.activeRow():
+            return
+        self._on_channel_row_selected(index)
 
     def _on_channel_cell_clicked(self, index: QModelIndex) -> None:
         """Apply a channel to the microscope only when the ● column is clicked."""

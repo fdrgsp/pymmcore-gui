@@ -716,6 +716,10 @@ class MicroscopeStyle(QProxyStyle):
         p: QPainter,
         widget: QWidget | None,
     ) -> None:
+        # Late import avoids a circular ref (_theme/__init__.py imports
+        # MicroscopeStyle from this module).
+        from . import qcolor, theme
+
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         pal = opt.palette
         r = QRectF(opt.rect)
@@ -723,12 +727,17 @@ class MicroscopeStyle(QProxyStyle):
         checked = bool(opt.state & QStyle.StateFlag.State_On)
         hovered = bool(opt.state & QStyle.StateFlag.State_MouseOver)
         enabled = bool(opt.state & QStyle.StateFlag.State_Enabled)
-        accent = pal.color(QPalette.ColorRole.Highlight)
+        # A checked box is filled with its own accent (green), not
+        # QPalette.Highlight: Highlight is also what an item view paints as a
+        # selected row's background, so a checked checkbox in a selected row
+        # would otherwise be the exact same color as what's behind it and
+        # visually disappear except for its white checkmark.
+        checked_accent = qcolor(theme().status_green)
 
         # Box
         if checked:
-            p.setPen(QPen(accent, 1))
-            p.setBrush(QBrush(accent))
+            p.setPen(QPen(checked_accent, 1))
+            p.setBrush(QBrush(checked_accent))
         else:
             border = pal.color(QPalette.ColorRole.Mid)
             if hovered:
@@ -774,17 +783,24 @@ class MicroscopeStyle(QProxyStyle):
         p: QPainter,
         widget: QWidget | None,
     ) -> None:
+        # Late import avoids a circular ref (_theme/__init__.py imports
+        # MicroscopeStyle from this module).
+        from . import qcolor, theme
+
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         pal = opt.palette
         r = QRectF(opt.rect).adjusted(0.5, 0.5, -0.5, -0.5)
 
         checked = bool(opt.state & QStyle.StateFlag.State_On)
         hovered = bool(opt.state & QStyle.StateFlag.State_MouseOver)
-        accent = pal.color(QPalette.ColorRole.Highlight)
+        # Same reasoning as _draw_checkbox: its own accent (green), not
+        # QPalette.Highlight, so it stays visible against a selected item
+        # view row (which is painted in Highlight).
+        checked_accent = qcolor(theme().status_green)
 
         # Circle
         if checked:
-            p.setPen(QPen(accent, 1.5))
+            p.setPen(QPen(checked_accent, 1.5))
             p.setBrush(Qt.BrushStyle.NoBrush)
         else:
             border = pal.color(QPalette.ColorRole.Mid)
@@ -800,7 +816,7 @@ class MicroscopeStyle(QProxyStyle):
         # Inner dot
         if checked:
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QBrush(accent))
+            p.setBrush(QBrush(checked_accent))
             p.drawEllipse(QPointF(cx, cy), radius * 0.45, radius * 0.45)
 
     # ═══════════════════════════════════════════════════════════

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from superqt import QIconifyIcon
 
+from pymmcore_gui._modern_gui._theme import qcolor, theme
 from pymmcore_gui._qt.QtCore import QPoint, QPropertyAnimation, Qt, QTimer
 from pymmcore_gui._qt.QtWidgets import (
     QHBoxLayout,
@@ -74,7 +75,7 @@ class NotificationToast(QWidget):
         if notification.severity == "warning":
             ic = QIconifyIcon("codicon:warning", color="orange")
         elif notification.severity == "error":
-            ic = QIconifyIcon("codicon:error", color="red")
+            ic = QIconifyIcon("codicon:error", color=qcolor(theme().status_red).name())
         else:  # info  # default
             ic = QIconifyIcon("codicon:info", color="#0af")
         self.icon.setPixmap(ic.pixmap(20, 20))
