@@ -151,6 +151,16 @@ def create_mmgui(
             stacklevel=2,
         )
 
+    # Initialize the theme/style before building any window. Both the standard
+    # (dock-based) MicroManagerGUI and the modern GUI host shared widgets
+    # (MemoryMDAWidget, ThemedStageExplorer) that call ``theme()`` during
+    # construction, which raises unless ``set_style()`` has run. Doing this here
+    # -- while no themed widget exists yet -- guarantees a valid theme for every
+    # window_cls without relying on the window itself to install it.
+    from pymmcore_gui._modern_gui._theme import DARK_THEME, set_theme
+
+    set_theme(DARK_THEME)
+
     # prepare graceful shutdown from SIGINT/SIGTERM when running tests
 
     if TESTING:

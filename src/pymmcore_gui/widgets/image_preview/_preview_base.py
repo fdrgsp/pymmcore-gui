@@ -41,12 +41,8 @@ class ImagePreviewBase(QWidget):
         ev.systemConfigurationLoaded.connect(self._on_system_config_loaded)
         ev.roiSet.connect(self._on_roi_set)
         ev.propertyChanged.connect(self._on_property_changed)
-        self._mda_started_callback = lambda: setattr(
-            self, "_is_mda_running", True
-        )
-        self._mda_finished_callback = lambda: setattr(
-            self, "_is_mda_running", False
-        )
+        self._mda_started_callback = lambda: setattr(self, "_is_mda_running", True)
+        self._mda_finished_callback = lambda: setattr(self, "_is_mda_running", False)
         core.mda.events.sequenceStarted.connect(self._mda_started_callback)
         core.mda.events.sequenceFinished.connect(self._mda_finished_callback)
 

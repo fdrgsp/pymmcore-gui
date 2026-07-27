@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from pymmcore_plus import DeviceType
 
-from pymmcore_gui._gui._theme import theme
+from pymmcore_gui._modern_gui._theme import theme
 from pymmcore_gui._qt.QtCore import Qt, pyqtSignal
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractItemView,

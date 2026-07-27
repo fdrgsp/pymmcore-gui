@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from pymmcore_plus import DeviceType, Keyword, PropertyType
 
-from pymmcore_gui._gui._theme import theme
+from pymmcore_gui._modern_gui._theme import theme
 from pymmcore_gui._qt.QtCore import Qt, pyqtSignal
 from pymmcore_gui._qt.QtWidgets import (
     QComboBox,

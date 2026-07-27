@@ -59,12 +59,12 @@ def settings() -> Iterator[Settings]:
         yield settings
 
 
-# install the _gui theme/style before every test that has a QApplication
+# install the _modern_gui theme/style before every test that has a QApplication
 @pytest.fixture(autouse=True)
 def _init_gui_theme() -> None:
-    """Guarantee the ``_gui`` theme is initialized for every test.
+    """Guarantee the ``_modern_gui`` theme is initialized for every test.
 
-    ``_gui`` widgets — and the shared ``MemoryMDAWidget``/``ThemedStageExplorer``
+    ``_modern_gui`` widgets — and the shared ``MemoryMDAWidget``/``ThemedStageExplorer``
     used by the legacy main window — call ``theme()`` during construction, which
     raises ``RuntimeError`` unless ``set_theme()`` has run (it installs the
     ``MicroscopeStyle`` and the process-wide scaled-theme view). Only
@@ -82,7 +82,7 @@ def _init_gui_theme() -> None:
     from pymmcore_gui._qt.QtWidgets import QApplication
 
     if QApplication.instance() is not None:
-        from pymmcore_gui._gui._theme import DARK_THEME, set_theme
+        from pymmcore_gui._modern_gui._theme import DARK_THEME, set_theme
 
         set_theme(DARK_THEME)
 

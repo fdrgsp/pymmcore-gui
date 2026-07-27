@@ -31,8 +31,12 @@ if TYPE_CHECKING:
     from pymmcore_gui._qt.QtGui import QShowEvent
 
 _PRESETS_LABEL = "Groups and Presets"
-_MDA_PANEL_WIDTH = 700
-_RIGHT_PANEL_WIDTH = 420
+_MDA_PANEL_MIN_WIDTH = 100
+_RIGHT_PANEL_MIN_WIDTH = 100
+# Wide enough that the panels don't open clipped -- the user can still drag
+# them down to the minimums above.
+_MDA_PANEL_INITIAL_WIDTH = 700
+_RIGHT_PANEL_INITIAL_WIDTH = 420
 
 
 class AcquirePage(TabPage):
@@ -47,7 +51,7 @@ class AcquirePage(TabPage):
         self._presets = AcquisitionPresetSelector(mmcore=self._core)
         self._mda = MemoryMDAWidget(mmcore=self._core)
         self.left.add_widget(self._mda, 1)
-        self.left.setMinimumWidth(_MDA_PANEL_WIDTH)
+        self.left.setMinimumWidth(_MDA_PANEL_MIN_WIDTH)
 
         self._right_tabs = QTabWidget()
         self._right_tabs.setTabBar(ThemedTabBar(self._right_tabs))
@@ -60,6 +64,7 @@ class AcquirePage(TabPage):
 
         self._property_browser: PropertyBrowser | None = None
         self.right.add_widget(self._right_tabs, 1)
+        self.right.setMinimumWidth(_RIGHT_PANEL_MIN_WIDTH)
 
         # Center content is itself split into two tabs: "Viewer" (a lazy snap
         # preview + one viewer per MDA run) and "Explorer" (a stage-explorer
@@ -77,7 +82,9 @@ class AcquirePage(TabPage):
 
         self.add_content_widget(self._content_tabs)
         self.bottom.hide()
-        self._h_split.setSizes([_MDA_PANEL_WIDTH, 900, _RIGHT_PANEL_WIDTH])
+        self._h_split.setSizes(
+            [_MDA_PANEL_INITIAL_WIDTH, 900, _RIGHT_PANEL_INITIAL_WIDTH]
+        )
 
         # toolbar: snap|live ‖ shutters … [Presets|Properties]
         self._shutters = ShuttersBar(self._core)
@@ -156,10 +163,18 @@ class AcquirePage(TabPage):
     def _update_right_sidebar(self) -> None:
         visible = self._right_tabs.count() > 0
         self.right.setVisible(visible)
+        # Only touch the right panel's own size, and only when it's actually
+        # collapsing/reappearing -- leave whatever the user already dragged
+        # the left (MDA) and right panels to alone otherwise (e.g. switching
+        # between an already-open Presets/Properties tab shouldn't resize
+        # anything).
+        sizes = self._h_split.sizes()
         if visible:
-            self._h_split.setSizes([_MDA_PANEL_WIDTH, 900, _RIGHT_PANEL_WIDTH])
+            if not sizes[2]:
+                sizes[2] = _RIGHT_PANEL_INITIAL_WIDTH
         else:
-            self._h_split.setSizes([_MDA_PANEL_WIDTH, 900, 0])
+            sizes[2] = 0
+        self._h_split.setSizes(sizes)
 
     def showEvent(self, a0: QShowEvent | None) -> None:
         # Devices added on the Hardware tab load into the core but don't fire

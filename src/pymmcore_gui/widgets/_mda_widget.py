@@ -14,7 +14,7 @@ from pymmcore_gui._array_viewer import (
     set_source_icon,
     unstyle_widgets,
 )
-from pymmcore_gui._gui._theme import qcolor, theme
+from pymmcore_gui._modern_gui._theme import qcolor, theme
 from pymmcore_gui._qt.QtCore import QEvent, QModelIndex, QObject, QSize, Qt, QTimer
 from pymmcore_gui._qt.QtWidgets import QComboBox, QGridLayout, QWidget
 

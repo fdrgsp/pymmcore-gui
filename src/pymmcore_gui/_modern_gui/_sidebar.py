@@ -55,7 +55,7 @@ class Sidebar(QWidget):
             self._layout = QVBoxLayout(self)
             # Without this, a QVBoxLayout with no item claiming the extra
             # space spreads it evenly across every margin/gap instead of
-            # packing widgets to the top (matches _modern_gui's Sidebar).
+            # packing widgets to the top.
             self._layout.setAlignment(Qt.AlignmentFlag.AlignTop)
             self.setSizePolicy(
                 QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding

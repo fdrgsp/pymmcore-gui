@@ -101,27 +101,20 @@ def run(
         "--no-telemetry",
         help="Disable telemetry.",
     ),
-    legacy: bool = typer.Option(
-        False,
-        "--legacy",
-        help="Use the legacy (dock-based) Micro-Manager GUI.",
-    ),
     modern: bool = typer.Option(
         False,
         "--modern",
-        help="Use the earlier 'modern' UI prototype.",
+        help="Use the modern Micro-Manager GUI.",
     ),
 ) -> None:
     """Run the Micro-Manager GUI (this is the default command)."""
     from pymmcore_gui import create_mmgui
 
     window_cls: str | None
-    if legacy:
-        window_cls = None  # create_mmgui falls back to MicroManagerGUI
-    elif modern:
-        window_cls = "pymmcore_gui._modern_gui._main_win.MainWindow"
+    if modern:
+        window_cls = "pymmcore_gui._modern_gui.MainWindow"
     else:
-        window_cls = "pymmcore_gui._gui.MainWindow"
+        window_cls = None  # create_mmgui falls back to MicroManagerGUI
     mm_config = "MMConfig_demo.cfg" if demo_config else config
     create_mmgui(
         mm_config=mm_config,

@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING, cast
 from pymmcore_plus import CMMCorePlus, DeviceType, Keyword
 from pymmcore_plus.model import Device, Microscope
 
-from pymmcore_gui._gui._busy import BusyOverlay, busy
-from pymmcore_gui._gui._tab_page import TabPage
+from pymmcore_gui._modern_gui._busy import BusyOverlay, busy
+from pymmcore_gui._modern_gui._tab_page import TabPage
 from pymmcore_gui._qt.QtCore import Qt
 from pymmcore_gui._qt.QtWidgets import (
     QFileDialog,

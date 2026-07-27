@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
-from pymmcore_gui._gui._theme import theme
+from pymmcore_gui._modern_gui._theme import theme
 from pymmcore_gui._qt.QtCore import Qt
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractItemView,

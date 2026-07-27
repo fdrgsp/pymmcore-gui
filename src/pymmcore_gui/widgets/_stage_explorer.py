@@ -12,7 +12,7 @@ from pymmcore_gui._array_viewer import (
     set_source_icon,
     unstyle_widgets,
 )
-from pymmcore_gui._gui._theme import qcolor, theme
+from pymmcore_gui._modern_gui._theme import qcolor, theme
 from pymmcore_gui._qt.QtCore import QEvent, QSize, Signal
 from pymmcore_gui._qt.QtWidgets import QMessageBox, QStyle, QToolButton
 

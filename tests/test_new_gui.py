@@ -13,16 +13,16 @@ from pymmcore_plus import PropertyType
 from pymmcore_widgets import MDAWidget as UpstreamMDAWidget
 from pymmcore_widgets.useq_widgets._positions import MDAButton
 
-import pymmcore_gui._gui._acquire_toolbar as acquire_toolbar_module
-import pymmcore_gui._gui._acquire_viewers as acquire_viewers_module
+import pymmcore_gui._modern_gui._acquire_toolbar as acquire_toolbar_module
+import pymmcore_gui._modern_gui._acquire_viewers as acquire_viewers_module
 from pymmcore_gui._app import LoadConfigDialog, create_mmgui
 from pymmcore_gui._array_viewer import _icon_avg_rgb
-from pymmcore_gui._gui._acquire import AcquirePage
-from pymmcore_gui._gui._configurations import ConfigurationsPage
-from pymmcore_gui._gui._hardware import HardwareSetupPage
-from pymmcore_gui._gui._main_win import MainWindow
-from pymmcore_gui._gui._tab_bar import ThemedTabBar
-from pymmcore_gui._gui._theme import (
+from pymmcore_gui._modern_gui._acquire import AcquirePage
+from pymmcore_gui._modern_gui._configurations import ConfigurationsPage
+from pymmcore_gui._modern_gui._hardware import HardwareSetupPage
+from pymmcore_gui._modern_gui._main_win import MainWindow
+from pymmcore_gui._modern_gui._tab_bar import ThemedTabBar
+from pymmcore_gui._modern_gui._theme import (
     UI_FONT_SIZE_PT,
     UI_FONT_WEIGHT,
     qcolor,
@@ -30,8 +30,8 @@ from pymmcore_gui._gui._theme import (
     theme,
     ui_font,
 )
-from pymmcore_gui._gui._theme._dark import DARK_THEME
-from pymmcore_gui._gui._theme._light import LIGHT_THEME
+from pymmcore_gui._modern_gui._theme._dark import DARK_THEME
+from pymmcore_gui._modern_gui._theme._light import LIGHT_THEME
 from pymmcore_gui._qt.QtCore import QSize, Qt
 from pymmcore_gui._qt.QtGui import QIcon, QPalette
 from pymmcore_gui._qt.QtWidgets import (
@@ -56,7 +56,7 @@ if TYPE_CHECKING:
     from pytestqt.qtbot import QtBot
 
     from pymmcore_gui._app import WindowProtocol
-    from pymmcore_gui._gui._theme import Color
+    from pymmcore_gui._modern_gui._theme import Color
     from pymmcore_gui._settings import Settings
 
 

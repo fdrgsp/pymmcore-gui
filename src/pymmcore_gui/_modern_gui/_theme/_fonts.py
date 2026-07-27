@@ -10,6 +10,9 @@ from __future__ import annotations
 
 from pymmcore_gui._qt.QtGui import QFont, QFontDatabase
 
+UI_FONT_SIZE_PT = 11.0
+UI_FONT_WEIGHT = QFont.Weight.Medium
+
 DEFAULT_MONO_FAMILIES = [
     "Fira Code",
     "Source Code Pro",
@@ -27,7 +30,10 @@ def _zoom() -> float:
     return theme().zoom_factor
 
 
-def ui_font(size_pt: float = 10, weight: int = QFont.Weight.Normal) -> QFont:
+def ui_font(
+    size_pt: float = UI_FONT_SIZE_PT,
+    weight: int = UI_FONT_WEIGHT,
+) -> QFont:
     """System UI font, zoom-scaled."""
     f = QFont()
     f.setPointSizeF(size_pt * _zoom())
@@ -35,7 +41,10 @@ def ui_font(size_pt: float = 10, weight: int = QFont.Weight.Normal) -> QFont:
     return f
 
 
-def mono_font(size_pt: float = 10, weight: int = QFont.Weight.Normal) -> QFont:
+def mono_font(
+    size_pt: float = UI_FONT_SIZE_PT,
+    weight: int = UI_FONT_WEIGHT,
+) -> QFont:
     """Monospace font, zoom-scaled."""
     zoom = _zoom()
     for fam in DEFAULT_MONO_FAMILIES:

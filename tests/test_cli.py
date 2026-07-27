@@ -33,7 +33,7 @@ def test_settings(tmp_path: Path) -> None:
         mock_reset.assert_called_once()
 
 
-def test_default_command_forwards_config_to_new_gui(tmp_path: Path) -> None:
+def test_default_command_forwards_config_to_standard_gui(tmp_path: Path) -> None:
     config = tmp_path / "startup.cfg"
     config.touch()
     argv = ["mmgui", "-c", str(config)]
@@ -46,4 +46,16 @@ def test_default_command_forwards_config_to_new_gui(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert mock_create.call_args.kwargs["mm_config"] == config.resolve()
-    assert mock_create.call_args.kwargs["window_cls"] == "pymmcore_gui._gui.MainWindow"
+    # by default the standard (dock-based) MicroManagerGUI is used
+    assert mock_create.call_args.kwargs["window_cls"] is None
+
+
+def test_modern_flag_uses_modern_gui() -> None:
+    with patch("pymmcore_gui.create_mmgui") as mock_create:
+        result = runner.invoke(app, ["run", "--modern"])
+
+    assert result.exit_code == 0
+    assert (
+        mock_create.call_args.kwargs["window_cls"]
+        == "pymmcore_gui._modern_gui.MainWindow"
+    )

@@ -23,6 +23,8 @@ Usage:
 
 from __future__ import annotations
 
+from superqt.iconify import QIconifyIcon
+
 from pymmcore_gui._qt.QtCore import QPointF, QRect, QRectF, QSize, Qt
 from pymmcore_gui._qt.QtGui import (
     QBrush,
@@ -31,9 +33,11 @@ from pymmcore_gui._qt.QtGui import (
     QPainterPath,
     QPalette,
     QPen,
+    QPixmap,
 )
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractSpinBox,
+    QApplication,
     QComboBox,
     QFrame,
     QProxyStyle,
@@ -44,9 +48,46 @@ from pymmcore_gui._qt.QtWidgets import (
     QStyleOptionButton,
     QStyleOptionComboBox,
     QStyleOptionComplex,
+    QStyleOptionHeader,
     QStyleOptionSlider,
     QStyleOptionSpinBox,
+    QStyleOptionTab,
     QWidget,
+)
+
+# ═══════════════════════════════════════════════════════════════
+# Work around a superqt/PyQt6 crash in QIconifyIcon's network-failure
+# fallback (e.g. offline, DNS hiccup, icon CDN blocked by a lab firewall).
+#
+# QIconifyIcon._draw_text_fallback() (superqt/iconify/__init__.py) calls
+# ``style.standardPixmap(icon)`` with only one argument when fetching an
+# icon's SVG fails. PyQt6 fills in a default for the missing ``opt``
+# argument when calling QStyle.standardPixmap() directly, but that default
+# isn't honored when the call dispatches through a QProxyStyle override
+# (which MicroscopeStyle below is, and which raises the same "TypeError:
+# not enough arguments" on a bare, unmodified QProxyStyle too — this isn't
+# specific to our style, any QProxyStyle-based app hits it). Passing
+# ``opt=None`` explicitly works identically on both QStyle and QProxyStyle,
+# so this is a drop-in fix, not a behavior change -- without it, any
+# transient icon-fetch failure anywhere in the app crashes instead of
+# quietly drawing the intended "?" fallback pixmap.
+# ═══════════════════════════════════════════════════════════════
+
+
+def _iconify_fallback_pixmap(self: QIconifyIcon, key: tuple[str, ...]) -> None:
+    if style := QApplication.style():
+        pixmap = style.standardPixmap(QStyle.StandardPixmap.SP_MessageBoxQuestion, None)
+    else:
+        pixmap = QPixmap(18, 18)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "?")
+        painter.end()
+    self.addPixmap(pixmap)
+
+
+QIconifyIcon._draw_text_fallback = (  # type: ignore[method-assign]
+    _iconify_fallback_pixmap
 )
 
 # ═══════════════════════════════════════════════════════════════
@@ -170,7 +211,11 @@ def _button_colors(
             return (_with_alpha(accent, 38), _with_alpha(accent, 76), accent)
 
         case "danger":
-            red = QColor(0xEF, 0x53, 0x50)
+            # Late import avoids a circular ref (_theme/__init__.py imports
+            # MicroscopeStyle from this module).
+            from . import qcolor, theme
+
+            red = qcolor(theme().status_red)
             if pressed:
                 return (red, red, QColor(0xFF, 0xFF, 0xFF))
             if hovered:
@@ -324,6 +369,14 @@ class MicroscopeStyle(QProxyStyle):
             # Ensure minimum button height and horizontal padding
             s.setHeight(max(s.height(), 26))
             s.setWidth(s.width() + 8)
+        elif type == QStyle.ContentsType.CT_ComboBox:
+            # Fusion's own CT_ComboBox width computation reserves space for
+            # *its* default arrow glyph, not the wider one _draw_combobox
+            # paints (COMBO_ARROW_W) -- without correcting for the
+            # difference, the text can be measured as fitting when it will
+            # actually be clipped by our wider arrow at paint time (e.g. a
+            # combo box defaulting to "composite" showed as "composit").
+            s.setWidth(s.width() + round(COMBO_ARROW_W * self._zoom))
         return s
 
     # ── Primitive Elements ──
@@ -387,6 +440,25 @@ class MicroscopeStyle(QProxyStyle):
             case PE.PE_IndicatorRadioButton:
                 self._draw_radio(option, painter, widget)
 
+            case PE.PE_PanelButtonTool:
+                # QToolButton frame. Fusion draws a beveled box here that
+                # clashes with our rounded QPushButton look; draw our own so
+                # tool buttons (toolbars, table action buttons, etc.) match.
+                # The base style still lays out the icon/text/menu-arrow.
+                self._draw_tool_button_frame(option, painter, widget)
+
+            case PE.PE_FrameTabWidget:
+                # Suppress Fusion's beveled frame around a QTabWidget's page
+                # area -- flat content, consistent with the rest of the app.
+                painter.fillRect(option.rect, pal.color(QPalette.ColorRole.Window))
+
+            case PE.PE_IndicatorTabClose:
+                # Fusion bakes this into a fixed reddish-orange square that
+                # never changes with the active theme (same color in light
+                # and dark mode) -- draw our own flat glyph in the theme's
+                # actual status-red instead, matching every other red icon.
+                self._draw_tab_close(option, painter, widget)
+
             case _:
                 super().drawPrimitive(element, option, painter, widget)
 
@@ -424,6 +496,17 @@ class MicroscopeStyle(QProxyStyle):
 
             case CE.CE_Splitter:
                 self._draw_splitter_handle(option, painter, widget)
+
+            case CE.CE_HeaderSection if isinstance(option, QStyleOptionHeader):
+                self._draw_header_section(option, painter, widget)
+
+            case CE.CE_HeaderEmptyArea:
+                painter.fillRect(
+                    option.rect, option.palette.color(QPalette.ColorRole.Button)
+                )
+
+            case CE.CE_TabBarTabShape if isinstance(option, QStyleOptionTab):
+                self._draw_tab_shape(option, painter, widget)
 
             case _:
                 super().drawControl(element, option, painter, widget)
@@ -531,23 +614,93 @@ class MicroscopeStyle(QProxyStyle):
         # Icon
         if not opt.icon.isNull():
             icon_size = opt.iconSize
-            icon_rect = QRect(
-                r.left() + 8,
-                r.top() + (r.height() - icon_size.height()) // 2,
-                icon_size.width(),
-                icon_size.height(),
-            )
+            if opt.text:
+                # Icon + text: pin the icon to the left, text fills the rest.
+                icon_rect = QRect(
+                    r.left() + 8,
+                    r.top() + (r.height() - icon_size.height()) // 2,
+                    icon_size.width(),
+                    icon_size.height(),
+                )
+                r = QRect(
+                    icon_rect.right() + 4,
+                    r.top(),
+                    r.width() - icon_rect.width() - 12,
+                    r.height(),
+                )
+            else:
+                # Icon-only: nothing to justify against on the right, so
+                # center it in the button instead of pinning it to the left.
+                icon_rect = QRect(
+                    r.left() + (r.width() - icon_size.width()) // 2,
+                    r.top() + (r.height() - icon_size.height()) // 2,
+                    icon_size.width(),
+                    icon_size.height(),
+                )
             opt.icon.paint(p, icon_rect)
-            r = QRect(
-                icon_rect.right() + 4,
-                r.top(),
-                r.width() - icon_rect.width() - 12,
-                r.height(),
-            )
 
-        # Text
+        # Text — drawItemText processes the '&' mnemonic (e.g. "&Yes" → "Yes"),
+        # honoring the platform's underline-shortcut style hint.
         if opt.text:
-            p.drawText(QRectF(r), Qt.AlignmentFlag.AlignCenter, opt.text)
+            flags = int(Qt.AlignmentFlag.AlignCenter) | int(
+                Qt.TextFlag.TextShowMnemonic
+            )
+            if not self.styleHint(QStyle.StyleHint.SH_UnderlineShortcut, opt, widget):
+                flags |= int(Qt.TextFlag.TextHideMnemonic)
+            enabled = bool(opt.state & QStyle.StateFlag.State_Enabled)
+            self.drawItemText(p, r, flags, opt.palette, enabled, opt.text)
+
+    # ═══════════════════════════════════════════════════════════
+    # Tool Button
+    # ═══════════════════════════════════════════════════════════
+
+    def _draw_tool_button_frame(
+        self,
+        opt: QStyleOption,
+        p: QPainter,
+        widget: QWidget | None,
+    ) -> None:
+        """Draw a QToolButton frame matching the QPushButton look.
+
+        An auto-raise tool button (the default inside a QToolBar) reads as a
+        "ghost" button — transparent at rest, filling on hover. A non
+        auto-raise tool button reads as a "subtle" button — a resting fill and
+        border. A checked button gets the accent tint in both cases.
+        """
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pal = opt.palette
+        r = QRectF(opt.rect).adjusted(0.5, 0.5, -0.5, -0.5)
+
+        hovered = bool(opt.state & QStyle.StateFlag.State_MouseOver)
+        pressed = bool(opt.state & QStyle.StateFlag.State_Sunken)
+        checked = bool(opt.state & QStyle.StateFlag.State_On)
+        enabled = bool(opt.state & QStyle.StateFlag.State_Enabled)
+        autoraise = bool(opt.state & QStyle.StateFlag.State_AutoRaise)
+        accent = _get_accent(widget)
+
+        transparent = QColor(0, 0, 0, 0)
+        bg = border = transparent
+        if not enabled:
+            pass  # flat/transparent — the label is dimmed by the base style
+        elif checked:
+            bg, border = _with_alpha(accent, 38), _with_alpha(accent, 76)
+        elif pressed:
+            bg, border = _with_alpha(accent, 50), _with_alpha(accent, 76)
+        elif hovered:
+            bg = pal.color(QPalette.ColorRole.Midlight)
+            border = transparent if autoraise else pal.color(QPalette.ColorRole.Mid)
+        elif not autoraise:
+            bg = pal.color(QPalette.ColorRole.Button)
+            border = pal.color(QPalette.ColorRole.Mid)
+
+        if bg.alpha() > 0:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(bg))
+            p.drawRoundedRect(r, RADIUS, RADIUS)
+        if border.alpha() > 0:
+            p.setPen(QPen(border, 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(r, RADIUS, RADIUS)
 
     # ═══════════════════════════════════════════════════════════
     # Checkbox
@@ -1163,6 +1316,109 @@ class MicroscopeStyle(QProxyStyle):
             else:
                 for dy in (-6, 0, 6):
                     p.drawEllipse(QPointF(cx, cy + dy), dot_r, dot_r)
+
+    # ═══════════════════════════════════════════════════════════
+    # QHeaderView (table / tree column & row headers)
+    # ═══════════════════════════════════════════════════════════
+
+    def _draw_header_section(
+        self,
+        opt: QStyleOptionHeader,
+        p: QPainter,
+        widget: QWidget | None,
+    ) -> None:
+        """Flat header cell background, replacing Fusion's palette-ignoring bevel.
+
+        Only the background/border are drawn here. QHeaderView::paintSection
+        calls CE_HeaderSection and CE_HeaderLabel as two separate, independent
+        steps (unlike CE_PushButton, which is expected to draw its own label)
+        -- Qt already invokes CE_HeaderLabel on its own right after this
+        returns. An earlier version of this method also delegated to it
+        explicitly, which drew the label a second time on top of Qt's own
+        pass and showed up as doubled/smeared header text.
+        """
+        pal = opt.palette
+        r = opt.rect
+        hovered = bool(opt.state & QStyle.StateFlag.State_MouseOver)
+        pressed = bool(opt.state & QStyle.StateFlag.State_Sunken)
+
+        if pressed:
+            bg = pal.color(QPalette.ColorRole.Midlight)
+        elif hovered:
+            bg = pal.color(QPalette.ColorRole.AlternateBase)
+        else:
+            bg = pal.color(QPalette.ColorRole.Button)
+
+        p.fillRect(r, bg)
+
+        p.setPen(self._border_color())
+        p.drawLine(r.bottomLeft(), r.bottomRight())
+        p.drawLine(r.topRight(), r.bottomRight())
+
+    # ═══════════════════════════════════════════════════════════
+    # QTabBar
+    # ═══════════════════════════════════════════════════════════
+
+    def _draw_tab_shape(
+        self,
+        opt: QStyleOptionTab,
+        p: QPainter,
+        widget: QWidget | None,
+    ) -> None:
+        """Flat tab: selected tab gets an accent underline, unselected is bare.
+
+        Text layout is left to the base style (CE_TabBarTabLabel), which
+        already reads the correct color from our palette.
+        """
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pal = opt.palette
+        r = opt.rect
+        selected = bool(opt.state & QStyle.StateFlag.State_Selected)
+        hovered = bool(opt.state & QStyle.StateFlag.State_MouseOver)
+
+        if selected:
+            p.fillRect(r, pal.color(QPalette.ColorRole.Base))
+        elif hovered:
+            p.fillRect(r, pal.color(QPalette.ColorRole.Midlight))
+
+        if selected:
+            p.setPen(QPen(pal.color(QPalette.ColorRole.Highlight), 2))
+        else:
+            p.setPen(self._border_color())
+        p.drawLine(r.bottomLeft(), r.bottomRight())
+
+    def _draw_tab_close(
+        self,
+        opt: QStyleOption,
+        p: QPainter,
+        widget: QWidget | None,
+    ) -> None:
+        """Flat 'x' glyph in the theme's status-red for a tab's close button.
+
+        Late import avoids a circular ref (_theme/__init__.py imports
+        MicroscopeStyle from this module).
+        """
+        from . import qcolor, theme
+
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        hovered = bool(opt.state & QStyle.StateFlag.State_MouseOver)
+        pressed = bool(opt.state & QStyle.StateFlag.State_Sunken)
+        red = qcolor(theme().status_red)
+        r = QRectF(opt.rect)
+
+        if pressed or hovered:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(_with_alpha(red, 90 if pressed else 60))
+            p.drawEllipse(r)
+
+        pen = QPen(red, max(1.2, r.width() * 0.09))
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        inset = r.adjusted(
+            r.width() * 0.3, r.height() * 0.3, -r.width() * 0.3, -r.height() * 0.3
+        )
+        p.drawLine(inset.topLeft(), inset.bottomRight())
+        p.drawLine(inset.topRight(), inset.bottomLeft())
 
 
 # ═══════════════════════════════════════════════════════════════
