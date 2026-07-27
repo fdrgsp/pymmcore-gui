@@ -409,6 +409,56 @@ def test_selecting_channel_row_applies_only_its_core_config(
     assert mmcore.getCurrentConfig("Channel") == first
 
 
+def test_core_config_change_syncs_channel_row_selection(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    set_theme(DARK_THEME)
+    mda = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(mda)
+    channels = mda.channels
+    table = channels.table()
+    presets = tuple(mmcore.getAvailableConfigs("Channel"))
+    assert len(presets) >= 3
+
+    # Table holds the first two presets only.
+    in_table = presets[:2]
+    not_in_table = presets[2]
+    mda.setValue(
+        useq.MDASequence(
+            channels=tuple(
+                useq.Channel(group="Channel", config=config, exposure=100.0 + i)
+                for i, config in enumerate(in_table)
+            )
+        )
+    )
+
+    # A preset activated on the core (e.g. from the Groups & Presets table)
+    # selects the matching row.
+    mmcore.setConfig("Channel", in_table[1])
+    QApplication.processEvents()
+    assert table.currentRow() == 1
+    assert mmcore.getCurrentConfig("Channel") == in_table[1]
+
+    mmcore.setConfig("Channel", in_table[0])
+    QApplication.processEvents()
+    assert table.currentRow() == 0
+
+    # Idle selection does not push the row's exposure to the hardware
+    # (just-in-time rule): only the preset is applied.
+    mmcore.setExposure(7.0)
+    mmcore.setConfig("Channel", in_table[1])
+    QApplication.processEvents()
+    assert mmcore.getExposure() == pytest.approx(7.0)
+
+    # Activating a channel that has no row deselects everything, and does not
+    # push anything back to the core.
+    mmcore.setConfig("Channel", not_in_table)
+    QApplication.processEvents()
+    assert table.currentRow() == -1
+    assert not table.selectedIndexes()
+    assert mmcore.getCurrentConfig("Channel") == not_in_table
+
+
 def test_channel_property_selector_lists_all_runtime_numeric_sliders(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
@@ -822,7 +872,8 @@ def test_snap_and_live_apply_the_active_channel_capture_settings(
     )
 
     table = channels.table()
-    table.setCurrentCell(0, table.indexOf(channels._config_column))
+    config_col = table.indexOf(channels._config_column)
+    table.setCurrentCell(0, config_col)
     source_device, source_property = "Camera", "TestProperty1"
     source_group = next(
         label
@@ -848,9 +899,15 @@ def test_snap_and_live_apply_the_active_channel_capture_settings(
     baseline_intensity = mmcore.getPropertyLowerLimit(source_device, source_property)
 
     def reset_core() -> None:
+        # Drift the core to a preset absent from the single-row table; this now
+        # clears the row selection (core->table reverse sync). Re-select the
+        # row afterwards, as a user would, so the "active channel" is restored.
+        # Idle selection re-applies only the preset, not exposure/intensity --
+        # those must be re-applied at capture time, which is what this verifies.
         mmcore.setConfig("Channel", first_config)
         mmcore.setExposure(5)
         mmcore.setProperty(source_device, source_property, baseline_intensity)
+        table.setCurrentCell(0, config_col)
 
     def capture_settings() -> tuple[str, float, float]:
         return (

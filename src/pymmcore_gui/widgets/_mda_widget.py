@@ -227,6 +227,14 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
             model.columnsInserted.connect(self._schedule_channel_editor_filters)
         self._install_channel_editor_filters()
 
+        # Reverse sync: when the active preset changes on the core from
+        # anywhere else (setConfig, the Groups & Presets table, etc.), reflect
+        # it here by selecting the matching channel row. Selection then runs
+        # the same path a manual click does, so exposure/intensity follow the
+        # existing just-in-time rule (applied while a sequence runs / at the
+        # next capture, not on idle selection).
+        self._mmc.events.configSet.connect(self._on_core_config_set)
+
     def _schedule_channel_editor_filters(self, *_: object) -> None:
         # columnsInserted fires from insertColumn(), before DataTable.addColumn()
         # has populated that column's cell widgets. Install after the insertion
@@ -321,6 +329,57 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
             current.row(),
             include_capture_settings=self._mmc.isSequenceRunning(),
         )
+
+    def _on_core_config_set(self, group: str, preset: str) -> None:
+        """Select the channel row matching a preset activated on the core.
+
+        Fires from ``configSet`` whenever the active preset changes anywhere
+        (setConfig, the Groups & Presets table, ...). Guarded against the
+        table->core path (``_applying_channel_config``) so a selection we
+        pushed to the core ourselves doesn't loop back, and against sequence
+        restore. Only the channel group is mirrored -- other config groups
+        (objective, etc.) have no row in this table.
+        """
+        if self._applying_channel_config or self._restoring_sequence:
+            return
+        if group != self._mmc.getChannelGroup():
+            return
+        selected = self._selected_channel_identity()
+        if selected is not None and selected[1] == preset:
+            return  # the current row already represents this preset
+        table = self.channels.table()
+        row = self._find_channel_row(preset)
+        if row < 0:
+            # The active channel isn't in the table -- clear the selection so a
+            # stale row doesn't imply it is. Clearing yields an invalid current
+            # index, which _on_channel_row_selected ignores, so the core is not
+            # touched.
+            table.clearSelection()
+            if (selection_model := table.selectionModel()) is not None:
+                selection_model.clearCurrentIndex()
+            return
+        # Selecting the row runs _on_channel_row_selected, exactly as a manual
+        # click would: it re-applies the (already-current) config as a no-op
+        # and applies exposure/intensity only under the usual conditions.
+        config_col = table.indexOf(self.channels._config_column)
+        table.setCurrentCell(row, max(0, config_col))
+        table.selectRow(row)
+
+    def _find_channel_row(self, preset: str) -> int:
+        """Row whose channel config == ``preset``, preferring a checked one."""
+        table = self.channels.table()
+        channels = self.channels.value(exclude_unchecked=False)
+        selector_col = table._get_selector_col()
+        selector = table.columnInfo(selector_col)
+        match = -1
+        for row, channel in enumerate(channels):
+            if str(channel.config or "") != preset:
+                continue
+            if match < 0:
+                match = row
+            if selector is not None and selector.isChecked(table, row, selector_col):
+                return row
+        return match
 
     def apply_active_channel_for_capture(self) -> bool:
         """Apply the active row's channel, exposure, and property before imaging.
