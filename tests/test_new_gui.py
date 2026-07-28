@@ -47,8 +47,8 @@ from pymmcore_gui._qt.QtWidgets import (
     QToolButton,
     QWidget,
 )
+from pymmcore_gui.widgets._active_channel_table import CURRENT_CHANNEL_COLUMN
 from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
-from pymmcore_gui.widgets._ranged_property_channels import CURRENT_CHANNEL_COLUMN
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -644,7 +644,7 @@ def test_channel_property_selector_lists_all_runtime_numeric_sliders(
     assert property_header is not None
     assert value_header is not None
     assert property_header.text() == "Light Source"
-    assert value_header.text() == "Intensity"
+    assert value_header.text() == "Intensity [%]"
 
 
 def test_collapsible_mda_round_trips_all_original_widgets(
@@ -726,6 +726,9 @@ def test_collapsible_mda_round_trips_all_original_widgets(
     assert not channel_table.isColumnHidden(
         channel_table.indexOf(mda.channels.ACQUIRE_EVERY)
     )
+    # Do Stack is gated behind the upstream "advanced" toggle (and the Z axis,
+    # which the round-tripped sequence above already activates).
+    mda.channels.advanced.setChecked(True)
     assert not channel_table.isColumnHidden(
         channel_table.indexOf(mda.channels.DO_STACK)
     )

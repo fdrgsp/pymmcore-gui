@@ -18,9 +18,9 @@ from pymmcore_gui._modern_gui._theme import qcolor, theme
 from pymmcore_gui._qt.QtCore import QEvent, QModelIndex, QObject, QSize, Qt, QTimer
 from pymmcore_gui._qt.QtWidgets import QComboBox, QDoubleSpinBox, QGridLayout, QWidget
 
-from ._ranged_property_channels import (
+from ._active_channel_table import (
     CURRENT_CHANNEL_COLUMN,
-    RangedPropertyCollapsibleCoreMDATabs,
+    ActiveChannelCollapsibleCoreMDATabs,
 )
 
 if TYPE_CHECKING:
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
     from pymmcore_widgets.mda._xy_bounds import CoreXYBoundsControl
 
-    from ._ranged_property_channels import RangedPropertyChannelTable
+    from ._active_channel_table import ActiveChannelTable
 
 
 def _align_bounds_grid(bounds: CoreXYBoundsControl) -> None:
@@ -94,16 +94,16 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
     """
 
     def _create_tab_widget(self) -> CollapsibleCoreMDATabs:
-        return RangedPropertyCollapsibleCoreMDATabs(None, self._mmc)
+        return ActiveChannelCollapsibleCoreMDATabs(None, self._mmc)
 
     # ----------- Override type hints in superclass -----------
-    # _create_tab_widget above always installs a RangedPropertyChannelTable,
-    # which adds activeRow/setActiveRow to the upstream CoreConnectedChannelTable
+    # _create_tab_widget above always installs an ActiveChannelTable, which adds
+    # activeRow/setActiveRow to the upstream CoreConnectedChannelTable
     # interface; narrow the property's declared return type to match.
 
     @property
-    def channels(self) -> RangedPropertyChannelTable:
-        return cast("RangedPropertyChannelTable", super().channels)
+    def channels(self) -> ActiveChannelTable:
+        return cast("ActiveChannelTable", super().channels)
 
     def __init__(self, mmcore: CMMCorePlus, parent: QWidget | None = None) -> None:
         self._restoring_sequence = False
