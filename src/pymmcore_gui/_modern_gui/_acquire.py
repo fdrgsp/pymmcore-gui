@@ -1,4 +1,4 @@
-"""Acquire tab with camera controls, live preview, and MDA viewers."""
+"""Acquire tab: camera controls, live preview, and a dockable MDA/tools layout."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ from pymmcore_plus import CMMCorePlus
 from pymmcore_widgets import PropertyBrowser
 
 from pymmcore_gui._array_viewer import unstyle_widgets
+from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget, DockWidgetArea
 from pymmcore_gui._qt.QtCore import QTimer
-from pymmcore_gui._qt.QtWidgets import QPushButton, QTabWidget, QWidget
+from pymmcore_gui._qt.QtWidgets import QPushButton, QWidget
 from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
-from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 
 from ._acquire_presets import AcquisitionPresetSelector
 from ._acquire_toolbar import (
@@ -22,73 +22,125 @@ from ._acquire_toolbar import (
     toolbar_separator,
 )
 from ._acquire_viewers import AcquireViewers
-from ._tab_bar import ThemedTabBar
 from ._tab_page import TabPage
 
 if TYPE_CHECKING:
-    from useq import Position
-
+    from pymmcore_gui._qt.QtAds import CDockAreaWidget
     from pymmcore_gui._qt.QtGui import QShowEvent
     from pymmcore_gui.widgets._mm_console import MMConsole
 
+_MDA_LABEL = "MDA"
 _PRESETS_LABEL = "Groups and Presets"
-_MDA_PANEL_MIN_WIDTH = 100
-_RIGHT_PANEL_MIN_WIDTH = 100
+_PROPS_LABEL = "Properties"
+_CONSOLE_LABEL = "Console"
+_DOCK_MIN_WIDTH = 100
 # Wide enough that the panels don't open clipped -- the user can still drag
-# them down to the minimums above.
-_MDA_PANEL_INITIAL_WIDTH = 700
-_RIGHT_PANEL_INITIAL_WIDTH = 420
+# them down to the minimum above.
+_MDA_DOCK_WIDTH = 700
+_SIDE_DOCK_WIDTH = 420
+
+_ads_configured = False
+
+
+def _configure_ads() -> None:
+    """Apply the process-wide ADS flags, once.
+
+    Mirrors ``_main_window.py``'s classic-GUI setup so both GUIs' dock
+    managers behave identically. These setters are static -- they affect every
+    ``CDockManager`` in the process, and only the *first* call before any
+    manager is constructed has an effect. ``DockAreaHasAutoHideButton`` is the
+    one addition beyond what the classic GUI sets: without it, pinning a dock
+    to a side bar is drag-only and undiscoverable.
+
+    Note: emptying a dock area (moving its last widget elsewhere, whether to
+    another regular area or to auto-hide) reproducibly segfaults under
+    ``QT_QPA_PLATFORM=offscreen`` + pytest-qt, independent of any app code,
+    on both PyQt6Ads 4.4.0.post2 and 5.0.0 -- confirmed test-harness-only,
+    since interactive drag-and-drop on a real display does not reproduce it.
+    Automated tests therefore stick to what doesn't empty an area (open/close
+    toggling, tabbing a dock into an existing one); actual rearranging is a
+    manual smoke-test item (see the PR description).
+    """
+    global _ads_configured
+    if _ads_configured:
+        return
+    _ads_configured = True
+    CDockManager.setConfigFlag(CDockManager.eConfigFlag.DockAreaHasCloseButton, False)
+    CDockManager.setConfigFlag(CDockManager.eConfigFlag.OpaqueSplitterResize, True)
+    CDockManager.setAutoHideConfigFlag(
+        CDockManager.eAutoHideFlag.AutoHideFeatureEnabled, True
+    )
+    CDockManager.setAutoHideConfigFlag(
+        CDockManager.eAutoHideFlag.DockAreaHasAutoHideButton, True
+    )
 
 
 class AcquirePage(TabPage):
-    """Acquisition controls with tabbed preview and MDA display."""
+    """Acquisition controls with a dockable MDA/tools layout and image viewers.
+
+    Every panel below the toolbar -- MDA, Groups and Presets, the Property
+    Browser, and the console -- is a QtAds dock widget, so the user can
+    rearrange them, pin any of them to a side bar, or move them to the bottom.
+    Only ``toolbar`` is inherited from ``TabPage``; the dock manager fills the
+    whole content area, replacing the fixed left/right sidebar split the other
+    pages still use.
+    """
 
     def __init__(
         self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
     ) -> None:
         super().__init__(parent)
         self._core = mmcore or CMMCorePlus.instance()
+        # AcquirePage doesn't use TabPage's left sidebar -- the dock manager
+        # below supplies its own left/right/bottom docking.
+        self.left.hide()
+        self._content_layout.setContentsMargins(0, 0, 0, 0)
 
-        self._presets = AcquisitionPresetSelector(mmcore=self._core)
-        self._mda = MemoryMDAWidget(mmcore=self._core)
-        self.left.add_widget(self._mda, 1)
-        self.left.setMinimumWidth(_MDA_PANEL_MIN_WIDTH)
+        _configure_ads()
+        self._dock_manager = CDockManager(self.content)
+        self.add_content_widget(self._dock_manager)
 
-        self._right_tabs = QTabWidget()
-        self._right_tabs.setTabBar(ThemedTabBar(self._right_tabs))
-        self._right_tabs.setDocumentMode(True)
-        self._right_tabs.setTabsClosable(True)
-        self._right_tabs.tabCloseRequested.connect(self._close_right_tab)
-
-        self._right_tabs.addTab(self._presets, _PRESETS_LABEL)
-        self._right_tabs.setCurrentWidget(self._presets)
-
-        self._property_browser: PropertyBrowser | None = None
-        self._console: MMConsole | None = None
-        self.right.add_widget(self._right_tabs, 1)
-        self.right.setMinimumWidth(_RIGHT_PANEL_MIN_WIDTH)
-
-        # Center content is itself split into two tabs: "Viewer" (a lazy snap
-        # preview + one viewer per MDA run) and "Explorer" (a stage-explorer
-        # map). The Viewer tab keeps its own inner Preview/MDA tab bar.
-        self._content_tabs = QTabWidget()
-        self._content_tabs.setTabBar(ThemedTabBar(self._content_tabs))
-        self._content_tabs.setDocumentMode(True)
-
+        # ── central: image viewers (its own Preview / MDA-run tab bar) ────
         self._viewers = AcquireViewers(self._core)
-        self._content_tabs.addTab(self._viewers, "Viewer")
+        self._viewers_dock = CDockWidget(self._dock_manager, "Viewers", self)
+        self._viewers_dock.setObjectName("acquire_viewers")
+        self._viewers_dock.setFeature(CDockWidget.DockWidgetFeature.NoTab, True)
+        self._viewers_dock.setFeature(
+            CDockWidget.DockWidgetFeature.DockWidgetClosable, False
+        )
+        self._viewers_dock.setWidget(
+            self._viewers, CDockWidget.eInsertMode.ForceNoScrollArea
+        )
+        self._dock_manager.setCentralWidget(self._viewers_dock)
 
-        self._explorer = ThemedStageExplorer(mmcore=self._core)
-        self._explorer.sendToMDARequested.connect(self._on_explorer_positions)
-        self._content_tabs.addTab(self._explorer, "Explorer")
-
-        self.add_content_widget(self._content_tabs)
-        self.bottom.hide()
-        self._h_split.setSizes(
-            [_MDA_PANEL_INITIAL_WIDTH, 900, _RIGHT_PANEL_INITIAL_WIDTH]
+        # ── eager docks: MDA and Groups/Presets are shown by default ──────
+        self._mda = MemoryMDAWidget(mmcore=self._core)
+        self._mda.setMinimumWidth(_DOCK_MIN_WIDTH)
+        self._mda_dock = self._add_dock(
+            "acquire_mda", _MDA_LABEL, self._mda, DockWidgetArea.LeftDockWidgetArea
         )
 
-        # toolbar: snap|live ‖ shutters … [Presets|Properties]
+        self._presets = AcquisitionPresetSelector(mmcore=self._core)
+        self._presets.setMinimumWidth(_DOCK_MIN_WIDTH)
+        self._presets_dock = self._add_dock(
+            "acquire_presets",
+            _PRESETS_LABEL,
+            self._presets,
+            DockWidgetArea.RightDockWidgetArea,
+        )
+
+        # ── lazy docks: built on first open ───────────────────────────────
+        self._property_browser: PropertyBrowser | None = None
+        self._props_dock: CDockWidget | None = None
+        self._console: MMConsole | None = None
+        self._console_dock: CDockWidget | None = None
+
+        if area := self._mda_dock.dockAreaWidget():
+            self._dock_manager.setSplitterSizes(area, [_MDA_DOCK_WIDTH, 900])
+        if area := self._presets_dock.dockAreaWidget():
+            self._dock_manager.setSplitterSizes(area, [900, _SIDE_DOCK_WIDTH])
+
+        # toolbar: snap|live ‖ shutters … [MDA][Groups and Presets][Properties][Console]
         self._shutters = ShuttersBar(self._core)
         self._snap_btn = SnapButton(mmcore=self._core)
         self._snap_btn.snapRequested.connect(self._mda.apply_active_channel_for_capture)
@@ -104,103 +156,119 @@ class AcquirePage(TabPage):
         self.toolbar.add_widget(self._shutters)
         self.toolbar.add_stretch()
 
-        # "subtle" = a persistently visible box (rather than the default
-        # "ghost", which is borderless until hovered), matching Snap/Live/
-        # Shutters and the channel-preset buttons.
-        self._presets_btn = QPushButton(_PRESETS_LABEL)
-        self._presets_btn.setProperty("variant", "subtle")
-        self._presets_btn.setCheckable(True)
+        self._mda_btn = self._add_panel_button(_MDA_LABEL, "Show or hide the MDA panel")
+        self._mda_btn.setChecked(True)
+        self._mda_btn.toggled.connect(self._mda_dock.toggleView)
+        self._sync_button(self._mda_btn, self._mda_dock)
+
+        self._presets_btn = self._add_panel_button(
+            _PRESETS_LABEL, "Show or hide the group/preset selection panel"
+        )
         self._presets_btn.setChecked(True)
-        self._presets_btn.setToolTip("Show the group/preset selection tab")
-        self._presets_btn.toggled.connect(self._toggle_presets)
-        self.toolbar.add_widget(self._presets_btn)
+        self._presets_btn.toggled.connect(self._presets_dock.toggleView)
+        self._sync_button(self._presets_btn, self._presets_dock)
 
-        self._props_btn = QPushButton("Properties")
-        self._props_btn.setProperty("variant", "subtle")
-        self._props_btn.setCheckable(True)
-        self._props_btn.setToolTip("Open the device property browser tab")
+        self._props_btn = self._add_panel_button(
+            _PROPS_LABEL, "Open the device property browser panel"
+        )
         self._props_btn.toggled.connect(self._toggle_properties)
-        self.toolbar.add_widget(self._props_btn)
 
-        self._console_btn = QPushButton("Console")
-        self._console_btn.setProperty("variant", "subtle")
-        self._console_btn.setCheckable(True)
-        self._console_btn.setToolTip("Open an IPython console tab")
+        self._console_btn = self._add_panel_button(
+            _CONSOLE_LABEL, "Open an IPython console panel"
+        )
         self._console_btn.toggled.connect(self._toggle_console)
-        self.toolbar.add_widget(self._console_btn)
 
-    def _on_explorer_positions(self, positions: list[Position], replace: bool) -> None:
-        """Transfer Stage Explorer regions into the MDA position table."""
-        existing = [] if replace else list(self._mda.stage_positions.value())
-        self._mda.stage_positions.setValue([*existing, *positions])
-        self._mda._collapsible_tabs().section("p").set_expanded(True)
+    # ------------------------------------------------------------------ dock helpers
 
-    def _toggle_presets(self, checked: bool) -> None:
-        idx = self._right_tabs.indexOf(self._presets)
-        if checked:
-            if idx < 0:
-                idx = self._right_tabs.insertTab(0, self._presets, _PRESETS_LABEL)
-            self._right_tabs.setCurrentIndex(idx)
-        elif idx >= 0:
-            self._right_tabs.removeTab(idx)
-        self._update_right_sidebar()
+    def _add_dock(
+        self,
+        name: str,
+        title: str,
+        widget: QWidget,
+        area: DockWidgetArea,
+        into: CDockAreaWidget | None = None,
+    ) -> CDockWidget:
+        """Create a dock wrapping *widget* and add it to the manager at *area*."""
+        dock = CDockWidget(self._dock_manager, title, self)
+        dock.setObjectName(name)
+        dock.setWidget(widget, CDockWidget.eInsertMode.ForceNoScrollArea)
+        # AcquirePage lives inside MainWindow's QStackedWidget; an ADS floating
+        # container is a top-level window that would linger after switching
+        # to another mode tab, so none of these docks may float.
+        dock.setFeature(CDockWidget.DockWidgetFeature.DockWidgetFloatable, False)
+        self._dock_manager.addDockWidget(area, dock, into)
+        return dock
+
+    def _add_side_dock(self, name: str, title: str, widget: QWidget) -> CDockWidget:
+        """Add a dock tabbed into the Groups-and-Presets area.
+
+        ``addDockWidget(RightDockWidgetArea, ...)`` called a second time would
+        create a second, side-by-side right area rather than a tab in the
+        existing one, so this targets that area's ``CDockAreaWidget``
+        directly. Falls back to a fresh right area if the Presets dock is
+        currently closed (its area is then ``None``).
+        """
+        if into := self._presets_dock.dockAreaWidget():
+            return self._add_dock(
+                name, title, widget, DockWidgetArea.CenterDockWidgetArea, into
+            )
+        return self._add_dock(name, title, widget, DockWidgetArea.RightDockWidgetArea)
+
+    def _add_panel_button(self, label: str, tooltip: str) -> QPushButton:
+        """A checkable toolbar toggle for a dock, styled like the other actions."""
+        btn = QPushButton(label)
+        btn.setProperty("variant", "subtle")
+        btn.setCheckable(True)
+        btn.setToolTip(tooltip)
+        self.toolbar.add_widget(btn)
+        return btn
+
+    def _sync_button(self, btn: QPushButton, dock: CDockWidget) -> None:
+        """Keep *btn* checked in sync with whether *dock* is open.
+
+        Connects ``viewToggled`` rather than ``dock.toggleViewAction().toggled``:
+        pinning a dock to an auto-hide side bar transiently unchecks and
+        re-checks that action without ever emitting ``viewToggled``, so
+        binding the button to the action would close the dock the moment the
+        user pinned it. Both directions are idempotent (``setChecked`` and
+        ``toggleView`` no-op when already in the target state), so this never
+        loops.
+        """
+        dock.viewToggled.connect(btn.setChecked)
 
     def _toggle_properties(self, checked: bool) -> None:
-        browser = self._property_browser
+        dock = self._props_dock
+        if dock is None:
+            if not checked:
+                return
+            # PropertyBrowser is a QDialog upstream; docking reparents it as a
+            # regular embedded page.
+            browser = self._property_browser = PropertyBrowser(mmcore=self._core)
+            unstyle_widgets(browser)
+            dock = self._props_dock = self._add_side_dock(
+                "acquire_properties", _PROPS_LABEL, browser
+            )
+            self._sync_button(self._props_btn, dock)
+        dock.toggleView(checked)
         if checked:
-            if browser is None:
-                # PropertyBrowser is a QDialog upstream. Adding it to QTabWidget
-                # reparents it as a regular embedded page.
-                browser = self._property_browser = PropertyBrowser(mmcore=self._core)
-                unstyle_widgets(browser)
-            idx = self._right_tabs.indexOf(browser)
-            if idx < 0:
-                idx = self._right_tabs.addTab(browser, "Properties")
-            self._right_tabs.setCurrentIndex(idx)
+            dock.setAsCurrentTab()
             QTimer.singleShot(0, self._refresh_property_browser)
-        elif browser is not None and (idx := self._right_tabs.indexOf(browser)) >= 0:
-            self._right_tabs.removeTab(idx)
-        self._update_right_sidebar()
 
     def _toggle_console(self, checked: bool) -> None:
-        console = self._console
+        dock = self._console_dock
+        if dock is None:
+            if not checked:
+                return
+            from pymmcore_gui.widgets._mm_console import MMConsole
+
+            console = self._console = MMConsole(mmcore=self._core)
+            dock = self._console_dock = self._add_side_dock(
+                "acquire_console", _CONSOLE_LABEL, console
+            )
+            self._sync_button(self._console_btn, dock)
+        dock.toggleView(checked)
         if checked:
-            if console is None:
-                from pymmcore_gui.widgets._mm_console import MMConsole
-
-                console = self._console = MMConsole(mmcore=self._core)
-            idx = self._right_tabs.indexOf(console)
-            if idx < 0:
-                idx = self._right_tabs.addTab(console, "Console")
-            self._right_tabs.setCurrentIndex(idx)
-        elif console is not None and (idx := self._right_tabs.indexOf(console)) >= 0:
-            self._right_tabs.removeTab(idx)
-        self._update_right_sidebar()
-
-    def _close_right_tab(self, index: int) -> None:
-        widget = self._right_tabs.widget(index)
-        if widget is self._presets:
-            self._presets_btn.setChecked(False)
-        elif widget is self._property_browser:
-            self._props_btn.setChecked(False)
-        elif widget is self._console:
-            self._console_btn.setChecked(False)
-
-    def _update_right_sidebar(self) -> None:
-        visible = self._right_tabs.count() > 0
-        self.right.setVisible(visible)
-        # Only touch the right panel's own size, and only when it's actually
-        # collapsing/reappearing -- leave whatever the user already dragged
-        # the left (MDA) and right panels to alone otherwise (e.g. switching
-        # between an already-open Presets/Properties tab shouldn't resize
-        # anything).
-        sizes = self._h_split.sizes()
-        if visible:
-            if not sizes[2]:
-                sizes[2] = _RIGHT_PANEL_INITIAL_WIDTH
-        else:
-            sizes[2] = 0
-        self._h_split.setSizes(sizes)
+            dock.setAsCurrentTab()
 
     def showEvent(self, a0: QShowEvent | None) -> None:
         # Devices added on the Hardware tab load into the core but don't fire
@@ -215,10 +283,7 @@ class AcquirePage(TabPage):
         self._shutters.refresh()
         self._presets.refresh()
         self._mda.refresh_channel_table()
-        if (
-            self._property_browser is not None
-            and self._right_tabs.indexOf(self._property_browser) >= 0
-        ):
+        if (dock := self._props_dock) is not None and not dock.isClosed():
             QTimer.singleShot(0, self._refresh_property_browser)
 
     def _refresh_property_browser(self) -> None:

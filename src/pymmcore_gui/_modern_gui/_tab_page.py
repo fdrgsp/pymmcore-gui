@@ -1,4 +1,4 @@
-"""Reusable tab page shell: toolbar + left/right/bottom docks + center."""
+"""Reusable tab page shell: toolbar + left dock + center."""
 
 from __future__ import annotations
 
@@ -21,15 +21,17 @@ class TabPage(QWidget):
     Layout::
 
         toolbar
-        ┌──────┬────────────┬───────┐
-        │ left │  content   │ right │
-        ├──────┴────────────┴───────┤
-        │          bottom           │
-        └───────────────────────────┘
+        ┌──────┬────────────┐
+        │ left │  content   │
+        └──────┴────────────┘
 
     All regions are empty placeholders exposed as attributes (``toolbar``,
-    ``left``, ``right``, ``bottom``, ``content``) so later iterations can
-    populate any of them. The docks are resizable via nested splitters.
+    ``left``, ``content``) so each page can populate the ones it needs. The
+    left dock is resizable via a splitter.
+
+    ``AcquirePage`` uses only ``toolbar`` and ``content`` -- it fills the
+    latter with a QtAds ``CDockManager``, which supplies its own docking on
+    all four sides.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -37,8 +39,6 @@ class TabPage(QWidget):
 
         self.toolbar = TabToolBar()
         self.left = Sidebar(SidebarPosition.LEFT)
-        self.right = Sidebar(SidebarPosition.RIGHT)
-        self.bottom = Sidebar(SidebarPosition.BOTTOM)
         self.content = QWidget()
         self.content.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -48,27 +48,18 @@ class TabPage(QWidget):
         self._content_layout.setContentsMargins(m, m, m, m)
         self._content_layout.setSpacing(m)
 
-        # left | content | right
+        # left | content
         self._h_split = QSplitter(Qt.Orientation.Horizontal)
         self._h_split.addWidget(self.left)
         self._h_split.addWidget(self.content)
-        self._h_split.addWidget(self.right)
         self._h_split.setStretchFactor(0, 0)
         self._h_split.setStretchFactor(1, 1)
-        self._h_split.setStretchFactor(2, 0)
-
-        # (row above) / bottom
-        self._v_split = QSplitter(Qt.Orientation.Vertical)
-        self._v_split.addWidget(self._h_split)
-        self._v_split.addWidget(self.bottom)
-        self._v_split.setStretchFactor(0, 1)
-        self._v_split.setStretchFactor(1, 0)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self.toolbar)
-        layout.addWidget(self._v_split)
+        layout.addWidget(self._h_split)
 
         self._seed_sizes()
 
@@ -79,5 +70,4 @@ class TabPage(QWidget):
     def _seed_sizes(self) -> None:
         """Seed initial splitter sizes from the theme."""
         side = theme().sidebar_width
-        self._h_split.setSizes([side, max(side, 600), side])
-        self._v_split.setSizes([600, self.bottom.sizeHint().height()])
+        self._h_split.setSizes([side, max(side, 600)])

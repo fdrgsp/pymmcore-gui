@@ -32,6 +32,7 @@ from pymmcore_gui._modern_gui._theme import (
 )
 from pymmcore_gui._modern_gui._theme._dark import DARK_THEME
 from pymmcore_gui._modern_gui._theme._light import LIGHT_THEME
+from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget
 from pymmcore_gui._qt.QtCore import QSize, Qt
 from pymmcore_gui._qt.QtGui import QIcon, QPalette
 from pymmcore_gui._qt.QtWidgets import (
@@ -49,6 +50,7 @@ from pymmcore_gui._qt.QtWidgets import (
 )
 from pymmcore_gui.widgets._active_channel_table import CURRENT_CHANNEL_COLUMN
 from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
+from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -169,7 +171,7 @@ def test_new_gui_uses_one_application_font(
     assert not mismatches, "\n".join(mismatches)
 
 
-def test_acquire_page_sidebar_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     set_theme(DARK_THEME)
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
@@ -178,18 +180,42 @@ def test_acquire_page_sidebar_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert page._viewers.count() == 0
     assert page._viewers.preview is None
     assert isinstance(page._viewers.tabBar(), ThemedTabBar)
-    assert not page.left.isHidden()
-    assert page._mda.parentWidget() is page.left
-    assert not page._mda.isHidden()
-    assert not page.right.isHidden()
+    # AcquirePage doesn't use TabPage's left sidebar or its (now-removed)
+    # right/bottom regions -- the dock manager supplies all docking itself.
+    assert page.left.isHidden()
+    assert not hasattr(page, "right")
+    assert not hasattr(page, "bottom")
+
+    dm = page._dock_manager
+    assert dm.centralWidget() is page._viewers_dock
+    assert page._viewers_dock.widget() is page._viewers
+    DF = CDockWidget.DockWidgetFeature
+    assert page._viewers_dock.features().value & DF.NoTab.value
+    assert not page._viewers_dock.features().value & DF.DockWidgetClosable.value
+
+    assert page._mda_dock.widget() is page._mda
+    assert not page._mda_dock.isClosed()
+    assert page._mda_btn.isChecked()
     assert page._mda.prepare_mda() == "memory"
-    assert page._right_tabs.count() == 1
-    assert isinstance(page._right_tabs.tabBar(), ThemedTabBar)
-    assert page._right_tabs.widget(0) is page._presets
-    assert page._right_tabs.tabText(0) == "Groups and Presets"
-    assert page._right_tabs.currentWidget() is page._presets
+
+    assert page._presets_dock.widget() is page._presets
+    assert page._presets_dock.windowTitle() == "Groups and Presets"
+    assert not page._presets_dock.isClosed()
     assert page._presets_btn.isChecked()
+
+    # Properties and Console are lazy: no widget and no dock before first open.
+    assert page._property_browser is None
+    assert page._props_dock is None
     assert not page._props_btn.isChecked()
+    assert page._console is None
+    assert page._console_dock is None
+    assert not page._console_btn.isChecked()
+
+    assert sorted(dm.dockWidgetsMap()) == [
+        "acquire_mda",
+        "acquire_presets",
+        "acquire_viewers",
+    ]
     assert not hasattr(page, "_channels")
     assert not {
         button.text() for button in page.toolbar.findChildren(QPushButton)
@@ -244,34 +270,117 @@ def test_acquire_page_sidebar_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert all(button.isHidden() for button in hidden_buttons)
     assert not page._presets.table_wdg.isHidden()
 
+    # Opening Properties builds it lazily and tabs it beside Groups and Presets.
     page._props_btn.click()
-    assert page._right_tabs.count() == 2
+    browser = page._property_browser
+    props_dock = page._props_dock
     assert page._props_btn.isChecked()
-    assert page._right_tabs.currentWidget() is page._property_browser
-    assert page._right_tabs.tabText(1) == "Properties"
-    assert page._property_browser is not None
-    assert not page._property_browser.isWindow()
+    assert browser is not None and not browser.isWindow()
+    assert props_dock is not None and not props_dock.isClosed()
+    assert props_dock.widget() is browser
+    assert props_dock.dockAreaWidget() is page._presets_dock.dockAreaWidget()
 
-    # Toggling a button removes and restores its corresponding tab.
+    # Toggling off closes the dock but keeps the (expensive) widget alive.
     page._props_btn.click()
-    assert page._right_tabs.count() == 1
+    assert props_dock.isClosed()
+    assert not page._props_btn.isChecked()
+    assert page._property_browser is browser
+
+    # Toggling back on reuses the same widget and dock rather than rebuilding.
+    page._props_btn.click()
+    assert not props_dock.isClosed()
+    assert page._property_browser is browser
+    assert page._props_dock is props_dock
+
+    # Closing the dock from its own tab (as the ✕ button does) unchecks the
+    # toolbar toggle, same as clicking it would.
+    props_dock.closeDockWidget()
+    assert props_dock.isClosed()
     assert not page._props_btn.isChecked()
 
-    page._props_btn.click()
-    page._close_right_tab(0)
-    assert page._right_tabs.count() == 1
+    page._presets_dock.closeDockWidget()
     assert not page._presets_btn.isChecked()
-    assert page._props_btn.isChecked()
-
-    page._close_right_tab(0)
-    assert page._right_tabs.count() == 0
-    assert not page._props_btn.isChecked()
-    assert page.right.isHidden()
-
     page._presets_btn.click()
-    assert page._right_tabs.count() == 1
-    assert page._right_tabs.currentWidget() is page._presets
-    assert not page.right.isHidden()
+    assert not page._presets_dock.isClosed()
+    assert page._presets_btn.isChecked()
+
+
+def test_acquire_docks_are_movable_and_pinnable(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """All four docks declare themselves movable and pinnable to a side bar.
+
+    This checks the *configuration* rather than performing a live redock:
+    moving a dock so its source area empties (what dragging it elsewhere, or
+    pinning it, actually does) reproducibly segfaults under
+    ``QT_QPA_PLATFORM=offscreen`` + pytest-qt -- confirmed test-harness-only
+    (independent of any app code, on both PyQt6Ads 4.4.0.post2 and the latest
+    5.0.0), since interactive drag-and-drop on a real display does not
+    reproduce it. See ``_configure_ads``'s docstring. Actual rearranging is a
+    manual smoke-test item.
+    """
+    set_theme(DARK_THEME)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    assert CDockManager.testAutoHideConfigFlag(
+        CDockManager.eAutoHideFlag.DockAreaHasAutoHideButton
+    )
+    DF = CDockWidget.DockWidgetFeature
+    for dock in (page._mda_dock, page._presets_dock):
+        assert dock.features().value & DF.DockWidgetPinnable.value
+        assert dock.features().value & DF.DockWidgetMovable.value
+        assert not dock.features().value & DF.DockWidgetFloatable.value
+
+
+def test_acquire_lazy_dock_tabs_into_existing_area(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Opening Properties tabs it into the Presets area without emptying either.
+
+    Unlike moving a dock *out* of its area, adding a new dock *into* an
+    existing (non-empty) one never destroys anything, so this is safe to
+    exercise directly -- and it's the one area-membership change the app
+    actually performs at runtime (see ``_add_side_dock``).
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page._props_btn.click()
+    assert page._props_dock is not None
+    assert page._props_dock.dockAreaWidget() is page._presets_dock.dockAreaWidget()
+    assert not page._presets_dock.isClosed()
+    assert not page._props_dock.isClosed()
+
+
+def test_acquire_console_dock_is_lazy(
+    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Console is only imported/constructed on first open, same as Properties."""
+
+    class FakeConsole(QWidget):
+        def __init__(self, mmcore: CMMCorePlus, parent: QWidget | None = None) -> None:
+            super().__init__(parent)
+
+    # _toggle_console does a function-local import, re-reading this attribute
+    # from the source module on every call -- patch there, not on AcquirePage.
+    monkeypatch.setattr("pymmcore_gui.widgets._mm_console.MMConsole", FakeConsole)
+
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    assert page._console is None
+    assert page._console_dock is None
+
+    page._console_btn.click()
+    console = page._console
+    dock = page._console_dock
+    assert isinstance(console, FakeConsole)
+    assert dock is not None and not dock.isClosed()
+    assert dock.dockAreaWidget() is page._presets_dock.dockAreaWidget()
+
+    page._console_btn.click()
+    assert dock.isClosed()
+    assert not page._console_btn.isChecked()
+    assert page._console is console  # not rebuilt
 
 
 def test_snap_opens_closable_preview(
@@ -1362,11 +1471,14 @@ def test_mda_action_icons_use_theme_status_colors(
     assert_icon_color(widget.channels.act_remove_row.icon(), theme().status_red)
 
 
-def test_stage_explorer_style_and_mda_link(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    """AcquirePage no longer shows the Stage Explorer, but the classic GUI still
+    ships it (``actions/widget_actions.py``'s ``stage_explorer_widget`` action),
+    so its theming stays covered directly rather than through AcquirePage.
+    """
     set_theme(DARK_THEME)
-    page = AcquirePage(mmcore)
-    qtbot.addWidget(page)
-    explorer = page._explorer
+    explorer = ThemedStageExplorer(mmcore=mmcore)
+    qtbot.addWidget(explorer)
     toolbar = explorer.toolBar()
 
     # Matches the rest of the app's action buttons (Snap/Live/etc.), not the
@@ -1383,15 +1495,6 @@ def test_stage_explorer_style_and_mda_link(mmcore: CMMCorePlus, qtbot: QtBot) ->
     assert all(button.property("variant") == "subtle" for button in tool_buttons)
     assert explorer._contrast_slider._slider.styleSheet() == ""
     assert not toolbar.stop_scan_action.icon().isNull()
-
-    first = useq.AbsolutePosition(x=10, y=20, name="ROI 1")
-    explorer.sendToMDARequested.emit([first], True)
-    assert list(page._mda.stage_positions.value()) == [first]
-    assert page._mda._collapsible_tabs().section("p").expanded
-
-    second = useq.AbsolutePosition(x=30, y=40, name="ROI 2")
-    explorer.sendToMDARequested.emit([second], False)
-    assert list(page._mda.stage_positions.value()) == [first, second]
 
 
 def test_hardware_toolbar_buttons_use_primary_style(

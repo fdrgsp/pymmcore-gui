@@ -251,10 +251,8 @@ class ConfigurationsPage(TabPage):
         self._tabs.addTab(self._pixel_config, "Pixel Configuration")
 
         self.add_content_widget(self._tabs)
-        # these editors fill the page; the docks would only crowd them
+        # these editors fill the page; the left dock would only crowd them
         self.left.hide()
-        self.right.hide()
-        self.bottom.hide()
 
         self._save_core_btn = QPushButton("Save to core")
         self._save_core_btn.setProperty("variant", "primary")
