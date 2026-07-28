@@ -179,6 +179,7 @@ class MainWindow(QMainWindow):
         set_theme(DARK_THEME)
 
         self._mmc = mmcore or CMMCorePlus.instance()
+        self.setObjectName("MicroManagerGUI")
         self.setWindowTitle("pymmcore-gui")
         self.resize(1800, 1200)
 
