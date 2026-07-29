@@ -28,6 +28,7 @@ from pymmcore_gui._modern_gui._theme import (
     UI_FONT_WEIGHT,
     qcolor,
     set_theme,
+    set_zoom,
     theme,
     ui_font,
 )
@@ -304,6 +305,80 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     page._presets_btn.click()
     assert not page._presets_dock.isClosed()
     assert page._presets_btn.isChecked()
+
+
+def test_acquire_inactive_dock_tab_labels_are_visible(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Inactive dock tab labels use the theme's text color, not ADS's default.
+
+    ADS's built-in stylesheet colors an inactive ``CDockWidgetTab`` label with
+    ``palette(dark)`` -- a shadow role that renders near-black on the dark
+    theme's near-black tab background, effectively invisible (see
+    ``_apply_dock_style``'s docstring). The active tab must stay visually
+    distinct from the inactive ones.
+    """
+    set_theme(DARK_THEME)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page._props_btn.click()  # a second tab to be inactive alongside Presets
+
+    ss = page._dock_manager.styleSheet()
+    inactive = qcolor(theme().text_secondary).name()
+    active = qcolor(theme().text_primary).name()
+    assert f"ads--CDockWidgetTab QLabel {{\n                color: {inactive};" in ss
+    assert (
+        f'ads--CDockWidgetTab[activeTab="true"] QLabel {{\n                '
+        f"color: {active};" in ss
+    )
+    # base ADS chrome (e.g. the qproperty-icon rules for title-bar buttons)
+    # must survive -- this appends overrides, it doesn't replace the sheet.
+    assert "qproperty-icon" in ss
+
+
+def test_acquire_dock_style_and_fonts_follow_theme_toggle(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Switching theme re-derives the tab-label override colors."""
+    set_theme(DARK_THEME)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    set_theme(LIGHT_THEME)
+    ss = page._dock_manager.styleSheet()
+    assert qcolor(theme().text_secondary).name() in ss
+    assert qcolor(theme().text_primary).name() in ss
+    set_theme(DARK_THEME)
+
+
+def test_acquire_dock_contents_follow_zoom(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    """Widgets inside the dock manager rescale with Cmd+Shift+±, in both directions.
+
+    ``CDockManager`` applies its own stylesheet in its constructor, which
+    freezes the resolved font of everything inside it -- so without
+    ``_refresh_dock_fonts``, dock contents (e.g. the MDA channel table's
+    Exposure column) silently stop tracking ``set_zoom()`` while everything
+    outside the dock area keeps rescaling normally.
+    """
+    set_theme(DARK_THEME)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    def exposure_cell_size() -> float:
+        table = page._mda.channels.table()
+        cell = table.cellWidget(0, table.indexOf(page._mda.channels.EXPOSURE))
+        assert cell is not None
+        return cell.font().pointSizeF()
+
+    try:
+        set_zoom(1.5)
+        assert exposure_cell_size() == pytest.approx(QApplication.font().pointSizeF())
+        set_zoom(0.8)
+        assert exposure_cell_size() == pytest.approx(QApplication.font().pointSizeF())
+        set_zoom(1.25)
+        assert exposure_cell_size() == pytest.approx(QApplication.font().pointSizeF())
+    finally:
+        set_theme(DARK_THEME)  # restores the default zoom too
 
 
 def test_acquire_docks_are_movable_and_pinnable(

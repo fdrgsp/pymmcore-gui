@@ -10,8 +10,9 @@ from pymmcore_widgets import PropertyBrowser
 
 from pymmcore_gui._array_viewer import unstyle_widgets
 from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget, DockWidgetArea
-from pymmcore_gui._qt.QtCore import QTimer
-from pymmcore_gui._qt.QtWidgets import QPushButton, QWidget
+from pymmcore_gui._qt.QtCore import QEvent, QTimer
+from pymmcore_gui._qt.QtGui import QFont
+from pymmcore_gui._qt.QtWidgets import QAbstractSlider, QPushButton, QWidget
 from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
 
 from ._acquire_presets import AcquisitionPresetSelector
@@ -23,6 +24,7 @@ from ._acquire_toolbar import (
 )
 from ._acquire_viewers import AcquireViewers
 from ._tab_page import TabPage
+from ._theme import qcolor, theme
 
 if TYPE_CHECKING:
     from pymmcore_gui._qt.QtAds import CDockAreaWidget
@@ -99,6 +101,8 @@ class AcquirePage(TabPage):
         _configure_ads()
         self._dock_manager = CDockManager(self.content)
         self.add_content_widget(self._dock_manager)
+        self._base_dock_style = self._dock_manager.styleSheet()
+        self._apply_dock_style()
 
         # ── central: image viewers (its own Preview / MDA-run tab bar) ────
         self._viewers = AcquireViewers(self._core)
@@ -235,6 +239,71 @@ class AcquirePage(TabPage):
         loops.
         """
         dock.viewToggled.connect(btn.setChecked)
+
+    # ------------------------------------------------------------------ theming
+
+    def _apply_dock_style(self) -> None:
+        """Append theme-derived overrides to ADS's built-in stylesheet.
+
+        ADS ships its own ~9KB sheet written entirely against ``palette(...)``
+        roles, which mostly tracks this app's light/dark themes for free. The
+        exception is the dock tab labels: inactive ones are ``palette(dark)``,
+        a *shadow* role, which under the dark theme renders near-black on a
+        near-black tab and is effectively invisible. Re-point both states at
+        the theme's own text colors instead. Appended (not replaced) so the
+        rest of ADS's chrome -- including the title-bar icons, which come from
+        ``qproperty-icon`` rules in that sheet -- is left intact.
+        """
+        t = theme()
+        self._dock_manager.setStyleSheet(
+            self._base_dock_style
+            + f"""
+            ads--CDockWidgetTab QLabel {{
+                color: {qcolor(t.text_secondary).name()};
+            }}
+            ads--CDockWidgetTab[activeTab="true"] QLabel {{
+                color: {qcolor(t.text_primary).name()};
+            }}
+            ads--CAutoHideTab {{
+                color: {qcolor(t.text_secondary).name()};
+            }}
+            ads--CAutoHideTab[activeTab="true"] {{
+                color: {qcolor(t.text_primary).name()};
+            }}
+            """
+        )
+
+    def _refresh_dock_fonts(self) -> None:
+        """Let the dock subtree follow app-font (zoom) changes again.
+
+        ``CDockManager`` applies a stylesheet in its constructor, and applying
+        *any* stylesheet makes Qt resolve and freeze the fonts of that widget's
+        whole subtree -- so every widget inside a dock stops following
+        ``QApplication.setFont()``, which is exactly how Cmd+Shift+± zooming
+        works (see ``set_zoom``). Without this the MDA table, its cell
+        editors, the presets table etc. stay pinned at whatever size was
+        current when the manager was built, while everything outside the dock
+        area rescales normally.
+
+        Resetting each descendant to a default-constructed (unresolved) QFont
+        makes it re-inherit the now-current app font. Same fix, same reason, as
+        ``_GroupEditorTab.changeEvent`` in ``_configurations.py``.
+        """
+        dm = self._dock_manager
+        for w in (dm, *dm.findChildren(QWidget)):
+            # QAbstractSlider is excluded for the same reason as in
+            # _configurations.py: its groove/handle metrics are derived from
+            # the font, and resetting it mid-StyleChange fights the style.
+            if not isinstance(w, QAbstractSlider):
+                w.setFont(QFont())
+
+    def changeEvent(self, a0: QEvent | None) -> None:
+        """Re-apply dock theming and un-freeze dock fonts after a theme/zoom change."""
+        super().changeEvent(a0)
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
+            if hasattr(self, "_dock_manager"):
+                self._apply_dock_style()
+                self._refresh_dock_fonts()
 
     def _toggle_properties(self, checked: bool) -> None:
         dock = self._props_dock
