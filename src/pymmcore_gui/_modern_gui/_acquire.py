@@ -22,7 +22,7 @@ from ._acquire_toolbar import (
     SnapButton,
     toolbar_separator,
 )
-from ._acquire_viewers import AcquireViewers
+from ._acquire_viewers import AcquireViewersManager
 from ._tab_page import TabPage
 from ._theme import qcolor, theme
 
@@ -104,18 +104,24 @@ class AcquirePage(TabPage):
         self._base_dock_style = self._dock_manager.styleSheet()
         self._apply_dock_style()
 
-        # ── central: image viewers (its own Preview / MDA-run tab bar) ────
-        self._viewers = AcquireViewers(self._core)
-        self._viewers_dock = CDockWidget(self._dock_manager, "Viewers", self)
-        self._viewers_dock.setObjectName("acquire_viewers")
-        self._viewers_dock.setFeature(CDockWidget.DockWidgetFeature.NoTab, True)
-        self._viewers_dock.setFeature(
+        # ── central: blank placeholder; Preview / MDA-run viewers are each a
+        # real CDockWidget tabbed into its dock area (see AcquireViewersManager) ──
+        self._central = CDockWidget(self._dock_manager, "Viewers", self)
+        self._central.setObjectName("acquire_viewers")
+        self._central.setFeature(CDockWidget.DockWidgetFeature.NoTab, True)
+        self._central.setFeature(
             CDockWidget.DockWidgetFeature.DockWidgetClosable, False
         )
-        self._viewers_dock.setWidget(
-            self._viewers, CDockWidget.eInsertMode.ForceNoScrollArea
+        blank = QWidget()
+        blank.setObjectName("blank")
+        self._central.setWidget(blank)
+        central_dock_area = self._dock_manager.setCentralWidget(self._central)
+        assert central_dock_area is not None
+        self._central_dock_area = central_dock_area
+
+        self._viewers = AcquireViewersManager(
+            self._dock_manager, self._central_dock_area, self._core, parent=self
         )
-        self._dock_manager.setCentralWidget(self._viewers_dock)
 
         # ── eager docks: MDA and Groups/Presets are shown by default ──────
         self._mda = MemoryMDAWidget(mmcore=self._core)
@@ -269,6 +275,9 @@ class AcquirePage(TabPage):
             }}
             ads--CAutoHideTab[activeTab="true"] {{
                 color: {qcolor(t.text_primary).name()};
+            }}
+            QWidget#blank {{
+                background-color: {qcolor(t.bg_deepest).name()};
             }}
             """
         )

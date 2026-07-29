@@ -22,7 +22,6 @@ from pymmcore_gui._modern_gui._acquire import AcquirePage
 from pymmcore_gui._modern_gui._configurations import ConfigurationsPage
 from pymmcore_gui._modern_gui._hardware import HardwareSetupPage
 from pymmcore_gui._modern_gui._main_win import MainWindow
-from pymmcore_gui._modern_gui._tab_bar import ThemedTabBar
 from pymmcore_gui._modern_gui._theme import (
     UI_FONT_SIZE_PT,
     UI_FONT_WEIGHT,
@@ -36,7 +35,6 @@ from pymmcore_gui._modern_gui._theme._dark import DARK_THEME
 from pymmcore_gui._modern_gui._theme._light import LIGHT_THEME
 from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget
 from pymmcore_gui._qt.QtCore import QSize, Qt
-from pymmcore_gui._qt.QtGui import QIcon, QPalette
 from pymmcore_gui._qt.QtWidgets import (
     QApplication,
     QComboBox,
@@ -45,8 +43,6 @@ from pymmcore_gui._qt.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
-    QTabBar,
-    QTabWidget,
     QToolButton,
     QWidget,
 )
@@ -64,6 +60,7 @@ if TYPE_CHECKING:
 
     from pymmcore_gui._app import WindowProtocol
     from pymmcore_gui._modern_gui._theme import Color
+    from pymmcore_gui._qt.QtGui import QIcon
     from pymmcore_gui._settings import Settings
 
 
@@ -179,9 +176,8 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     qtbot.addWidget(page)
     tabs = page._mda._collapsible_tabs()
 
-    assert page._viewers.count() == 0
     assert page._viewers.preview is None
-    assert isinstance(page._viewers.tabBar(), ThemedTabBar)
+    assert page._central_dock_area.dockWidgetsCount() == 1  # just the blank placeholder
     # AcquirePage doesn't use TabPage's left sidebar or its (now-removed)
     # right/bottom regions -- the dock manager supplies all docking itself.
     assert page.left.isHidden()
@@ -189,11 +185,10 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert not hasattr(page, "bottom")
 
     dm = page._dock_manager
-    assert dm.centralWidget() is page._viewers_dock
-    assert page._viewers_dock.widget() is page._viewers
+    assert dm.centralWidget() is page._central
     DF = CDockWidget.DockWidgetFeature
-    assert page._viewers_dock.features().value & DF.NoTab.value
-    assert not page._viewers_dock.features().value & DF.DockWidgetClosable.value
+    assert page._central.features().value & DF.NoTab.value
+    assert not page._central.features().value & DF.DockWidgetClosable.value
 
     assert page._mda_dock.widget() is page._mda
     assert not page._mda_dock.isClosed()
@@ -492,17 +487,18 @@ def test_snap_opens_closable_preview(
 
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
-    assert page._viewers.count() == 0
+    assert page._viewers._preview_dock is None
 
     page._snap_btn.click()
     preview = page._viewers.preview
     assert isinstance(preview, FakePreview)
-    assert page._viewers.count() == 1
-    assert page._viewers.tabText(0) == "Preview"
+    preview_dock = page._viewers._preview_dock
+    assert preview_dock is not None
+    assert preview_dock.windowTitle() == "Preview"
     assert preview.frames == 1
 
-    page._viewers.tabCloseRequested.emit(0)
-    assert page._viewers.count() == 0
+    preview_dock.closeDockWidget()
+    assert page._viewers._preview_dock is None
     assert page._viewers.preview is None
     assert preview.detached
 
@@ -1177,7 +1173,8 @@ def test_live_opens_preview_before_streaming(
     page._live_btn.click()
     preview = page._viewers.preview
     assert isinstance(preview, FakePreview)
-    assert page._viewers.tabText(0) == "Preview"
+    assert page._viewers._preview_dock is not None
+    assert page._viewers._preview_dock.windowTitle() == "Preview"
     assert preview.streaming_started == 1
     assert mmcore.isSequenceRunning()
 
@@ -1396,73 +1393,6 @@ def test_switching_channel_rows_during_live_applies_all_capture_settings(
             mmcore.stopSequenceAcquisition()
 
 
-def test_themed_tab_bar_keeps_style_after_reinserting_tab(qtbot: QtBot) -> None:
-    set_theme(DARK_THEME)
-    tabs = QTabWidget()
-    bar = ThemedTabBar(tabs)
-    tabs.setTabBar(bar)
-    tabs.setTabsClosable(True)
-    page = QWidget()
-    tabs.addTab(page, "MDA")
-    tabs.resize(320, 180)
-    tabs.show()
-    qtbot.addWidget(tabs)
-
-    palette = QApplication.palette()
-    expected_colors = (
-        palette.color(QPalette.ColorRole.Highlight),
-        palette.color(QPalette.ColorRole.WindowText),
-    )
-
-    def rendered_colors() -> set[tuple[int, int, int]]:
-        image = bar.grab().toImage()
-
-        def pixel_rgb(x: int, y: int) -> tuple[int, int, int]:
-            color = image.pixelColor(x, y)
-            return color.red(), color.green(), color.blue()
-
-        return {
-            pixel_rgb(x, y) for y in range(image.height()) for x in range(image.width())
-        }
-
-    for _ in range(5):
-        QApplication.processEvents()
-        colors = rendered_colors()
-        assert all(
-            (color.red(), color.green(), color.blue()) in colors
-            for color in expected_colors
-        )
-        tabs.removeTab(0)
-        tabs.insertTab(0, page, "MDA")
-
-
-def test_themed_tab_close_button_scrolls_with_its_tab(qtbot: QtBot) -> None:
-    tabs = QTabWidget()
-    bar = ThemedTabBar(tabs)
-    tabs.setTabBar(bar)
-    tabs.setTabsClosable(True)
-    for index in range(10):
-        tabs.addTab(QWidget(), f"MDA acquisition {index}")
-    tabs.resize(320, 180)
-    tabs.show()
-    qtbot.addWidget(tabs)
-    QApplication.processEvents()
-
-    last = tabs.count() - 1
-    close_button = bar.tabButton(last, QTabBar.ButtonPosition.RightSide)
-    if close_button is None:
-        close_button = bar.tabButton(last, QTabBar.ButtonPosition.LeftSide)
-    assert close_button is not None
-    initial_x = close_button.x()
-
-    bar.setCurrentIndex(last)
-    QApplication.processEvents()
-    bar.grab()  # force the custom paint path that positions tab buttons
-
-    assert close_button.x() != initial_x
-    assert bar.tabRect(last).contains(close_button.geometry().center())
-
-
 def test_acquire_page_adds_sink_backed_mda_tab(
     mmcore: CMMCorePlus,
     qtbot: QtBot,
@@ -1500,14 +1430,15 @@ def test_acquire_page_adds_sink_backed_mda_tab(
     )
     qtbot.wait(20)
 
-    assert page._viewers.count() == 1
-    assert page._viewers.tabText(0).startswith("MDA ")
+    assert page._viewers._active_dock is not None
+    assert page._viewers._active_dock.windowTitle().startswith("MDA ")
     viewer = page._viewers.active_viewer
     assert isinstance(viewer, FakeViewer)
     assert viewer.data is not None
 
-    page._viewers._close_tab(0)
-    assert page._viewers.count() == 0
+    dock = page._viewers._active_dock
+    dock.closeDockWidget()
+    assert page._viewers.active_viewer is None
     assert viewer.closed
 
 

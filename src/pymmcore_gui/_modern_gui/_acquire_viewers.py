@@ -1,4 +1,4 @@
-"""Tabbed image viewers for the Acquire page."""
+"""Dockable image viewers for the Acquire page."""
 
 from __future__ import annotations
 
@@ -8,11 +8,9 @@ from typing import TYPE_CHECKING, Any
 
 from pymmcore_gui._array_viewer import MMArrayViewer
 from pymmcore_gui._ndv_viewers import _add_follow_lock_button, _extract_scales
+from pymmcore_gui._qt.QtAds import CDockWidget
 from pymmcore_gui._qt.QtCore import QObject, QTimer, Signal
-from pymmcore_gui._qt.QtWidgets import QTabWidget, QWidget
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
-
-from ._tab_bar import ThemedTabBar
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -22,6 +20,9 @@ if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
     from pymmcore_plus.metadata import FrameMetaV1, SummaryMetaV1
     from useq import MDAEvent, MDASequence
+
+    from pymmcore_gui._qt.QtAds import CDockAreaWidget, CDockManager
+    from pymmcore_gui._qt.QtWidgets import QWidget
 
 
 class _StreamSignalBridge(QObject):
@@ -46,28 +47,38 @@ class _ViewerRecord:
         self.coords_callback = None
 
 
-class AcquireViewers(QTabWidget):
-    """Lazy snap preview plus one sink-backed viewer tab for each MDA run."""
+class AcquireViewersManager(QObject):
+    """Lazy snap preview plus one dock-tabbed viewer for each MDA run.
+
+    Every Preview/MDA-viewer instance is wrapped in its own ``CDockWidget`` and
+    tabbed into the shared ``central_dock_area`` via ``addDockWidgetTabToArea``,
+    mirroring the classic GUI's ``NDVViewersManager`` docking mechanics.
+    """
 
     _sequenceStarted = Signal(object, object)
     _frameReady = Signal(object, object, object)
     _sequenceFinished = Signal(object)
 
-    def __init__(self, mmcore: CMMCorePlus, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        dock_manager: CDockManager,
+        central_dock_area: CDockAreaWidget,
+        mmcore: CMMCorePlus,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._parent_widget = parent
+        self._dock_manager = dock_manager
+        self._central_dock_area = central_dock_area
         self._core = mmcore
-        self._records: dict[QWidget, _ViewerRecord] = {}
+        self._records: dict[CDockWidget, _ViewerRecord] = {}
         self._active_viewer: ndv.ArrayViewer | None = None
-        self._active_widget: QWidget | None = None
+        self._active_dock: CDockWidget | None = None
         self._follow_acquisition = True
         self._connected = True
 
-        self.setTabBar(ThemedTabBar(self))
-        self.setDocumentMode(True)
-        self.setTabsClosable(True)
-        self.tabCloseRequested.connect(self._close_tab)
-
         self.preview: NDVPreview | None = None
+        self._preview_dock: CDockWidget | None = None
 
         # pymmcore-plus MDA events may be emitted by the acquisition thread.
         # Re-emitting through QObject signals guarantees that all QWidget and ndv
@@ -85,13 +96,34 @@ class AcquireViewers(QTabWidget):
         events.sequenceFinished.connect(self._sequence_finished_callback)
         self.destroyed.connect(self._disconnect)
 
+    def _new_dock(self, title: str) -> CDockWidget:
+        """Create a dock widget for a viewer/preview, tabbed into the central area."""
+        dw = CDockWidget(self._dock_manager, title, self._parent_widget)
+        dw.setFeature(CDockWidget.DockWidgetFeature.DockWidgetFloatable, False)
+        dw.setFeature(CDockWidget.DockWidgetFeature.DockWidgetDeleteOnClose, True)
+        self._dock_manager.addDockWidgetTabToArea(dw, self._central_dock_area)
+        return dw
+
     def ensure_preview(self) -> NDVPreview:
         """Create and select the snap preview if it is not already open."""
         if self.preview is None:
-            self.preview = NDVPreview(mmcore=self._core, parent=self)
-            self.insertTab(0, self.preview, "Preview")
-        self.setCurrentWidget(self.preview)
+            preview = self.preview = NDVPreview(
+                mmcore=self._core, parent=self._parent_widget
+            )
+            dw = self._new_dock("Preview")
+            dw.setWidget(preview, CDockWidget.eInsertMode.ForceNoScrollArea)
+            dw.closed.connect(self._on_preview_closed)
+            self._preview_dock = dw
+        assert self._preview_dock is not None
+        self._preview_dock.setAsCurrentTab()
+        assert self.preview is not None
         return self.preview
+
+    def _on_preview_closed(self) -> None:
+        if (preview := self.preview) is not None:
+            preview.detach()
+        self.preview = None
+        self._preview_dock = None
 
     @property
     def active_viewer(self) -> ndv.ArrayViewer | None:
@@ -101,7 +133,7 @@ class AcquireViewers(QTabWidget):
     def _on_sequence_started(self, sequence: MDASequence, meta: SummaryMetaV1) -> None:
         """Create a viewer backed by the acquisition's live sink view."""
         self._active_viewer = None
-        self._active_widget = None
+        self._active_dock = None
         view = self._core.mda.get_view()
         if view is None:
             # Runs without a path, AcquisitionSettings, or "memory" output have
@@ -111,7 +143,8 @@ class AcquireViewers(QTabWidget):
 
         viewer = MMArrayViewer(view, scales=_extract_scales(sequence, meta))
         widget = viewer.widget()
-        widget.setObjectName(f"ndv-{str(sequence.uid)[:8]}")
+        sha = str(sequence.uid)[:8]
+        widget.setObjectName(f"ndv-{sha}")
 
         record = _ViewerRecord(viewer)
         wrapper = viewer.data_wrapper
@@ -128,11 +161,15 @@ class AcquireViewers(QTabWidget):
         self._follow_acquisition = True
         with suppress(Exception):
             _add_follow_lock_button(viewer, self)
-        self._records[widget] = record
+
+        dw = self._new_dock(f"MDA {sha}")
+        dw.setWidget(widget, CDockWidget.eInsertMode.ForceNoScrollArea)
+        dw.closed.connect(lambda: self._on_viewer_closed(dw))
+        dw.setAsCurrentTab()
+
+        self._records[dw] = record
         self._active_viewer = viewer
-        self._active_widget = widget
-        idx = self.addTab(widget, f"MDA {str(sequence.uid)[:8]}")
-        self.setCurrentIndex(idx)
+        self._active_dock = dw
 
     def _on_frame_ready(
         self, frame: np.ndarray, event: MDAEvent, meta: FrameMetaV1
@@ -163,31 +200,16 @@ class AcquireViewers(QTabWidget):
     def _on_sequence_finished(self, sequence: MDASequence) -> None:
         """Stop treating the most recent viewer as an active acquisition."""
 
-    def _close_tab(self, index: int) -> None:
-        widget = self.widget(index)
-        if widget is None:
-            return
-
-        preview = self.preview
-        if preview is not None and widget is preview:
-            preview.detach()
-            self.preview = None
-            self.removeTab(index)
-            preview.deleteLater()
-            return
-
-        record = self._records.pop(widget, None)
+    def _on_viewer_closed(self, dw: CDockWidget) -> None:
+        record = self._records.pop(dw, None)
         if record is not None:
             record.disconnect()
-        if widget is self._active_widget:
-            self._active_widget = None
+        if dw is self._active_dock:
+            self._active_dock = None
             self._active_viewer = None
-
-        self.removeTab(index)
         if record is not None:
             with suppress(Exception):
                 record.viewer.close()
-        widget.deleteLater()
 
     def _disconnect(self, obj: QObject | None = None) -> None:
         if not self._connected:
@@ -204,7 +226,7 @@ class AcquireViewers(QTabWidget):
             record.disconnect()
         self._records.clear()
         self._active_viewer = None
-        self._active_widget = None
+        self._active_dock = None
         if self.preview is not None:
             self.preview.detach()
             self.preview = None
