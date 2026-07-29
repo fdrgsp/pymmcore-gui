@@ -35,11 +35,9 @@ _MDA_LABEL = "MDA"
 _PRESETS_LABEL = "Groups and Presets"
 _PROPS_LABEL = "Properties"
 _CONSOLE_LABEL = "Console"
-_DOCK_MIN_WIDTH = 100
-# Wide enough that the panels don't open clipped -- the user can still drag
-# them down to the minimum above.
+_DOCK_MIN_WIDTH = 0
 _MDA_DOCK_WIDTH = 700
-_SIDE_DOCK_WIDTH = 420
+_RIGHT_DOCK_MAX_WIDTH = 500
 
 _ads_configured = False
 
@@ -123,32 +121,26 @@ class AcquirePage(TabPage):
             self._dock_manager, self._central_dock_area, self._core, parent=self
         )
 
-        # ── eager docks: MDA and Groups/Presets are shown by default ──────
+        # ── eager docks: MDA is shown by default ─────────────────────────
         self._mda = MemoryMDAWidget(mmcore=self._core)
-        self._mda.setMinimumWidth(_DOCK_MIN_WIDTH)
         self._mda_dock = self._add_dock(
             "acquire_mda", _MDA_LABEL, self._mda, DockWidgetArea.LeftDockWidgetArea
         )
 
-        self._presets = AcquisitionPresetSelector(mmcore=self._core)
-        self._presets.setMinimumWidth(_DOCK_MIN_WIDTH)
-        self._presets_dock = self._add_dock(
-            "acquire_presets",
-            _PRESETS_LABEL,
-            self._presets,
-            DockWidgetArea.RightDockWidgetArea,
-        )
-
         # ── lazy docks: built on first open ───────────────────────────────
+        self._presets: AcquisitionPresetSelector | None = None
+        self._presets_dock: CDockWidget | None = None
         self._property_browser: PropertyBrowser | None = None
         self._props_dock: CDockWidget | None = None
         self._console: MMConsole | None = None
         self._console_dock: CDockWidget | None = None
+        self._right_dock_area: CDockAreaWidget | None = None
 
-        if area := self._mda_dock.dockAreaWidget():
-            self._dock_manager.setSplitterSizes(area, [_MDA_DOCK_WIDTH, 900])
-        if area := self._presets_dock.dockAreaWidget():
-            self._dock_manager.setSplitterSizes(area, [900, _SIDE_DOCK_WIDTH])
+        area = self._mda_dock.dockAreaWidget()
+        if area is None:
+            return
+        central = self._dock_manager.width() - _MDA_DOCK_WIDTH
+        self._dock_manager.setSplitterSizes(area, [_MDA_DOCK_WIDTH, central])
 
         # toolbar: snap|live ‖ shutters … [MDA][Groups and Presets][Properties][Console]
         self._shutters = ShuttersBar(self._core)
@@ -174,9 +166,7 @@ class AcquirePage(TabPage):
         self._presets_btn = self._add_panel_button(
             _PRESETS_LABEL, "Show or hide the group/preset selection panel"
         )
-        self._presets_btn.setChecked(True)
-        self._presets_btn.toggled.connect(self._presets_dock.toggleView)
-        self._sync_button(self._presets_btn, self._presets_dock)
+        self._presets_btn.toggled.connect(self._toggle_presets)
 
         self._props_btn = self._add_panel_button(
             _PROPS_LABEL, "Open the device property browser panel"
@@ -210,19 +200,32 @@ class AcquirePage(TabPage):
         return dock
 
     def _add_side_dock(self, name: str, title: str, widget: QWidget) -> CDockWidget:
-        """Add a dock tabbed into the Groups-and-Presets area.
+        """Add a dock to the right area, tabbing into it if it already exists.
 
-        ``addDockWidget(RightDockWidgetArea, ...)`` called a second time would
-        create a second, side-by-side right area rather than a tab in the
-        existing one, so this targets that area's ``CDockAreaWidget``
-        directly. Falls back to a fresh right area if the Presets dock is
-        currently closed (its area is then ``None``).
+        The first call creates the right area and caps its initial width at
+        ``_RIGHT_DOCK_MAX_WIDTH``; subsequent calls tab into that same area.
         """
-        if into := self._presets_dock.dockAreaWidget():
+        if self._right_dock_area is not None:
             return self._add_dock(
-                name, title, widget, DockWidgetArea.CenterDockWidgetArea, into
+                name,
+                title,
+                widget,
+                DockWidgetArea.CenterDockWidgetArea,
+                self._right_dock_area,
             )
-        return self._add_dock(name, title, widget, DockWidgetArea.RightDockWidgetArea)
+        dock = self._add_dock(name, title, widget, DockWidgetArea.RightDockWidgetArea)
+        self._right_dock_area = dock.dockAreaWidget()
+        # Cap the right column width.  setSplitterSizes expects sizes for all
+        # columns in the splitter; use the MDA area as the reference since it
+        # is the leftmost area of the main horizontal splitter.
+        if (mda_area := self._mda_dock.dockAreaWidget()) is not None:
+            total = self._dock_manager.width()
+            right = min(total // 4, _RIGHT_DOCK_MAX_WIDTH)
+            central = max(total - _MDA_DOCK_WIDTH - right, _DOCK_MIN_WIDTH)
+            self._dock_manager.setSplitterSizes(
+                mda_area, [_MDA_DOCK_WIDTH, central, right]
+            )
+        return dock
 
     def _add_panel_button(self, label: str, tooltip: str) -> QPushButton:
         """A checkable toolbar toggle for a dock, styled like the other actions."""
@@ -314,6 +317,20 @@ class AcquirePage(TabPage):
                 self._apply_dock_style()
                 self._refresh_dock_fonts()
 
+    def _toggle_presets(self, checked: bool) -> None:
+        dock = self._presets_dock
+        if dock is None:
+            if not checked:
+                return
+            presets = self._presets = AcquisitionPresetSelector(mmcore=self._core)
+            dock = self._presets_dock = self._add_side_dock(
+                "acquire_presets", _PRESETS_LABEL, presets
+            )
+            self._sync_button(self._presets_btn, dock)
+        dock.toggleView(checked)
+        if checked:
+            dock.setAsCurrentTab()
+
     def _toggle_properties(self, checked: bool) -> None:
         dock = self._props_dock
         if dock is None:
@@ -359,7 +376,8 @@ class AcquirePage(TabPage):
         # ranged-property columns can't learn about those edits any other way.
         super().showEvent(a0)
         self._shutters.refresh()
-        self._presets.refresh()
+        if self._presets is not None:
+            self._presets.refresh()
         self._mda.refresh_channel_table()
         if (dock := self._props_dock) is not None and not dock.isClosed():
             QTimer.singleShot(0, self._refresh_property_browser)
