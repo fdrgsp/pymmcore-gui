@@ -11,6 +11,7 @@ import pytest
 import useq
 from pymmcore_plus import PropertyType
 from pymmcore_widgets import MDAWidget as UpstreamMDAWidget
+from pymmcore_widgets.mda._core_channels import PROPERTY_SEPARATOR
 from pymmcore_widgets.useq_widgets._positions import MDAButton
 
 import pymmcore_gui._modern_gui._acquire_toolbar as acquire_toolbar_module
@@ -659,8 +660,8 @@ def test_editing_active_row_exposure_or_intensity_applies_during_live(
     source_device, source_property = "Camera", "TestProperty1"
     source_group = next(
         label
-        for label, pair in channels.lightSources().items()
-        if pair == (source_device, source_property)
+        for label, pairs in channels.lightSources().items()
+        if pairs == [(source_device, source_property)]
     )
     channels.setLightSourceVisible(True)
     channels.setChannelProperties(
@@ -738,10 +739,13 @@ def test_channel_property_selector_lists_all_runtime_numeric_sliders(
     }
     choices = channels.lightSources()
 
-    assert set(choices.values()) == expected
+    # every ranged property is offered as its own single-property source
+    assert expected <= {pairs[0] for pairs in choices.values() if len(pairs) == 1}
     assert choices
     assert all(
-        label == f"{device} · {prop}" for label, (device, prop) in choices.items()
+        label == f"{pairs[0][0]} · {pairs[0][1]}"
+        for label, pairs in choices.items()
+        if len(pairs) == 1 and PROPERTY_SEPARATOR in label
     )
     assert channels.show_light_source.text() == "Show Light Source"
 
@@ -863,7 +867,12 @@ def test_collapsible_mda_round_trips_all_original_widgets(
     mda.setValue(with_properties)
     assert mda.channels.lightSourceVisible()
     restored_property = mda.channels.channelProperties()[0]
-    assert restored_property["group"] == "Camera · TestProperty1"
+    # "_slider_test" is a single-preset group wrapping the same property that is
+    # also offered as "Camera · TestProperty1"; a round trip must preserve
+    # whichever of the two the sequence was saved under.
+    assert restored_property["group"] == source_group
+    assert restored_property["device"] == source_device
+    assert restored_property["property"] == source_property
     assert restored_property["value"] == pytest.approx(intensity)
 
     tabs.setChecked("z", False)
@@ -1140,8 +1149,8 @@ def test_snap_and_live_apply_the_active_channel_capture_settings(
     source_device, source_property = "Camera", "TestProperty1"
     source_group = next(
         label
-        for label, pair in channels.lightSources().items()
-        if pair == (source_device, source_property)
+        for label, pairs in channels.lightSources().items()
+        if pairs == [(source_device, source_property)]
     )
     intensity = mmcore.getPropertyUpperLimit(source_device, source_property)
     channels.setLightSourceVisible(True)
@@ -1240,8 +1249,8 @@ def test_switching_channel_rows_during_live_applies_all_capture_settings(
     source_device, source_property = "Camera", "TestProperty1"
     source_group = next(
         label
-        for label, pair in channels.lightSources().items()
-        if pair == (source_device, source_property)
+        for label, pairs in channels.lightSources().items()
+        if pairs == [(source_device, source_property)]
     )
     property_values = (
         mmcore.getPropertyLowerLimit(source_device, source_property),

@@ -172,26 +172,22 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
     widget; embedded in a tab there is nothing to close, so Apply just applies.
     """
 
-    changed = pyqtSignal()  # emitted on any user edit (no public signal upstream)
-
     def __init__(
         self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
     ) -> None:
         super().__init__(parent, mmcore=mmcore)
         self._suppress_close = False
-        self._suppress_changed = False
         self._overlay = BusyOverlay(self)
         for btn in self.findChildren(QPushButton):
             if btn.text() in {"Apply and Close", "Cancel"}:
                 # Save actions live in the page toolbar when embedded.
                 btn.hide()
+        # Upstream's own status icon/label next to those buttons is redundant
+        # with the page's toolbar dirty label, which covers both editors.
+        for attr in ("_status_icon", "_status_label"):
+            if (w := getattr(self, attr, None)) is not None:
+                w.hide()
         unstyle_widgets(self)
-        # bridge the widget's internal edit signals to a public `changed` one
-        for attr in ("_px_table", "_affine_table", "_props_selector"):
-            owner = getattr(self, attr, None)
-            if (sig := getattr(owner, "valueChanged", None)) is not None:
-                with suppress(Exception):
-                    sig.connect(self._on_value_changed)
 
     def apply(self) -> None:
         """Apply the pixel configurations to the core (without closing)."""
@@ -205,23 +201,6 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
                 super()._on_apply()
         finally:
             self._suppress_close = False
-
-    def _on_px_table_selection_changed(self) -> None:
-        # Selecting a different resolution row makes upstream call
-        # _props_selector.setValue(...) purely to *display* that row's
-        # settings — but setValue() unconditionally emits valueChanged with
-        # no way to tell a display refresh apart from a genuine edit.
-        # Suppress our bridge for the duration so merely clicking a row
-        # doesn't mark this page dirty.
-        self._suppress_changed = True
-        try:
-            super()._on_px_table_selection_changed()
-        finally:
-            self._suppress_changed = False
-
-    def _on_value_changed(self, *_: object) -> None:
-        if not self._suppress_changed:
-            self.changed.emit()
 
     def close(self) -> bool:
         if self._suppress_close:
@@ -287,23 +266,18 @@ class ConfigurationsPage(TabPage):
         # Track the editors independently: saving the selected tab must not
         # silently mark changes in the other tab as persisted.
         #
-        # The group editor already tracks edits via its own QUndoStack, which
-        # is more accurate than watching for a "changed" signal — e.g. it
-        # correctly goes clean again if the user undoes back to the original
-        # state. It never marks itself clean on save though (that was the
-        # hidden "Apply" button's job) — _GroupEditorTab.save() does it now.
-        #
-        # Pixel Configuration has no such undo stack, so `_pixel_dirty` is
-        # still tracked manually from its bridged `changed` signal.
-        # `_suppress` is a depth counter guarding only that manual pixel path
-        # against our own programmatic refresh/commit calls.
+        # Both editors expose the same clean-state interface — the group
+        # editor backs it with a QUndoStack, Pixel Configuration with a
+        # baseline snapshot — so each reports dirtiness accurately, including
+        # going clean again when an edit is reverted rather than saved. Neither
+        # marks itself clean on *our* save (the group editor's was the hidden
+        # "Apply" button's job), so `mark_saved`/`mark_current_saved` do that.
         self._group_dirty = False
         self._pixel_dirty = False
-        self._suppress = 0
         self._group_editor.undoStack().cleanChanged.connect(
             self._on_group_clean_changed
         )
-        self._pixel_config.changed.connect(self._mark_pixel_dirty)
+        self._pixel_config.cleanChanged.connect(self._on_pixel_clean_changed)
 
         # a configuration may be loaded after this page is built
         self._core.events.systemConfigurationLoaded.connect(
@@ -320,6 +294,8 @@ class ConfigurationsPage(TabPage):
         """Mark both editors as persisted to the configuration file."""
         with suppress(Exception):
             self._group_editor.undoStack().setClean()
+        with suppress(Exception):
+            self._pixel_config.setClean()
         self._group_dirty = False
         self._pixel_dirty = False
         self._update_dirty_label()
@@ -331,28 +307,22 @@ class ConfigurationsPage(TabPage):
                 self._group_editor.undoStack().setClean()
             self._group_dirty = False
         elif self._tabs.currentWidget() is self._pixel_config:
+            with suppress(Exception):
+                self._pixel_config.setClean()
             self._pixel_dirty = False
         self._update_dirty_label()
 
     def commit_current_to_core(self) -> None:
         """Write the selected editor's contents into the live core."""
-        self._suppress += 1
-        try:
-            if self._tabs.currentWidget() is self._group_tab:
-                self._group_tab.save()
-            elif self._tabs.currentWidget() is self._pixel_config:
-                self._pixel_config.apply()
-        finally:
-            self._suppress -= 1
+        if self._tabs.currentWidget() is self._group_tab:
+            self._group_tab.save()
+        elif self._tabs.currentWidget() is self._pixel_config:
+            self._pixel_config.apply()
 
     def commit_to_core(self) -> None:
         """Write the group and pixel editors' contents into the core."""
-        self._suppress += 1
-        try:
-            self._group_tab.save()
-            self._pixel_config.apply()
-        finally:
-            self._suppress -= 1
+        self._group_tab.save()
+        self._pixel_config.apply()
 
     def _on_group_clean_changed(self, clean: bool) -> None:
         """QUndoStack.cleanChanged — the accurate source for group-dirty state.
@@ -363,20 +333,29 @@ class ConfigurationsPage(TabPage):
         self._group_dirty = not clean
         self._update_dirty_label()
 
+    def _on_pixel_clean_changed(self, clean: bool) -> None:
+        """PixelConfigurationWidget.cleanChanged — same contract as the group tab.
+
+        Backed by a baseline snapshot rather than an undo stack, so it too goes
+        clean again when an edit is reverted by hand, and merely selecting a
+        different resolution row never reports a change.
+        """
+        self._pixel_dirty = not clean
+        self._update_dirty_label()
+
     def _mark_group_dirty(self, *_: object) -> None:
         """Force the group tab dirty, bypassing the undo stack.
 
         Used by tests that want to simulate an edit without driving the real
         editor UI; real edits are tracked via _on_group_clean_changed instead.
         """
-        if self._suppress == 0:
-            self._group_dirty = True
-            self._update_dirty_label()
+        self._group_dirty = True
+        self._update_dirty_label()
 
     def _mark_pixel_dirty(self, *_: object) -> None:
-        if self._suppress == 0:
-            self._pixel_dirty = True
-            self._update_dirty_label()
+        """Force the pixel tab dirty; test-only counterpart of the above."""
+        self._pixel_dirty = True
+        self._update_dirty_label()
 
     def _update_dirty_label(self) -> None:
         parts = []
@@ -445,26 +424,24 @@ class ConfigurationsPage(TabPage):
         self._refresh(reload_configs=True)
 
     def _refresh(self, *, reload_configs: bool) -> None:
-        # programmatic refresh: don't let the resulting signals set the pixel
-        # dirty flag (unless a real config was loaded, which is a genuine
-        # change). The group side doesn't need this guard — update_from_core's
-        # setData() doesn't touch the undo stack, so cleanChanged only ever
-        # fires from a genuine user edit.
-        self._suppress += 1
-        try:
+        with suppress(Exception):
+            self._group_editor.update_from_core(
+                self._core, update_configs=reload_configs
+            )
+        if reload_configs:
+            # a full reload replaces the model wholesale — any undo
+            # history now refers to a superseded state, and the freshly
+            # loaded data is by definition the new clean baseline.
             with suppress(Exception):
-                self._group_editor.update_from_core(
-                    self._core, update_configs=reload_configs
-                )
-            if reload_configs:
-                # a full reload replaces the model wholesale — any undo
-                # history now refers to a superseded state, and the freshly
-                # loaded data is by definition the new clean baseline.
-                with suppress(Exception):
-                    self._group_editor.undoStack().clear()
-            # PixelConfigurationWidget only rebuilds on the core's
-            # systemConfigurationLoaded event and exposes no public refresh, so
-            # invoke its internal rebuild directly (guarded against renames).
+                self._group_editor.undoStack().clear()
+        # PixelConfigurationWidget only rebuilds on the core's
+        # systemConfigurationLoaded event and exposes no public refresh, so
+        # invoke its internal rebuild directly (guarded against renames).
+        # That rebuild reads the core wholesale, so skip it while the user has
+        # unsaved pixel edits — for the same reason the group editor's configs
+        # aren't reloaded on a plain revisit (see showEvent). A real config
+        # load (reload_configs) supersedes those edits and does rebuild.
+        if reload_configs or self._pixel_config.isClean():
             if callable(
                 fn := getattr(self._pixel_config, "_on_sys_config_loaded", None)
             ):
@@ -478,5 +455,3 @@ class ConfigurationsPage(TabPage):
                     # (every time this page is shown, or on a config reload)
                     # would otherwise keep a stale, theme-unaware appearance.
                     unstyle_widgets(self._pixel_config)
-        finally:
-            self._suppress -= 1
