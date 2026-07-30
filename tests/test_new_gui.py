@@ -1143,6 +1143,40 @@ def test_collapsible_mda_runs_disk_backed_acquisition(
     assert mda.control_btns.run_btn.isEnabled()
 
 
+def test_collapsible_mda_shows_store_creation_progress(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Disk-backed runs show feedback until the MDA startup signal arrives."""
+    mda = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(mda)
+    mda.show()
+    mda.save_info.setValue(tmp_path / "acquisition.ome.tif")
+
+    startup_observed = False
+
+    def fake_execute(_output: object) -> None:
+        nonlocal startup_observed
+        startup_observed = mda._store_overlay.isVisible()
+
+    monkeypatch.setattr(mda, "execute_mda", fake_execute)
+    mda.run_mda()
+
+    assert startup_observed
+    assert mda._store_overlay.isVisible()
+    assert mda._store_overlay._message == "Creating data store…"
+
+    mmcore.mda.events.sequenceStarted.emit(mda.value(), {})
+    qtbot.waitUntil(mda._store_overlay.isHidden)
+
+    # Memory-backed runs are fast and should not flash a store message.
+    mda.save_info.setChecked(False)
+    mda.run_mda()
+    assert mda._store_overlay.isHidden()
+
+
 def test_collapsible_mda_disables_every_editor_during_acquisition(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:

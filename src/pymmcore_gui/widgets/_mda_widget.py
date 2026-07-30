@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import TYPE_CHECKING, cast
 
 from pymmcore_widgets import MDAWidgetCollapsible
@@ -14,8 +15,17 @@ from pymmcore_gui._array_viewer import (
     set_source_icon,
     unstyle_widgets,
 )
+from pymmcore_gui._modern_gui._busy import BusyOverlay
 from pymmcore_gui._modern_gui._theme import qcolor, theme
-from pymmcore_gui._qt.QtCore import QEvent, QModelIndex, QObject, QSize, Qt, QTimer
+from pymmcore_gui._qt.QtCore import (
+    QEvent,
+    QModelIndex,
+    QObject,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
+)
 from pymmcore_gui._qt.QtWidgets import QComboBox, QDoubleSpinBox, QGridLayout, QWidget
 
 from ._active_channel_table import (
@@ -29,6 +39,8 @@ if TYPE_CHECKING:
     import useq
     from pymmcore_plus import CMMCorePlus
     from pymmcore_widgets.mda._xy_bounds import CoreXYBoundsControl
+
+    from pymmcore_gui._qt.QtGui import QResizeEvent
 
     from ._active_channel_table import ActiveChannelTable
 
@@ -93,6 +105,8 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
     core bridge, and the memory-sink output fallback.
     """
 
+    _storeCreationFinished = Signal()
+
     def _create_tab_widget(self) -> CollapsibleCoreMDATabs:
         return ActiveChannelCollapsibleCoreMDATabs(None, self._mmc)
 
@@ -109,6 +123,10 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         self._restoring_sequence = False
         self._applying_channel_config = False
         super().__init__(parent=parent, mmcore=mmcore)
+        self._store_overlay = BusyOverlay(self)
+        self._storeCreationFinished.connect(self._store_overlay.stop)
+        self._mmc.mda.events.sequenceStarted.connect(self._on_store_creation_finished)
+        self._mmc.mda.events.sequenceFinished.connect(self._on_store_creation_finished)
         self._apply_theme_metrics()
         combo = self.save_info._writer_combo
         for idx in range(combo.count()):
@@ -163,6 +181,45 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         self._connect_channel_selection()
 
         _align_bounds_grid(self.grid_plan._core_xy_bounds)
+
+    def resizeEvent(self, a0: QResizeEvent | None) -> None:
+        """Keep the data-store startup overlay fitted to the MDA editor."""
+        super().resizeEvent(a0)
+        if hasattr(self, "_store_overlay"):
+            self._store_overlay.setGeometry(self.rect())
+
+    def run_mda(self) -> None:
+        """Start an MDA, showing progress while a disk store is initialized."""
+        output = self.prepare_mda()
+        if isinstance(output, bool):
+            return
+
+        show_store_progress = self.save_info.isChecked() and self.isVisible()
+        if show_store_progress:
+            self._store_overlay.start("Creating data store…")
+        try:
+            self.execute_mda(output)
+        except Exception:
+            # A synchronous launch failure emits neither sequenceStarted nor
+            # sequenceFinished, so clear the overlay here.
+            if show_store_progress:
+                self._store_overlay.stop()
+            raise
+
+    def _on_store_creation_finished(self, *_: object) -> None:
+        """Relay worker-thread MDA signals safely back to the Qt GUI thread."""
+        self._storeCreationFinished.emit()
+
+    def _disconnect(self) -> None:
+        """Disconnect this subclass's MDA callbacks, then the upstream ones."""
+        with suppress(Exception):
+            self._mmc.mda.events.sequenceStarted.disconnect(
+                self._on_store_creation_finished
+            )
+            self._mmc.mda.events.sequenceFinished.disconnect(
+                self._on_store_creation_finished
+            )
+        super()._disconnect()
 
     def _on_table_rows_inserted(self, *_: object) -> None:
         """Theme cell widgets that are constructed only when a row is added."""
