@@ -202,12 +202,31 @@ def _recolor_icon(icon: QIcon, color: QColor) -> QIcon:
 
 
 _ORIGINAL_ICON_PROPERTY = "_pymmcore_gui_original_icon"
+_ICON_TINT_PROPERTY = "_pymmcore_gui_icon_tint"
 
 
 def set_source_icon(btn: QAbstractButton, icon: QIcon) -> None:
     """Set a button icon and remember it as the source for theme recoloring."""
     btn.setProperty(_ORIGINAL_ICON_PROPERTY, icon)
     btn.setIcon(icon)
+
+
+def set_icon_tint(btn: QAbstractButton, color: QColor) -> None:
+    """Force a button icon to *color*, retaining its pristine source icon.
+
+    The tint is stored as a dynamic property so subsequent calls to
+    :func:`ensure_visible_icon` (notably the application-wide theme-change
+    sweep) preserve the requested semantic color instead of replacing it with
+    the generic foreground color.
+    """
+    icon = btn.property(_ORIGINAL_ICON_PROPERTY)
+    if icon is None:
+        icon = btn.icon()
+        if icon.isNull():
+            return
+        btn.setProperty(_ORIGINAL_ICON_PROPERTY, icon)
+    btn.setProperty(_ICON_TINT_PROPERTY, QColor(color))
+    btn.setIcon(_recolor_icon(icon, color))
 
 
 def ensure_visible_icon(btn: QAbstractButton) -> None:
@@ -234,6 +253,10 @@ def ensure_visible_icon(btn: QAbstractButton) -> None:
         if icon.isNull():
             return
         btn.setProperty(_ORIGINAL_ICON_PROPERTY, icon)
+
+    if isinstance(tint := btn.property(_ICON_TINT_PROPERTY), QColor):
+        btn.setIcon(_recolor_icon(icon, tint))
+        return
 
     size = btn.iconSize()
     if not size.isValid() or size.isEmpty():

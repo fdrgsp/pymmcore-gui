@@ -36,6 +36,7 @@ from pymmcore_gui._modern_gui._theme._light import LIGHT_THEME
 from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget
 from pymmcore_gui._qt.QtCore import QSize, Qt
 from pymmcore_gui._qt.QtWidgets import (
+    QAbstractButton,
     QApplication,
     QComboBox,
     QDoubleSpinBox,
@@ -195,12 +196,10 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert page._mda_btn.isChecked()
     assert page._mda.prepare_mda() == "memory"
 
-    assert page._presets_dock.widget() is page._presets
-    assert page._presets_dock.windowTitle() == "Groups and Presets"
-    assert not page._presets_dock.isClosed()
-    assert page._presets_btn.isChecked()
-
-    # Properties and Console are lazy: no widget and no dock before first open.
+    # Secondary panels are lazy: no widget or dock before first open.
+    assert page._presets is None
+    assert page._presets_dock is None
+    assert not page._presets_btn.isChecked()
     assert page._property_browser is None
     assert page._props_dock is None
     assert not page._props_btn.isChecked()
@@ -210,7 +209,6 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
 
     assert sorted(dm.dockWidgetsMap()) == [
         "acquire_mda",
-        "acquire_presets",
         "acquire_viewers",
     ]
     assert not hasattr(page, "_channels")
@@ -256,16 +254,27 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     tabs.saving_section.set_checked(False)
     assert not page._mda.save_info.isChecked()
 
+    # Opening Groups & Presets builds it lazily.
+    page._presets_btn.click()
+    presets = page._presets
+    presets_dock = page._presets_dock
+    assert presets is not None
+    assert presets_dock is not None
+    assert presets_dock.widget() is presets
+    assert presets_dock.windowTitle() == "Groups and Presets"
+    assert not presets_dock.isClosed()
+    assert page._presets_btn.isChecked()
+
     # Groups & Presets is the upstream GroupPresetTableWidget with its
     # editing/save/load controls hidden — editing groups already lives on the
     # Configurations tab, and saving/loading a .cfg on the Hardware tab.
     hidden_buttons = {
-        page._presets.edit_groups_btn,
-        page._presets.save_btn,
-        page._presets.load_btn,
+        presets.edit_groups_btn,
+        presets.save_btn,
+        presets.load_btn,
     }
     assert all(button.isHidden() for button in hidden_buttons)
-    assert not page._presets.table_wdg.isHidden()
+    assert not presets.table_wdg.isHidden()
 
     # Opening Properties builds it lazily and tabs it beside Groups and Presets.
     page._props_btn.click()
@@ -275,7 +284,7 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert browser is not None and not browser.isWindow()
     assert props_dock is not None and not props_dock.isClosed()
     assert props_dock.widget() is browser
-    assert props_dock.dockAreaWidget() is page._presets_dock.dockAreaWidget()
+    assert props_dock.dockAreaWidget() is presets_dock.dockAreaWidget()
 
     # Toggling off closes the dock but keeps the (expensive) widget alive.
     page._props_btn.click()
@@ -295,10 +304,10 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert props_dock.isClosed()
     assert not page._props_btn.isChecked()
 
-    page._presets_dock.closeDockWidget()
+    presets_dock.closeDockWidget()
     assert not page._presets_btn.isChecked()
     page._presets_btn.click()
-    assert not page._presets_dock.isClosed()
+    assert not presets_dock.isClosed()
     assert page._presets_btn.isChecked()
 
 
@@ -331,6 +340,35 @@ def test_acquire_inactive_dock_tab_labels_are_visible(
     assert "qproperty-icon" in ss
 
 
+def test_acquire_dock_icons_are_themed_on_initial_dark_startup(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """ADS's fixed black chrome is corrected without requiring a theme toggle."""
+    set_theme(DARK_THEME)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    buttons = {
+        btn.objectName(): btn
+        for btn in page._dock_manager.findChildren(QAbstractButton)
+    }
+    for name in ("tabsMenuButton", "detachGroupButton", "dockAreaAutoHideButton"):
+        rgb = _icon_avg_rgb(buttons[name].icon(), QSize(24, 24))
+        assert rgb is not None
+        # Dark-theme chrome should be a light neutral, not ADS's black source.
+        assert sum(rgb) / 3 > 180
+
+    close_rgb = _icon_avg_rgb(buttons["tabCloseButton"].icon(), QSize(24, 24))
+    assert close_rgb is not None
+    red = qcolor(theme().status_red)
+    assert all(
+        abs(actual - expected) < 2
+        for actual, expected in zip(
+            close_rgb, (red.red(), red.green(), red.blue()), strict=True
+        )
+    )
+
+
 def test_acquire_dock_style_and_fonts_follow_theme_toggle(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
@@ -343,6 +381,20 @@ def test_acquire_dock_style_and_fonts_follow_theme_toggle(
     ss = page._dock_manager.styleSheet()
     assert qcolor(theme().text_secondary).name() in ss
     assert qcolor(theme().text_primary).name() in ss
+    close = next(
+        btn
+        for btn in page._dock_manager.findChildren(QAbstractButton)
+        if btn.objectName() == "tabCloseButton"
+    )
+    close_rgb = _icon_avg_rgb(close.icon(), QSize(24, 24))
+    assert close_rgb is not None
+    red = qcolor(theme().status_red)
+    assert all(
+        abs(actual - expected) < 2
+        for actual, expected in zip(
+            close_rgb, (red.red(), red.green(), red.blue()), strict=True
+        )
+    )
     set_theme(DARK_THEME)
 
 
@@ -397,8 +449,11 @@ def test_acquire_docks_are_movable_and_pinnable(
     assert CDockManager.testAutoHideConfigFlag(
         CDockManager.eAutoHideFlag.DockAreaHasAutoHideButton
     )
+    page._presets_btn.click()
+    presets_dock = page._presets_dock
+    assert presets_dock is not None
     DF = CDockWidget.DockWidgetFeature
-    for dock in (page._mda_dock, page._presets_dock):
+    for dock in (page._mda_dock, presets_dock):
         assert dock.features().value & DF.DockWidgetPinnable.value
         assert dock.features().value & DF.DockWidgetMovable.value
         assert not dock.features().value & DF.DockWidgetFloatable.value
@@ -416,10 +471,13 @@ def test_acquire_lazy_dock_tabs_into_existing_area(
     """
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
+    page._presets_btn.click()
+    presets_dock = page._presets_dock
+    assert presets_dock is not None
     page._props_btn.click()
     assert page._props_dock is not None
-    assert page._props_dock.dockAreaWidget() is page._presets_dock.dockAreaWidget()
-    assert not page._presets_dock.isClosed()
+    assert page._props_dock.dockAreaWidget() is presets_dock.dockAreaWidget()
+    assert not presets_dock.isClosed()
     assert not page._props_dock.isClosed()
 
 
@@ -441,12 +499,15 @@ def test_acquire_console_dock_is_lazy(
     assert page._console is None
     assert page._console_dock is None
 
+    page._presets_btn.click()
+    presets_dock = page._presets_dock
+    assert presets_dock is not None
     page._console_btn.click()
     console = page._console
     dock = page._console_dock
     assert isinstance(console, FakeConsole)
     assert dock is not None and not dock.isClosed()
-    assert dock.dockAreaWidget() is page._presets_dock.dockAreaWidget()
+    assert dock.dockAreaWidget() is presets_dock.dockAreaWidget()
 
     page._console_btn.click()
     assert dock.isClosed()

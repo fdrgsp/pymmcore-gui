@@ -8,11 +8,20 @@ from typing import TYPE_CHECKING
 from pymmcore_plus import CMMCorePlus
 from pymmcore_widgets import PropertyBrowser
 
-from pymmcore_gui._array_viewer import unstyle_widgets
+from pymmcore_gui._array_viewer import (
+    ensure_visible_icon,
+    set_icon_tint,
+    unstyle_widgets,
+)
 from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget, DockWidgetArea
 from pymmcore_gui._qt.QtCore import QEvent, QTimer
 from pymmcore_gui._qt.QtGui import QFont
-from pymmcore_gui._qt.QtWidgets import QAbstractSlider, QPushButton, QWidget
+from pymmcore_gui._qt.QtWidgets import (
+    QAbstractButton,
+    QAbstractSlider,
+    QPushButton,
+    QWidget,
+)
 from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
 
 from ._acquire_presets import AcquisitionPresetSelector
@@ -38,6 +47,16 @@ _CONSOLE_LABEL = "Console"
 _DOCK_MIN_WIDTH = 0
 _MDA_DOCK_WIDTH = 700
 _RIGHT_DOCK_MAX_WIDTH = 500
+_ADS_NEUTRAL_ICON_BUTTONS = frozenset(
+    {
+        "tabsMenuButton",
+        "detachGroupButton",
+        "dockAreaAutoHideButton",
+        "dockAreaMinimizeButton",
+        "dockAreaCloseButton",
+    }
+)
+_ADS_TAB_CLOSE_BUTTON = "tabCloseButton"
 
 _ads_configured = False
 
@@ -98,6 +117,7 @@ class AcquirePage(TabPage):
 
         _configure_ads()
         self._dock_manager = CDockManager(self.content)
+        self._dock_manager.dockWidgetAdded.connect(self._queue_dock_icon_refresh)
         self.add_content_widget(self._dock_manager)
         self._base_dock_style = self._dock_manager.styleSheet()
         self._apply_dock_style()
@@ -177,6 +197,7 @@ class AcquirePage(TabPage):
             _CONSOLE_LABEL, "Open an IPython console panel"
         )
         self._console_btn.toggled.connect(self._toggle_console)
+        self._refresh_dock_icons()
 
     # ------------------------------------------------------------------ dock helpers
 
@@ -285,6 +306,31 @@ class AcquirePage(TabPage):
             """
         )
 
+    def _queue_dock_icon_refresh(self, _dock: CDockWidget) -> None:
+        """Refresh after ADS has finished constructing a newly added dock's chrome."""
+        QTimer.singleShot(0, self._refresh_dock_icons)
+
+    def _refresh_dock_icons(self) -> None:
+        """Make ADS chrome visible and keep tab-close glyphs theme red.
+
+        ADS assigns fixed black pixmaps to its title-bar buttons. Docks are
+        created after the application's initial dark-theme sweep, so those
+        icons otherwise remain black until the first light/dark toggle.
+        Reusing the shared contrast correction fixes their initial state.
+
+        The close button beside each dock tab is semantic rather than neutral:
+        force it to the active theme's status-red. ``set_icon_tint`` records
+        that intent so the application-wide contrast sweep cannot turn it
+        white again on the next theme change.
+        """
+        red = qcolor(theme().status_red)
+        for btn in self._dock_manager.findChildren(QAbstractButton):
+            name = btn.objectName()
+            if name == _ADS_TAB_CLOSE_BUTTON:
+                set_icon_tint(btn, red)
+            elif name in _ADS_NEUTRAL_ICON_BUTTONS:
+                ensure_visible_icon(btn)
+
     def _refresh_dock_fonts(self) -> None:
         """Let the dock subtree follow app-font (zoom) changes again.
 
@@ -315,6 +361,7 @@ class AcquirePage(TabPage):
         if a0 is not None and a0.type() == QEvent.Type.StyleChange:
             if hasattr(self, "_dock_manager"):
                 self._apply_dock_style()
+                self._refresh_dock_icons()
                 self._refresh_dock_fonts()
 
     def _toggle_presets(self, checked: bool) -> None:
