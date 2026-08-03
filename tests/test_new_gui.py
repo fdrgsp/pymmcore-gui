@@ -18,7 +18,7 @@ import pymmcore_gui._modern_gui._acquire_toolbar as acquire_toolbar_module
 import pymmcore_gui._modern_gui._acquire_viewers as acquire_viewers_module
 from pymmcore_gui._app import LoadConfigDialog, create_mmgui
 from pymmcore_gui._array_viewer import _icon_avg_rgb
-from pymmcore_gui._modern_gui._acquire import AcquirePage
+from pymmcore_gui._modern_gui._acquire import _MDA_DOCK_WIDTH, AcquirePage
 from pymmcore_gui._modern_gui._configurations import ConfigurationsPage
 from pymmcore_gui._modern_gui._hardware import HardwareSetupPage
 from pymmcore_gui._modern_gui._main_win import MainWindow
@@ -44,6 +44,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QToolButton,
     QWidget,
 )
@@ -61,6 +62,7 @@ if TYPE_CHECKING:
 
     from pymmcore_gui._app import WindowProtocol
     from pymmcore_gui._modern_gui._theme import Color
+    from pymmcore_gui._qt.QtAds import CDockAreaWidget
     from pymmcore_gui._qt.QtGui import QIcon
     from pymmcore_gui._settings import Settings
 
@@ -1535,6 +1537,209 @@ def test_acquire_page_adds_sink_backed_mda_tab(
     dock.closeDockWidget()
     assert page._viewers.active_viewer is None
     assert viewer.closed
+
+
+def test_acquire_viewer_close_reclaims_space_without_moving_mda(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Closing a viewer actually destroys its dock area, but MDA still holds.
+
+    Viewer docks use ADS's ``DockWidgetDeleteOnClose`` feature so a closed
+    viewer's dock-area/splitter node is genuinely removed (freeing its Qt
+    widget/canvas resources and letting any remaining side-by-side viewer
+    reclaim the freed space) rather than left behind as permanently-empty
+    dead space. Destroying a dock area makes ADS recompute splitter
+    proportions for the *whole* manager, which used to also resize unrelated
+    docks like the MDA panel -- that's now prevented by the MDA column's
+    width lock (see ``AcquirePage._install_width_lock``), not by avoiding
+    real deletion.
+
+    This can't be exercised through the actual "split two viewers side by
+    side, then close the one left alone in its area" scenario that motivated
+    the width lock: per the note in ``_configure_ads`` (``_acquire.py``),
+    emptying a dock area reproducibly segfaults under
+    ``QT_QPA_PLATFORM=offscreen`` + pytest-qt, independent of app code -- the
+    same reason the app's own tests stick to non-emptying dock moves (this
+    viewer is tabbed alongside the always-present central placeholder, so
+    closing it doesn't empty the area). Instead this verifies the two things
+    that matter: the feature flag is set, and the MDA column doesn't move.
+    """
+
+    class Emitter:
+        def emit(self) -> None:
+            pass
+
+    class FakeViewer:
+        def __init__(self, data: object, /, **kwargs: object) -> None:
+            self.data = data
+            self.display_model = SimpleNamespace(current_index={})
+            self.data_wrapper = SimpleNamespace(
+                dims_changed=Emitter(), data_changed=Emitter()
+            )
+            self._widget = QWidget()
+            self.closed = False
+
+        def widget(self) -> QWidget:
+            return self._widget
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(acquire_viewers_module, "MMArrayViewer", FakeViewer)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    mmcore.mda.run(
+        useq.MDASequence(channels=(useq.Channel(config="DAPI", exposure=10),)),
+        output="memory",
+    )
+    qtbot.wait(20)
+
+    dock = page._viewers._active_dock
+    assert dock is not None
+    viewer = page._viewers.active_viewer
+    assert isinstance(viewer, FakeViewer)
+    DF = CDockWidget.DockWidgetFeature
+    assert dock.features().value & DF.DockWidgetDeleteOnClose.value
+
+    mda_area = page._mda_dock.dockAreaWidget()
+    assert mda_area is not None
+    mda_width_before = mda_area.width()
+
+    dock.closeDockWidget()
+
+    assert page._viewers.active_viewer is None
+    assert viewer.closed
+    assert mda_area.width() == mda_width_before
+
+
+def _resized_splitter_sizes(
+    page: AcquirePage, area: CDockAreaWidget, width: int
+) -> list[int]:
+    """Current splitter sizes for *area*'s splitter with *area*'s slot set to *width*.
+
+    ``setSplitterSizes`` needs one entry per *current* child of that specific
+    splitter (2 columns if only MDA/central exist, 3 once the right column is
+    open too) -- built from the live sizes rather than assumed, so this stays
+    correct regardless of how many columns are open.
+    """
+    sizes = list(page._dock_manager.splitterSizes(area))
+    splitter = area.parentWidget()
+    assert isinstance(splitter, QSplitter)
+    idx = splitter.indexOf(area)
+    freed = sizes[idx] - width
+    sizes[idx] = width
+    # Give the freed/needed space to another column so the total is unchanged.
+    other = 0 if idx != 0 else 1
+    sizes[other] += freed
+    return sizes
+
+
+def _assert_column_resists_relayout_but_stays_draggable(
+    page: AcquirePage, qtbot: QtBot, area: CDockAreaWidget, new_width: int
+) -> None:
+    """Shared body for the MDA / right-column width-lock regression tests below."""
+    starting_width = area.width()
+    assert area.minimumWidth() == area.maximumWidth() == starting_width
+
+    # A direct, deliberate attempt to resize it away from the locked width
+    # must be clamped straight back -- exercising the same splitter API ADS
+    # itself uses internally when it recomputes proportions.
+    page._dock_manager.setSplitterSizes(area, _resized_splitter_sizes(page, area, 50))
+    assert area.width() == starting_width
+
+    # A real drag: press the handle (unlocks), resize (as the splitter would
+    # live, mid-drag), release (re-locks at wherever the user left it).
+    handle = next(h for h, a in page._width_locked_areas.items() if a is area)
+    qtbot.mousePress(handle, Qt.MouseButton.LeftButton)  # type: ignore[no-untyped-call]
+    assert area.minimumWidth() == 0
+    page._dock_manager.setSplitterSizes(
+        area, _resized_splitter_sizes(page, area, new_width)
+    )
+    assert area.width() == new_width
+    qtbot.mouseRelease(  # type: ignore[no-untyped-call]
+        handle, Qt.MouseButton.LeftButton
+    )
+    assert area.minimumWidth() == area.maximumWidth() == new_width
+    assert area.width() == new_width
+
+    # The new, user-chosen width is itself just as resistant to relayout.
+    page._dock_manager.setSplitterSizes(area, _resized_splitter_sizes(page, area, 50))
+    assert area.width() == new_width
+
+
+def test_acquire_mda_dock_width_resists_relayout_but_stays_draggable(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """The MDA dock area's width resists relayout, but a real drag can change it.
+
+    Regression test for a bug where ADS's own splitter relayout -- triggered
+    whenever any dock area's visibility changes anywhere in the manager, not
+    just areas adjacent to the one that changed -- could silently resize the
+    MDA (or right, Groups & Presets / Properties / Console) column when a
+    central viewer opened or closed. A *reactive* fix (re-applying
+    ``setSplitterSizes`` after the fact, even across several deferred
+    event-loop turns) proved unreliable in practice: it's a race against
+    ADS's own relayout passes, which can be arbitrarily delayed. The actual
+    fix (``AcquirePage._install_width_lock``) instead keeps
+    ``minimumWidth == maximumWidth`` on the locked dock area at all times --
+    a hard Qt layout constraint a splitter must respect in *any* layout
+    pass, regardless of what triggers it or when -- except for the exact
+    duration of a real mouse drag on the handle to its right, caught via
+    ``eventFilter`` (mouse press unlocks; release re-locks at the new
+    width). This can't be exercised through the actual "split two viewers
+    side by side, close the one left alone in its area" scenario that
+    motivated the fix -- per the note in ``_configure_ads``
+    (``_acquire.py``), emptying a dock area reproducibly segfaults under
+    ``QT_QPA_PLATFORM=offscreen`` + pytest-qt, independent of app code. This
+    instead verifies both halves directly: an explicit, deliberate attempt
+    to resize the splitter away from the locked width has no effect while
+    locked, and a simulated press-drag-release on the handle both unlocks it
+    for the drag and re-locks it at the resulting (user-chosen) width
+    afterward.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.resize(1400, 900)
+    page.show()
+    qtbot.waitExposed(page)
+    # AcquirePage is constructed standalone here, before it has real window
+    # geometry, so its one-time initial pin/lock (in __init__) captured a too
+    # small width; showEvent's one-time re-pin corrects that once the widget
+    # has real geometry, same as it would for the real app's startup. Give it
+    # a moment to settle.
+    qtbot.wait(50)
+
+    mda_area = page._mda_dock.dockAreaWidget()
+    assert mda_area is not None
+    assert mda_area.width() == _MDA_DOCK_WIDTH
+    _assert_column_resists_relayout_but_stays_draggable(page, qtbot, mda_area, 500)
+
+
+def test_acquire_right_dock_width_resists_relayout_but_stays_draggable(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """The right (Groups & Presets / Properties / Console) column gets the same lock.
+
+    Same regression as the MDA-column test above, but for the right-side
+    column -- opening it lazily is exactly the kind of dock-area-visibility
+    change elsewhere in the manager that used to be able to silently resize
+    it too, so it needs the same width lock installed once it exists (see
+    ``_add_side_dock``).
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.resize(1400, 900)
+    page.show()
+    qtbot.waitExposed(page)
+    qtbot.wait(50)
+
+    page._presets_btn.click()
+    right_area = page._right_dock_area
+    assert right_area is not None
+    _assert_column_resists_relayout_but_stays_draggable(page, qtbot, right_area, 300)
 
 
 def test_mda_action_icons_use_theme_status_colors(

@@ -53,6 +53,19 @@ class AcquireViewersManager(QObject):
     Every Preview/MDA-viewer instance is wrapped in its own ``CDockWidget`` and
     tabbed into the shared ``central_dock_area`` via ``addDockWidgetTabToArea``,
     mirroring the classic GUI's ``NDVViewersManager`` docking mechanics.
+
+    Closed viewer docks use ADS's ``DockWidgetDeleteOnClose`` feature so a
+    closed viewer's dock-area/splitter node is actually removed (freeing its
+    Qt widget/canvas resources via the normal parent-child cascade) rather
+    than left behind as a permanently-empty, still-space-occupying shell --
+    otherwise splitting several viewers side by side and closing some of them
+    leaves unreclaimable dead space that the remaining ones can't expand
+    into. Destroying a dock area makes ADS recompute splitter proportions
+    for the *whole* manager, which used to also resize unrelated docks (e.g.
+    the MDA panel) just because a viewer tab was closed -- that's now
+    prevented at the source (see ``AcquirePage._install_width_lock``, which
+    hard-locks the MDA/right columns against any relayout regardless of
+    cause), so it's safe to let ADS actually reclaim the space here.
     """
 
     _sequenceStarted = Signal(object, object)

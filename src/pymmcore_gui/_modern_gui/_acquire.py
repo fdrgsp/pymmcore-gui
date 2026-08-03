@@ -14,12 +14,14 @@ from pymmcore_gui._array_viewer import (
     unstyle_widgets,
 )
 from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget, DockWidgetArea
-from pymmcore_gui._qt.QtCore import QEvent, QTimer
+from pymmcore_gui._qt.QtCore import QEvent, QObject, QTimer
 from pymmcore_gui._qt.QtGui import QFont
 from pymmcore_gui._qt.QtWidgets import (
+    QWIDGETSIZE_MAX,
     QAbstractButton,
     QAbstractSlider,
     QPushButton,
+    QSplitter,
     QWidget,
 )
 from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
@@ -65,11 +67,14 @@ def _configure_ads() -> None:
     """Apply the process-wide ADS flags, once.
 
     Mirrors ``_main_window.py``'s classic-GUI setup so both GUIs' dock
-    managers behave identically. These setters are static -- they affect every
-    ``CDockManager`` in the process, and only the *first* call before any
-    manager is constructed has an effect. ``DockAreaHasAutoHideButton`` is the
-    one addition beyond what the classic GUI sets: without it, pinning a dock
-    to a side bar is drag-only and undiscoverable.
+    managers behave identically, plus two additions beyond what the classic
+    GUI sets: without ``DockAreaHasAutoHideButton``, pinning a dock to a side
+    bar is drag-only and undiscoverable; without ``EqualSplitOnInsertion``,
+    dragging a viewer tab out to split it gives the new area only a sliver
+    (a fixed minimum width) while the original area keeps the rest, rather
+    than splitting the space evenly. These setters are static -- they affect
+    every ``CDockManager`` in the process, and only the *first* call before
+    any manager is constructed has an effect.
 
     Note: emptying a dock area (moving its last widget elsewhere, whether to
     another regular area or to auto-hide) reproducibly segfaults under
@@ -86,6 +91,7 @@ def _configure_ads() -> None:
     _ads_configured = True
     CDockManager.setConfigFlag(CDockManager.eConfigFlag.DockAreaHasCloseButton, False)
     CDockManager.setConfigFlag(CDockManager.eConfigFlag.OpaqueSplitterResize, True)
+    CDockManager.setConfigFlag(CDockManager.eConfigFlag.EqualSplitOnInsertion, True)
     CDockManager.setAutoHideConfigFlag(
         CDockManager.eAutoHideFlag.AutoHideFeatureEnabled, True
     )
@@ -155,12 +161,12 @@ class AcquirePage(TabPage):
         self._console: MMConsole | None = None
         self._console_dock: CDockWidget | None = None
         self._right_dock_area: CDockAreaWidget | None = None
+        self._width_locked_areas: dict[QObject, CDockAreaWidget] = {}
+        self._mda_width_locked_at_real_size = False
 
-        area = self._mda_dock.dockAreaWidget()
-        if area is None:
-            return
-        central = self._dock_manager.width() - _MDA_DOCK_WIDTH
-        self._dock_manager.setSplitterSizes(area, [_MDA_DOCK_WIDTH, central])
+        self._pin_dock_widths()
+        if (mda_area := self._mda_dock.dockAreaWidget()) is not None:
+            self._install_width_lock(mda_area)
 
         # toolbar: snap|live ‖ shutters … [MDA][Groups and Presets][Properties][Console]
         self._shutters = ShuttersBar(self._core)
@@ -201,6 +207,83 @@ class AcquirePage(TabPage):
 
     # ------------------------------------------------------------------ dock helpers
 
+    def _pin_dock_widths(self) -> None:
+        """Set the MDA / right-column widths for the current manager width.
+
+        Called once at startup (before the MDA column's width lock -- see
+        ``_install_width_lock`` -- takes over) and whenever the right column
+        is first created.
+        """
+        mda_area = self._mda_dock.dockAreaWidget()
+        if mda_area is None:
+            return
+        total = self._dock_manager.width()
+        if self._right_dock_area is not None:
+            right = min(total // 4, _RIGHT_DOCK_MAX_WIDTH)
+            central = max(total - _MDA_DOCK_WIDTH - right, _DOCK_MIN_WIDTH)
+            self._dock_manager.setSplitterSizes(
+                mda_area, [_MDA_DOCK_WIDTH, central, right]
+            )
+        else:
+            central = max(total - _MDA_DOCK_WIDTH, _DOCK_MIN_WIDTH)
+            self._dock_manager.setSplitterSizes(mda_area, [_MDA_DOCK_WIDTH, central])
+
+    def _install_width_lock(self, area: CDockAreaWidget) -> None:
+        """Freeze *area*'s width except while it's actively being dragged.
+
+        ADS recomputes splitter proportions for the *whole* manager whenever
+        any dock area's visibility changes anywhere in it -- not just areas
+        adjacent to the one that changed -- so a central viewer opening or
+        closing can silently resize the MDA or right (Groups & Presets /
+        Properties / Console) columns even though the user never touched
+        them. Reactively re-applying a width after the fact (via a dock's
+        ``closed`` signal, even retried across several deferred event-loop
+        turns) is a race against ADS's own relayout passes, which can be
+        arbitrarily delayed -- proved unreliable in practice. A hard
+        ``minimumWidth == maximumWidth`` constraint is the only thing a
+        splitter must respect in *every* layout pass it computes, regardless
+        of what triggers that pass or when, so this locks the column there
+        instead. Locking permanently would also block genuine user resizing,
+        though, so the constraint is lifted for exactly the duration of a
+        real drag on the handle adjacent to it (mouse press to release,
+        caught via ``eventFilter``) and re-applied at whatever width the
+        user leaves it at -- preserving free resizing while remaining
+        immune to every other cause of unwanted relayout.
+        """
+        splitter = area.parentWidget()
+        if not isinstance(splitter, QSplitter):
+            return
+        # The leftmost column (MDA) has no handle to its left; every other
+        # column (e.g. the right/Groups & Presets column) has no handle to
+        # its right, since it's the last splitter child -- use whichever
+        # boundary actually exists.
+        idx = splitter.indexOf(area)
+        handle = splitter.handle(idx if idx > 0 else idx + 1)
+        if handle is None:
+            return
+        handle.installEventFilter(self)
+        self._width_locked_areas[handle] = area
+        self._lock_width(area)
+
+    def _lock_width(self, area: CDockAreaWidget) -> None:
+        width = area.width()
+        area.setMinimumWidth(width)
+        area.setMaximumWidth(width)
+
+    def _unlock_width(self, area: CDockAreaWidget) -> None:
+        area.setMinimumWidth(_DOCK_MIN_WIDTH)
+        area.setMaximumWidth(QWIDGETSIZE_MAX)
+
+    def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
+        """Unlock a locked column's width for the duration of a live handle drag."""
+        area = None if a0 is None else self._width_locked_areas.get(a0)
+        if a1 is not None and area is not None:
+            if a1.type() == QEvent.Type.MouseButtonPress:
+                self._unlock_width(area)
+            elif a1.type() == QEvent.Type.MouseButtonRelease:
+                self._lock_width(area)
+        return super().eventFilter(a0, a1)
+
     def _add_dock(
         self,
         name: str,
@@ -236,16 +319,9 @@ class AcquirePage(TabPage):
             )
         dock = self._add_dock(name, title, widget, DockWidgetArea.RightDockWidgetArea)
         self._right_dock_area = dock.dockAreaWidget()
-        # Cap the right column width.  setSplitterSizes expects sizes for all
-        # columns in the splitter; use the MDA area as the reference since it
-        # is the leftmost area of the main horizontal splitter.
-        if (mda_area := self._mda_dock.dockAreaWidget()) is not None:
-            total = self._dock_manager.width()
-            right = min(total // 4, _RIGHT_DOCK_MAX_WIDTH)
-            central = max(total - _MDA_DOCK_WIDTH - right, _DOCK_MIN_WIDTH)
-            self._dock_manager.setSplitterSizes(
-                mda_area, [_MDA_DOCK_WIDTH, central, right]
-            )
+        self._pin_dock_widths()
+        if self._right_dock_area is not None:
+            self._install_width_lock(self._right_dock_area)
         return dock
 
     def _add_panel_button(self, label: str, tooltip: str) -> QPushButton:
@@ -422,6 +498,21 @@ class AcquirePage(TabPage):
         # no signals (see ConfigurationsPage.save), so its channel-group and
         # ranged-property columns can't learn about those edits any other way.
         super().showEvent(a0)
+        if not self._mda_width_locked_at_real_size:
+            # AcquirePage is constructed eagerly in MainWindow.__init__, before
+            # the window has been shown/resized to its real on-screen geometry
+            # -- so the one-time initial pin (and the width lock installed
+            # right after it) may have captured too small a width. Re-run both
+            # now that this tab has real geometry, but only once: unlike the
+            # refreshes below, repeating this on every tab switch would wipe
+            # out any width the user had since dragged a locked column to.
+            self._mda_width_locked_at_real_size = True
+            locked_areas = list(self._width_locked_areas.values())
+            for area in locked_areas:
+                self._unlock_width(area)
+            self._pin_dock_widths()
+            for area in locked_areas:
+                self._lock_width(area)
         self._shutters.refresh()
         if self._presets is not None:
             self._presets.refresh()
