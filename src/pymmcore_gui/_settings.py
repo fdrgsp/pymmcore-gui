@@ -173,6 +173,32 @@ class WindowSettingsV1(BaseMMSettings):
         return values
 
 
+class ModernWindowSettingsV1(BaseMMSettings):
+    """Persisted state for the modern GUI (``_modern_gui._main_win.MainWindow``).
+
+    Kept separate from ``WindowSettingsV1``: the two GUIs use different ADS
+    dock ``objectName``s (e.g. ``docked_pymmcore_gui.mda_widget`` vs.
+    ``acquire_mda``), so sharing one blob would collide.
+    """
+
+    geometry: Base64Bytes | None = None
+    """Position and size of the main window. Restored with .restoreGeometry()"""
+    acquire_dock_state: Base64Bytes | None = None
+    """State of the Acquire page's dock manager. Restored with .restoreState()"""
+    acquire_panels: WidgetNames = Field(default_factory=set)
+    """Keys (see ``_modern_gui._panels.PanelKey``) of panels open on the Acquire page"""
+    acquire_hidden_panels: WidgetNames = Field(default_factory=set)
+    """Keys whose Acquire toolbar buttons the user hid from the customize menu.
+
+    The hidden set is stored (rather than the visible one) so a panel added to
+    the registry in a later release shows up for existing users by default.
+    """
+    theme: Literal["dark", "light"] = "dark"
+    """Active color theme."""
+    zoom: float | None = None
+    """Active zoom step (one of ``_modern_gui._theme.ZOOM_STEPS``)."""
+
+
 class SettingsV1(BaseMMSettings):
     """Global settings for the PyMMCore GUI."""
 
@@ -183,6 +209,9 @@ class SettingsV1(BaseMMSettings):
 
     version: Literal["1.0"] = "1.0"
     window: WindowSettingsV1 = Field(default_factory=WindowSettingsV1)
+    modern_window: ModernWindowSettingsV1 = Field(
+        default_factory=ModernWindowSettingsV1
+    )
 
     send_error_reports: bool | None = None
     """Whether to send error reports to the developers, None means undecided."""

@@ -11,6 +11,7 @@ directly gives full control over appearance without post-hoc patching.
 from __future__ import annotations
 
 from contextlib import suppress
+from functools import partial
 from typing import TYPE_CHECKING
 
 from pymmcore_plus import CMMCorePlus, DeviceType
@@ -18,11 +19,13 @@ from pymmcore_widgets import ShuttersWidget
 from superqt.iconify import QIconifyIcon
 from superqt.utils import create_worker
 
-from pymmcore_gui._array_viewer import ensure_visible_icon
-from pymmcore_gui._qt.QtCore import QEvent, QSize, Signal
+from pymmcore_gui._array_viewer import ensure_visible_icon, set_source_icon
+from pymmcore_gui._qt.QtCore import QEvent, QPoint, QSize, Signal
+from pymmcore_gui._qt.QtGui import QAction
 from pymmcore_gui._qt.QtWidgets import (
     QFrame,
     QHBoxLayout,
+    QMenu,
     QPushButton,
     QWidget,
 )
@@ -30,7 +33,11 @@ from pymmcore_gui._qt.QtWidgets import (
 from ._theme import qcolor, theme
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from pymmcore_gui._qt.QtWidgets import QLayout
+
+    from ._panels import PanelInfo
 
 
 def _icon_size() -> QSize:
@@ -260,3 +267,142 @@ class ShuttersBar(QWidget):
             widget.shutter_button.setProperty("variant", "subtle")
             ensure_visible_icon(widget.shutter_button)
             self._layout.addWidget(widget)
+
+
+class PanelButtonBar(QWidget):
+    """Icon-only toggle buttons for the registry panels (see ``_panels.py``).
+
+    Two independent levels of control:
+
+    * each button toggles whether its panel's dock is *open*;
+    * the trailing ``⋯`` menu (also reachable by right-clicking the toolbar
+      row that hosts this bar) toggles whether that button is *present at
+      all*, so users can pare the bar down to the tools they actually use.
+
+    A self-contained content strip: no background painting, no assumptions
+    about its parent. That's what makes it relocatable -- today it shares the
+    Acquire toolbar row (see ``AcquirePage._place_panel_bar``), but it could
+    just as easily be dropped onto a second row or into ``MainWindow`` as its
+    own ``QToolBar`` without changing anything here.
+    """
+
+    _MENU_ICON = "mdi:dots-horizontal"
+
+    panelVisibilityChanged = Signal(str, bool)
+    """Emitted with (key, visible) when the customize menu shows/hides a button."""
+
+    resetLayoutRequested = Signal()
+    """Emitted when the customize menu's "Reset Layout" entry is chosen."""
+
+    def __init__(
+        self, panels: Iterable[PanelInfo], parent: QWidget | None = None
+    ) -> None:
+        super().__init__(parent)
+        self._panels = list(panels)
+
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(theme().sp_xxs)
+
+        self._buttons: dict[str, QPushButton] = {}
+        for info in self._panels:
+            btn = QPushButton(self)
+            btn.setCheckable(True)
+            btn.setProperty("variant", "subtle")
+            btn.setToolTip(info.tooltip)
+            btn.setIconSize(_icon_size())
+            self._layout.addWidget(btn)
+            self._buttons[info.key] = btn
+
+        self._menu_btn = QPushButton(self)
+        self._menu_btn.setProperty("variant", "subtle")
+        self._menu_btn.setIconSize(_icon_size())
+        self._menu_btn.setToolTip("Choose which tool buttons to show")
+        self._menu_btn.clicked.connect(self._popup_at_menu_button)
+        self._layout.addWidget(self._menu_btn)
+
+        self._apply_icons()
+
+    # ── buttons ───────────────────────────────────────────────────
+
+    def button_for(self, key: str) -> QPushButton:
+        """Return the toggle button for the panel registered under *key*."""
+        return self._buttons[key]
+
+    def set_button_visible(self, key: str, visible: bool) -> None:
+        """Show or hide *key*'s button. Always-visible panels ignore hiding."""
+        info = self._info_for(key)
+        if info.always_visible and not visible:
+            return
+        self._buttons[key].setVisible(visible)
+
+    def hidden_keys(self) -> set[str]:
+        """Return the keys whose buttons are currently hidden.
+
+        The *hidden* set (rather than the visible one) is what gets persisted:
+        a panel added to the registry in a future release is then visible by
+        default for existing users, instead of silently missing because it
+        wasn't in their saved visible set.
+        """
+        return {
+            info.key
+            for info in self._panels
+            if not info.always_visible and self._buttons[info.key].isHidden()
+        }
+
+    def _info_for(self, key: str) -> PanelInfo:
+        return next(info for info in self._panels if info.key == key)
+
+    # ── customize menu ────────────────────────────────────────────
+
+    def build_menu(self) -> QMenu:
+        """Build the customize menu: one checkable entry per hideable panel.
+
+        Rebuilt per invocation so the check states can't drift out of sync
+        with the buttons; it's a handful of actions, so cheap.
+        """
+        menu = QMenu(self)
+        for info in self._panels:
+            if info.always_visible:
+                continue
+            action = QAction(info.title, menu)
+            action.setCheckable(True)
+            action.setChecked(not self._buttons[info.key].isHidden())
+            action.toggled.connect(partial(self.panelVisibilityChanged.emit, info.key))
+            menu.addAction(action)
+        menu.addSeparator()
+        reset = QAction("Reset Layout", menu)
+        reset.setToolTip("Restore the default panel arrangement")
+        reset.triggered.connect(self.resetLayoutRequested.emit)
+        menu.addAction(reset)
+        return menu
+
+    def popup_menu(self, global_pos: QPoint) -> None:
+        """Pop the customize menu at *global_pos* (screen coordinates)."""
+        self.build_menu().exec(global_pos)
+
+    def _popup_at_menu_button(self) -> None:
+        self.popup_menu(self._menu_btn.mapToGlobal(self._menu_btn.rect().bottomLeft()))
+
+    # ── theming ───────────────────────────────────────────────────
+
+    def _apply_icons(self) -> None:
+        # QIconifyIcon bakes its color in at construction, so the icon must
+        # be rebuilt (not just resized) whenever the theme changes.
+        color = qcolor(theme().text_primary).name()
+        for info in self._panels:
+            btn = self._buttons[info.key]
+            # set_source_icon (not setIcon) refreshes the stash that the
+            # app-wide theme-change sweep (ensure_visible_icon) re-derives
+            # from -- a bare setIcon would leave that sweep recoloring from
+            # the *previous* theme's icon. See the "Theme-aware icons" note
+            # in the panels-toolbar design doc.
+            set_source_icon(btn, QIconifyIcon(info.icon, color=color))
+            btn.setIconSize(_icon_size())
+        set_source_icon(self._menu_btn, QIconifyIcon(self._MENU_ICON, color=color))
+        self._menu_btn.setIconSize(_icon_size())
+
+    def changeEvent(self, a0: QEvent | None) -> None:
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
+            self._apply_icons()
+        super().changeEvent(a0)

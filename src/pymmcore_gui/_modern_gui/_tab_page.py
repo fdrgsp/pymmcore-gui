@@ -55,17 +55,21 @@ class TabPage(QWidget):
         self._h_split.setStretchFactor(0, 0)
         self._h_split.setStretchFactor(1, 1)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.addWidget(self.toolbar)
-        layout.addWidget(self._h_split)
+        self._page_layout = QVBoxLayout(self)
+        self._page_layout.setContentsMargins(0, 0, 0, 0)
+        self._page_layout.setSpacing(0)
+        self._page_layout.addWidget(self.toolbar)
+        self._page_layout.addWidget(self._h_split)
 
         self._seed_sizes()
 
     def add_content_widget(self, widget: QWidget) -> None:
         """Add a widget to the central content area."""
         self._content_layout.addWidget(widget)
+
+    def add_toolbar_row(self, widget: QWidget) -> None:
+        """Insert *widget* as a full-width row directly below ``toolbar``."""
+        self._page_layout.insertWidget(self._page_layout.indexOf(self._h_split), widget)
 
     def _seed_sizes(self) -> None:
         """Seed initial splitter sizes from the theme."""

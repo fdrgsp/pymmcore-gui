@@ -27,6 +27,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QToolBar,
     QWidget,
 )
+from pymmcore_gui._settings import Settings
 
 from ._acquire import AcquirePage
 from ._configurations import ConfigurationsPage
@@ -35,8 +36,10 @@ from ._theme import (
     qcolor,
     reset_zoom,
     set_theme,
+    set_zoom_step,
     theme,
     ui_font,
+    zoom_factor,
     zoom_in,
     zoom_out,
 )
@@ -176,7 +179,7 @@ class MainWindow(QMainWindow):
     def __init__(self, *, mmcore: CMMCorePlus | None = None) -> None:
         super().__init__()
 
-        set_theme(DARK_THEME)
+        self._apply_saved_appearance()
 
         self._mmc = mmcore or CMMCorePlus.instance()
         self.setObjectName("MicroManagerGUI")
@@ -196,11 +199,10 @@ class MainWindow(QMainWindow):
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._toolbar.addWidget(spacer)
 
-        self._theme_btn = QPushButton("☀")
+        self._theme_btn = QPushButton("☀" if self._is_dark else "🌙")
         self._theme_btn.setFixedSize(32, 32)
         self._theme_btn.setToolTip("Toggle light/dark theme")
         self._theme_btn.clicked.connect(self._toggle_theme)
-        self._is_dark = True
         self._toolbar.addWidget(self._theme_btn)
 
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._toolbar)
@@ -221,6 +223,8 @@ class MainWindow(QMainWindow):
             self._save_current_configuration
         )
 
+        self._acquire.layoutReset.connect(self._on_acquire_layout_reset)
+
         self._mode_tabs.current_changed.connect(self._stack.setCurrentIndex)
         self._stack.setCurrentIndex(0)
 
@@ -233,6 +237,66 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(mods | Qt.Key.Key_Plus), self, zoom_in)  # type: ignore
         QShortcut(QKeySequence(mods | Qt.Key.Key_Minus), self, zoom_out)  # type: ignore
         QShortcut(QKeySequence(mods | Qt.Key.Key_0), self, reset_zoom)  # type: ignore
+
+    def _apply_saved_appearance(self) -> None:
+        """Apply the saved theme/zoom before any widget exists, so nothing flashes.
+
+        ``_app.create_mmgui`` already calls ``set_theme(DARK_THEME)`` before
+        any window exists (installing ``MicroscopeStyle``, which the classic
+        GUI also depends on) -- that call stays. This one applies the user's
+        actual preference before the first widget is constructed and before
+        the window is ever shown (``show()`` now happens in
+        ``restore_state``), so there's no flash and no risk of this
+        unconditionally clobbering a restored light theme.
+        """
+        prefs = Settings.instance().modern_window
+        self._is_dark = prefs.theme != "light"
+        set_theme(DARK_THEME if self._is_dark else LIGHT_THEME)
+        if prefs.zoom is not None:
+            set_zoom_step(prefs.zoom)
+
+    def restore_state(self, *, show: bool = False) -> None:
+        """Restore window geometry and the Acquire dock layout, then optionally show.
+
+        Detected and called by ``_app.create_mmgui`` via ``hasattr`` --
+        adding this method means the app no longer calls ``show()`` directly,
+        so *this* method must, when ``show`` is True.
+        """
+        prefs = Settings.instance().modern_window
+        if geo := prefs.geometry:
+            self.restoreGeometry(geo)
+        # Buttons first: hiding one closes its panel, so applying this after
+        # restore_layout would undo part of the layout it just restored.
+        self._acquire.apply_hidden_panels(prefs.acquire_hidden_panels)
+        self._acquire.restore_layout(prefs.acquire_dock_state, prefs.acquire_panels)
+        if show:
+            self.show()
+
+    def _on_acquire_layout_reset(self) -> None:
+        """Drop the persisted Acquire layout so a crash can't resurrect it.
+
+        ``_save_state`` would write the freshly-reset arrangement on close
+        anyway; clearing now just means the reset also survives an abnormal
+        exit. Scoped to the layout keys only -- geometry, theme and zoom are
+        preferences, not layout.
+        """
+        settings = Settings.instance()
+        prefs = settings.modern_window
+        prefs.acquire_dock_state = None
+        prefs.acquire_panels = set()
+        prefs.acquire_hidden_panels = set()
+        settings.flush()
+
+    def _save_state(self) -> None:
+        """Persist geometry, the Acquire dock layout, theme, and zoom."""
+        settings = Settings.instance()
+        prefs = settings.modern_window
+        prefs.geometry = self.saveGeometry().data()
+        prefs.acquire_dock_state, prefs.acquire_panels = self._acquire.save_layout()
+        prefs.acquire_hidden_panels = self._acquire.hidden_panels()
+        prefs.theme = "dark" if self._is_dark else "light"
+        prefs.zoom = zoom_factor()
+        settings.flush(timeout=5000)
 
     def on_startup_configuration_loaded(self) -> None:
         """Land on Acquire after the application loads its initial config."""
@@ -272,6 +336,7 @@ class MainWindow(QMainWindow):
                 if a0 is not None:
                     a0.ignore()
                 return
+        self._save_state()
         super().closeEvent(a0)
 
     def _save_all(self) -> bool:

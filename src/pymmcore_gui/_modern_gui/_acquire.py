@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from contextlib import suppress
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from functools import partial
+from typing import TYPE_CHECKING, cast
 
 from pymmcore_plus import CMMCorePlus
-from pymmcore_widgets import PropertyBrowser
 
 from pymmcore_gui._array_viewer import (
     ensure_visible_icon,
@@ -14,7 +15,15 @@ from pymmcore_gui._array_viewer import (
     unstyle_widgets,
 )
 from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget, DockWidgetArea
-from pymmcore_gui._qt.QtCore import QEvent, QObject, QTimer
+from pymmcore_gui._qt.QtCore import (
+    QEvent,
+    QObject,
+    QPoint,
+    QSignalBlocker,
+    Qt,
+    QTimer,
+    Signal,
+)
 from pymmcore_gui._qt.QtGui import QFont
 from pymmcore_gui._qt.QtWidgets import (
     QWIDGETSIZE_MAX,
@@ -24,28 +33,26 @@ from pymmcore_gui._qt.QtWidgets import (
     QSplitter,
     QWidget,
 )
-from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
 
-from ._acquire_presets import AcquisitionPresetSelector
 from ._acquire_toolbar import (
     LiveButton,
+    PanelButtonBar,
     ShuttersBar,
     SnapButton,
     toolbar_separator,
 )
 from ._acquire_viewers import AcquireViewersManager
+from ._panels import PANELS, PanelInfo, PanelKey
 from ._tab_page import TabPage
 from ._theme import qcolor, theme
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from pymmcore_gui._qt.QtAds import CDockAreaWidget
     from pymmcore_gui._qt.QtGui import QShowEvent
-    from pymmcore_gui.widgets._mm_console import MMConsole
+    from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
 
-_MDA_LABEL = "MDA"
-_PRESETS_LABEL = "Groups and Presets"
-_PROPS_LABEL = "Properties"
-_CONSOLE_LABEL = "Console"
 _DOCK_MIN_WIDTH = 0
 _MDA_DOCK_WIDTH = 700
 _RIGHT_DOCK_MAX_WIDTH = 500
@@ -84,6 +91,15 @@ def _configure_ads() -> None:
     Automated tests therefore stick to what doesn't empty an area (open/close
     toggling, tabbing a dock into an existing one); actual rearranging is a
     manual smoke-test item (see the PR description).
+
+    A second, related harness-only quirk: running *several* of the
+    ``restore_layout`` tests together via a partial ``-k`` selection can
+    segfault in pytest-qt's between-test widget teardown (repainting a
+    half-destroyed widget). It is not a ``restoreState`` bug -- 8 full
+    save/restore cycles over 16 live ``AcquirePage``s in one process are
+    fine, and the full test files and the full suite both pass repeatedly.
+    Only contrived subsets trip it, so run whole files rather than narrow
+    ``-k`` filters when working on this area.
     """
     global _ads_configured
     if _ads_configured:
@@ -100,16 +116,33 @@ def _configure_ads() -> None:
     )
 
 
+@dataclass
+class _Panel:
+    """Runtime state for one registry panel.
+
+    Holds its toggle button, and -- once opened -- its widget and dock.
+    """
+
+    info: PanelInfo
+    button: QPushButton
+    widget: QWidget | None = None
+    dock: CDockWidget | None = None
+
+
 class AcquirePage(TabPage):
     """Acquisition controls with a dockable MDA/tools layout and image viewers.
 
     Every panel below the toolbar -- MDA, Groups and Presets, the Property
-    Browser, and the console -- is a QtAds dock widget, so the user can
-    rearrange them, pin any of them to a side bar, or move them to the bottom.
-    Only ``toolbar`` is inherited from ``TabPage``; the dock manager fills the
-    whole content area, replacing the fixed left/right sidebar split the other
-    pages still use.
+    Browser, the console, and so on -- is a QtAds dock widget built from the
+    registry in ``_panels.py``, so the user can rearrange them, pin any of
+    them to a side bar, or move them to the bottom. Only ``toolbar`` is
+    inherited from ``TabPage``; the dock manager fills the whole content
+    area, replacing the fixed left/right sidebar split the other pages
+    still use.
     """
+
+    layoutReset = Signal()
+    """Emitted after :meth:`reset_layout` restores the default arrangement."""
 
     def __init__(
         self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
@@ -147,63 +180,289 @@ class AcquirePage(TabPage):
             self._dock_manager, self._central_dock_area, self._core, parent=self
         )
 
-        # ── eager docks: MDA is shown by default ─────────────────────────
-        self._mda = MemoryMDAWidget(mmcore=self._core)
-        self._mda_dock = self._add_dock(
-            "acquire_mda", _MDA_LABEL, self._mda, DockWidgetArea.LeftDockWidgetArea
-        )
-
-        # ── lazy docks: built on first open ───────────────────────────────
-        self._presets: AcquisitionPresetSelector | None = None
-        self._presets_dock: CDockWidget | None = None
-        self._property_browser: PropertyBrowser | None = None
-        self._props_dock: CDockWidget | None = None
-        self._console: MMConsole | None = None
-        self._console_dock: CDockWidget | None = None
         self._right_dock_area: CDockAreaWidget | None = None
         self._width_locked_areas: dict[QObject, CDockAreaWidget] = {}
         self._mda_width_locked_at_real_size = False
+        self._layout_restored = False
 
-        self._pin_dock_widths()
-        if (mda_area := self._mda_dock.dockAreaWidget()) is not None:
-            self._install_width_lock(mda_area)
-
-        # toolbar: snap|live ‖ shutters … [MDA][Groups and Presets][Properties][Console]
+        # toolbar: snap|live ‖ shutters … [panel buttons]
         self._shutters = ShuttersBar(self._core)
         self._snap_btn = SnapButton(mmcore=self._core)
-        self._snap_btn.snapRequested.connect(self._mda.apply_active_channel_for_capture)
-        self._snap_btn.snapRequested.connect(self._viewers.ensure_preview)
         self.toolbar.add_widget(self._snap_btn)
         self._live_btn = LiveButton(mmcore=self._core)
+        self.toolbar.add_widget(self._live_btn)
+        self.toolbar.add_widget(toolbar_separator())
+        self.toolbar.add_widget(self._shutters)
+
+        self._panel_bar = PanelButtonBar(PANELS, self)
+        self._place_panel_bar()
+
+        self._panels: dict[str, _Panel] = {
+            info.key: _Panel(info=info, button=self._panel_bar.button_for(info.key))
+            for info in PANELS
+        }
+        for info in PANELS:
+            self._panel_bar.button_for(info.key).toggled.connect(
+                partial(self._toggle_panel, info.key)
+            )
+        self._panel_bar.panelVisibilityChanged.connect(self._set_panel_visible)
+        self._panel_bar.resetLayoutRequested.connect(self.reset_layout)
+
+        # Default-open panels (MDA) build now, before any width pinning.
+        for info in PANELS:
+            if info.default_open:
+                self._panel_bar.button_for(info.key).setChecked(True)
+
+        self._mda = cast("MemoryMDAWidget", self.panel_widget(PanelKey.MDA))
+        self._mda_dock = cast("CDockWidget", self.panel_dock(PanelKey.MDA))
+        self._snap_btn.snapRequested.connect(self._mda.apply_active_channel_for_capture)
+        self._snap_btn.snapRequested.connect(self._viewers.ensure_preview)
         self._live_btn.liveStartedRequested.connect(
             self._mda.apply_active_channel_for_capture
         )
         self._live_btn.liveStartedRequested.connect(self._viewers.ensure_preview)
-        self.toolbar.add_widget(self._live_btn)
-        self.toolbar.add_widget(toolbar_separator())
-        self.toolbar.add_widget(self._shutters)
-        self.toolbar.add_stretch()
 
-        self._mda_btn = self._add_panel_button(_MDA_LABEL, "Show or hide the MDA panel")
-        self._mda_btn.setChecked(True)
-        self._mda_btn.toggled.connect(self._mda_dock.toggleView)
-        self._sync_button(self._mda_btn, self._mda_dock)
-
-        self._presets_btn = self._add_panel_button(
-            _PRESETS_LABEL, "Show or hide the group/preset selection panel"
-        )
-        self._presets_btn.toggled.connect(self._toggle_presets)
-
-        self._props_btn = self._add_panel_button(
-            _PROPS_LABEL, "Open the device property browser panel"
-        )
-        self._props_btn.toggled.connect(self._toggle_properties)
-
-        self._console_btn = self._add_panel_button(
-            _CONSOLE_LABEL, "Open an IPython console panel"
-        )
-        self._console_btn.toggled.connect(self._toggle_console)
+        self._pin_dock_widths()
+        self._lock_default_areas()
         self._refresh_dock_icons()
+
+    # ------------------------------------------------------------------ panels
+
+    def _place_panel_bar(self) -> None:
+        """Host the panel bar. This is the single seam for relocating it.
+
+        Today it shares the acquire toolbar row, right of snap/live/shutters.
+        To give it its own row instead, swap the body for::
+
+            row = TabToolBar()
+            row.add_widget(self._panel_bar)
+            row.add_stretch()
+            self.add_toolbar_row(row)
+
+        Moving it into ``MainWindow`` as a draggable ``QToolBar`` is the same
+        shape: the bar itself needs no changes, only a different host.
+        """
+        self.toolbar.add_stretch()
+        self.toolbar.add_widget(toolbar_separator())
+        self.toolbar.add_widget(self._panel_bar)
+        # Right-clicking anywhere on the host row opens the same customize
+        # menu as the bar's own ⋯ button -- the Qt convention for toolbars.
+        self.toolbar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.toolbar.customContextMenuRequested.connect(self._popup_panel_menu)
+
+    def _popup_panel_menu(self, pos: QPoint) -> None:
+        self._panel_bar.popup_menu(self.toolbar.mapToGlobal(pos))
+
+    def panel_button(self, key: str) -> QPushButton:
+        """Return the toolbar toggle button for the panel registered under *key*."""
+        return self._panels[key].button
+
+    def panel_widget(self, key: str) -> QWidget | None:
+        """Return the panel's widget, or None if it hasn't been created yet."""
+        return self._panels[key].widget
+
+    def panel_dock(self, key: str) -> CDockWidget | None:
+        """Return the panel's dock, or None if it hasn't been created yet."""
+        return self._panels[key].dock
+
+    def open_panels(self) -> set[str]:
+        """Return the keys of panels that are currently open."""
+        return {
+            key
+            for key, panel in self._panels.items()
+            if panel.dock is not None and not panel.dock.isClosed()
+        }
+
+    def hidden_panels(self) -> set[str]:
+        """Return the keys whose toolbar buttons the user has hidden."""
+        return self._panel_bar.hidden_keys()
+
+    def apply_hidden_panels(self, keys: Iterable[str]) -> None:
+        """Hide the toolbar buttons for *keys*, showing all the others.
+
+        The restore-time counterpart to :meth:`hidden_panels`. Unlike the
+        interactive menu path (:meth:`_set_panel_visible`), showing a button
+        here must *not* open its panel: which panels are open is
+        ``restore_layout``'s business, and forcing them open would both fight
+        that and defeat the lazy-construction guarantee -- every registered
+        panel would be built on every launch.
+        """
+        hidden = {k for k in keys if k in self._panels}
+        for key in self._panels:
+            visible = key not in hidden
+            self._panel_bar.set_button_visible(key, visible)
+            if not visible:
+                self._close_panel(key)
+
+    def _set_panel_visible(self, key: str, visible: bool) -> None:
+        """Show or hide *key*'s toolbar button, taking its dock along with it.
+
+        The customize-menu path. Hiding a button would otherwise strand its
+        panel on screen with no way to close it, so hiding also closes the
+        dock; symmetrically, re-adding a button opens its panel, which is the
+        whole point of picking it from the menu. The widget itself is kept
+        alive either way, matching what plain close/reopen already does.
+        """
+        self._panel_bar.set_button_visible(key, visible)
+        if visible:
+            self.panel_button(key).setChecked(True)
+        else:
+            self._close_panel(key)
+
+    def _close_panel(self, key: str) -> None:
+        """Close *key*'s panel if it's open, without ever building it."""
+        button = self.panel_button(key)
+        if button.isChecked():
+            button.setChecked(False)
+
+    def _toggle_panel(self, key: str, checked: bool) -> None:
+        panel = self._panels[key]
+        if panel.dock is None:
+            if not checked:
+                return
+            self._create_panel(panel)
+        dock = panel.dock
+        assert dock is not None
+        dock.toggleView(checked)
+        if checked:
+            dock.setAsCurrentTab()
+            if panel.info.refresh is not None:
+                QTimer.singleShot(0, partial(self._refresh_panel, key))
+
+    def _create_panel(self, panel: _Panel) -> None:
+        # Some upstream factories return a QDialog (PropertyBrowser) or set
+        # always-on-top window flags (create_exception_log) meant for
+        # standalone use. Nothing is done about that here on purpose:
+        # ``_add_dock``'s ``dock.setWidget()`` reparents the widget, and
+        # QWidget.setParent() clears window flags -- which is exactly how
+        # docking a QDialog has always worked here. Pre-emptively calling
+        # setWindowFlags() would be redundant *and* harmful: Qt documents
+        # that it hides the widget, requiring an explicit show() afterward.
+        widget = panel.info.create(self, self._core)
+        if panel.info.unstyle:
+            unstyle_widgets(widget)
+        panel.widget = widget
+        name, title = panel.info.dock_name, panel.info.title
+        if panel.info.area == DockWidgetArea.LeftDockWidgetArea:
+            panel.dock = self._add_dock(name, title, widget, panel.info.area)
+        else:
+            panel.dock = self._add_side_dock(name, title, widget)
+        # Connects viewToggled (not toggleViewAction().toggled): pinning a
+        # dock to an auto-hide side bar transiently unchecks and re-checks
+        # that action without ever emitting viewToggled, so binding the
+        # button to the action would close the dock the moment the user
+        # pinned it. Both directions are idempotent (setChecked and
+        # toggleView no-op when already in the target state), so this never
+        # loops.
+        panel.dock.viewToggled.connect(panel.button.setChecked)
+
+    def _refresh_panel(self, key: str) -> None:
+        panel = self._panels[key]
+        if panel.widget is not None and panel.info.refresh is not None:
+            panel.info.refresh(panel.widget)
+
+    # ------------------------------------------------------------------ layout
+
+    def save_layout(self) -> tuple[bytes | None, set[str]]:
+        """Return ``(dock_manager_state, open_panel_keys)`` for persistence."""
+        open_keys = self.open_panels()
+        if not open_keys:
+            return None, set()
+        return self._dock_manager.saveState().data(), open_keys
+
+    def restore_layout(self, state: bytes | None, keys: Iterable[str]) -> bool:
+        """Recreate the given panels and restore a previously saved dock layout.
+
+        Returns True if the layout was restored, False if there was nothing
+        to restore or ADS rejected the saved state -- either way, the page
+        is left in a working (default) layout.
+        """
+        wanted = {k for k in keys if k in self._panels}
+        if not state or not wanted:
+            return False
+        for key in wanted:
+            panel = self._panels[key]
+            if panel.dock is None:
+                self._create_panel(panel)
+        self._release_width_locks()
+        if not self._dock_manager.restoreState(state):
+            self._relock_widths(pin=False)
+            return False
+        for panel in self._panels.values():
+            if panel.dock is not None:
+                with QSignalBlocker(panel.button):
+                    panel.button.setChecked(not panel.dock.isClosed())
+        self._rediscover_areas()
+        self._layout_restored = True
+        # Deliberately *not* re-locking widths here: restore_layout runs
+        # before the window has ever been shown (``_app`` defers it to a
+        # singleShot that itself calls ``show()``), so every dock area is
+        # still 0px wide. ``showEvent`` installs the locks once there is a
+        # real geometry to lock to.
+        return True
+
+    def reset_layout(self) -> None:
+        """Restore the out-of-the-box Acquire arrangement.
+
+        Un-hides every toolbar button, un-pins anything the user sent to an
+        auto-hide side bar, closes every panel except the default-open ones,
+        puts the MDA column back on the left, and re-applies the default
+        column widths. Panel *widgets* are kept alive, exactly as a normal
+        close does -- this resets the arrangement, not the session.
+
+        Only the layout is affected: window geometry, theme and zoom are
+        deliberately left alone, since losing those to a "reset layout"
+        action would be a surprise.
+        """
+        for info in PANELS:
+            panel = self._panels[info.key]
+            self._panel_bar.set_button_visible(info.key, True)
+            if (dock := panel.dock) is not None:
+                with suppress(RuntimeError):
+                    if dock.isAutoHide():
+                        dock.setAutoHide(False)
+            panel.button.setChecked(info.default_open)
+
+        self._release_width_locks()
+        if not self._mda_is_home():
+            # Only move MDA when the user actually dragged it elsewhere.
+            # Re-docking it unconditionally would empty and destroy its
+            # current area even in the common case where it never moved --
+            # churn for nothing, and the one ADS operation documented in
+            # ``_configure_ads`` as fatal under the offscreen test platform.
+            self._dock_manager.addDockWidget(
+                DockWidgetArea.LeftDockWidgetArea, self._mda_dock
+            )
+        self._right_dock_area = None
+        # A reset supersedes whatever was restored, so the canonical widths
+        # apply again (see showEvent's one-shot pin).
+        self._layout_restored = False
+        self._pin_dock_widths()
+        self._lock_default_areas()
+        self.layoutReset.emit()
+
+    def _mda_is_home(self) -> bool:
+        """True if the MDA dock still occupies the leftmost column."""
+        if self._mda_dock.isAutoHide():
+            return False
+        area = self._mda_dock.dockAreaWidget()
+        if area is None or area is self._central_dock_area:
+            return False
+        splitter = area.parentWidget()
+        return isinstance(splitter, QSplitter) and splitter.indexOf(area) == 0
+
+    def _rediscover_areas(self) -> None:
+        """Re-point cached area references after ``restoreState`` rebuilt the tree."""
+        central = self._dock_manager.centralWidget()
+        if central is not None and (area := central.dockAreaWidget()) is not None:
+            self._central_dock_area = area
+            self._viewers.set_central_dock_area(area)
+
+        # Drop the stale cache and re-derive from the rebuilt tree, so the
+        # next panel opened tabs into the restored right column instead of
+        # spawning a second one beside it.
+        self._right_dock_area = None
+        self._resolve_right_dock_area()
 
     # ------------------------------------------------------------------ dock helpers
 
@@ -217,16 +476,33 @@ class AcquirePage(TabPage):
         mda_area = self._mda_dock.dockAreaWidget()
         if mda_area is None:
             return
+        # ``setSplitterSizes`` needs exactly one entry per *current* child of
+        # that splitter. Deriving the count from the live splitter rather than
+        # from ``_right_dock_area`` keeps this correct in the in-between
+        # states -- notably right after ``reset_layout`` closes the side
+        # panels, when ADS has not yet collapsed the emptied right column, so
+        # the tree still has three children while the cache says two.
+        sizes = list(self._dock_manager.splitterSizes(mda_area))
+        if len(sizes) < 2:
+            return
         total = self._dock_manager.width()
+        new = [0] * len(sizes)
+        new[0] = _MDA_DOCK_WIDTH
+        middle = range(1, len(sizes))
+        if len(sizes) > 2:
+            new[-1] = min(total // 4, _RIGHT_DOCK_MAX_WIDTH)
+            middle = range(1, len(sizes) - 1)
+        remaining = max(total - sum(new), _DOCK_MIN_WIDTH)
+        for idx in middle:
+            new[idx] = remaining // len(middle)
+        self._dock_manager.setSplitterSizes(mda_area, new)
+
+    def _lock_default_areas(self) -> None:
+        """(Re)install width locks on the MDA area and the right column, if any."""
+        if (mda_area := self._mda_dock.dockAreaWidget()) is not None:
+            self._install_width_lock(mda_area)
         if self._right_dock_area is not None:
-            right = min(total // 4, _RIGHT_DOCK_MAX_WIDTH)
-            central = max(total - _MDA_DOCK_WIDTH - right, _DOCK_MIN_WIDTH)
-            self._dock_manager.setSplitterSizes(
-                mda_area, [_MDA_DOCK_WIDTH, central, right]
-            )
-        else:
-            central = max(total - _MDA_DOCK_WIDTH, _DOCK_MIN_WIDTH)
-            self._dock_manager.setSplitterSizes(mda_area, [_MDA_DOCK_WIDTH, central])
+            self._install_width_lock(self._right_dock_area)
 
     def _install_width_lock(self, area: CDockAreaWidget) -> None:
         """Freeze *area*'s width except while it's actively being dragged.
@@ -265,8 +541,50 @@ class AcquirePage(TabPage):
         self._width_locked_areas[handle] = area
         self._lock_width(area)
 
+    def _release_width_locks(self) -> None:
+        """Drop every lock before the objects holding them are destroyed.
+
+        ``CDockManager.restoreState`` tears down and rebuilds the entire
+        splitter/dock-area tree, so both the ``QSplitterHandle`` keys and the
+        ``CDockAreaWidget`` values in ``_width_locked_areas`` become dangling
+        C++ wrappers afterward -- touching one then raises ``RuntimeError``.
+        Unhook the event filters and lift the constraints first, so nothing
+        stale survives the rebuild.
+        """
+        for handle, area in self._width_locked_areas.items():
+            handle.removeEventFilter(self)
+            self._unlock_width(area)
+        self._width_locked_areas.clear()
+
+    def _relock_widths(self, *, pin: bool) -> None:
+        """Lift every width lock, optionally re-pin, then lock again.
+
+        Used by the one-shot ``showEvent`` refresh: the constraints have to
+        come off before ``_pin_dock_widths`` (when *pin* is true) can resize
+        anything, and go back on at the resulting width. Rebuilding the locks
+        from scratch rather than reusing the old set also covers the restore
+        path, where ``restore_layout`` released them and ADS then built an
+        entirely new set of dock areas.
+
+        *pin* must be False after a layout restore -- the restored splitter
+        sizes are the widths the user left, and ``_pin_dock_widths`` assumes
+        the canonical 2-/3-column arrangement, which an arbitrary restored
+        layout need not have.
+        """
+        self._release_width_locks()
+        if pin:
+            self._pin_dock_widths()
+        self._lock_default_areas()
+
     def _lock_width(self, area: CDockAreaWidget) -> None:
         width = area.width()
+        if width <= 0:
+            # Nothing meaningful to lock to yet -- the page hasn't been laid
+            # out at its real geometry. Freezing min == max == 0 here would
+            # pin the column shut permanently (it survives every later
+            # layout pass, which is the whole point of the lock), so leave it
+            # unconstrained and let showEvent lock it once it has a width.
+            return
         area.setMinimumWidth(width)
         area.setMaximumWidth(width)
 
@@ -303,19 +621,49 @@ class AcquirePage(TabPage):
         self._dock_manager.addDockWidget(area, dock, into)
         return dock
 
-    def _add_side_dock(self, name: str, title: str, widget: QWidget) -> CDockWidget:
-        """Add a dock to the right area, tabbing into it if it already exists.
+    def _resolve_right_dock_area(self) -> CDockAreaWidget | None:
+        """Return the live right-column area, re-deriving it if the cache is stale.
 
-        The first call creates the right area and caps its initial width at
-        ``_RIGHT_DOCK_MAX_WIDTH``; subsequent calls tab into that same area.
+        ADS destroys a dock area once its last dock widget leaves it, and
+        ``restoreState`` rebuilds the whole tree -- either way the cached
+        reference can end up wrapping a deleted C++ object, and docking *into*
+        that would crash rather than tab. Re-derive from whichever side panel
+        is currently open before concluding there is no right column yet.
         """
-        if self._right_dock_area is not None:
+        area = self._right_dock_area
+        if area is not None:
+            with suppress(RuntimeError):
+                if area.dockWidgetsCount() > 0:
+                    return area
+        self._right_dock_area = None
+        for key, panel in self._panels.items():
+            if key == PanelKey.MDA or panel.dock is None:
+                continue
+            with suppress(RuntimeError):
+                if panel.dock.isClosed() or panel.dock.isAutoHide():
+                    continue
+                candidate = panel.dock.dockAreaWidget()
+                if candidate is not None and candidate is not self._central_dock_area:
+                    self._right_dock_area = candidate
+                    return candidate
+        return None
+
+    def _add_side_dock(self, name: str, title: str, widget: QWidget) -> CDockWidget:
+        """Add a dock to the right column, tabbing into it if one already exists.
+
+        Every panel that isn't explicitly placed elsewhere lands here, so a
+        widget being opened for the first time always appears in the right
+        sidebar -- as a new column if it's the only one there, tabbed
+        alongside its neighbours otherwise. The first call caps the column's
+        initial width at ``_RIGHT_DOCK_MAX_WIDTH``.
+        """
+        if (right_area := self._resolve_right_dock_area()) is not None:
             return self._add_dock(
                 name,
                 title,
                 widget,
                 DockWidgetArea.CenterDockWidgetArea,
-                self._right_dock_area,
+                right_area,
             )
         dock = self._add_dock(name, title, widget, DockWidgetArea.RightDockWidgetArea)
         self._right_dock_area = dock.dockAreaWidget()
@@ -323,28 +671,6 @@ class AcquirePage(TabPage):
         if self._right_dock_area is not None:
             self._install_width_lock(self._right_dock_area)
         return dock
-
-    def _add_panel_button(self, label: str, tooltip: str) -> QPushButton:
-        """A checkable toolbar toggle for a dock, styled like the other actions."""
-        btn = QPushButton(label)
-        btn.setProperty("variant", "subtle")
-        btn.setCheckable(True)
-        btn.setToolTip(tooltip)
-        self.toolbar.add_widget(btn)
-        return btn
-
-    def _sync_button(self, btn: QPushButton, dock: CDockWidget) -> None:
-        """Keep *btn* checked in sync with whether *dock* is open.
-
-        Connects ``viewToggled`` rather than ``dock.toggleViewAction().toggled``:
-        pinning a dock to an auto-hide side bar transiently unchecks and
-        re-checks that action without ever emitting ``viewToggled``, so
-        binding the button to the action would close the dock the moment the
-        user pinned it. Both directions are idempotent (``setChecked`` and
-        ``toggleView`` no-op when already in the target state), so this never
-        loops.
-        """
-        dock.viewToggled.connect(btn.setChecked)
 
     # ------------------------------------------------------------------ theming
 
@@ -440,54 +766,6 @@ class AcquirePage(TabPage):
                 self._refresh_dock_icons()
                 self._refresh_dock_fonts()
 
-    def _toggle_presets(self, checked: bool) -> None:
-        dock = self._presets_dock
-        if dock is None:
-            if not checked:
-                return
-            presets = self._presets = AcquisitionPresetSelector(mmcore=self._core)
-            dock = self._presets_dock = self._add_side_dock(
-                "acquire_presets", _PRESETS_LABEL, presets
-            )
-            self._sync_button(self._presets_btn, dock)
-        dock.toggleView(checked)
-        if checked:
-            dock.setAsCurrentTab()
-
-    def _toggle_properties(self, checked: bool) -> None:
-        dock = self._props_dock
-        if dock is None:
-            if not checked:
-                return
-            # PropertyBrowser is a QDialog upstream; docking reparents it as a
-            # regular embedded page.
-            browser = self._property_browser = PropertyBrowser(mmcore=self._core)
-            unstyle_widgets(browser)
-            dock = self._props_dock = self._add_side_dock(
-                "acquire_properties", _PROPS_LABEL, browser
-            )
-            self._sync_button(self._props_btn, dock)
-        dock.toggleView(checked)
-        if checked:
-            dock.setAsCurrentTab()
-            QTimer.singleShot(0, self._refresh_property_browser)
-
-    def _toggle_console(self, checked: bool) -> None:
-        dock = self._console_dock
-        if dock is None:
-            if not checked:
-                return
-            from pymmcore_gui.widgets._mm_console import MMConsole
-
-            console = self._console = MMConsole(mmcore=self._core)
-            dock = self._console_dock = self._add_side_dock(
-                "acquire_console", _CONSOLE_LABEL, console
-            )
-            self._sync_button(self._console_btn, dock)
-        dock.toggleView(checked)
-        if checked:
-            dock.setAsCurrentTab()
-
     def showEvent(self, a0: QShowEvent | None) -> None:
         # Devices added on the Hardware tab load into the core but don't fire
         # systemConfigurationLoaded, so the toolbar bars (and property table)
@@ -505,30 +783,25 @@ class AcquirePage(TabPage):
             # right after it) may have captured too small a width. Re-run both
             # now that this tab has real geometry, but only once: unlike the
             # refreshes below, repeating this on every tab switch would wipe
-            # out any width the user had since dragged a locked column to.
+            # out any width the user had since dragged a locked column to (or,
+            # after a layout restore, the width the user left it at last
+            # session -- hence pin=False on that path).
             self._mda_width_locked_at_real_size = True
-            locked_areas = list(self._width_locked_areas.values())
-            for area in locked_areas:
-                self._unlock_width(area)
-            self._pin_dock_widths()
-            for area in locked_areas:
-                self._lock_width(area)
+            if self._layout_restored:
+                # A restored layout has no widths to pin, so there is nothing
+                # to force the areas to their final size synchronously -- ADS
+                # only applies the restored splitter sizes on the layout pass
+                # that follows this event. Locking here would freeze the
+                # still-unresized (0px) columns, so wait one turn.
+                QTimer.singleShot(0, partial(self._relock_widths, pin=False))
+            else:
+                self._relock_widths(pin=True)
         self._shutters.refresh()
-        if self._presets is not None:
-            self._presets.refresh()
-        self._mda.refresh_channel_table()
-        if (dock := self._props_dock) is not None and not dock.isClosed():
-            QTimer.singleShot(0, self._refresh_property_browser)
-
-    def _refresh_property_browser(self) -> None:
-        # PropertyBrowser exposes no public refresh; rebuild its table directly
-        # (guarded, in case the internals change). The widget itself already
-        # handles systemConfigurationLoaded.
-        with suppress(RuntimeError):
-            browser = self._property_browser
-            if browser is None:
-                return
-            fn = getattr(browser._prop_table, "_rebuild_table", None)
-            if callable(fn):
-                with suppress(Exception):
-                    fn()
+        for key, panel in self._panels.items():
+            if (
+                panel.widget is not None
+                and panel.dock is not None
+                and not panel.dock.isClosed()
+                and panel.info.refresh is not None
+            ):
+                QTimer.singleShot(0, partial(self._refresh_panel, key))

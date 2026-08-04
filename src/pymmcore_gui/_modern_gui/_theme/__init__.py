@@ -57,8 +57,10 @@ __all__ = [
     "set_style",
     "set_theme",
     "set_zoom",
+    "set_zoom_step",
     "theme",
     "ui_font",
+    "zoom_factor",
     "zoom_in",
     "zoom_out",
 ]
@@ -189,7 +191,25 @@ def set_zoom(factor: float) -> None:
         if layout := win.layout():
             layout.activate()
 
-    # TODO: persist zoom to QSettings
+    # zoom is persisted by MainWindow._save_state(), not here -- this is
+    # called on every set_theme()/set_style(), which is the wrong hook.
+
+
+def zoom_factor() -> float:
+    """Return the currently active zoom step."""
+    return ZOOM_STEPS[_zoom_index]
+
+
+def set_zoom_step(factor: float) -> None:
+    """Snap to the nearest entry in ``ZOOM_STEPS`` and apply it.
+
+    Unlike :func:`set_zoom`, this also moves the module's step index, so a
+    later :func:`zoom_in`/:func:`zoom_out` continues from this level instead
+    of from the default.
+    """
+    global _zoom_index
+    _zoom_index = min(range(len(ZOOM_STEPS)), key=lambda i: abs(ZOOM_STEPS[i] - factor))
+    set_zoom(ZOOM_STEPS[_zoom_index])
 
 
 def zoom_in() -> None:

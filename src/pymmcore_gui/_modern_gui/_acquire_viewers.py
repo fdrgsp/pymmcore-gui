@@ -109,6 +109,16 @@ class AcquireViewersManager(QObject):
         events.sequenceFinished.connect(self._sequence_finished_callback)
         self.destroyed.connect(self._disconnect)
 
+    def set_central_dock_area(self, area: CDockAreaWidget) -> None:
+        """Re-point at the central area after a layout restore rebuilt it.
+
+        ``CDockManager.restoreState()`` tears down and rebuilds the entire
+        dock-area tree, so the area captured at construction time becomes a
+        dangling wrapper around a destroyed C++ object -- without this, the
+        first viewer opened after a restore would tab into that deleted area.
+        """
+        self._central_dock_area = area
+
     def _new_dock(self, title: str) -> CDockWidget:
         """Create a dock widget for a viewer/preview, tabbed into the central area."""
         dw = CDockWidget(self._dock_manager, title, self._parent_widget)

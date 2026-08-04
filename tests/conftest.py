@@ -82,9 +82,13 @@ def _init_gui_theme() -> None:
     from pymmcore_gui._qt.QtWidgets import QApplication
 
     if QApplication.instance() is not None:
-        from pymmcore_gui._modern_gui._theme import DARK_THEME, set_theme
+        from pymmcore_gui._modern_gui._theme import DARK_THEME, reset_zoom, set_theme
 
         set_theme(DARK_THEME)
+        # set_theme() re-applies the *current* zoom step, it doesn't reset it --
+        # so a test that calls set_zoom()/zoom_in() etc. would otherwise leak
+        # its zoom level into whichever test runs next.
+        reset_zoom()
 
 
 @pytest.fixture()

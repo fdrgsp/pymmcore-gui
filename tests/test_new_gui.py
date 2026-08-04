@@ -19,9 +19,11 @@ import pymmcore_gui._modern_gui._acquire_viewers as acquire_viewers_module
 from pymmcore_gui._app import LoadConfigDialog, create_mmgui
 from pymmcore_gui._array_viewer import _icon_avg_rgb
 from pymmcore_gui._modern_gui._acquire import _MDA_DOCK_WIDTH, AcquirePage
+from pymmcore_gui._modern_gui._acquire_presets import AcquisitionPresetSelector
 from pymmcore_gui._modern_gui._configurations import ConfigurationsPage
 from pymmcore_gui._modern_gui._hardware import HardwareSetupPage
 from pymmcore_gui._modern_gui._main_win import MainWindow
+from pymmcore_gui._modern_gui._panels import PANELS, PanelKey
 from pymmcore_gui._modern_gui._theme import (
     UI_FONT_SIZE_PT,
     UI_FONT_WEIGHT,
@@ -42,6 +44,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QLabel,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSplitter,
@@ -195,19 +198,19 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
 
     assert page._mda_dock.widget() is page._mda
     assert not page._mda_dock.isClosed()
-    assert page._mda_btn.isChecked()
+    assert page.panel_button(PanelKey.MDA).isChecked()
     assert page._mda.prepare_mda() == "memory"
 
     # Secondary panels are lazy: no widget or dock before first open.
-    assert page._presets is None
-    assert page._presets_dock is None
-    assert not page._presets_btn.isChecked()
-    assert page._property_browser is None
-    assert page._props_dock is None
-    assert not page._props_btn.isChecked()
-    assert page._console is None
-    assert page._console_dock is None
-    assert not page._console_btn.isChecked()
+    assert page.panel_widget(PanelKey.PRESETS) is None
+    assert page.panel_dock(PanelKey.PRESETS) is None
+    assert not page.panel_button(PanelKey.PRESETS).isChecked()
+    assert page.panel_widget(PanelKey.PROPERTIES) is None
+    assert page.panel_dock(PanelKey.PROPERTIES) is None
+    assert not page.panel_button(PanelKey.PROPERTIES).isChecked()
+    assert page.panel_widget(PanelKey.CONSOLE) is None
+    assert page.panel_dock(PanelKey.CONSOLE) is None
+    assert not page.panel_button(PanelKey.CONSOLE).isChecked()
 
     assert sorted(dm.dockWidgetsMap()) == [
         "acquire_mda",
@@ -257,15 +260,15 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert not page._mda.save_info.isChecked()
 
     # Opening Groups & Presets builds it lazily.
-    page._presets_btn.click()
-    presets = page._presets
-    presets_dock = page._presets_dock
-    assert presets is not None
+    page.panel_button(PanelKey.PRESETS).click()
+    presets = page.panel_widget(PanelKey.PRESETS)
+    presets_dock = page.panel_dock(PanelKey.PRESETS)
+    assert isinstance(presets, AcquisitionPresetSelector)
     assert presets_dock is not None
     assert presets_dock.widget() is presets
     assert presets_dock.windowTitle() == "Groups and Presets"
     assert not presets_dock.isClosed()
-    assert page._presets_btn.isChecked()
+    assert page.panel_button(PanelKey.PRESETS).isChecked()
 
     # Groups & Presets is the upstream GroupPresetTableWidget with its
     # editing/save/load controls hidden — editing groups already lives on the
@@ -279,38 +282,38 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert not presets.table_wdg.isHidden()
 
     # Opening Properties builds it lazily and tabs it beside Groups and Presets.
-    page._props_btn.click()
-    browser = page._property_browser
-    props_dock = page._props_dock
-    assert page._props_btn.isChecked()
+    page.panel_button(PanelKey.PROPERTIES).click()
+    browser = page.panel_widget(PanelKey.PROPERTIES)
+    props_dock = page.panel_dock(PanelKey.PROPERTIES)
+    assert page.panel_button(PanelKey.PROPERTIES).isChecked()
     assert browser is not None and not browser.isWindow()
     assert props_dock is not None and not props_dock.isClosed()
     assert props_dock.widget() is browser
     assert props_dock.dockAreaWidget() is presets_dock.dockAreaWidget()
 
     # Toggling off closes the dock but keeps the (expensive) widget alive.
-    page._props_btn.click()
+    page.panel_button(PanelKey.PROPERTIES).click()
     assert props_dock.isClosed()
-    assert not page._props_btn.isChecked()
-    assert page._property_browser is browser
+    assert not page.panel_button(PanelKey.PROPERTIES).isChecked()
+    assert page.panel_widget(PanelKey.PROPERTIES) is browser
 
     # Toggling back on reuses the same widget and dock rather than rebuilding.
-    page._props_btn.click()
+    page.panel_button(PanelKey.PROPERTIES).click()
     assert not props_dock.isClosed()
-    assert page._property_browser is browser
-    assert page._props_dock is props_dock
+    assert page.panel_widget(PanelKey.PROPERTIES) is browser
+    assert page.panel_dock(PanelKey.PROPERTIES) is props_dock
 
     # Closing the dock from its own tab (as the ✕ button does) unchecks the
     # toolbar toggle, same as clicking it would.
     props_dock.closeDockWidget()
     assert props_dock.isClosed()
-    assert not page._props_btn.isChecked()
+    assert not page.panel_button(PanelKey.PROPERTIES).isChecked()
 
     presets_dock.closeDockWidget()
-    assert not page._presets_btn.isChecked()
-    page._presets_btn.click()
+    assert not page.panel_button(PanelKey.PRESETS).isChecked()
+    page.panel_button(PanelKey.PRESETS).click()
     assert not presets_dock.isClosed()
-    assert page._presets_btn.isChecked()
+    assert page.panel_button(PanelKey.PRESETS).isChecked()
 
 
 def test_acquire_inactive_dock_tab_labels_are_visible(
@@ -327,7 +330,8 @@ def test_acquire_inactive_dock_tab_labels_are_visible(
     set_theme(DARK_THEME)
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
-    page._props_btn.click()  # a second tab to be inactive alongside Presets
+    # a second tab, to be inactive alongside Presets
+    page.panel_button(PanelKey.PROPERTIES).click()
 
     ss = page._dock_manager.styleSheet()
     inactive = qcolor(theme().text_secondary).name()
@@ -451,8 +455,8 @@ def test_acquire_docks_are_movable_and_pinnable(
     assert CDockManager.testAutoHideConfigFlag(
         CDockManager.eAutoHideFlag.DockAreaHasAutoHideButton
     )
-    page._presets_btn.click()
-    presets_dock = page._presets_dock
+    page.panel_button(PanelKey.PRESETS).click()
+    presets_dock = page.panel_dock(PanelKey.PRESETS)
     assert presets_dock is not None
     DF = CDockWidget.DockWidgetFeature
     for dock in (page._mda_dock, presets_dock):
@@ -473,14 +477,15 @@ def test_acquire_lazy_dock_tabs_into_existing_area(
     """
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
-    page._presets_btn.click()
-    presets_dock = page._presets_dock
+    page.panel_button(PanelKey.PRESETS).click()
+    presets_dock = page.panel_dock(PanelKey.PRESETS)
     assert presets_dock is not None
-    page._props_btn.click()
-    assert page._props_dock is not None
-    assert page._props_dock.dockAreaWidget() is presets_dock.dockAreaWidget()
+    page.panel_button(PanelKey.PROPERTIES).click()
+    props_dock = page.panel_dock(PanelKey.PROPERTIES)
+    assert props_dock is not None
+    assert props_dock.dockAreaWidget() is presets_dock.dockAreaWidget()
     assert not presets_dock.isClosed()
-    assert not page._props_dock.isClosed()
+    assert not props_dock.isClosed()
 
 
 def test_acquire_console_dock_is_lazy(
@@ -492,29 +497,464 @@ def test_acquire_console_dock_is_lazy(
         def __init__(self, mmcore: CMMCorePlus, parent: QWidget | None = None) -> None:
             super().__init__(parent)
 
-    # _toggle_console does a function-local import, re-reading this attribute
-    # from the source module on every call -- patch there, not on AcquirePage.
+    # the console panel's factory does a function-local import, re-reading
+    # this attribute from the source module on every call -- patch there,
+    # not on AcquirePage.
     monkeypatch.setattr("pymmcore_gui.widgets._mm_console.MMConsole", FakeConsole)
 
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
-    assert page._console is None
-    assert page._console_dock is None
+    assert page.panel_widget(PanelKey.CONSOLE) is None
+    assert page.panel_dock(PanelKey.CONSOLE) is None
 
-    page._presets_btn.click()
-    presets_dock = page._presets_dock
+    page.panel_button(PanelKey.PRESETS).click()
+    presets_dock = page.panel_dock(PanelKey.PRESETS)
     assert presets_dock is not None
-    page._console_btn.click()
-    console = page._console
-    dock = page._console_dock
+    page.panel_button(PanelKey.CONSOLE).click()
+    console = page.panel_widget(PanelKey.CONSOLE)
+    dock = page.panel_dock(PanelKey.CONSOLE)
     assert isinstance(console, FakeConsole)
     assert dock is not None and not dock.isClosed()
     assert dock.dockAreaWidget() is presets_dock.dockAreaWidget()
 
-    page._console_btn.click()
+    page.panel_button(PanelKey.CONSOLE).click()
     assert dock.isClosed()
-    assert not page._console_btn.isChecked()
-    assert page._console is console  # not rebuilt
+    assert not page.panel_button(PanelKey.CONSOLE).isChecked()
+    assert page.panel_widget(PanelKey.CONSOLE) is console  # not rebuilt
+
+
+def test_acquire_panel_buttons_match_registry(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Every registry entry gets one icon-only, checkable toggle button."""
+    set_theme(DARK_THEME)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    for info in PANELS:
+        btn = page.panel_button(info.key)
+        assert btn.isCheckable()
+        assert btn.text() == ""
+        assert not btn.icon().isNull()
+        assert btn.toolTip() == info.tooltip
+        assert btn.property("variant") == "subtle"
+
+    assert page.panel_button(PanelKey.MDA).isChecked()
+    for info in PANELS:
+        if info.key != PanelKey.MDA:
+            assert not page.panel_button(info.key).isChecked()
+
+    # Only MDA is open by default -- nothing else in the registry builds
+    # eagerly, matching the lazy-panel guarantee the other tests exercise.
+    assert sorted(page._dock_manager.dockWidgetsMap()) == [
+        "acquire_mda",
+        "acquire_viewers",
+    ]
+
+    # The bar's contents (not its host) are what the registry contract
+    # guarantees, so this test survives relocating it -- see
+    # AcquirePage._place_panel_bar. This one assertion pins today's default
+    # placement and is the only line to update if the bar moves.
+    assert page._panel_bar.parent() is page.toolbar
+
+
+def _panel_customize_menu(page: AcquirePage) -> QMenu:
+    """The ⋯ customize menu, built but not exec'd (exec would block the test)."""
+    return page._panel_bar.build_menu()
+
+
+def _toggle_customize_menu_entry(page: AcquirePage, title: str, checked: bool) -> None:
+    """Check/uncheck one entry of a freshly built customize menu, as a click would."""
+    menu = _panel_customize_menu(page)
+    action = next(a for a in menu.actions() if a.text() == title)
+    action.setChecked(checked)
+    menu.deleteLater()
+
+
+def test_acquire_customize_menu_lists_hideable_panels(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """The ⋯ menu offers every panel except the always-visible MDA one."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    menu = _panel_customize_menu(page)
+    toggles = [a for a in menu.actions() if a.isCheckable()]
+    titles = [a.text() for a in toggles]
+    assert titles == [info.title for info in PANELS if not info.always_visible]
+    # Everything starts visible, so every entry starts checked.
+    assert all(action.isChecked() for action in toggles)
+    assert "MDA" not in titles
+    assert not page.hidden_panels()
+
+    # ...followed by a separated, non-checkable Reset Layout entry.
+    assert [a.text() for a in menu.actions() if not a.isCheckable() and a.text()] == [
+        "Reset Layout"
+    ]
+    assert any(a.isSeparator() for a in menu.actions())
+
+    # Both affordances exist: the bar's own ⋯ button, and right-click on the
+    # host toolbar row.
+    assert not page._panel_bar._menu_btn.icon().isNull()
+    assert page.toolbar.contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
+
+
+def test_acquire_customize_menu_hides_button_and_closes_panel(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Unchecking a panel in the ⋯ menu removes its button and closes its dock."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    page.panel_button(PanelKey.PRESETS).click()
+    presets_dock = page.panel_dock(PanelKey.PRESETS)
+    assert presets_dock is not None and not presets_dock.isClosed()
+
+    _toggle_customize_menu_entry(page, "Groups and Presets", False)
+    assert page.panel_button(PanelKey.PRESETS).isHidden()
+    assert presets_dock.isClosed()
+    assert page.hidden_panels() == {PanelKey.PRESETS}
+    assert PanelKey.PRESETS not in page.open_panels()
+    # The widget is kept alive, same as a plain close/reopen.
+    assert page.panel_widget(PanelKey.PRESETS) is not None
+
+    # Re-checking brings the button back *and* re-opens the panel -- that's
+    # the point of picking it from the menu.
+    _toggle_customize_menu_entry(page, "Groups and Presets", True)
+    assert not page.panel_button(PanelKey.PRESETS).isHidden()
+    assert not presets_dock.isClosed()
+    assert page.hidden_panels() == set()
+
+
+def test_acquire_customize_menu_cannot_hide_mda(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """MDA is always_visible, so even a direct request can't hide its button."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    page._set_panel_visible(PanelKey.MDA, False)
+    assert not page.panel_button(PanelKey.MDA).isHidden()
+    assert PanelKey.MDA not in page.hidden_panels()
+
+
+def test_acquire_apply_hidden_panels_round_trips(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """apply_hidden_panels() is the inverse of hidden_panels(), incl. unknown keys."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    page.apply_hidden_panels({PanelKey.CONSOLE, PanelKey.EXCEPTION_LOG})
+    assert page.hidden_panels() == {PanelKey.CONSOLE, PanelKey.EXCEPTION_LOG}
+    assert page.panel_button(PanelKey.CONSOLE).isHidden()
+    assert not page.panel_button(PanelKey.PRESETS).isHidden()
+    # Hiding a never-opened panel must not build it (laziness is preserved).
+    assert page.panel_widget(PanelKey.CONSOLE) is None
+
+    # A key from a newer/older release is ignored rather than raising.
+    page.apply_hidden_panels({PanelKey.CONSOLE, "not_a_registered_panel"})
+    assert page.hidden_panels() == {PanelKey.CONSOLE}
+
+
+def test_acquire_apply_hidden_panels_never_opens_panels(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Showing a button must not open its panel -- only the ⋯ menu does that.
+
+    Regression test: ``apply_hidden_panels`` used to route through
+    ``_set_panel_visible``, whose "re-adding a button opens its panel"
+    behaviour is right for an interactive menu click but catastrophic on the
+    restore path -- it force-opened *every* registered panel on launch,
+    eagerly building all of them and burying the MDA dock.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    page.apply_hidden_panels(set())
+
+    assert page.open_panels() == {PanelKey.MDA}
+    assert sorted(page._dock_manager.dockWidgetsMap()) == [
+        "acquire_mda",
+        "acquire_viewers",
+    ]
+    for info in PANELS:
+        assert not page.panel_button(info.key).isHidden()
+        if info.key != PanelKey.MDA:
+            assert page.panel_widget(info.key) is None
+
+
+def test_acquire_docked_panels_are_reparented_not_windows(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Docking reparents every panel widget, clearing any standalone window flags.
+
+    ``PropertyBrowser`` is a QDialog upstream and ``create_exception_log``
+    sets ``WindowStaysOnTopHint | Window``. ``dock.setWidget()`` reparents
+    them, and ``QWidget.setParent()`` clears window flags -- this must keep
+    working *without* a pre-emptive ``setWindowFlags()`` call, which Qt
+    documents as hiding the widget.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.resize(1400, 900)
+    page.show()
+    qtbot.waitExposed(page)
+
+    for key in (PanelKey.PROPERTIES, PanelKey.EXCEPTION_LOG, PanelKey.CAMERA_ROI):
+        page.panel_button(key).click()
+        widget = page.panel_widget(key)
+        dock = page.panel_dock(key)
+        assert widget is not None and dock is not None
+        assert not widget.isWindow()
+        assert widget.parent() is not None
+        assert not dock.isClosed()
+
+    # The MDA panel, which is open from the start, must actually be on screen.
+    assert page._mda.isVisible()
+
+
+def test_acquire_new_panels_go_to_right_column_and_tab_together(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A panel opened for the first time lands in the right sidebar, tabbed.
+
+    The first one creates the right column; every subsequent one tabs into
+    that same column rather than spawning a second one beside it. MDA is the
+    only panel placed elsewhere (left).
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    side_keys = [i.key for i in PANELS if i.key != PanelKey.MDA]
+    page.panel_button(side_keys[0]).click()
+    right_area = page._right_dock_area
+    assert right_area is not None
+    assert right_area is not page._central_dock_area
+    assert page._mda_dock.dockAreaWidget() is not right_area
+
+    for key in side_keys[1:]:
+        page.panel_button(key).click()
+        dock = page.panel_dock(key)
+        assert dock is not None
+        assert dock.dockAreaWidget() is right_area, f"{key} did not tab into the column"
+
+    assert right_area.dockWidgetsCount() == len(side_keys)
+
+
+def test_acquire_right_column_survives_being_emptied(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """After the right column is emptied, the next new panel rebuilds it.
+
+    ADS destroys a dock area once its last dock leaves, so the cached
+    ``_right_dock_area`` can end up wrapping a deleted C++ object. Docking
+    *into* that would crash instead of tabbing, hence ``_resolve_right_dock_area``.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    page.panel_button(PanelKey.PRESETS).click()
+    assert page._right_dock_area is not None
+    page.panel_button(PanelKey.PRESETS).click()  # close it again
+
+    # Must not raise, and must give the new panel a usable right column.
+    page.panel_button(PanelKey.CAMERA_ROI).click()
+    roi_dock = page.panel_dock(PanelKey.CAMERA_ROI)
+    assert roi_dock is not None and not roi_dock.isClosed()
+    area = roi_dock.dockAreaWidget()
+    assert area is not None
+    assert area is not page._central_dock_area
+    assert page._mda_dock.dockAreaWidget() is not area
+
+
+def test_acquire_reset_layout_restores_defaults(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Reset Layout re-opens only the defaults, un-hides buttons, re-pins widths."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.resize(1400, 900)
+    page.show()
+    qtbot.waitExposed(page)
+    qtbot.wait(50)
+
+    page.panel_button(PanelKey.PRESETS).click()
+    page.panel_button(PanelKey.CAMERA_ROI).click()
+    page.apply_hidden_panels({PanelKey.CONSOLE})
+    assert page.open_panels() == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.CAMERA_ROI}
+    assert page.hidden_panels() == {PanelKey.CONSOLE}
+
+    with qtbot.waitSignal(page.layoutReset):
+        page.reset_layout()
+
+    assert page.open_panels() == {PanelKey.MDA}
+    assert page.hidden_panels() == set()
+    for info in PANELS:
+        assert not page.panel_button(info.key).isHidden()
+    # Widgets survive, exactly as a normal close/reopen does.
+    assert page.panel_widget(PanelKey.PRESETS) is not None
+
+    mda_area = page._mda_dock.dockAreaWidget()
+    assert mda_area is not None
+    assert mda_area.width() == _MDA_DOCK_WIDTH
+    assert page._right_dock_area is None
+
+
+def test_acquire_customize_menu_reset_entry_is_wired(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Triggering the menu's Reset Layout entry reaches AcquirePage.reset_layout.
+
+    Deliberately exercises reset via a *hidden button* rather than an open
+    panel: this is a wiring test, and hiding a never-opened panel builds no
+    dock, so nothing here empties a dock area -- the ADS operation that is
+    fatal under the offscreen test platform (see ``_configure_ads``). The
+    behavioural coverage lives in the reset tests above.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.apply_hidden_panels({PanelKey.CONSOLE})
+    assert page.panel_button(PanelKey.CONSOLE).isHidden()
+
+    menu = _panel_customize_menu(page)
+    reset = next(a for a in menu.actions() if a.text() == "Reset Layout")
+    with qtbot.waitSignal(page.layoutReset):
+        reset.trigger()
+    menu.deleteLater()
+
+    assert not page.panel_button(PanelKey.CONSOLE).isHidden()
+    assert page.panel_widget(PanelKey.CONSOLE) is None  # still never built
+    assert page.open_panels() == {PanelKey.MDA}
+
+
+def test_acquire_reset_layout_after_restore_repins_default_widths(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A reset supersedes a restored layout, so the canonical widths come back."""
+    page_a = AcquirePage(mmcore)
+    qtbot.addWidget(page_a)
+    page_a.resize(1400, 900)
+    page_a.show()
+    qtbot.waitExposed(page_a)
+    qtbot.wait(50)
+
+    mda_area = page_a._mda_dock.dockAreaWidget()
+    assert mda_area is not None
+    handle = next(h for h, a in page_a._width_locked_areas.items() if a is mda_area)
+    qtbot.mousePress(handle, Qt.MouseButton.LeftButton)  # type: ignore[no-untyped-call]
+    page_a._dock_manager.setSplitterSizes(
+        mda_area, _resized_splitter_sizes(page_a, mda_area, 500)
+    )
+    qtbot.mouseRelease(handle, Qt.MouseButton.LeftButton)  # type: ignore[no-untyped-call]
+    state, keys = page_a.save_layout()
+    assert state is not None
+
+    page_b = AcquirePage(mmcore)
+    qtbot.addWidget(page_b)
+    page_b.resize(1400, 900)
+    assert page_b.restore_layout(state, keys)
+    page_b.show()
+    qtbot.waitExposed(page_b)
+    qtbot.wait(50)
+    assert page_b._layout_restored
+
+    page_b.reset_layout()
+    assert not page_b._layout_restored
+    mda_area_b = page_b._mda_dock.dockAreaWidget()
+    assert mda_area_b is not None
+    assert mda_area_b.width() == _MDA_DOCK_WIDTH
+
+
+def test_acquire_camera_roi_and_exception_log_panels_open(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """The two newly-registered panels dock inline, not as standalone windows."""
+    from pymmcore_widgets import CameraRoiWidget
+
+    from pymmcore_gui.widgets._exception_log import ExceptionLog
+
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    page.panel_button(PanelKey.CAMERA_ROI).click()
+    roi_widget = page.panel_widget(PanelKey.CAMERA_ROI)
+    roi_dock = page.panel_dock(PanelKey.CAMERA_ROI)
+    assert isinstance(roi_widget, CameraRoiWidget)
+    assert roi_dock is not None and not roi_dock.isClosed()
+    assert not roi_widget.isWindow()
+
+    page.panel_button(PanelKey.EXCEPTION_LOG).click()
+    log_widget = page.panel_widget(PanelKey.EXCEPTION_LOG)
+    log_dock = page.panel_dock(PanelKey.EXCEPTION_LOG)
+    assert isinstance(log_widget, ExceptionLog)
+    assert log_dock is not None and not log_dock.isClosed()
+    # create_exception_log sets WindowStaysOnTopHint | Window upstream --
+    # every registry panel must be normalized to a plain docked child.
+    assert not log_widget.isWindow()
+
+    assert roi_dock.dockAreaWidget() is log_dock.dockAreaWidget()
+
+
+def test_acquire_panel_button_icons_follow_theme(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Panel-button icons re-derive their color on a theme toggle, in both directions.
+
+    Regression test for using ``setIcon`` instead of ``set_source_icon``: a
+    bare ``setIcon`` would leave the app-wide ``ensure_visible_icon`` sweep
+    (which runs right after our ``StyleChange`` handler) re-deriving from the
+    *previous* theme's icon, since it never sees our freshly-set one as the
+    "original".
+    """
+    set_theme(DARK_THEME)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    btn = page.panel_button(PanelKey.PRESETS)
+    rgb = _icon_avg_rgb(btn.icon(), QSize(24, 24))
+    assert rgb is not None
+    dark = qcolor(theme().text_primary)
+    assert all(
+        abs(a - b) < 4
+        for a, b in zip(rgb, (dark.red(), dark.green(), dark.blue()), strict=True)
+    )
+
+    set_theme(LIGHT_THEME)
+    rgb = _icon_avg_rgb(btn.icon(), QSize(24, 24))
+    assert rgb is not None
+    light = qcolor(theme().text_primary)
+    assert all(
+        abs(a - b) < 4
+        for a, b in zip(rgb, (light.red(), light.green(), light.blue()), strict=True)
+    )
+    set_theme(DARK_THEME)
+
+
+def test_acquire_panel_buttons_follow_zoom(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    """Panel-button icons rescale with zoom, same as Snap/Live.
+
+    Unlike a ``QToolBar``, a bare ``QPushButton`` isn't touched by
+    ``set_zoom()``'s icon-size pass over every ``QToolBar`` -- so
+    ``PanelButtonBar`` must re-apply its own icon size on every zoom change,
+    same as ``SnapButton``/``LiveButton`` already do.
+    """
+    set_theme(DARK_THEME)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    try:
+        set_zoom(1.5)
+        expected = acquire_toolbar_module._icon_size()
+        for info in PANELS:
+            assert page.panel_button(info.key).iconSize() == expected
+
+        set_zoom(0.8)
+        expected = acquire_toolbar_module._icon_size()
+        for info in PANELS:
+            assert page.panel_button(info.key).iconSize() == expected
+    finally:
+        set_theme(DARK_THEME)
 
 
 def test_snap_opens_closable_preview(
@@ -1736,10 +2176,134 @@ def test_acquire_right_dock_width_resists_relayout_but_stays_draggable(
     qtbot.waitExposed(page)
     qtbot.wait(50)
 
-    page._presets_btn.click()
+    page.panel_button(PanelKey.PRESETS).click()
     right_area = page._right_dock_area
     assert right_area is not None
     _assert_column_resists_relayout_but_stays_draggable(page, qtbot, right_area, 300)
+
+
+def test_acquire_layout_round_trip(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    """save_layout()/restore_layout() round-trip the open panels onto a fresh page."""
+    page_a = AcquirePage(mmcore)
+    qtbot.addWidget(page_a)
+    page_a.panel_button(PanelKey.PRESETS).click()
+    page_a.panel_button(PanelKey.CAMERA_ROI).click()
+
+    state, keys = page_a.save_layout()
+    assert state is not None
+    assert keys == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.CAMERA_ROI}
+
+    page_b = AcquirePage(mmcore)
+    qtbot.addWidget(page_b)
+    assert page_b.restore_layout(state, keys)
+
+    assert page_b.open_panels() == keys
+    for key in keys:
+        assert page_b.panel_button(key).isChecked()
+    # Console was never opened on page_a, so restoring must not force every
+    # registered panel open -- laziness survives a restore.
+    assert page_b.panel_widget(PanelKey.CONSOLE) is None
+
+
+def test_acquire_restore_does_not_repin_column_widths(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A restored layout keeps the user's widths; the one-shot pin is skipped.
+
+    Mirrors ``test_acquire_mda_dock_width_resists_relayout_but_stays_draggable``'s
+    drag simulation, but checks the *restore* path: the width a user dragged
+    the MDA column to in a previous session must survive into a freshly
+    constructed page, rather than being reset to the canonical
+    ``_MDA_DOCK_WIDTH`` by AcquirePage's normal first-show pin.
+    """
+    page_a = AcquirePage(mmcore)
+    qtbot.addWidget(page_a)
+    page_a.resize(1400, 900)
+    page_a.show()
+    qtbot.waitExposed(page_a)
+    qtbot.wait(50)
+
+    mda_area = page_a._mda_dock.dockAreaWidget()
+    assert mda_area is not None
+    handle = next(h for h, a in page_a._width_locked_areas.items() if a is mda_area)
+    qtbot.mousePress(handle, Qt.MouseButton.LeftButton)  # type: ignore[no-untyped-call]
+    page_a._dock_manager.setSplitterSizes(
+        mda_area, _resized_splitter_sizes(page_a, mda_area, 500)
+    )
+    qtbot.mouseRelease(handle, Qt.MouseButton.LeftButton)  # type: ignore[no-untyped-call]
+    assert mda_area.width() == 500
+
+    state, keys = page_a.save_layout()
+    assert state is not None
+
+    # Mirrors MainWindow.restore_state(): geometry is applied, then the dock
+    # layout is restored, then the window is shown.
+    page_b = AcquirePage(mmcore)
+    qtbot.addWidget(page_b)
+    page_b.resize(1400, 900)
+    assert page_b.restore_layout(state, keys)
+    page_b.show()
+    qtbot.waitExposed(page_b)
+    qtbot.wait(50)
+
+    mda_area_b = page_b._mda_dock.dockAreaWidget()
+    assert mda_area_b is not None
+    # The exact width the user dragged to -- not the canonical pin, and above
+    # all not zero. Asserting the concrete value matters: `!= _MDA_DOCK_WIDTH`
+    # plus `min == max == width` is also satisfied by a collapsed 0px column,
+    # which is precisely the bug this guards (locking a restored layout before
+    # the window is first shown froze every column at min == max == 0).
+    assert mda_area_b.width() == 500
+    assert page_b._mda.isVisible()
+    assert page_b._width_locked_areas
+    assert mda_area_b.minimumWidth() == mda_area_b.maximumWidth() == 500
+
+
+def test_acquire_restore_repoints_viewer_central_area(
+    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first snap after a restore must not tab into a deleted C++ area.
+
+    Regression test for ``AcquireViewersManager`` caching
+    ``_central_dock_area`` at construction: ``CDockManager.restoreState``
+    tears down and rebuilds the whole dock-area tree, so without
+    ``AcquireViewersManager.set_central_dock_area`` the manager would hold a
+    dangling reference and crash on the first preview/viewer opened after a
+    restore.
+    """
+
+    class FakePreview(QWidget):
+        def __init__(self, mmcore: CMMCorePlus, parent: QWidget | None = None) -> None:
+            super().__init__(parent)
+            self._core = mmcore
+
+    def run_worker_now(func: Callable[[], None], **_: object) -> None:
+        func()
+
+    monkeypatch.setattr(acquire_viewers_module, "NDVPreview", FakePreview)
+    monkeypatch.setattr(acquire_toolbar_module, "create_worker", run_worker_now)
+
+    page_a = AcquirePage(mmcore)
+    qtbot.addWidget(page_a)
+    page_a.panel_button(PanelKey.PRESETS).click()
+    state, keys = page_a.save_layout()
+    assert state is not None
+    # Tear the source page down before building the second one. Leaving two
+    # live CDockManagers (each with its own docks and snap/live core
+    # connections) around until pytest-qt's teardown segfaults the offscreen
+    # platform while it repaints them -- the same harness-only ADS fragility
+    # documented in ``_configure_ads``.
+    page_a.close()
+    page_a.deleteLater()
+
+    page_b = AcquirePage(mmcore)
+    qtbot.addWidget(page_b)
+    assert page_b.restore_layout(state, keys)
+
+    # Must not raise/crash: ensure_preview tabs into the *current* central
+    # area, not the one captured when AcquireViewersManager was constructed.
+    page_b._snap_btn.click()
+    assert page_b._viewers.preview is not None
 
 
 def test_mda_action_icons_use_theme_status_colors(
