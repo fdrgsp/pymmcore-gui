@@ -2350,6 +2350,42 @@ def test_mda_action_icons_use_theme_status_colors(
     assert_icon_color(widget.channels.act_remove_row.icon(), theme().status_red)
 
 
+def test_mda_grid_bounds_icons_stay_visible_after_action_changes(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """The Bounds editor must theme each raw icon installed by Mark/Move."""
+    set_theme(DARK_THEME)
+    widget = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(widget)
+
+    grid = widget.grid_plan
+    bounds = grid._core_xy_bounds
+    buttons = bounds.findChildren(QPushButton)
+    expected = qcolor(theme().text_primary)
+    expected_rgb = expected.red(), expected.green(), expected.blue()
+
+    def assert_themed() -> None:
+        for button in buttons:
+            rgb = _icon_avg_rgb(button.icon(), QSize(24, 24))
+            assert rgb is not None
+            assert all(
+                abs(actual - wanted) < 2
+                for actual, wanted in zip(rgb, expected_rgb, strict=True)
+            )
+
+    # Entering the edge/bounds mode keeps the initially themed Mark glyphs.
+    grid._mode_area_radio.setChecked(True)
+    grid._mode_bounds_radio.setChecked(True)
+    assert_themed()
+
+    # Each action change replaces the glyph upstream; both replacements must
+    # be re-themed rather than reverting to the nearly invisible black source.
+    bounds.go_middle.setChecked(True)
+    assert_themed()
+    bounds.go_middle.setChecked(False)
+    assert_themed()
+
+
 def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     """AcquirePage no longer shows the Stage Explorer, but the classic GUI still
     ships it (``actions/widget_actions.py``'s ``stage_explorer_widget`` action),

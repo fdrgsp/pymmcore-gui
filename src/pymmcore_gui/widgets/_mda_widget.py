@@ -26,7 +26,13 @@ from pymmcore_gui._qt.QtCore import (
     QTimer,
     Signal,
 )
-from pymmcore_gui._qt.QtWidgets import QComboBox, QDoubleSpinBox, QGridLayout, QWidget
+from pymmcore_gui._qt.QtWidgets import (
+    QComboBox,
+    QDoubleSpinBox,
+    QGridLayout,
+    QPushButton,
+    QWidget,
+)
 
 from ._active_channel_table import (
     CURRENT_CHANNEL_COLUMN,
@@ -179,6 +185,15 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         self._connect_position_icon_updates()
         self._apply_themed_icons()
         self._connect_channel_selection()
+
+        # CoreXYBoundsControl swaps each edge button's icon whenever its
+        # Mark/Move action changes.  That replacement installs the upstream
+        # raw (black) icon after unstyle_widgets() has already made the initial
+        # icon theme-aware, so it becomes nearly invisible in dark mode.
+        # Connect after the upstream swap handler and refresh the new glyph.
+        self.grid_plan._core_xy_bounds.go_middle.toggled.connect(
+            self._refresh_grid_bounds_icons
+        )
 
         _align_bounds_grid(self.grid_plan._core_xy_bounds)
 
@@ -626,6 +641,16 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
                 continue
             btn.setProperty("_pymmcore_gui_icon_colors_connected", True)
             btn.valueChanged.connect(self._apply_themed_icons)
+
+    def _refresh_grid_bounds_icons(self, *_: object) -> None:
+        """Theme the edge-button glyphs replaced by a Mark/Move action change."""
+        bounds = self.grid_plan._core_xy_bounds
+        for btn in bounds.findChildren(QPushButton):
+            # The action toggle has just installed a different raw glyph, so
+            # replace ensure_visible_icon's previously stashed Mark/Move source
+            # before deriving the themed version from it.
+            set_source_icon(btn, btn.icon())
+            ensure_visible_icon(btn)
 
     def _apply_themed_icons(self, *_: object) -> None:
         """Apply the app's semantic green/red to every MDA action icon."""
