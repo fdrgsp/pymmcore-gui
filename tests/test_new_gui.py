@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import Mock, patch
 
+import numpy as np
 import pytest
 import useq
 from pymmcore_plus import PropertyType
@@ -2053,6 +2054,71 @@ def test_acquire_viewer_close_reclaims_space_without_moving_mda(
     assert page._viewers.active_viewer is None
     assert viewer.closed
     assert mda_area.width() == mda_width_before
+
+
+def test_acquire_viewer_records_frame_metadata_regardless_of_follow_lock(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per-frame metadata capture must not be gated by the follow/lock toggle.
+
+    ``AcquireViewersManager._on_frame_ready`` used to check ``_follow_acquisition``
+    before doing anything at all; the metadata now appended to the viewer's
+    ``AcquisitionRecord`` must happen regardless, or locking the slider (e.g. to
+    inspect an earlier timepoint mid-run) would silently truncate whatever gets
+    exported later from the viewer's Save button.
+    """
+    from pymmcore_plus.metadata import frame_metadata
+
+    class Emitter:
+        def emit(self) -> None:
+            pass
+
+    class FakeViewer:
+        def __init__(self, data: object, /, **kwargs: object) -> None:
+            self.data = data
+            self.display_model = SimpleNamespace(current_index={})
+            self.data_wrapper = SimpleNamespace(
+                dims_changed=Emitter(), data_changed=Emitter()
+            )
+            self._widget = QWidget()
+
+        def widget(self) -> QWidget:
+            return self._widget
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(acquire_viewers_module, "MMArrayViewer", FakeViewer)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    sequence = useq.MDASequence(channels=(useq.Channel(config="DAPI", exposure=10),))
+    mmcore.mda.run(sequence, output="memory")
+    qtbot.wait(20)
+
+    manager = page._viewers
+    dock = manager._active_dock
+    assert dock is not None
+    record = manager._records[dock]
+    assert record.acquisition is not None
+    assert record.acquisition.settings.dtype
+    assert record.acquisition.summary_meta is not None
+    n_before = len(record.acquisition.frame_meta)
+    assert n_before >= 1  # the one real frame from the run above
+
+    frame = np.zeros((4, 4), dtype="uint16")
+    event = next(iter(sequence))
+    meta = frame_metadata(mmcore, runner_time_ms=1.0)
+
+    manager._follow_acquisition = False
+    manager._on_frame_ready(frame, event, meta)
+    assert len(record.acquisition.frame_meta) == n_before + 1
+
+    manager._follow_acquisition = True
+    manager._on_frame_ready(frame, event, meta)
+    assert len(record.acquisition.frame_meta) == n_before + 2
 
 
 def _resized_splitter_sizes(

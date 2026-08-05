@@ -7,13 +7,18 @@ from __future__ import annotations
 
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import ndv
 import numpy as np
 import tifffile
+from ndv.models import ChannelMode
+from ome_writers import AcquisitionSettings, Dimension
+from pymmcore_plus import CMMCorePlus
+from pymmcore_plus.metadata import summary_metadata
 from superqt import QIconifyIcon
 
+from pymmcore_gui._mda_export import AcquisitionRecord, export_acquisition
 from pymmcore_gui._qt.QtCore import QEvent, QObject, QSize, Qt
 from pymmcore_gui._qt.QtGui import QColor, QIcon, QPainter, QPalette
 from pymmcore_gui._qt.QtWidgets import (
@@ -21,10 +26,15 @@ from pymmcore_gui._qt.QtWidgets import (
     QAbstractSlider,
     QApplication,
     QFileDialog,
+    QMessageBox,
+    QProgressDialog,
     QPushButton,
     QWidget,
 )
 from pymmcore_gui.actions.widget_actions import WidgetAction, _get_mm_main_window
+
+if TYPE_CHECKING:
+    from pymmcore_gui._mda_export import ExportFormat
 
 # icons this dark (or darker) are effectively invisible against a dark
 # theme's background and get recolored; see `ensure_visible_icon`.
@@ -60,13 +70,21 @@ _ORTHO_VIEWS = [("y", "x"), ("z", "x"), ("z", "y")]
 
 
 class MMArrayViewer(ndv.ArrayViewer):
-    """ArrayViewer with OME-TIFF saving and orthogonal-axis rotation."""
+    """ArrayViewer with OME-TIFF/OME-Zarr saving and orthogonal-axis rotation."""
 
     def __init__(self, data: Any = None, /, **kwargs: Any) -> None:
         opts = kwargs.pop("viewer_options", None) or {}
         opts.setdefault("show_roi_button", True)
         kwargs["viewer_options"] = opts
         super().__init__(data, **kwargs)
+
+        # Set by the viewer manager (e.g. AcquireViewersManager) right after
+        # construction, for MDA-backed viewers: a snapshot of the sink's
+        # resolved settings + summary metadata, plus live per-frame metadata
+        # appended as the acquisition progresses. When absent (e.g. the
+        # snap/live Preview, which isn't backed by an MDA at all), _save_data
+        # falls back to synthesizing a minimal one from what's on screen.
+        self._acquisition_record: AcquisitionRecord | None = None
 
         self._key_filter = _KeyFilter(self)
         widget = self.widget()
@@ -98,42 +116,108 @@ class MMArrayViewer(ndv.ArrayViewer):
         self.display_model.visible_axes = _ORTHO_VIEWS[(idx + 1) % len(_ORTHO_VIEWS)]
 
     def _save_data(self) -> None:
-        """Save the viewer data as one or more OME-TIFF files."""
-        data = self.data
-        if data is None:
+        """Export the viewer's data as a metadata-complete OME-TIFF or OME-Zarr.
+
+        Streams frame-by-frame through `ome_writers` -- the same writer a live,
+        disk-backed acquisition uses -- rather than materializing the whole
+        array and hand-writing a TIFF, so channel names, timestamps,
+        exposures, stage positions and the summary metadata all survive.
+        """
+        if self.data is None:
             return
 
-        arr = np.asarray(data)
+        if self.display_model.channel_mode is ChannelMode.RGBA:
+            # ome_writers models a written frame as a plain 2D (Y, X) plane; it
+            # has no concept of an RGB/RGBA sample axis. This only affects the
+            # snap/live Preview (the only place an RGB frame can appear), so
+            # fall back to a direct, non-metadata TIFF write for that one case.
+            self._save_rgb_snapshot()
+            return
+
+        prompt = _prompt_save_path(self.widget())
+        if prompt is None:
+            return
+        path, fmt = prompt
+
+        record = self._acquisition_record or _synthesize_record(self)
+        if record is None:
+            QMessageBox.warning(self.widget(), "Save", "No data available to save.")
+            return
+
+        try:
+            self._export_with_overwrite_prompt(record, path, fmt)
+        except Exception as e:
+            QMessageBox.critical(
+                self.widget(), "Save failed", f"Failed to save data:\n\n{e}"
+            )
+
+    def _export_with_overwrite_prompt(
+        self, record: AcquisitionRecord, path: Path, fmt: ExportFormat
+    ) -> None:
+        """Run `export_acquisition`, confirming before clobbering an existing path.
+
+        `ome_writers` is the authority on whether the *resolved* output path
+        (which, for a multi-position OME-TIFF, is a directory distinct from
+        the file path the user picked) already exists -- so the first attempt
+        always goes in with `overwrite=False`, and only on the resulting
+        `FileExistsError` do we ask and retry. `create_stream` raises that
+        error before any frame is written, so the retry never double-writes.
+        """
+
+        def _run(*, overwrite: bool) -> None:
+            dlg = QProgressDialog("Saving…", "Cancel", 0, 0, self.widget())
+            dlg.setWindowModality(Qt.WindowModality.WindowModal)
+            dlg.setMinimumDuration(0)
+            dlg.setAutoClose(True)
+            dlg.setValue(0)
+
+            def _progress(done: int, total: int) -> bool:
+                dlg.setMaximum(total)
+                dlg.setValue(done)
+                QApplication.processEvents()
+                return not dlg.wasCanceled()
+
+            try:
+                export_acquisition(
+                    record, path, fmt, overwrite=overwrite, progress=_progress
+                )
+            finally:
+                dlg.close()
+
+        try:
+            _run(overwrite=False)
+        except FileExistsError:
+            reply = QMessageBox.question(
+                self.widget(),
+                "Overwrite existing data?",
+                f"{path} already exists.\n\nOverwrite it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                _run(overwrite=True)
+
+    def _save_rgb_snapshot(self) -> None:
+        """Save a single RGB/RGBA frame directly as TIFF (no ome_writers path)."""
+        arr = np.asarray(self.data)
         if arr.size == 0:
             return
-
+        # Drop leading singleton axes (e.g. the Preview's 1-frame ring-buffer
+        # axis) so tifffile sees a plain (Y, X, samples) plane.
+        while arr.ndim > 3 and arr.shape[0] == 1:
+            arr = arr[0]
         path, _ = QFileDialog.getSaveFileName(
-            self.widget(),
-            "Save Image",
-            "",
-            "OME-TIFF (*.ome.tif);;All Files (*)",
+            self.widget(), "Save Image", "", "TIFF (*.tiff *.tif)"
         )
         if not path:
             return
-
-        sizes: dict[str, int] = {}
-        with suppress(Exception):
-            if wrapper := self.data_wrapper:
-                sizes = {str(key): value for key, value in wrapper.sizes().items()}
-
-        scales = self.display_model.scales
-        pixel_size_um = scales.get("x") or scales.get("y")
-        z_step_um = scales.get("z")
-        non_yx = [axis for axis in sizes if axis.lower() in "tcz"]
-        axes = "".join(axis.upper() for axis in non_yx) + "YX" if non_yx else ""
-
-        if sizes.get("p", 0) > 1:
-            _save_multiposition(arr, sizes, path, pixel_size_um, z_step_um, axes)
-        else:
-            if "p" in sizes:
-                p_idx = list(sizes).index("p")
-                arr = np.squeeze(arr, axis=p_idx)
-            _save_as_tiff(arr, path, pixel_size_um, z_step_um, axes)
+        if not path.lower().endswith((".tif", ".tiff")):
+            path += ".tiff"
+        try:
+            tifffile.imwrite(path, arr, photometric="rgb")
+        except Exception as e:
+            QMessageBox.critical(
+                self.widget(), "Save failed", f"Failed to save data:\n\n{e}"
+            )
 
     def _get_roi_data(self) -> np.ndarray | None:
         """Extract data under the current ROI bounding box."""
@@ -330,7 +414,7 @@ def _add_save_button(viewer: MMArrayViewer) -> QPushButton:
 
     btn = QPushButton(q_widget)
     btn.setIcon(QIconifyIcon("mdi:content-save-outline"))
-    btn.setToolTip("Save as OME-TIFF")
+    btn.setToolTip("Save as OME-TIFF / OME-Zarr")
     btn.clicked.connect(viewer._save_data)
 
     ndims_idx = btn_layout.indexOf(q_widget.ndims_btn)
@@ -352,56 +436,99 @@ def _add_roll_axes_button(viewer: MMArrayViewer) -> QPushButton:
     return btn
 
 
-def _save_multiposition(
-    arr: Any,
-    sizes: dict[str, int],
-    path: str,
-    pixel_size_um: float | None,
-    z_step_um: float | None,
-    axes: str,
-) -> None:
-    """Save a multi-position array as one OME-TIFF per position."""
-    p_idx = list(sizes).index("p")
-    base = str(Path(path).with_suffix("").with_suffix(""))
-    for i in range(arr.shape[p_idx]):
-        _save_as_tiff(
-            np.take(arr, i, axis=p_idx),
-            f"{base}_p{i:03d}.ome.tif",
-            pixel_size_um,
-            z_step_um,
-            axes,
-        )
+_SAVE_FILTERS = "OME-TIFF (*.ome.tiff *.ome.tif);;OME-Zarr (*.ome.zarr)"
+
+_DimType = Literal["space", "time", "channel", "position", "other"]
+_TYPE_BY_AXIS_NAME: dict[str, _DimType] = {
+    "t": "time",
+    "c": "channel",
+    "z": "space",
+    "p": "position",
+}
 
 
-def _save_as_tiff(
-    arr: Any,
-    path: str,
-    pixel_size_um: float | None = None,
-    z_step_um: float | None = None,
-    axes: str = "",
-) -> None:
-    """Save an array as OME-TIFF with physical-size metadata."""
-    array = np.asarray(arr)
-    metadata: dict[str, Any] = {}
-    if axes:
-        metadata["axes"] = axes
-    if pixel_size_um:
-        metadata.update(
-            {
-                "PhysicalSizeX": pixel_size_um,
-                "PhysicalSizeXUnit": "µm",
-                "PhysicalSizeY": pixel_size_um,
-                "PhysicalSizeYUnit": "µm",
-            }
-        )
-    if z_step_um:
-        metadata["PhysicalSizeZ"] = z_step_um
-        metadata["PhysicalSizeZUnit"] = "µm"
+class _RecordSource(Protocol):
+    """Structural type for `_synthesize_record`'s input.
 
-    tifffile.imwrite(
-        path,
-        array,
-        ome=True,
-        photometric="minisblack",
-        metadata=metadata or None,
+    Matches the subset of `ndv.ArrayViewer` (which `MMArrayViewer` inherits)
+    that the function actually reads, so lightweight test fakes can duck-type
+    against it without depending on the concrete `MMArrayViewer` class.
+    """
+
+    @property
+    def data(self) -> Any: ...
+    @property
+    def data_wrapper(self) -> Any: ...
+    @property
+    def display_model(self) -> Any: ...
+
+
+def _prompt_save_path(parent: QWidget) -> tuple[Path, ExportFormat] | None:
+    """Ask for a destination path and format via one native save dialog."""
+    path_str, selected_filter = QFileDialog.getSaveFileName(
+        parent, "Save Acquisition", "", _SAVE_FILTERS
     )
+    if not path_str:
+        return None
+
+    fmt: ExportFormat = "ome-zarr" if "Zarr" in selected_filter else "ome-tiff"
+    name = path_str.lower()
+    if fmt == "ome-zarr":
+        if not name.endswith(".zarr"):
+            path_str += ".ome.zarr"
+    elif not name.endswith((".tif", ".tiff")):
+        path_str += ".ome.tiff"
+    return Path(path_str), fmt
+
+
+def _synthesize_record(viewer: _RecordSource) -> AcquisitionRecord | None:
+    """Build a minimal record straight from what the viewer is currently displaying.
+
+    Used whenever no live `AcquisitionRecord` was attached at acquisition time
+    -- e.g. the snap/live Preview (not backed by an MDA at all), or an MDA
+    viewer whose manager didn't attach one. Per-frame metadata is unavailable
+    here, and non-spatial axes get sequential (not necessarily named)
+    coordinates; physical scale comes only from the viewer's current
+    `display_model.scales`. `viewer.data` (never materialized) is used
+    directly as the record's view -- it already supports the same
+    acquisition-order tuple indexing `export_acquisition` relies on, whether
+    it's a live `StreamView` or an `ndv` `RingBuffer`.
+    """
+    data = viewer.data
+    wrapper = viewer.data_wrapper
+    if data is None or wrapper is None:
+        return None
+
+    sizes = dict(wrapper.sizes())
+    if len(sizes) < 2:
+        return None
+    names = list(sizes)
+    n = len(names)
+    scales = dict(viewer.display_model.scales)
+
+    dims: list[Dimension] = []
+    for i, name in enumerate(names):
+        is_frame_axis = i >= n - 2
+        axis_name = ("y", "x")[i - (n - 2)] if is_frame_axis else str(name)
+        dim_type: _DimType = (
+            "space" if is_frame_axis else _TYPE_BY_AXIS_NAME.get(axis_name, "other")
+        )
+        scale = scales.get(axis_name)
+        dims.append(
+            Dimension(
+                name=axis_name,
+                count=sizes[name],
+                type=dim_type,
+                scale=scale,
+                unit="micrometer" if (dim_type == "space" and scale) else None,
+            )
+        )
+
+    summary_meta = None
+    with suppress(Exception):
+        summary_meta = summary_metadata(CMMCorePlus.instance())
+
+    settings = AcquisitionSettings(
+        dimensions=tuple(dims), dtype=str(np.dtype(wrapper.dtype))
+    )
+    return AcquisitionRecord(settings=settings, summary_meta=summary_meta, view=data)

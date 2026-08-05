@@ -6,7 +6,10 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from pymmcore_plus.mda import OmeWritersSink, frame_meta_to_ome
+
 from pymmcore_gui._array_viewer import MMArrayViewer
+from pymmcore_gui._mda_export import AcquisitionRecord
 from pymmcore_gui._ndv_viewers import _add_follow_lock_button, _extract_scales
 from pymmcore_gui._qt.QtAds import CDockWidget
 from pymmcore_gui._qt.QtCore import QObject, QTimer, Signal
@@ -37,6 +40,7 @@ class _ViewerRecord:
     bridge: _StreamSignalBridge | None = None
     coords_signal: Any = None
     coords_callback: Callable[[], None] | None = None
+    acquisition: AcquisitionRecord | None = None
 
     def disconnect(self) -> None:
         """Disconnect the live stream from a viewer that is being closed."""
@@ -170,6 +174,17 @@ class AcquireViewersManager(QObject):
         widget.setObjectName(f"ndv-{sha}")
 
         record = _ViewerRecord(viewer)
+        # Snapshot the sink's resolved settings + summary metadata now: the
+        # sink is replaced wholesale on the *next* run, so a viewer left open
+        # across two acquisitions must hold its own copy to export correctly
+        # later. Per-frame metadata is appended live, in _on_frame_ready.
+        sink = self._core.mda.get_sink()
+        if isinstance(sink, OmeWritersSink):
+            acquisition = AcquisitionRecord(
+                settings=sink.settings, summary_meta=sink.summary_meta, view=view
+            )
+            record.acquisition = acquisition
+            viewer._acquisition_record = acquisition  # read by MMArrayViewer._save_data
         wrapper = viewer.data_wrapper
         coords_signal = getattr(view, "coords_changed", None)
         if coords_signal is not None and wrapper is not None:
@@ -197,7 +212,18 @@ class AcquireViewersManager(QObject):
     def _on_frame_ready(
         self, frame: np.ndarray, event: MDAEvent, meta: FrameMetaV1
     ) -> None:
-        """Follow the latest acquired index and redraw once its write settles."""
+        """Record frame metadata for export, then follow the latest acquired index.
+
+        Metadata capture happens unconditionally, *before* the follow-lock
+        check below: the lock only controls whether the displayed slider
+        position tracks new frames, and must not also silently truncate the
+        metadata used later by the viewer's Save button.
+        """
+        if (dw := self._active_dock) is not None:
+            record = self._records.get(dw)
+            if record is not None and record.acquisition is not None:
+                record.acquisition.frame_meta.append(frame_meta_to_ome(meta))
+
         viewer = self._active_viewer
         if viewer is None or not self._follow_acquisition:
             return
