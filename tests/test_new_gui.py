@@ -1335,6 +1335,25 @@ def test_channel_property_selector_lists_all_runtime_numeric_sliders(
     assert value_header.text() == "Intensity [%]"
 
 
+def test_memory_mda_hides_estimated_duration(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    mda = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(mda)
+    mda.show()
+
+    assert mda._duration_label.isHidden()
+    assert mda._time_warning.isHidden()
+
+    mda.setValue(
+        useq.MDASequence(
+            time_plan=useq.TIntervalLoops(interval=timedelta(milliseconds=1), loops=3),
+            channels=(useq.Channel(config="DAPI", exposure=100),),
+        )
+    )
+    QApplication.processEvents()
+    assert mda._duration_label.isHidden()
+    assert mda._time_warning.isHidden()
+
+
 def test_collapsible_mda_round_trips_all_original_widgets(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:

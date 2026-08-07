@@ -129,6 +129,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         self._restoring_sequence = False
         self._applying_channel_config = False
         super().__init__(parent=parent, mmcore=mmcore)
+        self._update_time_estimate()
         self._store_overlay = BusyOverlay(self)
         self._storeCreationFinished.connect(self._store_overlay.stop)
         self._mmc.mda.events.sequenceStarted.connect(self._on_store_creation_finished)
@@ -196,6 +197,11 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         )
 
         _align_bounds_grid(self.grid_plan._core_xy_bounds)
+
+    def _update_time_estimate(self) -> None:
+        """Keep the upstream acquisition-duration display hidden in this GUI."""
+        self._time_warning.hide()
+        self._duration_label.hide()
 
     def resizeEvent(self, a0: QResizeEvent | None) -> None:
         """Keep the data-store startup overlay fitted to the MDA editor."""
