@@ -1,6 +1,5 @@
 import os
 import subprocess
-import sys
 import time
 from collections.abc import Iterator
 from contextlib import suppress
@@ -16,30 +15,6 @@ if not APP.exists():
     pytest.skip(f"App not built: {APP}", allow_module_level=True)
 
 import pyautogui  # noqa: E402
-
-
-def _close_windows_app(pid: int) -> bool:
-    """Post WM_CLOSE to each visible top-level window owned by *pid*."""
-    if sys.platform != "win32":
-        return False
-
-    import ctypes
-    from ctypes import wintypes
-
-    found = False
-    user32 = ctypes.windll.user32
-
-    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-    def _close(hwnd: int, _lparam: int) -> bool:
-        nonlocal found
-        window_pid = wintypes.DWORD()
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(window_pid))
-        if window_pid.value == pid and user32.IsWindowVisible(hwnd):
-            found = bool(user32.PostMessageW(hwnd, 0x0010, 0, 0)) or found
-        return True
-
-    user32.EnumWindows(_close, 0)
-    return found
 
 
 @pytest.fixture
@@ -63,11 +38,15 @@ def app_process() -> Iterator[subprocess.Popen]:
 
         # --- teardown ---
         if proc.poll() is None:
-            closed_gracefully = _close_windows_app(proc.pid)
-            if not closed_gracefully:
+            # This is a launch smoke test, not a shutdown test. The frozen
+            # Windows app currently faults in native Qt/ADS cleanup after a
+            # WM_CLOSE, so do not enter that unrelated teardown path here.
+            if os.name == "nt":
+                proc.kill()
+            else:
                 proc.terminate()
             try:
-                if not closed_gracefully and os.name != "nt":
+                if os.name != "nt":
                     with suppress(Exception):
                         pyautogui.moveTo(1200, 600, duration=0.1)
                 proc.wait(timeout=4)

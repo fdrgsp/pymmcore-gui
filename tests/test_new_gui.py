@@ -36,8 +36,8 @@ from pymmcore_gui._modern_gui._theme import (
 )
 from pymmcore_gui._modern_gui._theme._dark import DARK_THEME
 from pymmcore_gui._modern_gui._theme._light import LIGHT_THEME
-from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget
-from pymmcore_gui._qt.QtCore import QSize, Qt
+from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget, DockWidgetArea
+from pymmcore_gui._qt.QtCore import QPoint, QSize, Qt
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractButton,
     QApplication,
@@ -778,7 +778,7 @@ def test_acquire_reset_layout_restores_defaults(
     page.resize(1400, 900)
     page.show()
     qtbot.waitExposed(page)
-    qtbot.wait(50)
+    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
 
     page.panel_button(PanelKey.PRESETS).click()
     page.panel_button(PanelKey.CAMERA_ROI).click()
@@ -838,7 +838,7 @@ def test_acquire_reset_layout_after_restore_repins_default_widths(
     page_a.resize(1400, 900)
     page_a.show()
     qtbot.waitExposed(page_a)
-    qtbot.wait(50)
+    qtbot.waitUntil(lambda: page_a._mda_width_locked_at_real_size, timeout=2000)
 
     mda_area = page_a._mda_dock.dockAreaWidget()
     assert mda_area is not None
@@ -857,7 +857,7 @@ def test_acquire_reset_layout_after_restore_repins_default_widths(
     assert page_b.restore_layout(state, keys)
     page_b.show()
     qtbot.waitExposed(page_b)
-    qtbot.wait(50)
+    qtbot.waitUntil(lambda: page_b._mda_width_locked_at_real_size, timeout=2000)
     assert page_b._layout_restored
 
     page_b.reset_layout()
@@ -2178,14 +2178,35 @@ def _assert_column_resists_relayout_but_stays_draggable(
     # A real drag: press the handle (unlocks), resize (as the splitter would
     # live, mid-drag), release (re-locks at wherever the user left it).
     handle = next(h for h, a in page._width_locked_areas.items() if a is area)
-    qtbot.mousePress(handle, Qt.MouseButton.LeftButton)  # type: ignore[no-untyped-call]
-    assert area.minimumWidth() == 0
-    page._dock_manager.setSplitterSizes(
-        area, _resized_splitter_sizes(page, area, new_width)
+    assert isinstance(handle, QWidget)
+    # A fixed-width neighbor can prevent the real platform from targeting the
+    # handle at all. The cursor poll must unlock while nearby, then re-lock at
+    # the current width after the pointer leaves.
+    with patch("pymmcore_gui._modern_gui._acquire.QCursor") as cursor_cls:
+        cursor_cls.pos.return_value = handle.mapToGlobal(handle.rect().center())
+        page._update_width_handle_hover()
+        assert area.minimumWidth() == 0
+        cursor_cls.pos.return_value = QPoint(-10_000, -10_000)
+        page._update_width_handle_hover()
+        assert area.minimumWidth() == area.maximumWidth() == starting_width
+
+    splitter = area.parentWidget()
+    assert isinstance(splitter, QSplitter)
+    area_idx = splitter.indexOf(area)
+    delta = new_width - starting_width
+    if area_idx > 0:
+        delta = -delta
+    start = handle.rect().center()
+    end = start + QPoint(delta, 0)
+
+    qtbot.mousePress(  # type: ignore[no-untyped-call]
+        handle, Qt.MouseButton.LeftButton, pos=start
     )
+    assert area.minimumWidth() == 0
+    qtbot.mouseMove(handle, pos=end)  # type: ignore[no-untyped-call]
     assert area.width() == new_width
     qtbot.mouseRelease(  # type: ignore[no-untyped-call]
-        handle, Qt.MouseButton.LeftButton
+        handle, Qt.MouseButton.LeftButton, pos=end
     )
     assert area.minimumWidth() == area.maximumWidth() == new_width
     assert area.width() == new_width
@@ -2232,10 +2253,10 @@ def test_acquire_mda_dock_width_resists_relayout_but_stays_draggable(
     qtbot.waitExposed(page)
     # AcquirePage is constructed standalone here, before it has real window
     # geometry, so its one-time initial pin/lock (in __init__) captured a too
-    # small width; showEvent's one-time re-pin corrects that once the widget
-    # has real geometry, same as it would for the real app's startup. Give it
-    # a moment to settle.
-    qtbot.wait(50)
+    # small width; showEvent schedules a debounced re-pin (see
+    # ``_schedule_width_settle``) that fires once geometry stops changing,
+    # same as it would for the real app's startup. Wait for it to settle.
+    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
 
     mda_area = page._mda_dock.dockAreaWidget()
     assert mda_area is not None
@@ -2259,12 +2280,107 @@ def test_acquire_right_dock_width_resists_relayout_but_stays_draggable(
     page.resize(1400, 900)
     page.show()
     qtbot.waitExposed(page)
-    qtbot.wait(50)
+    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
 
     page.panel_button(PanelKey.PRESETS).click()
     right_area = page._right_dock_area
     assert right_area is not None
     _assert_column_resists_relayout_but_stays_draggable(page, qtbot, right_area, 300)
+
+
+def test_acquire_restored_stacked_right_column_stays_draggable(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A right column with multiple *stacked* (non-tabbed) areas stays resizable.
+
+    Regression test for a bug (only reproducible on a real, non-offscreen
+    display -- see below) where restoring a layout whose right column held
+    more than one *stacked* area -- e.g. Camera ROI split out below Groups &
+    Presets rather than left tabbed alongside it, exactly what ADS does on a
+    real drag-and-drop split -- left the whole column permanently
+    un-resizable. ``_install_width_lock`` used to lock whichever single
+    ``CDockAreaWidget`` ``_resolve_right_dock_area`` happened to find. That's
+    fine while every right-side panel stays tabbed together in one area (the
+    only case the other width-lock tests exercise), but a vertical splitter
+    forces every stacked child to share its width -- so locking just *one* of
+    several stacked areas to a fixed width transitively locked the *whole*
+    column to that width forever, with no boundary left to unlock through
+    (the eventFilter was watching the divider between the stacked panels, not
+    the actual column-width handle). The fix (``AcquirePage._column_widget``)
+    walks up to the top splitter's direct child before locking -- the
+    wrapping splitter once a column holds more than one area, the area
+    itself otherwise.
+
+    The splitter tree is built directly (not via a live drag-to-split) and
+    round-tripped through save/restore before checking draggability: building
+    it live leaves the *original* single-area lock stale until the next
+    settle pass (a separate, narrower gap than this test targets), and ADS's
+    own drag-and-drop can't run headless anyway (see ``_configure_ads``).
+    Going through an actual restore matches how this was found -- an
+    already-split layout persisted from styling.
+    """
+    page_a = AcquirePage(mmcore)
+    qtbot.addWidget(page_a)
+    page_a.panel_button(PanelKey.PRESETS).click()
+    page_a.panel_button(PanelKey.CAMERA_ROI).click()
+    right_area_a = page_a._right_dock_area
+    assert right_area_a is not None
+    roi_dock_a = page_a.panel_dock(PanelKey.CAMERA_ROI)
+    assert roi_dock_a is not None
+    page_a._dock_manager.addDockWidget(
+        DockWidgetArea.BottomDockWidgetArea, roi_dock_a, right_area_a
+    )
+    state, keys = page_a.save_layout()
+    assert state is not None
+
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.resize(1400, 900)
+    assert page.restore_layout(state, keys)
+    page.show()
+    qtbot.waitExposed(page)
+    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
+
+    right_area = page._right_dock_area
+    assert right_area is not None
+    column = page._column_widget(right_area)
+    assert column is not right_area, "column should now be the wrapping splitter"
+    assert isinstance(column, QSplitter)
+    assert column.orientation() == Qt.Orientation.Vertical
+    assert column.count() == 2
+
+    handle = next(h for h, w in page._width_locked_areas.items() if w is column)
+    assert isinstance(handle, QWidget)
+    starting_width = column.width()
+    assert column.minimumWidth() == column.maximumWidth() == starting_width
+
+    top_splitter = column.parentWidget()
+    assert isinstance(top_splitter, QSplitter)
+    idx = top_splitter.indexOf(column)
+
+    # A direct, deliberate attempt to resize the column away from the locked
+    # width must be clamped straight back.
+    sizes = top_splitter.sizes()
+    other = 0 if idx != 0 else 1
+    sizes[other] += sizes[idx] - 50
+    sizes[idx] = 50
+    top_splitter.setSizes(sizes)
+    assert column.width() == starting_width
+
+    # A real drag on the actual column-width handle must still work.
+    new_width = 300
+    delta = new_width - starting_width
+    if idx > 0:
+        delta = -delta
+    start = handle.rect().center()
+    end = start + QPoint(delta, 0)
+    qtbot.mousePress(handle, Qt.MouseButton.LeftButton, pos=start)  # type: ignore[no-untyped-call]
+    assert column.minimumWidth() == 0
+    qtbot.mouseMove(handle, pos=end)  # type: ignore[no-untyped-call]
+    assert column.width() == new_width
+    qtbot.mouseRelease(handle, Qt.MouseButton.LeftButton, pos=end)  # type: ignore[no-untyped-call]
+    assert column.minimumWidth() == column.maximumWidth() == new_width
+    assert column.width() == new_width
 
 
 def test_acquire_layout_round_trip(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
@@ -2306,7 +2422,7 @@ def test_acquire_restore_does_not_repin_column_widths(
     page_a.resize(1400, 900)
     page_a.show()
     qtbot.waitExposed(page_a)
-    qtbot.wait(50)
+    qtbot.waitUntil(lambda: page_a._mda_width_locked_at_real_size, timeout=2000)
 
     mda_area = page_a._mda_dock.dockAreaWidget()
     assert mda_area is not None
@@ -2329,7 +2445,7 @@ def test_acquire_restore_does_not_repin_column_widths(
     assert page_b.restore_layout(state, keys)
     page_b.show()
     qtbot.waitExposed(page_b)
-    qtbot.wait(50)
+    qtbot.waitUntil(lambda: page_b._mda_width_locked_at_real_size, timeout=2000)
 
     mda_area_b = page_b._mda_dock.dockAreaWidget()
     assert mda_area_b is not None
@@ -2645,3 +2761,48 @@ def test_toolbar_save_commits_selected_tab_before_writing() -> None:
 
     assert MainWindow._save_current_configuration(window)  # type: ignore[arg-type]
     assert calls == ["selected", "file", "clean-selected"]
+
+
+def test_acquire_width_settle_waits_out_a_late_resize(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """The initial width lock waits for resizing to stop, not just start.
+
+    Regression test for a bug where the Acquire tab's dock layout became
+    permanently un-resizable after a restart. ``AcquirePage`` lives inside
+    ``MainWindow``'s ``QStackedWidget`` and isn't the initially-active page,
+    so it only gets its first real ``showEvent`` once the app switches to it
+    -- by which point ``MainWindow`` has already requested
+    ``WindowMaximized``. On a real window manager that maximize is applied
+    *asynchronously*, often completing just after this tab's first
+    showEvent. The old one-shot ``showEvent`` handler locked the MDA/right
+    column widths (``minimumWidth == maximumWidth``) immediately, so a late
+    maximize landing a moment later froze them at a transient, too-small
+    pre-maximize size that nothing ever revisited -- explaining why
+    resizing worked fine when opening a panel interactively (the window was
+    already settled by then) but not after a restart (the lock could win the
+    race against the tab's own first show). The fix debounces the one-time
+    lock via ``resizeEvent``, so it only fires once the geometry has
+    actually stopped changing.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    # Simulate the pre-maximize transient: a too-small initial geometry.
+    page.resize(400, 400)
+    page.show()
+    qtbot.waitExposed(page)
+
+    mda_area = page._mda_dock.dockAreaWidget()
+    assert mda_area is not None
+    assert not page._mda_width_locked_at_real_size
+
+    # Simulate the async WindowMaximized completing just after the first
+    # showEvent -- before the debounce timer has fired.
+    page.resize(1400, 900)
+    assert not page._mda_width_locked_at_real_size
+
+    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
+    # Locked at the *final* (1400-wide) canonical width, not the transient
+    # 400-wide one.
+    assert mda_area.width() == _MDA_DOCK_WIDTH
+    assert mda_area.minimumWidth() == mda_area.maximumWidth() == _MDA_DOCK_WIDTH

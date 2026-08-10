@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -134,6 +135,11 @@ class ActiveChannelCollapsibleCoreMDATabs(CollapsibleCoreMDATabs):
         inherited_channels = self.channels
         self.channels = ActiveChannelTable(1, self._mmc)
         inherited_channels.deleteLater()
+
+    def _apply_editor_min_heights(self) -> None:
+        """Ignore a queued upstream resize after this tab widget was deleted."""
+        with suppress(RuntimeError):
+            super()._apply_editor_min_heights()
 
 
 __all__ = [

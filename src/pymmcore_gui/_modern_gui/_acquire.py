@@ -24,7 +24,7 @@ from pymmcore_gui._qt.QtCore import (
     QTimer,
     Signal,
 )
-from pymmcore_gui._qt.QtGui import QFont
+from pymmcore_gui._qt.QtGui import QCursor, QFont
 from pymmcore_gui._qt.QtWidgets import (
     QWIDGETSIZE_MAX,
     QAbstractButton,
@@ -50,12 +50,13 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from pymmcore_gui._qt.QtAds import CDockAreaWidget
-    from pymmcore_gui._qt.QtGui import QShowEvent
+    from pymmcore_gui._qt.QtGui import QResizeEvent, QShowEvent
     from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
 
 _DOCK_MIN_WIDTH = 0
 _MDA_DOCK_WIDTH = 700
 _RIGHT_DOCK_MAX_WIDTH = 500
+_WIDTH_SETTLE_DELAY_MS = 200
 _ADS_NEUTRAL_ICON_BUTTONS = frozenset(
     {
         "tabsMenuButton",
@@ -181,13 +182,31 @@ class AcquirePage(TabPage):
         )
 
         self._right_dock_area: CDockAreaWidget | None = None
-        self._width_locked_areas: dict[QObject, CDockAreaWidget] = {}
+        # Values are usually the CDockAreaWidget itself, but see
+        # ``_column_widget`` -- once a column holds more than one
+        # stacked/split-apart area, the locked widget is the wrapping
+        # QSplitter instead.
+        self._width_locked_areas: dict[QObject, QWidget] = {}
         # Keep PySide6's wrapper for each QtAds-owned splitter alive alongside
         # its handle. Otherwise the temporary parentWidget() wrapper may be
         # collected at the end of _install_width_lock and invalidate the handle.
         self._width_lock_splitters: dict[QObject, QSplitter] = {}
+        self._dragging_width_handles: set[QObject] = set()
         self._mda_width_locked_at_real_size = False
         self._layout_restored = False
+        # Debounced rather than a plain one-shot on the first showEvent:
+        # MainWindow requests WindowMaximized before it's ever shown, and on
+        # real window managers that maximize is applied asynchronously --
+        # often *after* this tab has already been switched to and gotten its
+        # first showEvent. Locking immediately there can freeze the columns
+        # at a transient, too-small pre-maximize size that nothing ever
+        # revisits afterward (see resizeEvent). Restarting this timer on
+        # every resize and only acting once it goes quiet for
+        # ``_WIDTH_SETTLE_DELAY_MS`` waits out that churn.
+        self._width_settle_timer = QTimer(self)
+        self._width_settle_timer.setSingleShot(True)
+        self._width_settle_timer.setInterval(_WIDTH_SETTLE_DELAY_MS)
+        self._width_settle_timer.timeout.connect(self._settle_and_lock_widths)
 
         # toolbar: snap|live ‖ shutters … [panel buttons]
         self._shutters = ShuttersBar(self._core)
@@ -228,6 +247,14 @@ class AcquirePage(TabPage):
 
         self._pin_dock_widths()
         self._lock_default_areas()
+        # A fixed-width neighbor may prevent a platform's hit testing from
+        # targeting the QSplitterHandle at all, so its Enter/Press filter would
+        # never get a chance to unlock it. Polling the cursor while this page is
+        # alive lets the real handle become draggable before the click.
+        self._width_handle_hover_timer = QTimer(self)
+        self._width_handle_hover_timer.setInterval(20)
+        self._width_handle_hover_timer.timeout.connect(self._update_width_handle_hover)
+        self._width_handle_hover_timer.start()
         self._refresh_dock_icons()
 
     # ------------------------------------------------------------------ panels
@@ -507,8 +534,49 @@ class AcquirePage(TabPage):
         if self._right_dock_area is not None:
             self._install_width_lock(self._right_dock_area)
 
+    def _top_splitter(self) -> QSplitter | None:
+        """Return the outer splitter that separates the MDA / center / right columns.
+
+        Every column hangs off this splitter, either directly (a column with
+        a single, un-split area) or through a nested sub-splitter (see
+        ``_column_widget``). The MDA dock never gets anything tabbed or
+        stacked alongside it, so its area's parent is always this splitter --
+        a reliable anchor to walk up to from anywhere else in the tree.
+        """
+        mda_area = self._mda_dock.dockAreaWidget()
+        if mda_area is None:
+            return None
+        splitter = mda_area.parentWidget()
+        return splitter if isinstance(splitter, QSplitter) else None
+
+    def _column_widget(self, area: CDockAreaWidget) -> QWidget:
+        """Return the top splitter's direct child that *area* lives under.
+
+        ``_add_side_dock`` tabs every new right-side panel into one shared
+        area by default, in which case *area* already is that direct child.
+        But ADS also lets the user drag a tab back out into its own area
+        stacked (or split) alongside the others -- nothing here prevents
+        that -- and then the column is a nested splitter wrapping one area
+        per stack slot, with *area* somewhere inside it. A splitter forces
+        every stacked child to share its width, so locking one of those
+        inner areas to a fixed width would transitively lock the *whole*
+        column to that width forever, with no handle left to escape through
+        (the eventFilter below is attached to the boundary of whatever gets
+        locked, and there is no boundary between stacked siblings and the
+        rest of the window). Locking the wrapping splitter itself instead
+        keeps the lock on the actual column-width boundary regardless of
+        how many areas the user has split that column into.
+        """
+        top = self._top_splitter()
+        widget: QWidget = area
+        parent = widget.parentWidget()
+        while parent is not None and parent is not top:
+            widget = parent
+            parent = widget.parentWidget()
+        return widget
+
     def _install_width_lock(self, area: CDockAreaWidget) -> None:
-        """Freeze *area*'s width except while it's actively being dragged.
+        """Freeze *area*'s column width except while it's actively being dragged.
 
         ADS recomputes splitter proportions for the *whole* manager whenever
         any dock area's visibility changes anywhere in it -- not just areas
@@ -529,21 +597,26 @@ class AcquirePage(TabPage):
         user leaves it at -- preserving free resizing while remaining
         immune to every other cause of unwanted relayout.
         """
-        splitter = area.parentWidget()
+        widget = self._column_widget(area)
+        splitter = widget.parentWidget()
         if not isinstance(splitter, QSplitter):
             return
         # The leftmost column (MDA) has no handle to its left; every other
         # column (e.g. the right/Groups & Presets column) has no handle to
         # its right, since it's the last splitter child -- use whichever
         # boundary actually exists.
-        idx = splitter.indexOf(area)
+        idx = splitter.indexOf(widget)
         handle = splitter.handle(idx if idx > 0 else idx + 1)
         if handle is None:
             return
         handle.installEventFilter(self)
-        self._width_locked_areas[handle] = area
-        self._width_lock_splitters[handle] = splitter
-        self._lock_width(area)
+        self._width_locked_areas[handle] = widget
+        if type(splitter).__module__.startswith("PySide6"):
+            # PySide6 can invalidate the handle when its temporary wrapper for
+            # this QtAds-owned splitter is collected. PyQt6 does not have that
+            # ownership issue, so preserve its original wrapper lifecycle.
+            self._width_lock_splitters[handle] = splitter
+        self._lock_width(widget)
 
     def _release_width_locks(self) -> None:
         """Drop every lock before the objects holding them are destroyed.
@@ -565,6 +638,7 @@ class AcquirePage(TabPage):
                 self._unlock_width(area)
         self._width_locked_areas.clear()
         self._width_lock_splitters.clear()
+        self._dragging_width_handles.clear()
 
     def _relock_widths(self, *, pin: bool) -> None:
         """Lift every width lock, optionally re-pin, then lock again.
@@ -586,7 +660,7 @@ class AcquirePage(TabPage):
             self._pin_dock_widths()
         self._lock_default_areas()
 
-    def _lock_width(self, area: CDockAreaWidget) -> None:
+    def _lock_width(self, area: QWidget) -> None:
         width = area.width()
         if width <= 0:
             # Nothing meaningful to lock to yet -- the page hasn't been laid
@@ -598,17 +672,49 @@ class AcquirePage(TabPage):
         area.setMinimumWidth(width)
         area.setMaximumWidth(width)
 
-    def _unlock_width(self, area: CDockAreaWidget) -> None:
+    def _unlock_width(self, area: QWidget) -> None:
         area.setMinimumWidth(_DOCK_MIN_WIDTH)
         area.setMaximumWidth(QWIDGETSIZE_MAX)
 
+    def _update_width_handle_hover(self) -> None:
+        """Unlock a fixed column while the pointer is near its resize handle."""
+        cursor = QCursor.pos()
+        for handle, area in tuple(self._width_locked_areas.items()):
+            if not isinstance(handle, QWidget):
+                continue
+            with suppress(RuntimeError):
+                local_pos = handle.mapFromGlobal(cursor)
+                is_near = handle.rect().adjusted(-6, 0, 6, 0).contains(local_pos)
+                is_unlocked = area.minimumWidth() != area.maximumWidth()
+                if is_near and not is_unlocked:
+                    self._unlock_width(area)
+                elif (
+                    not is_near
+                    and is_unlocked
+                    and handle not in self._dragging_width_handles
+                ):
+                    self._lock_width(area)
+
     def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
-        """Unlock a locked column's width for the duration of a live handle drag."""
+        """Unlock a column while its splitter handle is hovered or dragged."""
         area = None if a0 is None else self._width_locked_areas.get(a0)
-        if a1 is not None and area is not None:
-            if a1.type() == QEvent.Type.MouseButtonPress:
+        if a0 is not None and a1 is not None and area is not None:
+            event_type = a1.type()
+            if event_type == QEvent.Type.Enter:
+                # Unlock before the press: on some real platform plugins a
+                # fixed-size neighbor prevents the handle from beginning a
+                # drag, so waiting for MouseButtonPress is too late.
                 self._unlock_width(area)
-            elif a1.type() == QEvent.Type.MouseButtonRelease:
+            elif event_type == QEvent.Type.MouseButtonPress:
+                self._dragging_width_handles.add(a0)
+                self._unlock_width(area)
+            elif event_type == QEvent.Type.MouseButtonRelease:
+                self._dragging_width_handles.discard(a0)
+                self._lock_width(area)
+            elif (
+                event_type == QEvent.Type.Leave
+                and a0 not in self._dragging_width_handles
+            ):
                 self._lock_width(area)
         return super().eventFilter(a0, a1)
 
@@ -735,13 +841,17 @@ class AcquirePage(TabPage):
         that intent so the application-wide contrast sweep cannot turn it
         white again on the next theme change.
         """
-        red = qcolor(theme().status_red)
-        for btn in self._dock_manager.findChildren(QAbstractButton):
-            name = btn.objectName()
-            if name == _ADS_TAB_CLOSE_BUTTON:
-                set_icon_tint(btn, red)
-            elif name in _ADS_NEUTRAL_ICON_BUTTONS:
-                ensure_visible_icon(btn)
+        # dockWidgetAdded queues this method for the next event-loop turn. A
+        # short-lived window may be gone by then, especially under PySide6,
+        # whose wrappers immediately reject access to deleted C++ objects.
+        with suppress(RuntimeError):
+            red = qcolor(theme().status_red)
+            for btn in self._dock_manager.findChildren(QAbstractButton):
+                name = btn.objectName()
+                if name == _ADS_TAB_CLOSE_BUTTON:
+                    set_icon_tint(btn, red)
+                elif name in _ADS_NEUTRAL_ICON_BUTTONS:
+                    ensure_visible_icon(btn)
 
     def _refresh_dock_fonts(self) -> None:
         """Let the dock subtree follow app-font (zoom) changes again.
@@ -790,22 +900,13 @@ class AcquirePage(TabPage):
             # AcquirePage is constructed eagerly in MainWindow.__init__, before
             # the window has been shown/resized to its real on-screen geometry
             # -- so the one-time initial pin (and the width lock installed
-            # right after it) may have captured too small a width. Re-run both
-            # now that this tab has real geometry, but only once: unlike the
-            # refreshes below, repeating this on every tab switch would wipe
-            # out any width the user had since dragged a locked column to (or,
-            # after a layout restore, the width the user left it at last
-            # session -- hence pin=False on that path).
-            self._mda_width_locked_at_real_size = True
-            if self._layout_restored:
-                # A restored layout has no widths to pin, so there is nothing
-                # to force the areas to their final size synchronously -- ADS
-                # only applies the restored splitter sizes on the layout pass
-                # that follows this event. Locking here would freeze the
-                # still-unresized (0px) columns, so wait one turn.
-                QTimer.singleShot(0, partial(self._relock_widths, pin=False))
-            else:
-                self._relock_widths(pin=True)
+            # right after it) may have captured too small a width. Schedule
+            # the (one-time) settle-and-lock now that this tab has *a* real
+            # geometry; resizeEvent keeps pushing it back out while that
+            # geometry is still changing (e.g. an in-progress WindowMaximized
+            # completing after this showEvent), so it only fires once things
+            # have actually settled.
+            self._schedule_width_settle()
         self._shutters.refresh()
         for key, panel in self._panels.items():
             if (
@@ -815,3 +916,38 @@ class AcquirePage(TabPage):
                 and panel.info.refresh is not None
             ):
                 QTimer.singleShot(0, partial(self._refresh_panel, key))
+
+    def resizeEvent(self, a0: QResizeEvent | None) -> None:
+        """Keep pushing the initial width-settle out while still resizing.
+
+        Covers the same startup race as ``showEvent``'s call into
+        ``_schedule_width_settle``, for the common case where this tab's
+        first real resize (e.g. an async ``WindowMaximized`` completing)
+        lands *after* that first showEvent already scheduled a lock -- this
+        restarts the same timer so the lock still waits for the resizing to
+        stop rather than firing mid-resize.
+        """
+        super().resizeEvent(a0)
+        if not self._mda_width_locked_at_real_size:
+            self._schedule_width_settle()
+
+    def _schedule_width_settle(self) -> None:
+        """(Re)start the debounce timer that runs ``_settle_and_lock_widths`` once."""
+        if not self._mda_width_locked_at_real_size:
+            self._width_settle_timer.start()
+
+    def _settle_and_lock_widths(self) -> None:
+        """One-time pin/lock once this tab's geometry has stopped changing.
+
+        Mirrors what the old one-shot ``showEvent`` handler did, just fired
+        from the debounce timer instead: unlike the refreshes in
+        ``showEvent``, this must run only once ever -- repeating it on every
+        later resize would wipe out any width the user has since dragged a
+        locked column to (or, after a layout restore, the width the user
+        left it at last session -- hence ``pin=False`` on that path).
+        """
+        self._mda_width_locked_at_real_size = True
+        if self._layout_restored:
+            self._relock_widths(pin=False)
+        else:
+            self._relock_widths(pin=True)
