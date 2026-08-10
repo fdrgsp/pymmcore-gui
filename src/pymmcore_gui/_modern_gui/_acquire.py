@@ -947,7 +947,26 @@ class AcquirePage(TabPage):
         later resize would wipe out any width the user has since dragged a
         locked column to (or, after a layout restore, the width the user
         left it at last session -- hence ``pin=False`` on that path).
+
+        This tab's *own* geometry settling (what the debounce above waits
+        for) is necessary but not sufficient after a restore: ADS applies
+        the restored splitter sizes to the live dock-area tree in its own
+        deferred pass, decoupled from this tab's resize events, so the debounce
+        can fire while the MDA area is still genuinely 0px wide. Locking at
+        that instant wouldn't freeze it at 0 -- ``_lock_width`` already
+        guards against that -- but it would skip locking entirely, leaving
+        the column permanently unconstrained (indistinguishable, from the
+        outside, from never having settled at all). Checking the MDA area's
+        actual width before committing, and re-arming the same debounce
+        timer if it's not real yet, waits out that second, independent
+        source of delay instead of gambling that one fixed timeout covers
+        both -- a race that a slower CI runner or platform binding can
+        still lose.
         """
+        mda_area = self._mda_dock.dockAreaWidget()
+        if mda_area is not None and mda_area.width() <= 0:
+            self._width_settle_timer.start()
+            return
         self._mda_width_locked_at_real_size = True
         if self._layout_restored:
             self._relock_widths(pin=False)
