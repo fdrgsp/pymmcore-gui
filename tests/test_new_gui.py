@@ -38,6 +38,7 @@ from pymmcore_gui._modern_gui._theme._dark import DARK_THEME
 from pymmcore_gui._modern_gui._theme._light import LIGHT_THEME
 from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget
 from pymmcore_gui._qt.QtCore import QPoint, QSize, Qt
+from pymmcore_gui._qt.QtGui import QCursor
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractButton,
     QApplication,
@@ -848,6 +849,7 @@ def test_acquire_reset_layout_after_restore_repins_default_widths(
         mda_area, _resized_splitter_sizes(page_a, mda_area, 500)
     )
     qtbot.mouseRelease(handle, Qt.MouseButton.LeftButton)  # type: ignore[no-untyped-call]
+    _park_real_cursor_away()
     state, keys = page_a.save_layout()
     assert state is not None
 
@@ -2162,6 +2164,24 @@ def _resized_splitter_sizes(
     return sizes
 
 
+def _park_real_cursor_away() -> None:
+    """Move the real global cursor off of any splitter handle after a drag.
+
+    On a real platform (confirmed inert under the offscreen test platform,
+    which is exactly why this can't be verified locally), ``QTest`` mouse
+    simulation warps the real system cursor, not just synthetic per-widget
+    events -- so without this, wherever a drag left the real cursor can
+    bleed into whatever ``AcquirePage`` gets constructed next. Two pages
+    built with the same default geometry, as the restore-path tests below
+    do, can easily place a handle at the exact screen position a previous
+    one's drag left the real cursor at; ``_update_width_handle_hover``'s
+    poll would then read that as a live hover on a column nobody is
+    actually touching, unlock it, and never see anything move the
+    (nonexistent) real pointer back off again to re-lock it.
+    """
+    QCursor.setPos(QPoint(-10_000, -10_000))
+
+
 def _assert_column_resists_relayout_but_stays_draggable(
     page: AcquirePage, qtbot: QtBot, area: CDockAreaWidget, new_width: int
 ) -> None:
@@ -2208,6 +2228,7 @@ def _assert_column_resists_relayout_but_stays_draggable(
     qtbot.mouseRelease(  # type: ignore[no-untyped-call]
         handle, Qt.MouseButton.LeftButton, pos=end
     )
+    _park_real_cursor_away()
     assert area.minimumWidth() == area.maximumWidth() == new_width
     assert area.width() == new_width
 
@@ -2456,6 +2477,7 @@ def test_acquire_restore_does_not_repin_column_widths(
         mda_area, _resized_splitter_sizes(page_a, mda_area, 500)
     )
     qtbot.mouseRelease(handle, Qt.MouseButton.LeftButton)  # type: ignore[no-untyped-call]
+    _park_real_cursor_away()
     assert mda_area.width() == 500
 
     state, keys = page_a.save_layout()
@@ -2470,6 +2492,16 @@ def test_acquire_restore_does_not_repin_column_widths(
     page_b.show()
     qtbot.waitExposed(page_b)
     qtbot.waitUntil(lambda: page_b._mda_width_locked_at_real_size, timeout=2000)
+    # A stray real cursor position -- left over from *any* earlier real drag,
+    # in this test or another one entirely -- can park itself on page_b's own
+    # handle purely by screen-coordinate coincidence and read as a live hover
+    # nobody is actually performing (see _park_real_cursor_away). Parking it
+    # away and giving the ever-running hover poll a moment to see that is
+    # exactly the self-correction that mechanism exists for, so do that
+    # before asserting on the settled state rather than assuming nothing
+    # could have nudged it since waitUntil returned.
+    _park_real_cursor_away()
+    qtbot.wait(50)
 
     mda_area_b = page_b._mda_dock.dockAreaWidget()
     assert mda_area_b is not None
