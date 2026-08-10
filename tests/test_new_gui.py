@@ -2797,3 +2797,58 @@ def test_acquire_width_settle_waits_out_a_late_resize(
     # 400-wide one.
     assert mda_area.width() == _MDA_DOCK_WIDTH
     assert mda_area.minimumWidth() == mda_area.maximumWidth() == _MDA_DOCK_WIDTH
+
+
+def test_acquire_settle_retries_until_lock_actually_takes(
+    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The debounce settle retries until the lock actually applies, not just once.
+
+    Regression test for a CI-only failure (never reproduced locally, on any
+    platform or Qt binding) where a restored layout's MDA area ended up
+    completely unlocked (``minimumWidth() == 0``, ``maximumWidth() ==
+    16777215``) despite ``_mda_width_locked_at_real_size`` having already
+    flipped True and the area's *width* already matching the restored
+    value. The debounce used to treat "the MDA area has a nonzero width" as
+    proof the whole restored tree was ready to lock -- but
+    ``_install_width_lock`` also needs a specific splitter handle index,
+    which only exists once every sibling column has *also* been re-added to
+    the tree by ADS's own deferred restore pass. A width can already be
+    real before that handle exists, so the old width-only check could let
+    the one-shot settle declare victory while the lock silently failed
+    underneath it, with nothing left to ever retry. The fix has the locking
+    functions report whether they actually succeeded and retries the
+    debounce on *that* signal instead.
+
+    Simulated here by forcing ``_install_width_lock`` to fail a couple of
+    times before delegating to the real implementation -- reproducing the
+    missing-handle race directly, since it never showed up locally on its
+    own.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.resize(1400, 900)
+
+    call_count = 0
+    real_install = page._install_width_lock
+
+    def flaky_install(area: CDockAreaWidget) -> bool:
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 2:
+            # Simulate ADS not having rebuilt the expected splitter handle
+            # yet, even though the area may already have a real width.
+            return False
+        return real_install(area)
+
+    monkeypatch.setattr(page, "_install_width_lock", flaky_install)
+
+    page.show()
+    qtbot.waitExposed(page)
+    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
+
+    assert call_count > 2, "test didn't actually exercise a retry"
+    mda_area = page._mda_dock.dockAreaWidget()
+    assert mda_area is not None
+    assert mda_area.width() == _MDA_DOCK_WIDTH
+    assert mda_area.minimumWidth() == mda_area.maximumWidth() == _MDA_DOCK_WIDTH

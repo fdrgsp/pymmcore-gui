@@ -527,12 +527,19 @@ class AcquirePage(TabPage):
             new[idx] = remaining // len(middle)
         self._dock_manager.setSplitterSizes(mda_area, new)
 
-    def _lock_default_areas(self) -> None:
-        """(Re)install width locks on the MDA area and the right column, if any."""
+    def _lock_default_areas(self) -> bool:
+        """(Re)install width locks on the MDA area and the right column, if any.
+
+        Returns whether every lock actually attempted (an area with nothing
+        docked in it yet is skipped, not a failure) took -- see
+        ``_install_width_lock``.
+        """
+        ok = True
         if (mda_area := self._mda_dock.dockAreaWidget()) is not None:
-            self._install_width_lock(mda_area)
+            ok = self._install_width_lock(mda_area) and ok
         if self._right_dock_area is not None:
-            self._install_width_lock(self._right_dock_area)
+            ok = self._install_width_lock(self._right_dock_area) and ok
+        return ok
 
     def _column_widget(self, area: CDockAreaWidget) -> QWidget:
         """Return the outer splitter's direct child that *area* lives under.
@@ -577,7 +584,7 @@ class AcquirePage(TabPage):
             parent = widget.parentWidget()
         return widget
 
-    def _install_width_lock(self, area: CDockAreaWidget) -> None:
+    def _install_width_lock(self, area: CDockAreaWidget) -> bool:
         """Freeze *area*'s column width except while it's actively being dragged.
 
         ADS recomputes splitter proportions for the *whole* manager whenever
@@ -598,11 +605,18 @@ class AcquirePage(TabPage):
         caught via ``eventFilter``) and re-applied at whatever width the
         user leaves it at -- preserving free resizing while remaining
         immune to every other cause of unwanted relayout.
+
+        Returns whether the lock actually took. Right after a layout
+        restore, ADS is still applying the restored tree to the live
+        widgets in its own deferred pass (see ``_settle_and_lock_widths``),
+        so the expected handle -- or even *area*'s width -- may not exist
+        yet; the caller is expected to retry rather than treat that as
+        permanent.
         """
         widget = self._column_widget(area)
         splitter = widget.parentWidget()
         if not isinstance(splitter, QSplitter):
-            return
+            return False
         # The leftmost column (MDA) has no handle to its left; every other
         # column (e.g. the right/Groups & Presets column) has no handle to
         # its right, since it's the last splitter child -- use whichever
@@ -610,7 +624,7 @@ class AcquirePage(TabPage):
         idx = splitter.indexOf(widget)
         handle = splitter.handle(idx if idx > 0 else idx + 1)
         if handle is None:
-            return
+            return False
         handle.installEventFilter(self)
         self._width_locked_areas[handle] = widget
         if type(splitter).__module__.startswith("PySide6"):
@@ -618,7 +632,7 @@ class AcquirePage(TabPage):
             # this QtAds-owned splitter is collected. PyQt6 does not have that
             # ownership issue, so preserve its original wrapper lifecycle.
             self._width_lock_splitters[handle] = splitter
-        self._lock_width(widget)
+        return self._lock_width(widget)
 
     def _release_width_locks(self) -> None:
         """Drop every lock before the objects holding them are destroyed.
@@ -642,7 +656,7 @@ class AcquirePage(TabPage):
         self._width_lock_splitters.clear()
         self._dragging_width_handles.clear()
 
-    def _relock_widths(self, *, pin: bool) -> None:
+    def _relock_widths(self, *, pin: bool) -> bool:
         """Lift every width lock, optionally re-pin, then lock again.
 
         Used by the one-shot ``showEvent`` refresh: the constraints have to
@@ -656,13 +670,16 @@ class AcquirePage(TabPage):
         sizes are the widths the user left, and ``_pin_dock_widths`` assumes
         the canonical 2-/3-column arrangement, which an arbitrary restored
         layout need not have.
+
+        Returns whether every attempted lock actually took -- see
+        ``_lock_default_areas``.
         """
         self._release_width_locks()
         if pin:
             self._pin_dock_widths()
-        self._lock_default_areas()
+        return self._lock_default_areas()
 
-    def _lock_width(self, area: QWidget) -> None:
+    def _lock_width(self, area: QWidget) -> bool:
         width = area.width()
         if width <= 0:
             # Nothing meaningful to lock to yet -- the page hasn't been laid
@@ -670,9 +687,10 @@ class AcquirePage(TabPage):
             # pin the column shut permanently (it survives every later
             # layout pass, which is the whole point of the lock), so leave it
             # unconstrained and let showEvent lock it once it has a width.
-            return
+            return False
         area.setMinimumWidth(width)
         area.setMaximumWidth(width)
+        return True
 
     def _unlock_width(self, area: QWidget) -> None:
         area.setMinimumWidth(_DOCK_MIN_WIDTH)
@@ -950,25 +968,26 @@ class AcquirePage(TabPage):
 
         This tab's *own* geometry settling (what the debounce above waits
         for) is necessary but not sufficient after a restore: ADS applies
-        the restored splitter sizes to the live dock-area tree in its own
-        deferred pass, decoupled from this tab's resize events, so the debounce
-        can fire while the MDA area is still genuinely 0px wide. Locking at
-        that instant wouldn't freeze it at 0 -- ``_lock_width`` already
-        guards against that -- but it would skip locking entirely, leaving
-        the column permanently unconstrained (indistinguishable, from the
-        outside, from never having settled at all). Checking the MDA area's
-        actual width before committing, and re-arming the same debounce
-        timer if it's not real yet, waits out that second, independent
-        source of delay instead of gambling that one fixed timeout covers
-        both -- a race that a slower CI runner or platform binding can
-        still lose.
+        the restored splitter sizes to the live dock-area tree -- rebuilding
+        the splitter/handle structure along the way -- in its own deferred
+        pass, decoupled from this tab's resize events. The debounce can fire
+        while that pass is still mid-flight, when the MDA area may be
+        genuinely 0px wide, or its column's expected splitter handle may not
+        exist yet at all (``_install_width_lock`` needs a specific handle
+        index, which requires every sibling column to have already been
+        re-added to the tree). Either way ``_relock_widths`` reports it
+        rather than lock nothing and call it done: a width of 0 wouldn't
+        actually get frozen there (``_lock_width`` guards against that), and
+        a missing handle just skips the lock outright -- both
+        indistinguishable, from the outside, from having settled with
+        nothing to lock. Retrying on that signal instead of a plain width
+        check catches the missing-handle case too, and waits out however
+        long ADS's pass actually takes instead of gambling that one fixed
+        timeout covers it -- a race that a slower CI runner or platform
+        binding can still lose.
         """
-        mda_area = self._mda_dock.dockAreaWidget()
-        if mda_area is not None and mda_area.width() <= 0:
+        ok = self._relock_widths(pin=not self._layout_restored)
+        if not ok:
             self._width_settle_timer.start()
             return
         self._mda_width_locked_at_real_size = True
-        if self._layout_restored:
-            self._relock_widths(pin=False)
-        else:
-            self._relock_widths(pin=True)
