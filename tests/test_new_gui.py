@@ -36,7 +36,7 @@ from pymmcore_gui._modern_gui._theme import (
 )
 from pymmcore_gui._modern_gui._theme._dark import DARK_THEME
 from pymmcore_gui._modern_gui._theme._light import LIGHT_THEME
-from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget, DockWidgetArea
+from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget
 from pymmcore_gui._qt.QtCore import QPoint, QSize, Qt
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractButton,
@@ -2288,99 +2288,90 @@ def test_acquire_right_dock_width_resists_relayout_but_stays_draggable(
     _assert_column_resists_relayout_but_stays_draggable(page, qtbot, right_area, 300)
 
 
-def test_acquire_restored_stacked_right_column_stays_draggable(
+def test_column_widget_locates_top_splitter_child_through_nesting(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    """A right column with multiple *stacked* (non-tabbed) areas stays resizable.
+    """``_column_widget`` finds the outer splitter's direct child at any depth.
 
-    Regression test for a bug (only reproducible on a real, non-offscreen
-    display -- see below) where restoring a layout whose right column held
-    more than one *stacked* area -- e.g. Camera ROI split out below Groups &
-    Presets rather than left tabbed alongside it, exactly what ADS does on a
-    real drag-and-drop split -- left the whole column permanently
-    un-resizable. ``_install_width_lock`` used to lock whichever single
-    ``CDockAreaWidget`` ``_resolve_right_dock_area`` happened to find. That's
-    fine while every right-side panel stays tabbed together in one area (the
-    only case the other width-lock tests exercise), but a vertical splitter
-    forces every stacked child to share its width -- so locking just *one* of
-    several stacked areas to a fixed width transitively locked the *whole*
-    column to that width forever, with no boundary left to unlock through
-    (the eventFilter was watching the divider between the stacked panels, not
-    the actual column-width handle). The fix (``AcquirePage._column_widget``)
-    walks up to the top splitter's direct child before locking -- the
-    wrapping splitter once a column holds more than one area, the area
-    itself otherwise.
+    Regression test for two bugs, both only reproducible on a real,
+    non-offscreen display:
 
-    The splitter tree is built directly (not via a live drag-to-split) and
-    round-tripped through save/restore before checking draggability: building
-    it live leaves the *original* single-area lock stale until the next
-    settle pass (a separate, narrower gap than this test targets), and ADS's
-    own drag-and-drop can't run headless anyway (see ``_configure_ads``).
-    Going through an actual restore matches how this was found -- an
-    already-split layout persisted from styling.
+    1. Restoring a layout whose right column held more than one *stacked*
+       (non-tabbed) area -- e.g. Camera ROI split out below Groups & Presets
+       rather than tabbed alongside it, exactly what ADS does on a real
+       drag-and-drop split -- left the whole column permanently
+       un-resizable. ``_install_width_lock`` used to lock whichever single
+       ``CDockAreaWidget`` ``_resolve_right_dock_area`` happened to find.
+       That's fine while every right-side panel stays tabbed together in one
+       area, but a vertical splitter forces every stacked child to share its
+       width -- so locking just *one* of several stacked areas to a fixed
+       width transitively locked the *whole* column to that width forever,
+       with no boundary left to unlock through (the eventFilter was watching
+       the divider between the stacked panels, not the actual column-width
+       handle).
+
+    2. The first fix for (1) assumed the MDA column could never itself be
+       split this way, and used ``self._mda_dock.dockAreaWidget()`` as a
+       fixed anchor to identify the outer splitter. That assumption doesn't
+       hold -- ADS lets a user stack a panel onto MDA's column exactly like
+       any other. The current version doesn't reference MDA (or any other
+       specific dock) at all: it climbs until the next splitter up is no
+       longer itself nested in another splitter, which identifies the outer
+       (MDA / center / right) splitter structurally, symmetric across every
+       column.
+
+    Built from plain ``QSplitter``/``QWidget`` stand-ins rather than an
+    actual ADS split: splitting a dock area for real (``addDockWidget`` into
+    a *new* area, as opposed to tabbing into an existing one) reproducibly
+    crashes under this automated harness -- see ``_configure_ads`` -- so
+    real ADS rearranging stays a manual smoke-test item here too. This
+    instead verifies the tree-walking logic directly.
     """
-    page_a = AcquirePage(mmcore)
-    qtbot.addWidget(page_a)
-    page_a.panel_button(PanelKey.PRESETS).click()
-    page_a.panel_button(PanelKey.CAMERA_ROI).click()
-    right_area_a = page_a._right_dock_area
-    assert right_area_a is not None
-    roi_dock_a = page_a.panel_dock(PanelKey.CAMERA_ROI)
-    assert roi_dock_a is not None
-    page_a._dock_manager.addDockWidget(
-        DockWidgetArea.BottomDockWidgetArea, roi_dock_a, right_area_a
-    )
-    state, keys = page_a.save_layout()
-    assert state is not None
-
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
-    page.resize(1400, 900)
-    assert page.restore_layout(state, keys)
-    page.show()
-    qtbot.waitExposed(page)
-    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
 
-    right_area = page._right_dock_area
-    assert right_area is not None
-    column = page._column_widget(right_area)
-    assert column is not right_area, "column should now be the wrapping splitter"
-    assert isinstance(column, QSplitter)
-    assert column.orientation() == Qt.Orientation.Vertical
-    assert column.count() == 2
+    outer = QSplitter(Qt.Orientation.Horizontal)
+    qtbot.addWidget(outer)
 
-    handle = next(h for h, w in page._width_locked_areas.items() if w is column)
-    assert isinstance(handle, QWidget)
-    starting_width = column.width()
-    assert column.minimumWidth() == column.maximumWidth() == starting_width
+    # Left (MDA) column: split into two stacked areas -- case 2 above.
+    left = QSplitter(Qt.Orientation.Vertical)
+    left_area_a = QWidget()
+    left_area_b = QWidget()
+    left.addWidget(left_area_a)
+    left.addWidget(left_area_b)
 
-    top_splitter = column.parentWidget()
-    assert isinstance(top_splitter, QSplitter)
-    idx = top_splitter.indexOf(column)
+    # Center column: ADS wraps even an *unsplit* column in a chain of
+    # single-child splitters in practice -- verify the walk isn't fooled
+    # into stopping one level early by that extra wrapping.
+    center_outer_wrap = QSplitter(Qt.Orientation.Vertical)
+    center_inner_wrap = QSplitter(Qt.Orientation.Horizontal)
+    center_area = QWidget()
+    center_inner_wrap.addWidget(center_area)
+    center_outer_wrap.addWidget(center_inner_wrap)
 
-    # A direct, deliberate attempt to resize the column away from the locked
-    # width must be clamped straight back.
-    sizes = top_splitter.sizes()
-    other = 0 if idx != 0 else 1
-    sizes[other] += sizes[idx] - 50
-    sizes[idx] = 50
-    top_splitter.setSizes(sizes)
-    assert column.width() == starting_width
+    # Right column: split into two stacked areas -- case 1 above.
+    right = QSplitter(Qt.Orientation.Vertical)
+    right_area_a = QWidget()
+    right_area_b = QWidget()
+    right.addWidget(right_area_a)
+    right.addWidget(right_area_b)
 
-    # A real drag on the actual column-width handle must still work.
-    new_width = 300
-    delta = new_width - starting_width
-    if idx > 0:
-        delta = -delta
-    start = handle.rect().center()
-    end = start + QPoint(delta, 0)
-    qtbot.mousePress(handle, Qt.MouseButton.LeftButton, pos=start)  # type: ignore[no-untyped-call]
-    assert column.minimumWidth() == 0
-    qtbot.mouseMove(handle, pos=end)  # type: ignore[no-untyped-call]
-    assert column.width() == new_width
-    qtbot.mouseRelease(handle, Qt.MouseButton.LeftButton, pos=end)  # type: ignore[no-untyped-call]
-    assert column.minimumWidth() == column.maximumWidth() == new_width
-    assert column.width() == new_width
+    outer.addWidget(left)
+    outer.addWidget(center_outer_wrap)
+    outer.addWidget(right)
+
+    # Every stacked area in a split column resolves to that column's
+    # wrapping splitter -- left (MDA) and right alike, no special-casing.
+    assert page._column_widget(cast("CDockAreaWidget", left_area_a)) is left
+    assert page._column_widget(cast("CDockAreaWidget", left_area_b)) is left
+    assert page._column_widget(cast("CDockAreaWidget", right_area_a)) is right
+    assert page._column_widget(cast("CDockAreaWidget", right_area_b)) is right
+    # An unsplit column resolves to the outer splitter's direct child, no
+    # matter how many redundant single-child wrapper splitters ADS put
+    # between it and the area itself.
+    assert (
+        page._column_widget(cast("CDockAreaWidget", center_area)) is center_outer_wrap
+    )
 
 
 def test_acquire_layout_round_trip(mmcore: CMMCorePlus, qtbot: QtBot) -> None:

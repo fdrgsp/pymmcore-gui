@@ -534,43 +534,45 @@ class AcquirePage(TabPage):
         if self._right_dock_area is not None:
             self._install_width_lock(self._right_dock_area)
 
-    def _top_splitter(self) -> QSplitter | None:
-        """Return the outer splitter that separates the MDA / center / right columns.
-
-        Every column hangs off this splitter, either directly (a column with
-        a single, un-split area) or through a nested sub-splitter (see
-        ``_column_widget``). The MDA dock never gets anything tabbed or
-        stacked alongside it, so its area's parent is always this splitter --
-        a reliable anchor to walk up to from anywhere else in the tree.
-        """
-        mda_area = self._mda_dock.dockAreaWidget()
-        if mda_area is None:
-            return None
-        splitter = mda_area.parentWidget()
-        return splitter if isinstance(splitter, QSplitter) else None
-
     def _column_widget(self, area: CDockAreaWidget) -> QWidget:
-        """Return the top splitter's direct child that *area* lives under.
+        """Return the outer splitter's direct child that *area* lives under.
 
         ``_add_side_dock`` tabs every new right-side panel into one shared
-        area by default, in which case *area* already is that direct child.
-        But ADS also lets the user drag a tab back out into its own area
-        stacked (or split) alongside the others -- nothing here prevents
-        that -- and then the column is a nested splitter wrapping one area
-        per stack slot, with *area* somewhere inside it. A splitter forces
-        every stacked child to share its width, so locking one of those
-        inner areas to a fixed width would transitively lock the *whole*
-        column to that width forever, with no handle left to escape through
-        (the eventFilter below is attached to the boundary of whatever gets
+        area by default, in which case *area* already is that direct child --
+        and the same is true of the MDA column, ``_add_dock``'s
+        ``LeftDockWidgetArea`` default. But ADS lets the user drag *any* tab
+        out into its own area stacked (or split) alongside the others in the
+        same column -- MDA's included, nothing here is special-cased to it --
+        and then that column is a nested splitter wrapping one area per stack
+        slot, with *area* somewhere inside it. A splitter forces every
+        stacked child to share its width, so locking one of those inner areas
+        to a fixed width would transitively lock the *whole* column to that
+        width forever, with no handle left to escape through (the
+        eventFilter below is attached to the boundary of whatever gets
         locked, and there is no boundary between stacked siblings and the
         rest of the window). Locking the wrapping splitter itself instead
-        keeps the lock on the actual column-width boundary regardless of
-        how many areas the user has split that column into.
+        keeps the lock on the actual column-width boundary regardless of how
+        many areas the user has split that column into, or which column it
+        is.
+
+        Climbs from *area* until the next splitter up is no longer nested in
+        another splitter -- i.e. until it reaches the outermost (MDA / center
+        / right) splitter -- and returns whichever ancestor sits directly
+        under *that*. ADS wraps even an unsplit column in a chain of
+        single-child splitters (observed for the center/viewer column), so
+        "no splitter above" is what actually identifies the outermost level,
+        not "only one splitter up" -- and unlike comparing against a
+        separately-fetched reference with ``is``, this never depends on
+        Python wrapper identity being preserved across repeated
+        ``.parentWidget()`` calls on the same C++ object, which PySide6 does
+        not guarantee (PyQt6 does, but relying on that is what let a PySide6-
+        only regression through here once already).
         """
-        top = self._top_splitter()
         widget: QWidget = area
         parent = widget.parentWidget()
-        while parent is not None and parent is not top:
+        while isinstance(parent, QSplitter) and isinstance(
+            parent.parentWidget(), QSplitter
+        ):
             widget = parent
             parent = widget.parentWidget()
         return widget
