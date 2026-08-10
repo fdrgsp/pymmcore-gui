@@ -108,7 +108,7 @@ the existing `_create_mda` / `_create_console` shape, and delete the
 `_ignoring_core` adapter. Update the three `PANELS` entries.
 
 - **Keep `parent=parent`** on all three. `PropertyBrowser` is a `QDialog`;
-  unparented it would briefly be a top-level window, which
+  parentless it would briefly be a top-level window, which
   `test_new_gui.py::test_acquire_docked_panels_are_reparented_not_windows` and
   `conftest.py::check_leaks` exist to police.
 - **Drop** `create_exception_log`'s `setWindowFlags(...)` and
@@ -258,13 +258,12 @@ selected with no `flake8-tidy-imports` override, so the default
 
 ### 2.3 Hoist `_app.py`'s theme import to module scope
 
-Post-move the graph is
-`_app -> _main_window -> {_acquire -> {_array_viewer, _panels, _tab_page, _theme}, ...}`
-with `_theme -> _array_viewer -> {_mda_export, _qt}` as a one-way edge. No cycle
-remains once `_array_viewer.py` stops importing `actions` (1.2), so the deferred
-import at line 161 can become top-level. **Leave `_theme -> _array_viewer`
-alone** — inverting it means relocating three public helpers across 8 files for
-no functional gain.
+Post-move the graph is `_app -> _main_window -> {_acquire -> {_array_viewer,
+_panels, _tab_page, _theme}, ...}` with `_theme -> _array_viewer ->
+{_mda_export, _qt}` as a one-way edge. No cycle remains once `_array_viewer.py`
+stops importing `actions` (1.2), so the deferred import at line 161 can become
+top-level. **Leave `_theme -> _array_viewer` alone** — inverting it means
+relocating three public helpers across 8 files for no functional gain.
 
 ### 2.4 `DATA_SAVING.md`
 
