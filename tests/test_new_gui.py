@@ -2274,6 +2274,16 @@ def test_acquire_right_dock_width_resists_relayout_but_stays_draggable(
     change elsewhere in the manager that used to be able to silently resize
     it too, so it needs the same width lock installed once it exists (see
     ``_add_side_dock``).
+
+    Checks the lock itself (resists a programmatic resize, and the hover
+    handler recognizes its own handle) rather than re-running a full
+    interactive mouse-drag simulation a second time: the MDA test above
+    already proves that mechanism end-to-end, and ``eventFilter`` doesn't
+    branch on which column's handle it's attached to, so a second real
+    ``QTest`` press/move/release cycle here would only double the suite's
+    exposure to real Qt event delivery -- on a non-offscreen display, the
+    kind of thing that can reach into ADS/paint internals -- without
+    covering any behavior the MDA test doesn't already cover.
     """
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
@@ -2285,7 +2295,30 @@ def test_acquire_right_dock_width_resists_relayout_but_stays_draggable(
     page.panel_button(PanelKey.PRESETS).click()
     right_area = page._right_dock_area
     assert right_area is not None
-    _assert_column_resists_relayout_but_stays_draggable(page, qtbot, right_area, 300)
+    starting_width = right_area.width()
+    assert starting_width > 0
+    assert right_area.minimumWidth() == right_area.maximumWidth() == starting_width
+
+    # A direct, deliberate attempt to resize it away from the locked width
+    # must be clamped straight back -- exercising the same splitter API ADS
+    # itself uses internally when it recomputes proportions.
+    page._dock_manager.setSplitterSizes(
+        right_area, _resized_splitter_sizes(page, right_area, 50)
+    )
+    assert right_area.width() == starting_width
+
+    # The hover handler must recognize *this* column's handle, not just
+    # MDA's -- confirming _install_width_lock actually ran for the right
+    # column rather than being silently skipped.
+    handle = next(h for h, a in page._width_locked_areas.items() if a is right_area)
+    assert isinstance(handle, QWidget)
+    with patch("pymmcore_gui._modern_gui._acquire.QCursor") as cursor_cls:
+        cursor_cls.pos.return_value = handle.mapToGlobal(handle.rect().center())
+        page._update_width_handle_hover()
+        assert right_area.minimumWidth() == 0
+        cursor_cls.pos.return_value = QPoint(-10_000, -10_000)
+        page._update_width_handle_hover()
+        assert right_area.minimumWidth() == right_area.maximumWidth() == starting_width
 
 
 def test_column_widget_locates_top_splitter_child_through_nesting(
