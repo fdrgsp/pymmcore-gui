@@ -2,6 +2,17 @@ ci:
   autoupdate_schedule: monthly
   autofix_commit_msg: "style(pre-commit.ci): auto fixes [...]"
   autoupdate_commit_msg: "ci(pre-commit.ci): autoupdate"
+  # These are `language: system` hooks that shell out to `uv run`, so they
+  # need the project's own environment. pre-commit.ci runs hooks in its own
+  # container with no uv and no project install, where they fail with
+  # "Executable `uv` not found". They are still enforced on every PR by the
+  # `lint` job in .github/workflows/ci.yml, which does `uv sync` first, and
+  # locally by the git hook.
+  skip:
+    - ruff-format
+    - ruff-check
+    - mypy
+    - pyright
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks

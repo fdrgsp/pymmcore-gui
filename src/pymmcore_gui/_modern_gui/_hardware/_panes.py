@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 from pymmcore_plus import DeviceType
 
 from pymmcore_gui._modern_gui._theme import theme
-from pymmcore_gui._qt.QtCore import Qt, pyqtSignal
+from pymmcore_gui._qt.QtCore import Qt, Signal
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -74,7 +74,7 @@ class _DeviceTable(QTableWidget):
 class AvailableDevicesPane(QWidget):
     """Left pane: every device offered by the installed device adapters."""
 
-    deviceSelected = pyqtSignal(object)  # AvailableDevice | None
+    deviceSelected = Signal(object)  # AvailableDevice | None
 
     HEADERS = ("Module", "Adapter", "Type")
 
@@ -220,8 +220,8 @@ class AvailableDevicesPane(QWidget):
 class InstalledDevicesPane(QWidget):
     """Middle pane: devices currently part of the configuration."""
 
-    deviceSelected = pyqtSignal(object)  # Device | None
-    removeRequested = pyqtSignal(object)  # Device
+    deviceSelected = Signal(object)  # Device | None
+    removeRequested = Signal(object)  # Device
 
     HEADERS = ("Label", "Adapter", "Type")
 

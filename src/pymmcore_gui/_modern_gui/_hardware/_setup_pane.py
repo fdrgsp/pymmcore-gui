@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from pymmcore_plus import DeviceType, Keyword, PropertyType
 
 from pymmcore_gui._modern_gui._theme import theme
-from pymmcore_gui._qt.QtCore import Qt, pyqtSignal
+from pymmcore_gui._qt.QtCore import Qt, Signal
 from pymmcore_gui._qt.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -78,14 +78,14 @@ def _editor_for(prop: Property, on_change: Callable[[str], None]) -> QWidget:
 class DeviceSetupPane(QWidget):
     """Setup / property pane for the selected device."""
 
-    addRequested = pyqtSignal(str)  # label typed by the user
-    addConfirmed = pyqtSignal()  # pre-init configured, finish adding
-    addCancelled = pyqtSignal()
-    propertyChanged = pyqtSignal(object, str)  # (Property, new value)
-    delayChanged = pyqtSignal(object, float)  # (Device, delay in ms)
-    renameRequested = pyqtSignal(object, str)  # (Device, new label)
-    stateLabelChanged = pyqtSignal(object, int, str)  # (Device, state, new label)
-    portSelected = pyqtSignal(str, str)  # (serial adapter name, library)
+    addRequested = Signal(str)  # label typed by the user
+    addConfirmed = Signal()  # pre-init configured, finish adding
+    addCancelled = Signal()
+    propertyChanged = Signal(object, str)  # (Property, new value)
+    delayChanged = Signal(object, float)  # (Device, delay in ms)
+    renameRequested = Signal(object, str)  # (Device, new label)
+    stateLabelChanged = Signal(object, int, str)  # (Device, state, new label)
+    portSelected = Signal(str, str)  # (serial adapter name, library)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)

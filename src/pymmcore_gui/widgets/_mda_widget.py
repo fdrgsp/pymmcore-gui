@@ -129,6 +129,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         self._restoring_sequence = False
         self._applying_channel_config = False
         super().__init__(parent=parent, mmcore=mmcore)
+        self._update_time_estimate()
         self._store_overlay = BusyOverlay(self)
         self._storeCreationFinished.connect(self._store_overlay.stop)
         self._mmc.mda.events.sequenceStarted.connect(self._on_store_creation_finished)
@@ -196,6 +197,11 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         )
 
         _align_bounds_grid(self.grid_plan._core_xy_bounds)
+
+    def _update_time_estimate(self) -> None:
+        """Keep the upstream acquisition-duration display hidden in this GUI."""
+        self._time_warning.hide()
+        self._duration_label.hide()
 
     def resizeEvent(self, a0: QResizeEvent | None) -> None:
         """Keep the data-store startup overlay fitted to the MDA editor."""
@@ -344,9 +350,15 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         undoes Qt's own focus-driven selection change for every other column.
         """
         table = self.channels.table()
-        config_col = table.indexOf(self.channels._config_column)
-        exposure_col = table.indexOf(self.channels.EXPOSURE)
-        intensity_col = table.indexOf(self.channels.INTENSITY)
+        try:
+            config_col = table.indexOf(self.channels._config_column)
+            exposure_col = table.indexOf(self.channels.EXPOSURE)
+            intensity_col = table.indexOf(self.channels.INTENSITY)
+        except RuntimeError:
+            # A zero-delay install queued during table construction may outlive
+            # the widget when a window is closed immediately afterward. PySide6
+            # raises for that deleted C++ wrapper; there is nothing left to wire.
+            return
         for row in range(table.rowCount()):
             for col in range(table.columnCount()):
                 cell = table.cellWidget(row, col)
