@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from pymmcore_plus import CMMCorePlus
 
-from pymmcore_gui._qt.QtCore import QEvent, QRectF, QSize, Qt, QTimer, pyqtSignal
+from pymmcore_gui._qt.QtCore import QEvent, QRectF, QSize, Qt, QTimer, Signal
 from pymmcore_gui._qt.QtGui import (
     QCloseEvent,
     QEnterEvent,
@@ -55,7 +55,7 @@ class ModeTab(QWidget):
 
     _BASE_HEIGHT = 40
 
-    clicked = pyqtSignal()
+    clicked = Signal()
 
     def __init__(self, label: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -137,7 +137,7 @@ class ModeTab(QWidget):
 class ModeTabBar(QWidget):
     """Horizontal bar of mode tabs; emits the selected index on click."""
 
-    current_changed = pyqtSignal(int)
+    current_changed = Signal(int)
 
     def __init__(self, labels: Sequence[str], parent: QWidget | None = None) -> None:
         super().__init__(parent)

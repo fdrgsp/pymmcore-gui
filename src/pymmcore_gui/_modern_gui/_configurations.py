@@ -18,7 +18,7 @@ from pymmcore_widgets._util import block_core
 from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import unstyle_widgets
-from pymmcore_gui._qt.QtCore import QEvent, QTimer, pyqtSignal
+from pymmcore_gui._qt.QtCore import QEvent, QTimer, Signal
 from pymmcore_gui._qt.QtGui import QFont, QPalette
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractSlider,
@@ -213,7 +213,7 @@ class ConfigurationsPage(TabPage):
 
     # "Save to core" commits to the live core only; this asks the window to
     # write the whole configuration (hardware + groups + pixel) to a .cfg.
-    saveToFileRequested = pyqtSignal()
+    saveToFileRequested = Signal()
 
     def __init__(
         self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None

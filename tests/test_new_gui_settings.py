@@ -107,6 +107,7 @@ def test_restored_layout_has_real_column_widths_on_second_launch(
     win1.close()
     win1.deleteLater()
     qtbot.wait(10)
+    del win1
 
     # Second launch, in _app's order: build, restore (window never shown yet),
     # and only then show.

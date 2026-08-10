@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 import time
 from collections.abc import Iterator
 from contextlib import suppress
@@ -15,6 +16,30 @@ if not APP.exists():
     pytest.skip(f"App not built: {APP}", allow_module_level=True)
 
 import pyautogui  # noqa: E402
+
+
+def _close_windows_app(pid: int) -> bool:
+    """Post WM_CLOSE to each visible top-level window owned by *pid*."""
+    if sys.platform != "win32":
+        return False
+
+    import ctypes
+    from ctypes import wintypes
+
+    found = False
+    user32 = ctypes.windll.user32
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def _close(hwnd: int, _lparam: int) -> bool:
+        nonlocal found
+        window_pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(window_pid))
+        if window_pid.value == pid and user32.IsWindowVisible(hwnd):
+            found = bool(user32.PostMessageW(hwnd, 0x0010, 0, 0)) or found
+        return True
+
+    user32.EnumWindows(_close, 0)
+    return found
 
 
 @pytest.fixture
@@ -38,17 +63,18 @@ def app_process() -> Iterator[subprocess.Popen]:
 
         # --- teardown ---
         if proc.poll() is None:
-            proc.terminate()
+            closed_gracefully = _close_windows_app(proc.pid)
+            if not closed_gracefully:
+                proc.terminate()
             try:
-                with suppress(Exception):
-                    pyautogui.moveTo(1200, 600, duration=0.1)
+                if not closed_gracefully and os.name != "nt":
+                    with suppress(Exception):
+                        pyautogui.moveTo(1200, 600, duration=0.1)
                 proc.wait(timeout=4)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
 
-    # FIXME: allowing 1 on windows is a cop-out
-    # can't figure out how to send a signal to gracefully close the app
     acceptable_codes = {0, 1} if os.name == "nt" else {0, -9}
     assert proc.returncode in acceptable_codes
 

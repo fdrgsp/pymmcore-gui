@@ -350,9 +350,15 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         undoes Qt's own focus-driven selection change for every other column.
         """
         table = self.channels.table()
-        config_col = table.indexOf(self.channels._config_column)
-        exposure_col = table.indexOf(self.channels.EXPOSURE)
-        intensity_col = table.indexOf(self.channels.INTENSITY)
+        try:
+            config_col = table.indexOf(self.channels._config_column)
+            exposure_col = table.indexOf(self.channels.EXPOSURE)
+            intensity_col = table.indexOf(self.channels.INTENSITY)
+        except RuntimeError:
+            # A zero-delay install queued during table construction may outlive
+            # the widget when a window is closed immediately afterward. PySide6
+            # raises for that deleted C++ wrapper; there is nothing left to wire.
+            return
         for row in range(table.rowCount()):
             for col in range(table.columnCount()):
                 cell = table.cellWidget(row, col)

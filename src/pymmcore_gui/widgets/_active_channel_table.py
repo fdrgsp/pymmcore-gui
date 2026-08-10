@@ -49,7 +49,7 @@ class _CurrentChannelColumn(ColumnInfo):
     ) -> None:
         """Populate the cell with an inactive indicator."""
         item = QTableWidgetItem(_CURRENT_INACTIVE)
-        item.setTextAlignment(int(Qt.AlignmentFlag.AlignCenter))
+        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         item.setToolTip("Click to activate this channel on the microscope")
         table.setItem(row, col, item)

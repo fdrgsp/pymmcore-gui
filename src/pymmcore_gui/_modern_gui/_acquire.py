@@ -182,6 +182,10 @@ class AcquirePage(TabPage):
 
         self._right_dock_area: CDockAreaWidget | None = None
         self._width_locked_areas: dict[QObject, CDockAreaWidget] = {}
+        # Keep PySide6's wrapper for each QtAds-owned splitter alive alongside
+        # its handle. Otherwise the temporary parentWidget() wrapper may be
+        # collected at the end of _install_width_lock and invalidate the handle.
+        self._width_lock_splitters: dict[QObject, QSplitter] = {}
         self._mda_width_locked_at_real_size = False
         self._layout_restored = False
 
@@ -437,8 +441,7 @@ class AcquirePage(TabPage):
         # A reset supersedes whatever was restored, so the canonical widths
         # apply again (see showEvent's one-shot pin).
         self._layout_restored = False
-        self._pin_dock_widths()
-        self._lock_default_areas()
+        self._relock_widths(pin=True)
         self.layoutReset.emit()
 
     def _mda_is_home(self) -> bool:
@@ -539,6 +542,7 @@ class AcquirePage(TabPage):
             return
         handle.installEventFilter(self)
         self._width_locked_areas[handle] = area
+        self._width_lock_splitters[handle] = splitter
         self._lock_width(area)
 
     def _release_width_locks(self) -> None:
@@ -552,9 +556,15 @@ class AcquirePage(TabPage):
         stale survives the rebuild.
         """
         for handle, area in self._width_locked_areas.items():
-            handle.removeEventFilter(self)
-            self._unlock_width(area)
+            # PySide6 raises as soon as a wrapper's C++ object has already
+            # disappeared; ADS may replace a splitter handle during an earlier
+            # relayout, before restoreState itself starts rebuilding the tree.
+            with suppress(RuntimeError):
+                handle.removeEventFilter(self)
+            with suppress(RuntimeError):
+                self._unlock_width(area)
         self._width_locked_areas.clear()
+        self._width_lock_splitters.clear()
 
     def _relock_widths(self, *, pin: bool) -> None:
         """Lift every width lock, optionally re-pin, then lock again.
