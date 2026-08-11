@@ -75,6 +75,10 @@ class AcquireViewersManager(QObject):
     _sequenceStarted = Signal(object, object)
     _frameReady = Signal(object, object, object)
     _sequenceFinished = Signal(object)
+    previewCreated = Signal(object)
+    previewClosed = Signal()
+    mdaViewerCreated = Signal(object)
+    mdaViewerClosed = Signal(object)
 
     def __init__(
         self,
@@ -141,6 +145,7 @@ class AcquireViewersManager(QObject):
             dw.setWidget(preview, CDockWidget.eInsertMode.ForceNoScrollArea)
             dw.closed.connect(self._on_preview_closed)
             self._preview_dock = dw
+            self.previewCreated.emit(preview)
         assert self._preview_dock is not None
         self._preview_dock.setAsCurrentTab()
         assert self.preview is not None
@@ -151,6 +156,7 @@ class AcquireViewersManager(QObject):
             preview.detach()
         self.preview = None
         self._preview_dock = None
+        self.previewClosed.emit()
 
     @property
     def active_viewer(self) -> ndv.ArrayViewer | None:
@@ -208,6 +214,7 @@ class AcquireViewersManager(QObject):
         self._records[dw] = record
         self._active_viewer = viewer
         self._active_dock = dw
+        self.mdaViewerCreated.emit(viewer)
 
     def _on_frame_ready(
         self, frame: np.ndarray, event: MDAEvent, meta: FrameMetaV1
@@ -252,6 +259,7 @@ class AcquireViewersManager(QObject):
     def _on_viewer_closed(self, dw: CDockWidget) -> None:
         record = self._records.pop(dw, None)
         if record is not None:
+            self.mdaViewerClosed.emit(record.viewer)
             record.disconnect()
         if dw is self._active_dock:
             self._active_dock = None
@@ -272,6 +280,7 @@ class AcquireViewersManager(QObject):
         with suppress(Exception):
             events.sequenceFinished.disconnect(self._sequence_finished_callback)
         for record in self._records.values():
+            self.mdaViewerClosed.emit(record.viewer)
             record.disconnect()
         self._records.clear()
         self._active_viewer = None

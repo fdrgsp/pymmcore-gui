@@ -229,6 +229,7 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
         "Grid / Tile Scan",
         "Z Stack",
         "Time Series",
+        "Camera ROI",
         "Saving",
         "Settings",
     ]
@@ -703,7 +704,7 @@ def test_acquire_docked_panels_are_reparented_not_windows(
     page.show()
     qtbot.waitExposed(page)
 
-    for key in (PanelKey.PROPERTIES, PanelKey.EXCEPTION_LOG, PanelKey.CAMERA_ROI):
+    for key in (PanelKey.PROPERTIES, PanelKey.EXCEPTION_LOG):
         page.panel_button(key).click()
         widget = page.panel_widget(key)
         dock = page.panel_dock(key)
@@ -761,10 +762,10 @@ def test_acquire_right_column_survives_being_emptied(
     page.panel_button(PanelKey.PRESETS).click()  # close it again
 
     # Must not raise, and must give the new panel a usable right column.
-    page.panel_button(PanelKey.CAMERA_ROI).click()
-    roi_dock = page.panel_dock(PanelKey.CAMERA_ROI)
-    assert roi_dock is not None and not roi_dock.isClosed()
-    area = roi_dock.dockAreaWidget()
+    page.panel_button(PanelKey.EXCEPTION_LOG).click()
+    log_dock = page.panel_dock(PanelKey.EXCEPTION_LOG)
+    assert log_dock is not None and not log_dock.isClosed()
+    area = log_dock.dockAreaWidget()
     assert area is not None
     assert area is not page._central_dock_area
     assert page._mda_dock.dockAreaWidget() is not area
@@ -782,9 +783,13 @@ def test_acquire_reset_layout_restores_defaults(
     qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
 
     page.panel_button(PanelKey.PRESETS).click()
-    page.panel_button(PanelKey.CAMERA_ROI).click()
+    page.panel_button(PanelKey.EXCEPTION_LOG).click()
     page.apply_hidden_panels({PanelKey.CONSOLE})
-    assert page.open_panels() == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.CAMERA_ROI}
+    assert page.open_panels() == {
+        PanelKey.MDA,
+        PanelKey.PRESETS,
+        PanelKey.EXCEPTION_LOG,
+    }
     assert page.hidden_panels() == {PanelKey.CONSOLE}
 
     with qtbot.waitSignal(page.layoutReset):
@@ -869,10 +874,10 @@ def test_acquire_reset_layout_after_restore_repins_default_widths(
     assert mda_area_b.width() == _MDA_DOCK_WIDTH
 
 
-def test_acquire_camera_roi_and_exception_log_panels_open(
+def test_acquire_camera_roi_is_embedded_and_exception_log_panel_opens(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    """The two newly-registered panels dock inline, not as standalone windows."""
+    """Camera ROI lives in MDA; the exception log remains a docked panel."""
     from pymmcore_widgets import CameraRoiWidget
 
     from pymmcore_gui.widgets._exception_log import ExceptionLog
@@ -880,12 +885,18 @@ def test_acquire_camera_roi_and_exception_log_panels_open(
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
 
-    page.panel_button(PanelKey.CAMERA_ROI).click()
-    roi_widget = page.panel_widget(PanelKey.CAMERA_ROI)
-    roi_dock = page.panel_dock(PanelKey.CAMERA_ROI)
-    assert isinstance(roi_widget, CameraRoiWidget)
-    assert roi_dock is not None and not roi_dock.isClosed()
-    assert not roi_widget.isWindow()
+    assert isinstance(page._mda.camera_roi, CameraRoiWidget)
+    assert page._mda.tabs.roi_section.title == "Camera ROI"
+    assert page._mda.camera_roi.select_roi_btn.isVisibleTo(page._mda.camera_roi)
+    assert not page._mda.camera_roi.snap_checkbox.isHidden()
+    assert page._mda.camera_roi.snap_checkbox.isChecked()
+    select_rgb = _icon_avg_rgb(
+        page._mda.camera_roi.select_roi_btn.icon(), QSize(24, 24)
+    )
+    crop_rgb = _icon_avg_rgb(page._mda.camera_roi.crop_btn.icon(), QSize(24, 24))
+    assert select_rgb is not None and crop_rgb is not None
+    assert all(abs(a - b) < 4 for a, b in zip(select_rgb, crop_rgb, strict=True))
+    assert "camera_roi" not in page._panels
 
     page.panel_button(PanelKey.EXCEPTION_LOG).click()
     log_widget = page.panel_widget(PanelKey.EXCEPTION_LOG)
@@ -896,7 +907,337 @@ def test_acquire_camera_roi_and_exception_log_panels_open(
     # every registry panel must be normalized to a plain docked child.
     assert not log_widget.isWindow()
 
-    assert roi_dock.dockAreaWidget() is log_dock.dockAreaWidget()
+    assert log_dock.dockAreaWidget() is not page._mda_dock.dockAreaWidget()
+
+
+def test_acquire_rejects_layout_with_removed_camera_roi_panel(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    assert not page.restore_layout(b"legacy ADS state", {PanelKey.MDA, "camera_roi"})
+    assert page.open_panels() == {PanelKey.MDA}
+
+
+def test_camera_roi_preset_restarts_live_toolbar(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    section = page._mda.tabs.roi_section
+    section.set_checked(True)
+    # Auto Snap's live stop/snap/restart order is covered upstream. Keep this
+    # toolbar-state check headless; showing the full ADS window requires a real
+    # macOS screen/graphics context.
+    page._mda.camera_roi.snap_checkbox.setChecked(False)
+
+    mmcore.startContinuousSequenceAcquisition()
+    assert page._live_btn.isChecked()
+    assert page._live_btn.toolTip() == "Stop"
+
+    try:
+        page._mda.camera_roi.camera_roi_combo.setCurrentText("64 x 64")
+
+        assert not mmcore.isSequenceRunning()
+        assert not page._live_btn.isChecked()
+        assert page._live_btn.toolTip() == "Live"
+        qtbot.waitUntil(mmcore.isSequenceRunning)
+        qtbot.waitUntil(page._live_btn.isChecked)
+        assert page._live_btn.toolTip() == "Stop"
+    finally:
+        if mmcore.isSequenceRunning():
+            mmcore.stopSequenceAcquisition()
+
+
+def test_camera_roi_live_view_sync_is_bidirectional(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    editor = page._mda.camera_roi
+    section = page._mda.tabs.roi_section
+    planned = {
+        "camera": "Camera",
+        "x": 20,
+        "y": 30,
+        "width": 200,
+        "height": 160,
+    }
+    editor.setRoiValue(planned)
+    section.set_checked(True)
+
+    try:
+        editor.select_roi_btn.click()
+        qtbot.waitUntil(mmcore.isSequenceRunning, timeout=2_000)
+        assert page._roi_sync.active
+        assert tuple(mmcore.getROI("Camera")) == (0, 0, 512, 512)
+        preview = page._viewers.preview
+        assert preview is not None
+        viewer = preview.viewer
+        assert viewer.roi is not None
+        assert viewer.roi.bounding_box == ((20.0, 30.0), (220.0, 190.0))
+        assert not viewer.roi_selection_active()
+        assert viewer.existing_roi_editing_active()
+        assert viewer.roi_visual_visible()
+        assert viewer.roi_visual_selected()
+
+        # Viewer coordinates are normalized to integer camera pixels and only edit
+        # the plan; hardware remains full-frame throughout the selection session.
+        viewer.roi.bounding_box = ((10.2, 12.8), (111.1, 99.2))
+        assert editor.roiValue() == {
+            "camera": "Camera",
+            "x": 10,
+            "y": 12,
+            "width": 102,
+            "height": 88,
+        }
+        assert tuple(mmcore.getROI("Camera")) == (0, 0, 512, 512)
+
+        typed = {
+            "camera": "Camera",
+            "x": 40,
+            "y": 50,
+            "width": 120,
+            "height": 100,
+        }
+        editor.setRoiValue(typed)
+        assert viewer.roi.bounding_box == ((40.0, 50.0), (160.0, 150.0))
+
+        # Leaving the MDA selection session stops live and removes its overlay.
+        editor.select_roi_btn.click()
+        assert not page._roi_sync.active
+        qtbot.waitUntil(lambda: not mmcore.isSequenceRunning(), timeout=2_000)
+        assert viewer.roi is None
+        assert not viewer.roi_selection_active()
+
+        # ndv's own ROI button remains local: it must not start live or opt the
+        # MDA camera ROI into a selection session. Drawing only copies the ROI
+        # into the disabled editor as a Custom ROI plan.
+        section.set_checked(False)
+        viewer.set_roi_selection_active(True)
+        assert not page._roi_sync.active
+        assert not mmcore.isSequenceRunning()
+        assert not section.checked
+        assert viewer.roi is not None
+        viewer.roi.bounding_box = ((5.2, 7.8), (105.1, 87.4))
+        assert editor.roiValue() == {
+            "camera": "Camera",
+            "x": 5,
+            "y": 7,
+            "width": 101,
+            "height": 81,
+        }
+        assert editor.camera_roi_combo.currentText() == "Custom ROI"
+        assert not section.checked
+        assert not page._roi_sync.active
+        assert not mmcore.isSequenceRunning()
+        viewer.set_roi_selection_active(False)
+
+        # Only the MDA action starts the coordinated selection session.
+        section.set_checked(True)
+        editor.select_roi_btn.click()
+        qtbot.waitUntil(mmcore.isSequenceRunning, timeout=2_000)
+        assert page._roi_sync.active
+        assert viewer.roi is not None
+        assert viewer.roi_visual_visible()
+        assert viewer.roi_visual_selected()
+
+        editor.crop_btn.click()
+        assert tuple(mmcore.getROI("Camera")) == (5, 7, 101, 81)
+        assert not page._roi_sync.active
+        qtbot.waitUntil(mmcore.isSequenceRunning, timeout=2_000)
+    finally:
+        if mmcore.isSequenceRunning():
+            mmcore.stopSequenceAcquisition()
+
+
+def test_camera_roi_session_configures_ndv_before_roi_and_stops_live(
+    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression coverage that does not require constructing a GPU canvas."""
+
+    class FakeSignal:
+        def __init__(self) -> None:
+            self.callbacks: list[object] = []
+
+        def connect(self, callback: object) -> None:
+            self.callbacks.append(callback)
+
+        def disconnect(self, callback: object) -> None:
+            self.callbacks.remove(callback)
+
+        def emit(self, *args: object) -> None:
+            for callback in list(self.callbacks):
+                callback(*args)  # type: ignore[operator]
+
+    class FakeRoi:
+        def __init__(
+            self, bbox: tuple[tuple[float, float], tuple[float, float]]
+        ) -> None:
+            self._bounding_box = bbox
+            self.visible = True
+            self.events = SimpleNamespace(bounding_box=FakeSignal())
+
+        @property
+        def bounding_box(self) -> tuple[tuple[float, float], tuple[float, float]]:
+            return self._bounding_box
+
+        @bounding_box.setter
+        def bounding_box(
+            self, value: tuple[tuple[float, float], tuple[float, float]]
+        ) -> None:
+            self._bounding_box = value
+            self.events.bounding_box.emit(value)
+
+    class FakeViewer:
+        def __init__(self) -> None:
+            self.operations: list[str] = []
+            self._roi: FakeRoi | None = None
+            self._mode_active = False
+            self._mode_changed = FakeSignal()
+            self._existing_edit_active = False
+            self.visual_selected = False
+
+        @property
+        def roi(self) -> FakeRoi | None:
+            return self._roi
+
+        @roi.setter
+        def roi(
+            self,
+            value: tuple[tuple[float, float], tuple[float, float]] | None,
+        ) -> None:
+            self.operations.append("roi")
+            self._roi = None if value is None else FakeRoi(value)
+
+        def set_roi_selection_active(self, active: bool) -> None:
+            self.operations.append(f"mode:{active}")
+            self._mode_active = active
+            self._mode_changed.emit(active)
+
+        def roi_selection_active(self) -> bool:
+            return self._mode_active
+
+        def set_roi_visual_selected(self, selected: bool) -> None:
+            self.visual_selected = selected
+
+        def set_existing_roi_editing_active(self, active: bool) -> None:
+            self.operations.append(f"edit:{active}")
+            self._existing_edit_active = active
+            self._mode_active = False
+            self.visual_selected = active
+
+        def clear_roi(self) -> None:
+            self.roi = None
+
+        def connect_roi_selection_changed(self, callback: object) -> None:
+            self._mode_changed.connect(callback)
+
+        def disconnect_roi_selection_changed(self, callback: object) -> None:
+            self._mode_changed.disconnect(callback)
+
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    viewer = FakeViewer()
+    preview = SimpleNamespace(viewer=viewer)
+    monkeypatch.setattr(page._viewers, "ensure_preview", lambda: preview)
+    monkeypatch.setattr(
+        page._live_btn,
+        "ensure_live",
+        mmcore.startContinuousSequenceAcquisition,
+    )
+
+    editor = page._mda.camera_roi
+    editor.setRoiValue(
+        {"camera": "Camera", "x": 20, "y": 30, "width": 200, "height": 160}
+    )
+    page._mda.tabs.roi_section.set_checked(True)
+    editor.select_roi_btn.click()
+
+    assert viewer.operations[:2] == ["roi", "edit:True"]
+    assert viewer.roi is not None
+    assert viewer.roi.bounding_box == ((20, 30), (220, 190))
+    assert viewer.visual_selected
+    assert mmcore.isSequenceRunning()
+
+    viewer.roi.bounding_box = ((30.25, 40.75), (230.25, 200.75))
+    assert editor.roiValue() == {
+        "camera": "Camera",
+        "x": 30,
+        "y": 40,
+        "width": 200,
+        "height": 160,
+    }
+    assert viewer.roi.bounding_box == ((30.25, 40.75), (230.25, 200.75))
+
+    editor.select_roi_btn.click()
+
+    assert not page._roi_sync.active
+    assert viewer.roi is None
+    assert not viewer.roi_selection_active()
+    assert not mmcore.isSequenceRunning()
+
+    # A standalone ndv ROI remains standalone. It updates only the editor
+    # coordinates/mode, preserving both live state and the MDA opt-in checkbox.
+    section = page._mda.tabs.roi_section
+    section.set_checked(False)
+    viewer.roi = ((0, 0), (1, 1))
+    viewer.set_roi_selection_active(True)
+    # Explicit annotation: pyright narrows `viewer.roi` to the tuple literal
+    # just assigned above rather than the property's actual `FakeRoi | None`
+    # getter type, so a bare `assert viewer.roi is not None` doesn't stick.
+    roi: FakeRoi | None = viewer.roi
+    assert roi is not None
+    roi.bounding_box = ((5.2, 7.8), (105.1, 87.4))
+
+    assert editor.roiValue() == {
+        "camera": "Camera",
+        "x": 5,
+        "y": 7,
+        "width": 101,
+        "height": 81,
+    }
+    assert editor.camera_roi_combo.currentText() == "Custom ROI"
+    assert not section.checked
+    assert not page._roi_sync.active
+    assert not mmcore.isSequenceRunning()
+
+    # Translating both edges by the same fractional delta must preserve size;
+    # independently flooring/ceiling them used to grow each dimension by one.
+    roi.bounding_box = ((20.25, 22.75), (120.15, 102.35))
+    assert editor.roiValue() == {
+        "camera": "Camera",
+        "x": 20,
+        "y": 22,
+        "width": 101,
+        "height": 81,
+    }
+    roi.bounding_box = ((30.6, 32.4), (130.5, 112.0))
+    assert editor.roiValue()["width"] == 101
+    assert editor.roiValue()["height"] == 81
+
+    # Acquired MDA viewers use the same passive one-way synchronization.
+    mda_viewer = FakeViewer()
+    page._viewers.mdaViewerCreated.emit(mda_viewer)
+    mda_viewer.roi = ((0, 0), (1, 1))
+    mda_viewer.set_roi_selection_active(True)
+    mda_roi: FakeRoi | None = mda_viewer.roi
+    assert mda_roi is not None
+    mda_roi.bounding_box = ((25.4, 30.1), (125.2, 90.9))
+
+    assert editor.roiValue() == {
+        "camera": "Camera",
+        "x": 25,
+        "y": 30,
+        "width": 101,
+        "height": 61,
+    }
+    assert editor.camera_roi_combo.currentText() == "Custom ROI"
+    assert not section.checked
+    assert not mmcore.isSequenceRunning()
+
+    page._viewers.mdaViewerClosed.emit(mda_viewer)
 
 
 def test_acquire_panel_button_icons_follow_theme(
@@ -917,7 +1258,7 @@ def test_acquire_panel_button_icons_follow_theme(
     btn = page.panel_button(PanelKey.PRESETS)
     rgb = _icon_avg_rgb(btn.icon(), QSize(24, 24))
     assert rgb is not None
-    dark = qcolor(theme().text_primary)
+    dark = qcolor(theme().status_green)
     assert all(
         abs(a - b) < 4
         for a, b in zip(rgb, (dark.red(), dark.green(), dark.blue()), strict=True)
@@ -926,7 +1267,7 @@ def test_acquire_panel_button_icons_follow_theme(
     set_theme(LIGHT_THEME)
     rgb = _icon_avg_rgb(btn.icon(), QSize(24, 24))
     assert rgb is not None
-    light = qcolor(theme().text_primary)
+    light = qcolor(theme().status_green)
     assert all(
         abs(a - b) < 4
         for a, b in zip(rgb, (light.red(), light.green(), light.blue()), strict=True)
@@ -1415,7 +1756,8 @@ def test_collapsible_mda_round_trips_all_original_widgets(
     reference_result = reference.value()
     result = mda.value()
 
-    assert result == reference_result
+    assert result.replace(metadata=reference_result.metadata) == reference_result
+    assert result.metadata["pymmcore_widgets"]["camera_roi"]["enabled"] is False
     assert result.channels == channels
     assert result.stage_positions == positions
     assert isinstance(result.grid_plan, useq.GridRowsColumns)
@@ -2433,11 +2775,11 @@ def test_acquire_layout_round_trip(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     page_a = AcquirePage(mmcore)
     qtbot.addWidget(page_a)
     page_a.panel_button(PanelKey.PRESETS).click()
-    page_a.panel_button(PanelKey.CAMERA_ROI).click()
+    page_a.panel_button(PanelKey.EXCEPTION_LOG).click()
 
     state, keys = page_a.save_layout()
     assert state is not None
-    assert keys == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.CAMERA_ROI}
+    assert keys == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.EXCEPTION_LOG}
 
     page_b = AcquirePage(mmcore)
     qtbot.addWidget(page_b)

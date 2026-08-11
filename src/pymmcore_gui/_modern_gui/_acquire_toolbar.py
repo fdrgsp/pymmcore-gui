@@ -161,10 +161,16 @@ class LiveButton(QPushButton):
         if self._core.isSequenceRunning():
             self._core.stopSequenceAcquisition()
         else:
-            # Give a lazy preview time to attach to the streaming signals
-            # before the core starts emitting frames.
-            self.liveStartedRequested.emit()
-            self._core.startContinuousSequenceAcquisition()
+            self.ensure_live()
+
+    def ensure_live(self) -> None:
+        """Start live mode if needed without toggling an existing stream off."""
+        if self._core.isSequenceRunning():
+            return
+        # Give a lazy preview time to attach to the streaming signals before the
+        # core starts emitting frames.
+        self.liveStartedRequested.emit()
+        self._core.startContinuousSequenceAcquisition()
 
     def _on_started(self, *_: object) -> None:
         self._set_running(True)
@@ -389,7 +395,7 @@ class PanelButtonBar(QWidget):
     def _apply_icons(self) -> None:
         # QIconifyIcon bakes its color in at construction, so the icon must
         # be rebuilt (not just resized) whenever the theme changes.
-        color = qcolor(theme().text_primary).name()
+        panel_color = qcolor(theme().status_green).name()
         for info in self._panels:
             btn = self._buttons[info.key]
             # set_source_icon (not setIcon) refreshes the stash that the
@@ -397,9 +403,13 @@ class PanelButtonBar(QWidget):
             # from -- a bare setIcon would leave that sweep recoloring from
             # the *previous* theme's icon. See the "Theme-aware icons" note
             # in the panels-toolbar design doc.
-            set_source_icon(btn, QIconifyIcon(info.icon, color=color))
+            set_source_icon(btn, QIconifyIcon(info.icon, color=panel_color))
             btn.setIconSize(_icon_size())
-        set_source_icon(self._menu_btn, QIconifyIcon(self._MENU_ICON, color=color))
+        menu_color = qcolor(theme().text_primary).name()
+        set_source_icon(
+            self._menu_btn,
+            QIconifyIcon(self._MENU_ICON, color=menu_color),
+        )
         self._menu_btn.setIconSize(_icon_size())
 
     def changeEvent(self, a0: QEvent | None) -> None:

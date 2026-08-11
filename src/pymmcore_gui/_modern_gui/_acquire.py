@@ -42,6 +42,7 @@ from ._acquire_toolbar import (
     toolbar_separator,
 )
 from ._acquire_viewers import AcquireViewersManager
+from ._camera_roi_sync import CameraRoiSyncController
 from ._panels import PANELS, PanelInfo, PanelKey
 from ._tab_page import TabPage
 from ._theme import qcolor, theme
@@ -67,6 +68,7 @@ _ADS_NEUTRAL_ICON_BUTTONS = frozenset(
     }
 )
 _ADS_TAB_CLOSE_BUTTON = "tabCloseButton"
+_REMOVED_PANEL_KEYS = frozenset({"camera_roi"})
 
 _ads_configured = False
 
@@ -244,6 +246,13 @@ class AcquirePage(TabPage):
             self._mda.apply_active_channel_for_capture
         )
         self._live_btn.liveStartedRequested.connect(self._viewers.ensure_preview)
+        self._roi_sync = CameraRoiSyncController(
+            self._core,
+            self._mda,
+            self._viewers,
+            self._live_btn,
+            parent=self,
+        )
 
         self._pin_dock_widths()
         self._lock_default_areas()
@@ -408,7 +417,13 @@ class AcquirePage(TabPage):
         to restore or ADS rejected the saved state -- either way, the page
         is left in a working (default) layout.
         """
-        wanted = {k for k in keys if k in self._panels}
+        requested = set(keys)
+        # ADS state stores dock object names as well as our separate key set. An
+        # old state containing the removed standalone Camera ROI dock cannot be
+        # safely rewritten, so deliberately fall back to the working default once.
+        if requested & _REMOVED_PANEL_KEYS:
+            return False
+        wanted = {k for k in requested if k in self._panels}
         if not state or not wanted:
             return False
         for key in wanted:

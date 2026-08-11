@@ -13,6 +13,7 @@ import ndv
 import numpy as np
 import tifffile
 from ndv.models import ChannelMode
+from ndv.models._viewer_model import InteractionMode
 from ome_writers import AcquisitionSettings, Dimension
 from pymmcore_plus import CMMCorePlus
 from pymmcore_plus.metadata import summary_metadata
@@ -66,6 +67,55 @@ class _KeyFilter(QObject):
         return False
 
 
+def _disable_vispy_backspace_reset(canvas: Any) -> None:
+    """Stop vispy's camera from resetting the view to its pre-data state.
+
+    ``vispy.scene.cameras.BaseCamera.viewbox_key_event`` resets the camera to
+    whatever range was set *before* any image was ever loaded whenever
+    Backspace reaches the canvas (macOS labels this key "delete", and it
+    reliably reaches the canvas since nothing else claims it). The reset
+    target is essentially an empty 1x1 rect, so the image appears to vanish
+    even though no data was touched. Qt-level event filtering can't prevent
+    this -- vispy's key handling isn't reachable through the normal
+    QWidget/eventFilter chain -- so the camera's listener is disconnected
+    from vispy's own key-press emitter directly.
+    """
+    camera = getattr(canvas, "_camera", None)
+    vispy_canvas = getattr(canvas, "_canvas", None)
+    if camera is None or vispy_canvas is None:
+        return
+    with suppress(Exception):
+        vispy_canvas.events.key_press.disconnect(camera.viewbox_key_event)
+    with suppress(Exception):
+        vispy_canvas.events.key_release.disconnect(camera.viewbox_key_event)
+
+
+def _guard_vispy_camera_resets(canvas: Any) -> None:
+    """Apply :func:`_disable_vispy_backspace_reset` to every camera vispy creates.
+
+    Channel-mode changes (grayscale vs. composite) never touch the camera,
+    but toggling ndv's 2D/3D view does: ``VispyArrayCanvas.set_ndim`` is the
+    only place that swaps in a new vispy camera (2D ``PanZoomCamera`` <-> 3D
+    ``ArcballCamera``), and each new camera reconnects its own Backspace-reset
+    listener independently of any previous one that was disarmed. Wrapping
+    ``set_ndim`` re-disarms whichever camera comes out of it, so the fix
+    survives 2D/3D toggling instead of only covering the camera that existed
+    at viewer construction.
+    """
+    _disable_vispy_backspace_reset(canvas)
+    set_ndim = getattr(canvas, "set_ndim", None)
+    if set_ndim is None:
+        return
+
+    def _set_ndim_and_guard(*args: Any, **kwargs: Any) -> Any:
+        result = set_ndim(*args, **kwargs)
+        _disable_vispy_backspace_reset(canvas)
+        return result
+
+    with suppress(Exception):
+        canvas.set_ndim = _set_ndim_and_guard
+
+
 _ORTHO_VIEWS = [("y", "x"), ("z", "x"), ("z", "y")]
 
 
@@ -92,6 +142,8 @@ class MMArrayViewer(ndv.ArrayViewer):
         if canvas := getattr(widget, "_canvas_widget", None):
             canvas.installEventFilter(self._key_filter)
 
+        _guard_vispy_camera_resets(self._canvas)
+
         with suppress(Exception):
             _add_save_button(self)
         with suppress(Exception):
@@ -114,6 +166,72 @@ class MMArrayViewer(ndv.ArrayViewer):
         except ValueError:
             idx = 0
         self.display_model.visible_axes = _ORTHO_VIEWS[(idx + 1) % len(_ORTHO_VIEWS)]
+
+    def set_roi_selection_active(self, active: bool) -> None:
+        """Enter or leave ndv's rectangular ROI interaction mode."""
+        mode = InteractionMode.CREATE_ROI if active else InteractionMode.PAN_ZOOM
+        if self._viewer_model.interaction_mode != mode:
+            self._viewer_model.interaction_mode = mode
+
+    def roi_selection_active(self) -> bool:
+        """Return whether ndv's rectangular ROI interaction mode is active."""
+        return self._viewer_model.interaction_mode is InteractionMode.CREATE_ROI
+
+    def set_existing_roi_editing_active(self, active: bool) -> None:
+        """Show handles for the existing ROI without entering creation mode.
+
+        ndv's ``CREATE_ROI`` mode intentionally uses the next mouse press to
+        start a brand-new rectangle. Existing rectangle handles, however, are
+        selected and dragged in ``PAN_ZOOM`` mode.
+        """
+        if self._viewer_model.interaction_mode is not InteractionMode.PAN_ZOOM:
+            self._viewer_model.interaction_mode = InteractionMode.PAN_ZOOM
+        if active and self.roi is not None:
+            if self._roi_view is None:
+                self._create_roi_view()
+            self._synchronize_roi()
+        self.set_roi_visual_selected(active)
+
+    def existing_roi_editing_active(self) -> bool:
+        """Return whether an existing ROI is selected for handle editing."""
+        return (
+            self._viewer_model.interaction_mode is InteractionMode.PAN_ZOOM
+            and self.roi is not None
+            and self.roi_visual_selected()
+        )
+
+    def set_roi_visual_selected(self, selected: bool) -> None:
+        """Set the current ndv ROI visual's selected/handle state."""
+        if self._roi_view is not None:
+            self._roi_view.set_selected(selected)
+
+    def roi_visual_selected(self) -> bool:
+        """Return whether the current ndv ROI visual is visibly selected."""
+        return self._roi_view is not None and self._roi_view.selected()
+
+    def roi_visual_visible(self) -> bool:
+        """Return whether the current ndv ROI visual is visible."""
+        return self._roi_view is not None and self._roi_view.visible()
+
+    def reset_zoom(self) -> None:
+        """Fit the canvas camera to the currently displayed image."""
+        self._on_view_reset_zoom_clicked()
+
+    def clear_roi(self) -> None:
+        """Remove both the ndv ROI model and its canvas visual."""
+        self.roi = None
+        if self._roi_view is not None:
+            self._roi_view.remove()
+            self._roi_view = None
+
+    def connect_roi_selection_changed(self, callback: Any) -> None:
+        """Connect to ndv interaction-mode changes through one compatibility seam."""
+        self._viewer_model.events.interaction_mode.connect(callback)
+
+    def disconnect_roi_selection_changed(self, callback: Any) -> None:
+        """Disconnect a callback registered by :meth:`connect_roi_selection_changed`."""
+        with suppress(Exception):
+            self._viewer_model.events.interaction_mode.disconnect(callback)
 
     def _save_data(self) -> None:
         """Export the viewer's data as a metadata-complete OME-TIFF or OME-Zarr.

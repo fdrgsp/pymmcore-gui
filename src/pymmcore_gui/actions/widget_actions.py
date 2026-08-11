@@ -37,7 +37,6 @@ class WidgetAction(ActionKey):
     INSTALL_DEVICES = "pymmcore_gui.install_devices_widget"
     MDA_WIDGET = "pymmcore_gui.mda_widget"
     CONFIG_GROUPS = "pymmcore_gui.config_groups_widget"
-    CAMERA_ROI = "pymmcore_gui.camera_roi_widget"
     CONSOLE = "pymmcore_gui.console"
     EXCEPTION_LOG = "pymmcore_gui.exception_log"
     STAGE_CONTROL = "pymmcore_gui.stage_control_widget"
@@ -100,16 +99,9 @@ def create_install_widgets(parent: QWidget) -> QDialog:
 
 def create_mda_widget(parent: QWidget) -> pmmw.MDAWidget:
     """Create the MDA widget."""
-    from pymmcore_widgets import MDAWidget
+    from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
 
-    return MDAWidget(parent=parent, mmcore=_get_core(parent))
-
-
-def create_camera_roi(parent: QWidget) -> pmmw.CameraRoiWidget:
-    """Create the Camera ROI widget."""
-    from pymmcore_widgets import CameraRoiWidget
-
-    return CameraRoiWidget(parent=parent, mmcore=_get_core(parent))
+    return MemoryMDAWidget(parent=parent, mmcore=_get_core(parent))
 
 
 def create_config_groups(parent: QWidget) -> pmmw.GroupPresetTableWidget:
@@ -217,15 +209,6 @@ show_mda_widget = WidgetActionInfo(
     shortcut="Ctrl+Shift+M",
     icon="qlementine-icons:cube-16",
     create_widget=create_mda_widget,
-)
-
-show_camera_roi = WidgetActionInfo(
-    key=WidgetAction.CAMERA_ROI,
-    text="Camera ROI",
-    shortcut="Ctrl+Shift+R",
-    icon="material-symbols-light:screenshot-region-rounded",
-    create_widget=create_camera_roi,
-    dock_area=DockWidgetArea.LeftDockWidgetArea,
 )
 
 show_config_groups = WidgetActionInfo(

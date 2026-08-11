@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Final
 
 from pymmcore_gui._qt.QtAds import DockWidgetArea
 from pymmcore_gui.actions.widget_actions import (
-    create_camera_roi,
     create_exception_log,
     create_property_browser,
 )
@@ -41,7 +40,6 @@ class PanelKey:
     PRESETS: Final = "presets"
     PROPERTIES: Final = "properties"
     CONSOLE: Final = "console"
-    CAMERA_ROI: Final = "camera_roi"
     EXCEPTION_LOG: Final = "exception_log"
 
 
@@ -152,14 +150,6 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
         icon="iconoir:terminal",
         tooltip="Console — open an IPython console panel",
         create=_create_console,
-    ),
-    PanelInfo(
-        key=PanelKey.CAMERA_ROI,
-        title="Camera ROI",
-        icon="material-symbols-light:screenshot-region-rounded",
-        tooltip="Camera ROI — show or hide the camera ROI panel",
-        create=_ignoring_core(create_camera_roi),
-        unstyle=True,
     ),
     PanelInfo(
         key=PanelKey.EXCEPTION_LOG,
