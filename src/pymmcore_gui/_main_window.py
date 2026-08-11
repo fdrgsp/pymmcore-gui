@@ -41,7 +41,6 @@ if TYPE_CHECKING:
 
     import ndv
     from pymmcore_widgets import (
-        CameraRoiWidget,
         ConfigWizard,
         GroupPresetTableWidget,
         InstallWidget,
@@ -133,7 +132,6 @@ class MicroManagerGUI(QMainWindow):
             WidgetAction.PROP_BROWSER,
             WidgetAction.MDA_WIDGET,
             WidgetAction.STAGE_CONTROL,
-            WidgetAction.CAMERA_ROI,
         ],
     }
     # Menus are a mapping of strings to either a list of ActionKeys or a callable
@@ -277,8 +275,6 @@ class MicroManagerGUI(QMainWindow):
     # fmt: off
     @overload
     def get_widget(self, key: Literal[WidgetAction.ABOUT], create: bool = ...) -> AboutWidget: ...  # noqa: E501
-    @overload
-    def get_widget(self, key: Literal[WidgetAction.CAMERA_ROI], create: bool = ...) -> CameraRoiWidget: ...  # noqa: E501
     @overload
     def get_widget(self, key: Literal[WidgetAction.CONFIG_GROUPS], create: bool = ...) -> GroupPresetTableWidget: ...  # noqa: E501
     @overload

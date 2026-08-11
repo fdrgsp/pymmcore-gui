@@ -15,9 +15,11 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
+from ndv.models._viewer_model import InteractionMode
 from ome_writers import (
     AcquisitionSettings,
     ScratchFormat,
@@ -56,6 +58,35 @@ class _FakeViewer:
 
     def widget(self) -> QWidget:
         return self._widget
+
+
+def test_clear_roi_removes_model_and_canvas_visual() -> None:
+    visual = SimpleNamespace(remove=Mock())
+    viewer = SimpleNamespace(roi=object(), _roi_view=visual)
+
+    MMArrayViewer.clear_roi(viewer)  # type: ignore[arg-type]
+
+    assert viewer.roi is None
+    assert viewer._roi_view is None
+    visual.remove.assert_called_once_with()
+
+
+def test_existing_roi_editing_uses_pan_zoom_not_creation_mode() -> None:
+    viewer = SimpleNamespace(
+        _viewer_model=SimpleNamespace(interaction_mode=InteractionMode.CREATE_ROI),
+        roi=object(),
+        _roi_view=None,
+        _create_roi_view=Mock(),
+        _synchronize_roi=Mock(),
+        set_roi_visual_selected=Mock(),
+    )
+
+    MMArrayViewer.set_existing_roi_editing_active(viewer, True)  # type: ignore[arg-type]
+
+    assert viewer._viewer_model.interaction_mode is InteractionMode.PAN_ZOOM
+    viewer._create_roi_view.assert_called_once_with()
+    viewer._synchronize_roi.assert_called_once_with()
+    viewer.set_roi_visual_selected.assert_called_once_with(True)
 
 
 def test_synthesize_record_from_stream_view(qtbot: QtBot) -> None:
