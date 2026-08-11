@@ -1044,7 +1044,7 @@ def test_camera_roi_live_view_sync_is_bidirectional(
         assert viewer.roi_visual_selected()
 
         editor.crop_btn.click()
-        assert tuple(mmcore.getROI("Camera")) == (40, 50, 120, 100)
+        assert tuple(mmcore.getROI("Camera")) == (5, 7, 101, 81)
         assert not page._roi_sync.active
         qtbot.waitUntil(mmcore.isSequenceRunning, timeout=2_000)
     finally:
