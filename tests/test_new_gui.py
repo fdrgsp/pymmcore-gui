@@ -58,7 +58,7 @@ from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
 from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from pymmcore_plus import CMMCorePlus
     from pymmcore_widgets.useq_widgets._data_table import DataTable
@@ -890,6 +890,8 @@ def test_acquire_camera_roi_is_embedded_and_exception_log_panel_opens(
     assert page._mda.camera_roi.select_roi_btn.isVisibleTo(page._mda.camera_roi)
     assert not page._mda.camera_roi.snap_checkbox.isHidden()
     assert page._mda.camera_roi.snap_checkbox.isChecked()
+    assert not page._mda.camera_roi.roiInfoVisible()
+    assert page._mda.camera_roi._info_lbl_wdg.isHidden()
     select_rgb = _icon_avg_rgb(
         page._mda.camera_roi.select_roi_btn.icon(), QSize(24, 24)
     )
@@ -948,6 +950,28 @@ def test_camera_roi_preset_restarts_live_toolbar(
     finally:
         if mmcore.isSequenceRunning():
             mmcore.stopSequenceAcquisition()
+
+
+def test_camera_roi_auto_snap_creates_preview_before_snap(
+    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    editor = page._mda.camera_roi
+    page._mda.tabs.roi_section.set_checked(True)
+    assert editor.snap_checkbox.isChecked()
+    assert page._viewers.preview is None
+
+    operations: list[str] = []
+    monkeypatch.setattr(editor.snap_checkbox, "isVisible", lambda: True)
+    monkeypatch.setattr(
+        page._viewers, "ensure_preview", lambda: operations.append("preview")
+    )
+    mmcore.events.imageSnapped.connect(lambda: operations.append("snap"))
+
+    editor.camera_roi_combo.setCurrentText("64 x 64")
+
+    assert operations == ["preview", "snap"]
 
 
 def test_camera_roi_live_view_sync_is_bidirectional(
@@ -1676,6 +1700,350 @@ def test_channel_property_selector_lists_all_runtime_numeric_sliders(
     assert value_header is not None
     assert property_header.text() == "Light Source"
     assert value_header.text() == "Intensity [%]"
+
+
+# ------------------------- light source declarations -------------------------
+
+
+def _load_cfg_with_light_sources(
+    mmcore: CMMCorePlus,
+    tmp_path: Path,
+    declarations: Sequence[tuple[str, str, str, float]],
+) -> Path:
+    """Load a copy of the test cfg with ``(preset, device, property, value)`` lines."""
+    dest = tmp_path / "declared.cfg"
+    lines = Path(__file__).with_name("test_config.cfg").read_text().splitlines()
+    lines += [
+        f"#@LightSource,Channel,{preset},{device},{prop},{value}"
+        for preset, device, prop, value in declarations
+    ]
+    dest.write_text("\n".join(lines) + "\n")
+    mmcore.loadSystemConfiguration(dest)
+    return dest
+
+
+def _declared_mda(
+    mmcore: CMMCorePlus, qtbot: QtBot, presets: Sequence[str]
+) -> MemoryMDAWidget:
+    """An MDA widget with one channel row per entry of ``presets``."""
+    mda = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(mda)
+    mda.setValue(
+        useq.MDASequence(
+            channels=tuple(
+                useq.Channel(group="Channel", config=config, exposure=100.0)
+                for config in presets
+            )
+        )
+    )
+    mda.channels.setLightSourceVisible(True)
+    return mda
+
+
+def _light_source_of(mda: MemoryMDAWidget, row: int) -> tuple[str, float]:
+    """Return the (label, intensity) shown in ``row``'s light source columns."""
+    channels = mda.channels
+    table = channels.table()
+    ls_col = table.indexOf(channels._light_source_column)
+    int_col = table.indexOf(channels.INTENSITY)
+    label = channels._light_source_column.get_cell_data(table, row, ls_col)
+    intensity = channels.INTENSITY.get_cell_data(table, row, int_col)
+    return str(label["light_source"]), float(intensity["intensity"])
+
+
+def test_light_source_declarations_are_invisible_to_the_core(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    """The declarations are comments: loading a cfg must not act on them at all."""
+    groups_before = set(mmcore.getAvailableConfigGroups())
+    _load_cfg_with_light_sources(
+        mmcore, tmp_path, [("DAPI", "Camera", "TestProperty1", 0.05)]
+    )
+
+    # no new config group, and the declared value was not pushed to hardware
+    assert set(mmcore.getAvailableConfigGroups()) == groups_before
+    assert float(mmcore.getProperty("Camera", "TestProperty1")) == pytest.approx(0.0)
+    # and the channel group still identifies its presets
+    mmcore.setConfig("Channel", "DAPI")
+    assert mmcore.getCurrentConfig("Channel") == "DAPI"
+
+
+def test_light_source_declaration_populates_channel_rows(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    _load_cfg_with_light_sources(
+        mmcore, tmp_path, [("DAPI", "Camera", "TestProperty1", 0.05)]
+    )
+    mda = _declared_mda(mmcore, qtbot, ("DAPI", "FITC"))
+
+    mda.refresh_channel_table()
+
+    label, intensity = _light_source_of(mda, 0)
+    assert mda.channels.lightSources()[label] == [("Camera", "TestProperty1")]
+    assert intensity == pytest.approx(0.05)
+    # FITC has no declaration, and nothing is inferred for it
+    assert _light_source_of(mda, 1)[0] == ""
+
+    # and the declaration reaches the acquisition-time properties
+    props = mda.channels.channelProperties(exclude_unchecked=False)
+    assert [(p["channel_index"], p["device"], p["property"]) for p in props] == [
+        (0, "Camera", "TestProperty1")
+    ]
+
+
+def test_light_source_declaration_resolves_multi_property_group(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    """A declaration listing several properties restores as its group label.
+
+    That is what makes one Intensity spin box drive every slider of a multi-channel
+    illuminator, rather than the row landing on a single "Device · Property" entry.
+    """
+    pairs = [("Camera", "TestProperty2"), ("Camera", "TestProperty4")]
+    _load_cfg_with_light_sources(
+        mmcore, tmp_path, [("DAPI", device, prop, 12.0) for device, prop in pairs]
+    )
+    for device, prop in pairs:
+        mmcore.defineConfig("_lida", "levels", device, prop, "0.0")
+    mda = _declared_mda(mmcore, qtbot, ("DAPI",))
+
+    mda.refresh_channel_table()
+
+    label, intensity = _light_source_of(mda, 0)
+    assert label == "_lida"
+    assert mda.channels.lightSources()["_lida"] == pairs
+    assert intensity == pytest.approx(12.0)
+    # one row, but a property entry per underlying slider
+    props = mda.channels.channelProperties(exclude_unchecked=False)
+    assert [(p["device"], p["property"], p["value"]) for p in props] == [
+        (device, prop, 12.0) for device, prop in pairs
+    ]
+
+
+def test_light_source_is_never_inferred_from_the_channel_preset(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A ranged property inside a channel preset is not treated as a declaration.
+
+    Storing the light source there would break preset identity, so it is only ever
+    read from the cfg's comment block -- see LIGHT_SOURCE_COMMENT.
+    """
+    mmcore.defineConfig("Channel", "DAPI", "Camera", "TestProperty1", "0.05")
+    mda = _declared_mda(mmcore, qtbot, ("DAPI",))
+
+    mda.refresh_channel_table()
+
+    assert _light_source_of(mda, 0)[0] == ""
+    assert mda.channels.channelProperties(exclude_unchecked=False) == []
+
+
+def test_stale_light_source_declaration_is_ignored(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    """A declaration naming a device this configuration doesn't have is dropped."""
+    _load_cfg_with_light_sources(
+        mmcore, tmp_path, [("DAPI", "NoSuchDevice", "Level", 5.0)]
+    )
+    mda = _declared_mda(mmcore, qtbot, ("DAPI",))
+
+    mda.refresh_channel_table()
+
+    assert _light_source_of(mda, 0)[0] == ""
+
+
+def test_malformed_light_source_declarations_are_skipped(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    """The block is hand-editable, so junk must be ignored rather than raise."""
+    dest = tmp_path / "declared.cfg"
+    lines = Path(__file__).with_name("test_config.cfg").read_text().splitlines()
+    lines += [
+        "#@LightSource,Channel,DAPI,Camera,TestProperty1",  # too few fields
+        "#@LightSource,Channel,FITC,Camera,TestProperty1,not-a-number",
+        "#@LightSource,OtherGroup,Cy5,Camera,TestProperty1,0.05",  # other group
+        "#@LightSource,Channel,Rhodamine,Camera,TestProperty1,0.05",  # the good one
+    ]
+    dest.write_text("\n".join(lines) + "\n")
+    mmcore.loadSystemConfiguration(dest)
+    mda = _declared_mda(mmcore, qtbot, ("DAPI", "FITC", "Cy5", "Rhodamine"))
+
+    mda.refresh_channel_table()
+
+    assert [_light_source_of(mda, row)[0] for row in range(3)] == ["", "", ""]
+    assert _light_source_of(mda, 3)[1] == pytest.approx(0.05)
+
+
+def test_changing_a_row_preset_follows_the_new_declaration(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    _load_cfg_with_light_sources(
+        mmcore, tmp_path, [("DAPI", "Camera", "TestProperty1", 0.05)]
+    )
+    mda = _declared_mda(mmcore, qtbot, ("DAPI",))
+    mda.refresh_channel_table()
+    assert _light_source_of(mda, 0)[0] != ""
+
+    table = mda.channels.table()
+    config_col = table.indexOf(mda.channels._config_column)
+    cell = table.cellWidget(0, config_col)
+    assert cell is not None
+    # the config cell is a CheckableCombo wrapper; the row's preset lives on the
+    # QComboBox nested inside it, which is what _install_channel_editor_filters
+    # connects to
+    combo = cell.findChildren(QComboBox)[0]
+
+    # switching to an undeclared preset clears the row's light source ...
+    combo.setCurrentText("FITC")
+    combo.activated.emit(combo.currentIndex())
+    assert _light_source_of(mda, 0) == ("", 0.0)
+
+    # ... and switching back restores it
+    combo.setCurrentText("DAPI")
+    combo.activated.emit(combo.currentIndex())
+    label, intensity = _light_source_of(mda, 0)
+    assert mda.channels.lightSources()[label] == [("Camera", "TestProperty1")]
+    assert intensity == pytest.approx(0.05)
+
+
+def test_saved_sequence_wins_over_light_source_declarations(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    """Restoring an MDASequence keeps its own channel properties."""
+    _load_cfg_with_light_sources(
+        mmcore, tmp_path, [("DAPI", "Camera", "TestProperty1", 0.05)]
+    )
+    mda = _declared_mda(mmcore, qtbot, ("DAPI",))
+    channels = mda.channels
+    label = next(
+        lbl
+        for lbl, pairs in channels.lightSources().items()
+        if pairs == [("Camera", "TestProperty2")]
+    )
+    channels.setChannelProperties(
+        [
+            {
+                "channel_index": 0,
+                "config": "DAPI",
+                "group": label,
+                "device": "Camera",
+                "property": "TestProperty2",
+                "value": 33.0,
+            }
+        ]
+    )
+
+    mda.setValue(mda.value())
+
+    restored_label, restored_intensity = _light_source_of(mda, 0)
+    assert restored_label == label
+    assert restored_intensity == pytest.approx(33.0)
+
+
+def test_save_light_sources_writes_a_complete_cfg(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    mda = _declared_mda(mmcore, qtbot, ("DAPI", "FITC"))
+    channels = mda.channels
+    label = next(
+        lbl
+        for lbl, pairs in channels.lightSources().items()
+        if pairs == [("Camera", "TestProperty1")]
+    )
+    channels.setChannelProperties(
+        [
+            {
+                "channel_index": 0,
+                "config": "DAPI",
+                "group": label,
+                "device": "Camera",
+                "property": "TestProperty1",
+                "value": 0.05,
+            }
+        ]
+    )
+
+    dest = tmp_path / "with_light_sources.cfg"
+    with patch.object(QFileDialog, "getSaveFileName", return_value=(str(dest), "")):
+        mda._save_light_sources_btn.click()
+
+    lines = dest.read_text().splitlines()
+    assert "#@LightSource,Channel,DAPI,Camera,TestProperty1,0.05" in lines
+    # the whole configuration is written, not just the light sources
+    assert any(line.startswith("Device,") for line in lines)
+    assert any(line.startswith("PixelSize_um,") for line in lines)
+    # FITC had no light source, so it gets no declaration
+    assert not any(line.startswith("#@LightSource,Channel,FITC,") for line in lines)
+
+    # nothing was written as real configuration: no new group, and the channel
+    # preset itself is untouched, so preset identity still works
+    assert not any(line.startswith("ConfigGroup,Channel-LightSource") for line in lines)
+    assert not any(
+        line.startswith("ConfigGroup,Channel,DAPI,Camera,TestProperty1")
+        for line in lines
+    )
+    mmcore.setConfig("Channel", "DAPI")
+    assert mmcore.getCurrentConfig("Channel") == "DAPI"
+
+
+def test_saved_light_sources_round_trip_through_a_reloaded_cfg(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    mda = _declared_mda(mmcore, qtbot, ("DAPI",))
+    channels = mda.channels
+    label = next(
+        lbl
+        for lbl, pairs in channels.lightSources().items()
+        if pairs == [("Camera", "TestProperty1")]
+    )
+    channels.setChannelProperties(
+        [
+            {
+                "channel_index": 0,
+                "config": "DAPI",
+                "group": label,
+                "device": "Camera",
+                "property": "TestProperty1",
+                "value": 0.05,
+            }
+        ]
+    )
+
+    dest = tmp_path / "round_trip.cfg"
+    with patch.object(QFileDialog, "getSaveFileName", return_value=(str(dest), "")):
+        mda._save_light_sources_btn.click()
+
+    # a fresh widget over the reloaded file picks the declaration back up
+    mmcore.loadSystemConfiguration(dest)
+    reloaded = _declared_mda(mmcore, qtbot, ("DAPI",))
+    reloaded.refresh_channel_table()
+
+    new_label, intensity = _light_source_of(reloaded, 0)
+    assert reloaded.channels.lightSources()[new_label] == [("Camera", "TestProperty1")]
+    assert intensity == pytest.approx(0.05)
+
+
+def test_save_light_sources_warns_when_the_feature_is_off(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    """Saving with light sources hidden would silently erase every declaration."""
+    _load_cfg_with_light_sources(
+        mmcore, tmp_path, [("DAPI", "Camera", "TestProperty1", 0.05)]
+    )
+    mda = _declared_mda(mmcore, qtbot, ("DAPI",))
+    mda.channels.setLightSourceVisible(False)
+
+    with (
+        patch.object(QMessageBox, "warning") as warning,
+        patch.object(QFileDialog, "getSaveFileName") as dialog,
+    ):
+        mda._save_light_sources_btn.click()
+
+    assert warning.called
+    assert not dialog.called
+    # the loaded cfg's declarations are still intact
+    assert mda._light_source_declarations == {
+        "DAPI": [("Camera", "TestProperty1", 0.05)]
+    }
 
 
 def test_memory_mda_hides_estimated_duration(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
@@ -3051,6 +3419,119 @@ def test_hardware_load_uses_native_config_semantics(
     assert mmcore.getShutterDevice() == "Shutter"
     assert mmcore.getFocusDevice() == "Z"
     assert page.model.config_file == str(config)
+
+
+def _hardware_page_over(
+    mmcore: CMMCorePlus, qtbot: QtBot, cfg: Path
+) -> HardwareSetupPage:
+    """A hardware page whose model came from ``cfg``, as after loading it."""
+    page = HardwareSetupPage(mmcore)
+    qtbot.addWidget(page)
+    with patch.object(QFileDialog, "getOpenFileName", return_value=(str(cfg), "")):
+        page.load_config()
+    return page
+
+
+def test_saving_over_a_cfg_offers_to_keep_its_light_sources(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    """Microscope.save() rewrites the file, so the comment block must be re-added."""
+    cfg = _load_cfg_with_light_sources(
+        mmcore, tmp_path, [("DAPI", "Camera", "TestProperty1", 0.05)]
+    )
+    page = _hardware_page_over(mmcore, qtbot, cfg)
+
+    with patch.object(
+        QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
+    ) as question:
+        assert page._save_to(str(cfg))
+
+    assert question.called
+    assert question.call_args.args[2] == (
+        "Do you want to keep the light source info for the DAPI channel?"
+    )
+    lines = cfg.read_text().splitlines()
+    assert "#@LightSource,Channel,DAPI,Camera,TestProperty1,0.05" in lines
+    # the rest of the configuration was still rewritten
+    assert any(line.startswith("ConfigGroup,Channel,DAPI,") for line in lines)
+
+
+def test_keeping_light_sources_lists_every_affected_channel(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    cfg = _load_cfg_with_light_sources(
+        mmcore,
+        tmp_path,
+        [
+            ("FITC", "Camera", "TestProperty2", 3.0),
+            ("Cy5", "Camera", "TestProperty1", 0.05),
+        ],
+    )
+    page = _hardware_page_over(mmcore, qtbot, cfg)
+
+    with patch.object(
+        QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
+    ) as question:
+        assert page._save_to(str(cfg))
+
+    assert question.call_args.args[2] == (
+        "Do you want to keep the light source info for the Cy5, FITC channels?"
+    )
+    kept = [line for line in cfg.read_text().splitlines() if "#@LightSource" in line]
+    assert kept == [
+        "#@LightSource,Channel,FITC,Camera,TestProperty2,3.0",
+        "#@LightSource,Channel,Cy5,Camera,TestProperty1,0.05",
+    ]
+
+
+def test_declining_to_keep_light_sources_drops_them(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    cfg = _load_cfg_with_light_sources(
+        mmcore, tmp_path, [("DAPI", "Camera", "TestProperty1", 0.05)]
+    )
+    page = _hardware_page_over(mmcore, qtbot, cfg)
+
+    with patch.object(
+        QMessageBox, "question", return_value=QMessageBox.StandardButton.No
+    ):
+        assert page._save_to(str(cfg))
+
+    assert "#@LightSource" not in cfg.read_text()
+
+
+def test_light_sources_for_removed_channels_are_dropped_without_asking(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    """A declaration for a channel the configuration no longer defines is dead."""
+    cfg = _load_cfg_with_light_sources(
+        mmcore, tmp_path, [("NoSuchChannel", "Camera", "TestProperty1", 0.05)]
+    )
+    page = _hardware_page_over(mmcore, qtbot, cfg)
+
+    with patch.object(QMessageBox, "question") as question:
+        assert page._save_to(str(cfg))
+
+    assert not question.called
+    assert "#@LightSource" not in cfg.read_text()
+
+
+def test_saving_to_a_new_file_never_asks_about_light_sources(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    cfg = _load_cfg_with_light_sources(
+        mmcore, tmp_path, [("DAPI", "Camera", "TestProperty1", 0.05)]
+    )
+    page = _hardware_page_over(mmcore, qtbot, cfg)
+
+    dest = tmp_path / "somewhere_else.cfg"
+    with patch.object(QMessageBox, "question") as question:
+        assert page._save_to(str(dest))
+
+    assert not question.called
+    assert "#@LightSource" not in dest.read_text()
+    # and the file that *does* hold them is untouched
+    assert "#@LightSource" in cfg.read_text()
 
 
 def test_configuration_save_buttons_are_in_toolbar(

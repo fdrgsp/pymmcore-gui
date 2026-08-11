@@ -14,6 +14,11 @@ from typing import TYPE_CHECKING, cast
 from pymmcore_plus import CMMCorePlus, DeviceType, Keyword
 from pymmcore_plus.model import Device, Microscope
 
+from pymmcore_gui._light_sources import (
+    Declarations,
+    parse_light_source_comments,
+    write_light_source_comments,
+)
 from pymmcore_gui._modern_gui._busy import BusyOverlay, busy
 from pymmcore_gui._modern_gui._tab_page import TabPage
 from pymmcore_gui._qt.QtCore import Qt
@@ -225,6 +230,10 @@ class HardwareSetupPage(TabPage):
         return self._save_to(path)
 
     def _save_to(self, path: str) -> bool:
+        # Decided before the write, because model.save() regenerates the .cfg from
+        # scratch and drops the per-channel light source comments it may hold.
+        light_sources = self._light_sources_to_preserve(Path(path))
+
         # Config groups and pixel-size configs are edited on the Configurations
         # tab, which commits them to the live core. Pull those into the model so
         # a saved .cfg captures hardware, groups and pixel sizes together.
@@ -234,6 +243,10 @@ class HardwareSetupPage(TabPage):
             self._model.update_pixel_sizes_from_core(self._core)
         try:
             self._model.save(path)
+            if light_sources:
+                write_light_source_comments(
+                    Path(path), self._core.getChannelGroup(), light_sources
+                )
         except Exception as e:
             self._warn(f"Failed to save {path}:\n\n{e}")
             return False
@@ -241,6 +254,32 @@ class HardwareSetupPage(TabPage):
         self._dirty = False
         self._status(f"Saved {Path(path).name}")
         return True
+
+    def _light_sources_to_preserve(self, path: Path) -> Declarations:
+        """Ask whether to carry over the light sources of the file being overwritten.
+
+        Only declarations naming a channel preset this configuration still defines
+        are offered: one for a channel that no longer exists is dead weight, and is
+        dropped without asking.
+        """
+        if not path.is_file() or not (channel_group := self._core.getChannelGroup()):
+            return {}
+        declarations = parse_light_source_comments(path, channel_group)
+        presets = set(self._core.getAvailableConfigs(channel_group))
+        kept = {p: entries for p, entries in declarations.items() if p in presets}
+        if not kept:
+            return {}
+        names = ", ".join(sorted(kept))
+        plural = "s" if len(kept) > 1 else ""
+        reply = QMessageBox.question(
+            self,
+            "Light Sources",
+            f"Do you want to keep the light source info "
+            f"for the {names} channel{plural}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        return kept if reply == QMessageBox.StandardButton.Yes else {}
 
     def _confirm_discard(self, question: str) -> bool:
         """Ask before throwing away unsaved edits."""

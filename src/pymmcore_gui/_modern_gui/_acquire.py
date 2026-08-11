@@ -182,6 +182,10 @@ class AcquirePage(TabPage):
         self._viewers = AcquireViewersManager(
             self._dock_manager, self._central_dock_area, self._core, parent=self
         )
+        # Connect before the MDA panel constructs CameraRoiWidget.  Its roiSet
+        # handler performs Auto Snap synchronously, so a lazy Preview must be
+        # created by an earlier listener in order to receive imageSnapped.
+        self._core.events.roiSet.connect(self._ensure_preview_for_roi_auto_snap)
 
         self._right_dock_area: CDockAreaWidget | None = None
         # Values are usually the CDockAreaWidget itself, but see
@@ -265,6 +269,17 @@ class AcquirePage(TabPage):
         self._width_handle_hover_timer.timeout.connect(self._update_width_handle_hover)
         self._width_handle_hover_timer.start()
         self._refresh_dock_icons()
+
+    def _ensure_preview_for_roi_auto_snap(self, *_args: object) -> None:
+        """Create the lazy Preview before Camera ROI performs an Auto Snap."""
+        if self._viewers.preview is not None:
+            return
+        mda = getattr(self, "_mda", None)
+        if mda is None:
+            return
+        auto_snap = mda.camera_roi.snap_checkbox
+        if auto_snap.isChecked() and auto_snap.isVisible():
+            self._viewers.ensure_preview()
 
     # ------------------------------------------------------------------ panels
 

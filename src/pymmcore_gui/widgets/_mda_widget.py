@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from contextlib import suppress
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from pymmcore_widgets import MDAWidgetCollapsible
-from pymmcore_widgets.mda import CollapsibleCoreMDATabs, SectionMetrics
+from pymmcore_widgets.mda import (
+    ChannelProperty,
+    CollapsibleCoreMDATabs,
+    SectionMetrics,
+)
+from pymmcore_widgets.mda._core_channels import NO_LIGHT_SOURCE
 from pymmcore_widgets.useq_widgets._positions import MDAButton
 from superqt.iconify import QIconifyIcon
 
@@ -14,6 +21,10 @@ from pymmcore_gui._array_viewer import (
     ensure_visible_icon,
     set_source_icon,
     unstyle_widgets,
+)
+from pymmcore_gui._light_sources import (
+    parse_light_source_comments,
+    write_light_source_comments,
 )
 from pymmcore_gui._modern_gui._busy import BusyOverlay
 from pymmcore_gui._modern_gui._theme import qcolor, theme
@@ -29,7 +40,9 @@ from pymmcore_gui._qt.QtCore import (
 from pymmcore_gui._qt.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
+    QFileDialog,
     QGridLayout,
+    QMessageBox,
     QPushButton,
     QWidget,
 )
@@ -40,7 +53,7 @@ from ._active_channel_table import (
 )
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    from collections.abc import Iterable
 
     import useq
     from pymmcore_plus import CMMCorePlus
@@ -128,7 +141,12 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
     def __init__(self, mmcore: CMMCorePlus, parent: QWidget | None = None) -> None:
         self._restoring_sequence = False
         self._applying_channel_config = False
+        # {channel preset: [(device, property, intensity), ...]}, parsed from the
+        # loaded cfg's comment block. Held in memory rather than re-read per use, so
+        # it stays right after saving to a *different* file than the loaded one.
+        self._light_source_declarations: dict[str, list[tuple[str, str, float]]] = {}
         super().__init__(parent=parent, mmcore=mmcore)
+        self.camera_roi.setRoiInfoVisible(False)
         self._update_time_estimate()
         self._store_overlay = BusyOverlay(self)
         self._storeCreationFinished.connect(self._store_overlay.stop)
@@ -153,6 +171,18 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
             self._load_button,
         ):
             btn.setProperty("variant", "subtle")
+
+        # Goes after the stretch that follows the upstream "Show Light Source" /
+        # "Advanced" checkboxes, so it right-aligns in that row. Created before the
+        # unstyle_widgets sweep below so it gets themed with everything else.
+        self._save_light_sources_btn = QPushButton("Save Light Sources to cfg")
+        self._save_light_sources_btn.setToolTip(
+            "Write each channel's light source into a Micro-Manager configuration "
+            "file, so it is restored the next time that file is loaded."
+        )
+        self._save_light_sources_btn.setProperty("variant", "subtle")
+        self._save_light_sources_btn.clicked.connect(self._save_light_sources_to_config)
+        self.channels._btn_row.insertWidget(3, self._save_light_sources_btn)
 
         # All sub-tabs (Channels/Positions/Z/Time/Grid) are constructed
         # eagerly by CoreMDATabs.create_subwidgets() during super().__init__,
@@ -186,6 +216,15 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         self._connect_position_icon_updates()
         self._apply_themed_icons()
         self._connect_channel_selection()
+
+        # Connected here rather than in the table itself so it runs *after*
+        # CoreConnectedChannelTable's own systemConfigurationLoaded handler, which
+        # rebuilds the light source combo we are about to pick an entry from.
+        self._mmc.events.systemConfigurationLoaded.connect(
+            self._reload_light_source_declarations
+        )
+        # a configuration is usually already loaded by the time this is constructed
+        self._reload_light_source_declarations()
 
         # CoreXYBoundsControl swaps each edge button's icon whenever its
         # Mark/Move action changes.  That replacement installs the upstream
@@ -240,6 +279,9 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
             self._mmc.mda.events.sequenceFinished.disconnect(
                 self._on_store_creation_finished
             )
+            self._mmc.events.systemConfigurationLoaded.disconnect(
+                self._reload_light_source_declarations
+            )
         super()._disconnect()
 
     def _on_table_rows_inserted(self, *_: object) -> None:
@@ -249,6 +291,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         self._install_channel_editor_filters()
         self._connect_position_icon_updates()
         self._apply_themed_icons()
+        self._apply_light_source_declarations()
 
     def setValue(self, value: useq.MDASequence) -> None:
         """Restore an MDA sequence without applying a selected row to the core."""
@@ -305,7 +348,147 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
             self._restore_channel_selection(selected, selected_row)
         finally:
             self._restoring_sequence = False
+        # After the guard is cleared, so the declarations actually apply: the
+        # snapshot restored above predates whatever configuration change prompted
+        # this refresh, and the loaded cfg is the more authoritative source.
+        self._apply_light_source_declarations()
         self._collapsible_tabs().refresh_summaries()
+
+    # ------------- light source declarations (see LIGHT_SOURCE_COMMENT) ---------
+
+    def _reload_light_source_declarations(self) -> None:
+        """Re-read the declaration block from the newly loaded cfg, and apply it."""
+        self._light_source_declarations = parse_light_source_comments(
+            self._mmc.systemConfigurationFile() or "", self._mmc.getChannelGroup()
+        )
+        self._apply_light_source_declarations()
+
+    def _apply_light_source_declarations(
+        self, rows: Iterable[int] | None = None, clear_missing: bool = False
+    ) -> None:
+        """Select each row's declared light source and default intensity.
+
+        Only rows whose channel preset is declared in the cfg are touched; there is
+        deliberately no fallback that infers a light source from a channel preset's
+        own properties, so an undeclared channel simply has none. Pass
+        ``clear_missing`` to also reset rows whose preset is undeclared (used when
+        the user picks a different preset for a row).
+        """
+        if self._restoring_sequence:
+            return
+        channels = self.channels.value(exclude_unchecked=False)
+        indices = range(len(channels)) if rows is None else rows
+
+        # A declaration listing several properties is one multi-slider light source
+        # (e.g. a Lumencor LIDA): map the whole pair set back to the single-preset
+        # config group entry whose one spin box drives all of them at once.
+        by_pairs = {
+            frozenset(pairs): label
+            for label, pairs in self.channels.lightSources().items()
+        }
+
+        props: list[ChannelProperty] = []
+        for row in indices:
+            if not 0 <= row < len(channels):  # pragma: no cover
+                continue
+            preset = str(channels[row].config or "")
+            if entries := self._light_source_declarations.get(preset):
+                pairs = [(device, prop) for device, prop, _ in entries]
+                # An unmatched pair set leaves the label empty, and
+                # setChannelProperties then resolves each entry by (device,
+                # property) instead -- which is what a single-property declaration
+                # wants anyway, and which drops a declaration naming a property
+                # this configuration does not offer.
+                label = by_pairs.get(frozenset(pairs), "")
+                props.extend(
+                    ChannelProperty(
+                        channel_index=row,
+                        config=preset,
+                        group=label,
+                        device=device,
+                        property=prop,
+                        value=entries[0][2],
+                    )
+                    for device, prop in pairs
+                )
+            elif clear_missing:
+                self._clear_light_source(row)
+        if props:
+            self.channels.setChannelProperties(props)
+
+    def _clear_light_source(self, row: int) -> None:
+        """Reset one row's light source and intensity to "none"."""
+        channels = self.channels
+        table = channels.table()
+        ls_col = table.indexOf(channels._light_source_column)
+        int_col = table.indexOf(channels.INTENSITY)
+        if ls_col < 0 or int_col < 0:  # pragma: no cover
+            return
+        # Left unblocked on purpose: the resulting valueChanged drives upstream's
+        # _sync_intensity_widgets, which re-ranges and disables the spin box.
+        channels._light_source_column.set_cell_data(table, row, ls_col, NO_LIGHT_SOURCE)
+        channels.INTENSITY.set_cell_data(table, row, int_col, 0.0)
+
+    def _save_light_sources_to_config(self) -> None:
+        """Save the whole cfg to a file, with the light source declarations appended.
+
+        The block is rewritten from scratch so a light source the user cleared
+        actually disappears, and two rows sharing one channel preset collapse to a
+        single declaration (the later row wins). The configuration itself is dumped
+        from the core, so uncommitted edits in the Hardware Setup page are not
+        included.
+        """
+        if not (channel_group := self._mmc.getChannelGroup()):
+            QMessageBox.warning(
+                self,
+                "Save Light Sources",
+                "No channel group is set on the current configuration, so there is "
+                "nothing to attach the light sources to.",
+            )
+            return
+        if not self.channels.lightSourceVisible():
+            QMessageBox.warning(
+                self,
+                "Save Light Sources",
+                "Light sources are turned off. Check 'Show Light Source' and pick "
+                "the light source for each channel before saving.",
+            )
+            return
+
+        current = self._mmc.systemConfigurationFile() or ""
+        path_str, _ = QFileDialog.getSaveFileName(
+            self, "Save Micro-Manager configuration file", current, "cfg(*.cfg)"
+        )
+        if not path_str:
+            return
+        path = Path(path_str)
+        if path.suffix.lower() != ".cfg":
+            path = path.with_suffix(".cfg")
+
+        by_row: dict[int, list[ChannelProperty]] = defaultdict(list)
+        for entry in self.channels.channelProperties(exclude_unchecked=False):
+            by_row[entry["channel_index"]].append(entry)
+        declarations: dict[str, list[tuple[str, str, float]]] = {}
+        for row, channel in enumerate(self.channels.value(exclude_unchecked=False)):
+            if (preset := str(channel.config or "")) and (entries := by_row.get(row)):
+                declarations[preset] = [
+                    (entry["device"], entry["property"], float(entry["value"]))
+                    for entry in entries
+                ]
+
+        try:
+            # dumps the configuration itself; comments do not survive this, which is
+            # why the declaration block is appended afterwards rather than merged
+            self._mmc.saveSystemConfiguration(str(path))
+            write_light_source_comments(path, channel_group, declarations)
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Save Light Sources", f"Could not save {path}:\n{exc}"
+            )
+            return
+        # The core is untouched by all of this, so the table needs no refresh -- but
+        # what was just written is now what a reload of this file would restore.
+        self._light_source_declarations = declarations
 
     def _connect_channel_selection(self) -> None:
         table = self.channels.table()
@@ -376,6 +559,11 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
                         # activated is user-only.  currentTextChanged would also
                         # fire while loading/refreshing an MDA and could move
                         # hardware.
+                        #
+                        # The declaration must be applied first: it updates this
+                        # row's Light Source/Intensity, which the apply-to-core
+                        # below then pushes to hardware.
+                        combo.activated.connect(self._on_channel_config_activated)
                         combo.activated.connect(self._on_channel_combo_activated)
                 elif col in (exposure_col, intensity_col) and isinstance(
                     cell, QDoubleSpinBox
@@ -417,6 +605,17 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         if not index.isValid() or index.row() != self.channels.activeRow():
             return
         self._on_channel_row_selected(index)
+
+    def _on_channel_config_activated(self, *_: object) -> None:
+        """Follow the new preset's light source declaration for the edited row.
+
+        Unlike _on_channel_combo_activated this applies to *any* row, not just the
+        active one: the row now holds a different channel, so its light source
+        should describe that channel whether or not hardware moves.
+        """
+        index = self._channel_index_for_editor(self.sender())
+        if index.isValid():
+            self._apply_light_source_declarations([index.row()], clear_missing=True)
 
     def _on_channel_cell_clicked(self, index: QModelIndex) -> None:
         """Apply a channel to the microscope only when the ● column is clicked."""
