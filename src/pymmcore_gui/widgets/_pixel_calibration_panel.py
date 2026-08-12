@@ -143,12 +143,12 @@ class CalibrationDiagnosticsWidget(QWidget):
         painter.setPen(QColor("#aab3bd"))
         painter.drawText(
             rect.adjusted(3, 3, -3, -3),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
             "Blue arrows: measured moves · Green dots: predicted endpoints",
         )
         painter.drawText(
             rect.adjusted(3, 21, -3, -3),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
             "Good calibration: green dots coincide with arrow tips",
         )
         plot = rect.adjusted(8, 43, -8, -18)
@@ -1220,18 +1220,22 @@ class PixelCalibrationPanel(QWidget):
             validation_summary = (
                 f"Fit RMS/worst: {fit.rms_residual_px:.4f}/{fit.max_residual_px:.4f} px"
             )
-        text = (
-            f"Applied automatically to {self._target.resolution_id!r}; "
-            "use Save to core to persist it. · "
+        lines = [
             f"Pixel size: {fit.pixel_size_um:.8f} µm/px "
-            f"(stored raw: {result.raw_pixel_size_um:.8f}) · "
+            f"(stored raw: {result.raw_pixel_size_um:.8f})",
             f"Rotation: {fit.rotation_deg:.3f}° · "
-            f"{'mirrored' if fit.determinant < 0 else 'not mirrored'} · "
-            f"{validation_summary}"
-        )
+            f"{'mirrored' if fit.determinant < 0 else 'not mirrored'}",
+            validation_summary,
+        ]
         if warning_text:
-            text += f" · {warning_text}"
-        self._set_result_message(text)
+            lines.append(warning_text)
+        lines.append("")
+        lines.append(
+            f"Applied automatically to {self._target.resolution_id!r}. Use "
+            '"Save to core" to update the current core instance, or '
+            '"Save to file" to also save it to the .cfg file.'
+        )
+        self._set_result_message("\n".join(lines), preserve_newlines=True)
         self._phase_label.setText("Validated result applied; configuration is dirty")
         self._progress.setValue(1000)
         self.resultReady.emit(result, self._target.resolution_id)
@@ -1250,10 +1254,20 @@ class PixelCalibrationPanel(QWidget):
         self._phase_label.setText("Calibration cancelled; hardware restored")
         self._set_result_message(message or "Calibration cancelled")
 
-    def _set_result_message(self, message: str) -> None:
-        """Show concise result text, with the full text available on hover."""
-        self._result_text.setText(message.replace("\n", " · "))
-        self._result_text.setToolTip(self._result_text.text())
+    def _set_result_message(
+        self, message: str, *, preserve_newlines: bool = False
+    ) -> None:
+        r"""Show result text, with the full text available on hover.
+
+        Most messages are a single collapsed line (``\\n`` joined with
+        " · ") to stay compact; a structured result (see ``_on_result``)
+        instead keeps its line breaks so pixel size / rotation / the
+        "applied to" note read as separate lines rather than one run-on
+        sentence.
+        """
+        text = message if preserve_newlines else message.replace("\n", " · ")
+        self._result_text.setText(text)
+        self._result_text.setToolTip(text)
 
     def _on_thread_finished(self) -> None:
         terminal_message = self._phase_label.text()

@@ -467,7 +467,9 @@ def _validate_fit(
     )
     if fit.rms_residual_px > rms_limit or fit.max_residual_px > max_limit:
         raise PixelCalibrationError(
-            "Affine fit residuals exceed the calibration quality threshold"
+            "Affine fit residuals exceed the calibration quality threshold: "
+            f"RMS {fit.rms_residual_px:.3f} px (limit {rms_limit:.3f}), "
+            f"worst {fit.max_residual_px:.3f} px (limit {max_limit:.3f})"
         )
     if fit.anisotropy > 0.10:
         raise PixelCalibrationError("Affine fit has more than 10% pixel anisotropy")
@@ -499,9 +501,12 @@ def _validate_holdouts(
         options.max_point_residual_fraction * median_shift,
     )
     rms = float(np.sqrt(np.mean(np.square(residuals))))
-    if rms > rms_limit or max(residuals) > max_limit:
+    worst = max(residuals)
+    if rms > rms_limit or worst > max_limit:
         raise PixelCalibrationError(
-            "Holdout prediction residuals exceed the quality threshold"
+            "Holdout prediction residuals exceed the quality threshold: "
+            f"RMS {rms:.3f} px (limit {rms_limit:.3f}), "
+            f"worst {worst:.3f} px (limit {max_limit:.3f})"
         )
 
 
