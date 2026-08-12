@@ -123,6 +123,8 @@ class MMArrayViewer(ndv.ArrayViewer):
     """ArrayViewer with OME-TIFF/OME-Zarr saving and orthogonal-axis rotation."""
 
     def __init__(self, data: Any = None, /, **kwargs: Any) -> None:
+        show_save_button = bool(kwargs.pop("show_save_button", True))
+        show_roll_axes_button = bool(kwargs.pop("show_roll_axes_button", True))
         opts = kwargs.pop("viewer_options", None) or {}
         opts.setdefault("show_roi_button", True)
         kwargs["viewer_options"] = opts
@@ -144,10 +146,12 @@ class MMArrayViewer(ndv.ArrayViewer):
 
         _guard_vispy_camera_resets(self._canvas)
 
-        with suppress(Exception):
-            _add_save_button(self)
-        with suppress(Exception):
-            _add_roll_axes_button(self)
+        if show_save_button:
+            with suppress(Exception):
+                _add_save_button(self)
+        if show_roll_axes_button:
+            with suppress(Exception):
+                _add_roll_axes_button(self)
         with suppress(Exception):
             unstyle_widgets(widget)
 

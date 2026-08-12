@@ -10,10 +10,7 @@ from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from pymmcore_plus import CMMCorePlus
-from pymmcore_widgets import (
-    ConfigGroupsEditor,
-    PixelConfigurationWidget,
-)
+from pymmcore_widgets import ConfigGroupsEditor
 from pymmcore_widgets._util import block_core
 from superqt.iconify import QIconifyIcon
 
@@ -30,6 +27,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from pymmcore_gui.widgets._pixel_configuration import PixelConfigurationWidget
 
 from ._busy import BusyOverlay, busy
 from ._tab_page import TabPage
@@ -214,6 +212,7 @@ class ConfigurationsPage(TabPage):
     # "Save to core" commits to the live core only; this asks the window to
     # write the whole configuration (hardware + groups + pixel) to a .cfg.
     saveToFileRequested = Signal()
+    calibrationRunningChanged = Signal(bool)
 
     def __init__(
         self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
@@ -249,6 +248,9 @@ class ConfigurationsPage(TabPage):
         )
         self._save_file_btn.clicked.connect(self.saveToFileRequested.emit)
         self.toolbar.add_widget(self._save_file_btn)
+        self._pixel_config.calibrationRunningChanged.connect(
+            self._on_pixel_calibration_running
+        )
 
         self._dirty_icon = QLabel()
         self._dirty_text = QLabel()
@@ -323,6 +325,17 @@ class ConfigurationsPage(TabPage):
         """Write the group and pixel editors' contents into the core."""
         self._group_tab.save()
         self._pixel_config.apply()
+
+    def _on_pixel_calibration_running(self, running: bool) -> None:
+        """Prevent configuration rewrites or tab changes during stage motion."""
+        self._save_core_btn.setEnabled(not running)
+        self._save_file_btn.setEnabled(not running)
+        self._tabs.setTabEnabled(self._tabs.indexOf(self._group_tab), not running)
+        self.calibrationRunningChanged.emit(running)
+
+    def shutdownCalibration(self) -> None:
+        """Cancel calibration and wait for stage/capture-state restoration."""
+        self._pixel_config.shutdownCalibration()
 
     def _on_group_clean_changed(self, clean: bool) -> None:
         """QUndoStack.cleanChanged — the accurate source for group-dirty state.

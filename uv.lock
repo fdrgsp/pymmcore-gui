@@ -2991,6 +2991,9 @@ name = "pymmcore-gui"
 source = { editable = "." }
 dependencies = [
     { name = "ndv", extra = ["vispy"] },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "ome-writers", extra = ["tensorstore", "tifffile"] },
     { name = "pydantic-settings" },
     { name = "pymmcore-plus", extra = ["cli"] },
@@ -3047,6 +3050,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "ndv", extras = ["vispy"], specifier = ">=0.5.0rc8" },
+    { name = "numpy", specifier = ">=1.24" },
     { name = "ome-writers", extras = ["tensorstore", "tifffile"], specifier = ">=0.3.0" },
     { name = "pydantic-settings", specifier = ">=2.7.1" },
     { name = "pymmcore-plus", extras = ["cli"], git = "https://github.com/fdrgsp/pymmcore-plus?rev=cite" },

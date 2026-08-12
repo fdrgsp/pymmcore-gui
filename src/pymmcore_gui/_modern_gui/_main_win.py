@@ -93,7 +93,9 @@ class ModeTab(QWidget):
         underline_h = t.scaled(3)
 
         # Text
-        if self._active:
+        if not self.isEnabled():
+            text_color = qcolor(t.text_disabled)
+        elif self._active:
             text_color = qcolor(t.accent)
         elif self._hovered:
             text_color = qcolor(t.text_primary)
@@ -130,7 +132,11 @@ class ModeTab(QWidget):
         self.update()
 
     def mousePressEvent(self, a0: QMouseEvent | None) -> None:
-        if a0 is not None and a0.button() == Qt.MouseButton.LeftButton:
+        if (
+            self.isEnabled()
+            and a0 is not None
+            and a0.button() == Qt.MouseButton.LeftButton
+        ):
             self.clicked.emit()
 
 
@@ -159,9 +165,16 @@ class ModeTabBar(QWidget):
             self._tabs[0].active = True
 
     def _select(self, index: int) -> None:
+        if not 0 <= index < len(self._tabs) or not self._tabs[index].isEnabled():
+            return
         for i, tab in enumerate(self._tabs):
             tab.active = i == index
         self.current_changed.emit(index)
+
+    def setTabEnabled(self, index: int, enabled: bool) -> None:
+        """Enable or disable a mode tab."""
+        if 0 <= index < len(self._tabs):
+            self._tabs[index].setEnabled(enabled)
 
     def changeEvent(self, a0: QEvent | None) -> None:
         if a0 is not None and a0.type() == QEvent.Type.StyleChange:
@@ -221,6 +234,9 @@ class MainWindow(QMainWindow):
         # configuration. Closing with unsaved changes still commits both.
         self._configurations.saveToFileRequested.connect(
             self._save_current_configuration
+        )
+        self._configurations.calibrationRunningChanged.connect(
+            self._on_pixel_calibration_running
         )
 
         self._acquire.layoutReset.connect(self._on_acquire_layout_reset)
@@ -313,8 +329,28 @@ class MainWindow(QMainWindow):
             self._mode_tabs._select(idx)
             self._stack.setCurrentIndex(idx)
 
+    def _on_pixel_calibration_running(self, running: bool) -> None:
+        """Keep other microscope workflows unavailable during stage calibration."""
+        configuration_index = self._stack.indexOf(self._configurations)
+        hardware_index = self._stack.indexOf(self._hardware)
+        acquire_index = self._stack.indexOf(self._acquire)
+        self._mode_tabs.setTabEnabled(hardware_index, not running)
+        self._mode_tabs.setTabEnabled(acquire_index, not running)
+        if running and configuration_index >= 0:
+            self._mode_tabs._select(configuration_index)
+            self._stack.setCurrentIndex(configuration_index)
+        if status_bar := self.statusBar():
+            status_bar.showMessage(
+                "Pixel calibration is controlling the camera and XY stage"
+                if running
+                else "Ready"
+            )
+
     def closeEvent(self, a0: QCloseEvent | None) -> None:
         """Offer to save hardware / group / pixel edits before closing."""
+        # Restoration is part of the calibration transaction.  Do not destroy
+        # its worker (or ask the user to save) until that transaction has ended.
+        self._configurations.shutdownCalibration()
         if self._hardware.is_dirty() or self._configurations.is_dirty():
             choice = QMessageBox.question(
                 self,

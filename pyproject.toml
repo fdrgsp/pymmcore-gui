@@ -37,6 +37,7 @@ classifiers = [
 ]
 dependencies = [
     "ndv[vispy]>=0.5.0rc8",
+    "numpy>=1.24",
     "ome-writers[tensorstore,tifffile]>=0.3.0",
     "pydantic-settings>=2.7.1",
     "pymmcore-plus[cli]>=0.18.0",

@@ -138,6 +138,30 @@ def test_explicit_startup_config_selects_acquire(
     assert window._stack.currentWidget() is window._acquire
 
 
+def test_pixel_calibration_locks_other_main_window_modes(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+) -> None:
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+    config_index = window._stack.indexOf(window._configurations)
+    hardware_index = window._stack.indexOf(window._hardware)
+    acquire_index = window._stack.indexOf(window._acquire)
+    window._mode_tabs._select(config_index)
+
+    window._configurations.calibrationRunningChanged.emit(True)
+
+    assert window._stack.currentWidget() is window._configurations
+    assert not window._mode_tabs._tabs[hardware_index].isEnabled()
+    assert not window._mode_tabs._tabs[acquire_index].isEnabled()
+    window._mode_tabs._select(acquire_index)
+    assert window._stack.currentWidget() is window._configurations
+
+    window._configurations.calibrationRunningChanged.emit(False)
+    assert window._mode_tabs._tabs[hardware_index].isEnabled()
+    assert window._mode_tabs._tabs[acquire_index].isEnabled()
+
+
 def test_new_gui_uses_one_application_font(
     mmcore: CMMCorePlus,
     qtbot: QtBot,
