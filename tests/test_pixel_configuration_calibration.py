@@ -16,7 +16,7 @@ from pymmcore_gui._pixel_calibration import (
     fit_affine,
 )
 from pymmcore_gui._qt.QtCore import Qt
-from pymmcore_gui._qt.QtWidgets import QDoubleSpinBox, QPushButton
+from pymmcore_gui._qt.QtWidgets import QDoubleSpinBox, QFrame, QPushButton
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
@@ -137,6 +137,16 @@ def test_calibration_panel_has_form_viewer_and_information_layout(
     assert widget._content_splitter.widget(2) is widget._props_selector
     assert panel._settings_group.title() == "Settings"
     assert not panel._settings_group.isCheckable()
+    assert not hasattr(panel, "_advanced_button")
+    assert panel._motion_separator.frameShape() is QFrame.Shape.HLine
+    for control, label in (
+        (panel._safe_radius, panel._safe_radius_label),
+        (panel._settle_time, panel._settle_time_label),
+        (panel._return_tolerance, panel._return_tolerance_label),
+    ):
+        assert control.isVisibleTo(panel)
+        assert control.toolTip()
+        assert label.toolTip() == control.toolTip()
     assert panel._top_splitter.indexOf(panel._settings_group) == 0
     assert panel._top_splitter.indexOf(panel._viewer_widget) == 1
     assert panel._info_group.title() == "Calibration information"

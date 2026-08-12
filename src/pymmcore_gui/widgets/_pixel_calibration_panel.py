@@ -24,6 +24,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -32,7 +33,6 @@ from pymmcore_gui._qt.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSplitter,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -368,41 +368,55 @@ class PixelCalibrationPanel(QWidget):
         settings_form.addRow("Exposure time:", self._exposure)
         settings_form.addRow("Light source:", self._light_source_combo)
         settings_form.addRow("Light intensity:", self._light_intensity)
-        settings_layout.addLayout(settings_form)
 
-        self._advanced_button = QToolButton()
-        self._advanced_button.setText("Motion settings")
-        self._advanced_button.setCheckable(True)
-        self._advanced_button.setChecked(False)
-        self._advanced_button.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
-        )
-        self._advanced_button.setArrowType(Qt.ArrowType.RightArrow)
-        settings_layout.addWidget(self._advanced_button)
+        self._motion_separator = QFrame()
+        self._motion_separator.setFrameShape(QFrame.Shape.HLine)
+        self._motion_separator.setFrameShadow(QFrame.Shadow.Sunken)
+        settings_form.addRow(self._motion_separator)
 
-        self._motion_widget = QWidget()
-        motion_form = QFormLayout(self._motion_widget)
-        motion_form.setContentsMargins(8, 0, 0, 0)
         self._safe_radius = QDoubleSpinBox()
         self._safe_radius.setRange(0.1, 100_000)
         self._safe_radius.setDecimals(2)
         self._safe_radius.setValue(100)
         self._safe_radius.setSuffix(" µm")
+        safe_radius_tip = (
+            "Maximum distance the XY stage may travel from its starting position "
+            "during calibration. Set this to a distance that is safe for the "
+            "objective, specimen, and stage."
+        )
+        self._safe_radius.setToolTip(safe_radius_tip)
         self._settle_time = QDoubleSpinBox()
         self._settle_time.setRange(0, 30)
         self._settle_time.setDecimals(3)
         self._settle_time.setValue(0.1)
         self._settle_time.setSuffix(" s")
+        settle_time_tip = (
+            "Time to wait after every XY-stage move before acquiring an image. "
+            "Increase this if vibration or stage lag causes blurred frames."
+        )
+        self._settle_time.setToolTip(settle_time_tip)
         self._return_tolerance = QDoubleSpinBox()
         self._return_tolerance.setRange(0, 100)
         self._return_tolerance.setDecimals(3)
         self._return_tolerance.setValue(0.5)
         self._return_tolerance.setSuffix(" µm")
-        motion_form.addRow("Safe radius:", self._safe_radius)
-        motion_form.addRow("Settle after move:", self._settle_time)
-        motion_form.addRow("Return tolerance:", self._return_tolerance)
-        self._motion_widget.hide()
-        settings_layout.addWidget(self._motion_widget)
+        return_tolerance_tip = (
+            "Maximum allowed error between the final and original XY position. "
+            "Calibration reports a failure if the stage cannot return within this "
+            "distance."
+        )
+        self._return_tolerance.setToolTip(return_tolerance_tip)
+
+        self._safe_radius_label = QLabel("Safe radius:")
+        self._safe_radius_label.setToolTip(safe_radius_tip)
+        self._settle_time_label = QLabel("Settle after move:")
+        self._settle_time_label.setToolTip(settle_time_tip)
+        self._return_tolerance_label = QLabel("Return tolerance:")
+        self._return_tolerance_label.setToolTip(return_tolerance_tip)
+        settings_form.addRow(self._safe_radius_label, self._safe_radius)
+        settings_form.addRow(self._settle_time_label, self._settle_time)
+        settings_form.addRow(self._return_tolerance_label, self._return_tolerance)
+        settings_layout.addLayout(settings_form)
         settings_layout.addStretch(1)
 
         button_row = QHBoxLayout()
@@ -484,7 +498,6 @@ class PixelCalibrationPanel(QWidget):
         info_layout.addWidget(self._info_splitter, 1)
         layout.addWidget(self._info_group, 2)
 
-        self._advanced_button.toggled.connect(self._toggle_motion_settings)
         self._test_button.clicked.connect(self.testFrame)
         self._start_button.clicked.connect(self.startCalibration)
         self._cancel_button.clicked.connect(self.cancelCalibration)
@@ -505,12 +518,6 @@ class PixelCalibrationPanel(QWidget):
         self._mmc.events.configDeleted.connect(self.refreshHardware)
         self.destroyed.connect(self._disconnect)
         self.refreshHardware()
-
-    def _toggle_motion_settings(self, visible: bool) -> None:
-        self._advanced_button.setArrowType(
-            Qt.ArrowType.DownArrow if visible else Qt.ArrowType.RightArrow
-        )
-        self._motion_widget.setVisible(visible)
 
     def _disconnect(self) -> None:
         for signal, callback in (
@@ -780,7 +787,6 @@ class PixelCalibrationPanel(QWidget):
             self._safe_radius,
             self._settle_time,
             self._return_tolerance,
-            self._advanced_button,
         ):
             widget.setEnabled(enabled)
         self._light_intensity.setEnabled(
