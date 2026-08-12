@@ -61,12 +61,16 @@ def _clear(layout: QLayout) -> None:
 
 
 class SnapButton(QPushButton):
-    """Icon-only snap button, wired directly to ``core.snap()``."""
+    """Acquire-style icon-only snap button, optionally controlling MMCore."""
 
     snapRequested = Signal()
 
     def __init__(
-        self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
+        self,
+        mmcore: CMMCorePlus | None = None,
+        parent: QWidget | None = None,
+        *,
+        control_core: bool = True,
     ) -> None:
         super().__init__(parent)
         self._core = mmcore or CMMCorePlus.instance()
@@ -75,7 +79,8 @@ class SnapButton(QPushButton):
         self.setIconSize(_icon_size())
         self.setToolTip("Snap")
         self.setProperty("variant", "subtle")
-        self.clicked.connect(self._snap)
+        if control_core:
+            self.clicked.connect(self._snap)
 
         self._core.events.systemConfigurationLoaded.connect(self._on_config_loaded)
         self.destroyed.connect(self._disconnect)
@@ -131,12 +136,16 @@ class SnapButton(QPushButton):
 
 
 class LiveButton(QPushButton):
-    """Icon-only live-toggle button, wired directly to core sequence control."""
+    """Acquire-style live toggle, optionally controlling MMCore directly."""
 
     liveStartedRequested = Signal()
 
     def __init__(
-        self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
+        self,
+        mmcore: CMMCorePlus | None = None,
+        parent: QWidget | None = None,
+        *,
+        control_core: bool = True,
     ) -> None:
         super().__init__(parent)
         self._core = mmcore or CMMCorePlus.instance()
@@ -145,7 +154,8 @@ class LiveButton(QPushButton):
         self.setIconSize(_icon_size())
         self.setProperty("variant", "subtle")
         self._set_running(False)
-        self.clicked.connect(self._toggle)
+        if control_core:
+            self.clicked.connect(self._toggle)
 
         ev = self._core.events
         ev.systemConfigurationLoaded.connect(self._on_config_loaded)

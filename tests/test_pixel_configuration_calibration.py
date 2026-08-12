@@ -7,16 +7,23 @@ import numpy as np
 import pytest
 from superqt.cmap import QColormapComboBox
 
+from pymmcore_gui._modern_gui._acquire_toolbar import LiveButton, SnapButton
 from pymmcore_gui._modern_gui._configurations import ConfigurationsPage
 from pymmcore_gui._pixel_calibration import (
     CalibrationCaptureSettings,
     CaptureStateTransaction,
     HardwareFingerprint,
     PixelCalibrationResult,
+    RegistrationResult,
     fit_affine,
 )
+from pymmcore_gui._pixel_calibration._models import CalibrationObservation
 from pymmcore_gui._qt.QtCore import Qt
-from pymmcore_gui._qt.QtWidgets import QDoubleSpinBox, QFrame, QPushButton
+from pymmcore_gui._qt.QtWidgets import (
+    QDoubleSpinBox,
+    QFrame,
+    QPushButton,
+)
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
@@ -38,7 +45,26 @@ def _result_for_selected_resolution(
         ]
     )
     shifts = np.asarray(((-60, 0), (60, 0), (0, -55), (0, 55)), dtype=float)
-    fit = fit_affine(shifts, shifts @ matrix.T)
+    deltas = shifts @ matrix.T
+    fit = fit_affine(shifts, deltas)
+    registration = RegistrationResult(
+        shift_xy=(0, 0),
+        psr=20,
+        peak_ratio=2,
+        overlap=0.9,
+        normalized_error=0,
+    )
+
+    def _observation(shift: np.ndarray, delta: np.ndarray) -> CalibrationObservation:
+        return CalibrationObservation(
+            stage_position_um=(float(delta[0]), float(delta[1])),
+            stage_delta_um=(float(delta[0]), float(delta[1])),
+            registration=registration,
+            corrected_shift_xy=(float(shift[0]), float(shift[1])),
+        )
+
+    validation_shifts = np.asarray(((25, 20), (-25, 20), (0, -30)), dtype=float)
+    validation_deltas = validation_shifts @ matrix.T
     core = page._core
     fingerprint = HardwareFingerprint(
         camera=str(core.getCameraDevice()),
@@ -57,8 +83,14 @@ def _result_for_selected_resolution(
         raw_matrix=matrix,
         raw_pixel_size_um=fit.pixel_size_um,
         fingerprint=fingerprint,
-        observations=(),
-        validation_observations=(),
+        observations=tuple(
+            _observation(shift, delta)
+            for shift, delta in zip(shifts, deltas, strict=True)
+        ),
+        validation_observations=tuple(
+            _observation(shift, delta)
+            for shift, delta in zip(validation_shifts, validation_deltas, strict=True)
+        ),
         stage_returned=True,
     )
 
@@ -151,15 +183,62 @@ def test_calibration_panel_has_form_viewer_and_information_layout(
     assert panel._top_splitter.indexOf(panel._viewer_widget) == 1
     assert panel._info_group.title() == "Calibration information"
     assert panel._info_splitter.orientation() is Qt.Orientation.Horizontal
-    assert panel._info_splitter.widget(0) is panel._result_text
+    assert panel._info_splitter.widget(0) is panel._result_widget
+    assert panel._result_text.frameShape() is QFrame.Shape.NoFrame
+    assert panel._result_text.wordWrap()
     assert panel._info_splitter.widget(1) is panel._diagnostics
+    assert panel._settle_time.value() == 0
     assert panel._camera_combo.currentText() == mmcore.getCameraDevice()
+    assert panel._xy_stage_combo.currentText() == mmcore.getXYStageDevice()
+    assert panel._xy_stage_combo.toolTip()
     assert panel._channel_group_combo.currentText() == mmcore.getChannelGroup()
     assert panel._channel_combo.currentText() in mmcore.getAvailableConfigs(
         mmcore.getChannelGroup()
     )
-    assert not panel._test_button.icon().isNull()
+    assert isinstance(panel._snap_button, SnapButton)
+    assert isinstance(panel._live_button, LiveButton)
+    assert panel._snap_button.toolTip() == "Snap"
+    assert panel._live_button.toolTip() == "Live"
+    assert not panel._snap_button.icon().isNull()
+    assert not panel._live_button.icon().isNull()
     assert not panel._start_button.icon().isNull()
+
+
+def test_xy_stage_can_be_selected_when_core_stage_is_unassigned(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    panel = page._pixel_config._calibration_panel
+
+    with patch.object(mmcore, "getXYStageDevice", return_value=""):
+        panel.refreshHardware()
+        panel._xy_stage_combo.setCurrentText("XY")
+
+        assert panel._xy_stage() == "XY"
+        assert not panel._unavailable_reason()
+
+
+def test_error_and_success_summary_use_same_information_area(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    panel = page._pixel_config._calibration_panel
+    result_field = panel._result_text
+
+    panel._on_failure("Stage did not settle")
+    assert panel._result_text is result_field
+    assert result_field.text() == "Stage did not settle"
+
+    panel._on_result(_result_for_selected_resolution(page))
+    assert panel._result_text is result_field
+    assert "Independent validation passed" in result_field.text()
+    assert panel._info_splitter.widget(0) is panel._result_widget
+    assert panel._info_splitter.widget(1) is panel._diagnostics
+    panel._diagnostics.resize(500, 240)
+    assert not panel._diagnostics.grab().isNull()
+    assert "green points" in panel._diagnostics.toolTip()
 
 
 def test_no_resolution_selection_disables_entire_calibration_panel(
@@ -183,7 +262,10 @@ def test_calibration_preview_hides_nonessential_controls_and_defaults_to_gray(
 ) -> None:
     page = ConfigurationsPage(mmcore)
     qtbot.addWidget(page)
-    preview = page._pixel_config._calibration_panel._preview
+    # The live-frame viewer is built lazily (on first Snap / Live / Start
+    # calibration) to avoid paying its OpenGL-context realization cost at
+    # startup for sessions that never open this panel.
+    preview = page._pixel_config._calibration_panel._ensure_preview()
     viewer = preview.viewer
     viewer_widget = viewer.widget()
 
@@ -247,7 +329,7 @@ def test_settings_form_builds_single_channel_capture_settings(
     assert settings.light_properties == (("Camera", "TestProperty1", 0.05),)
 
 
-def test_test_frame_worker_restores_and_finishes_cleanly(
+def test_snap_frame_worker_restores_and_finishes_cleanly(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
     page = ConfigurationsPage(mmcore)
@@ -257,12 +339,51 @@ def test_test_frame_worker_restores_and_finishes_cleanly(
 
     # Keep this a worker/thread lifecycle test; NDV rendering is covered by its
     # own widget and is not available on every headless OpenGL test backend.
-    with patch.object(panel._preview, "append"):
-        panel.testFrame()
+    with patch.object(panel._ensure_preview(), "append"):
+        panel.snapFrame()
         qtbot.waitUntil(lambda: panel._thread is None, timeout=5000)
 
     assert not panel.isRunning()
-    assert panel._phase_label.text() == ("Test frame acquired; hardware state restored")
+    assert panel._phase_label.text() == "Frame snapped; hardware state restored"
+
+
+def test_live_preview_applies_settings_restores_them_and_retains_fov(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    panel = page._pixel_config._calibration_panel
+    preview = panel._ensure_preview()
+    old_exposure = float(mmcore.getExposure())
+    start_x, start_y = mmcore.getXYPosition(panel._xy_stage())
+    panel._exposure.setValue(old_exposure + 13)
+
+    with patch.object(preview, "append"):
+        panel._live_button.click()
+        qtbot.waitUntil(mmcore.isSequenceRunning, timeout=5000)
+
+        assert panel._live_button.isChecked()
+        assert panel._live_button.toolTip() == "Stop"
+        assert panel.isRunning()
+        assert mmcore.getExposure() == pytest.approx(old_exposure + 13)
+        assert not panel._exposure.isEnabled()
+        assert panel._snap_button.isEnabled()
+        assert panel._start_button.isEnabled()
+
+        mmcore.setXYPosition(panel._xy_stage(), start_x + 2, start_y + 3)
+        mmcore.waitForDevice(panel._xy_stage())
+        panel._live_button.click()
+        qtbot.waitUntil(lambda: not mmcore.isSequenceRunning(), timeout=5000)
+
+    assert not panel._live_button.isChecked()
+    assert panel._live_button.toolTip() == "Live"
+    assert not panel.isRunning()
+    assert mmcore.getExposure() == pytest.approx(old_exposure)
+    assert mmcore.getXYPosition(panel._xy_stage()) == pytest.approx(
+        (start_x + 2, start_y + 3), abs=0.01
+    )
+    assert panel._exposure.isEnabled()
+    assert "starting field of view retained" in panel._phase_label.text()
 
 
 def test_capture_transaction_applies_target_and_restores_exact_state(

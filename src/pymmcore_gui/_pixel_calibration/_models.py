@@ -14,8 +14,8 @@ if TYPE_CHECKING:
 class CalibrationOptions:
     """Numerical and motion limits for an automatic calibration run."""
 
-    safe_radius_um: float = 1_000.0
-    settle_time_s: float = 0.1
+    safe_radius_um: float = 100.0
+    settle_time_s: float = 0.0
     crop_fraction: float = 0.75
     upsample_factor: int = 20
     min_psr: float = 8.0

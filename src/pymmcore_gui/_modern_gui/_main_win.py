@@ -17,6 +17,7 @@ from pymmcore_gui._qt.QtGui import (
     QPaintEvent,
     QShortcut,
 )
+from pymmcore_gui._qt.QtOpenGLWidgets import QOpenGLWidget
 from pymmcore_gui._qt.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
@@ -229,6 +230,16 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(self._configurations)
         self._stack.addWidget(self._acquire)
         self.setCentralWidget(self._stack)
+
+        # Adding a QOpenGLWidget (e.g. ndv canvas) to a window that uses raster
+        # rendering forces Qt to destroy and recreate the native window with an
+        # OpenGL-compatible surface, causing a visible flash. Adding a zero-size
+        # QOpenGLWidget before the first show() ensures the window is born with
+        # the right surface type, avoiding the flash. Without this, the first
+        # snap/MDA run -- whichever creates the first viewer canvas -- flickers.
+        _gl = QOpenGLWidget(self)
+        _gl.setFixedSize(0, 0)
+        _gl.close()
 
         # The toolbar action commits its selected editor, then saves the whole
         # configuration. Closing with unsaved changes still commits both.

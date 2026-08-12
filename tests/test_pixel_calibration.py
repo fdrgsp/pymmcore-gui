@@ -22,6 +22,12 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 
+def test_default_motion_settings_match_the_gui() -> None:
+    options = CalibrationOptions()
+    assert options.safe_radius_um == 100
+    assert options.settle_time_s == 0
+
+
 def _texture(shape: tuple[int, int] = (256, 320)) -> NDArray[np.float64]:
     rng = np.random.default_rng(12)
     image = rng.normal(size=shape)
