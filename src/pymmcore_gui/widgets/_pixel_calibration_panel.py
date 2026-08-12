@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import html
 import logging
 from dataclasses import dataclass
 from threading import Event
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 from pymmcore_plus import CMMCorePlus, DeviceType, PropertyType
@@ -54,6 +55,12 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+# Sentinel default for _on_failure/_on_cancelled's diagnostics parameter,
+# distinguishing "no diagnostics for this outcome" (clear the graph) from
+# "not applicable, don't touch the graph" (the default, for direct callers
+# reporting something other than a calibration/test-frame attempt).
+_DIAGNOSTICS_UNCHANGED = object()
 
 
 def _describe_error(exc: BaseException) -> str:
@@ -263,8 +270,10 @@ class _CalibrationWorker(QObject):
     frameReady = Signal(object)
     resultReady = Signal(object)
     previewReady = Signal()
-    failed = Signal(str)
-    cancelled = Signal(str)
+    # str message, plus whatever diagnostics (PixelCalibrationResult | None)
+    # the failure's exception carried -- see PixelCalibrationError.diagnostics.
+    failed = Signal(str, object)
+    cancelled = Signal(str, object)
     finished = Signal()
 
     def __init__(
@@ -296,6 +305,7 @@ class _CalibrationWorker(QObject):
         )
         failure = ""
         cancelled = False
+        diagnostics: PixelCalibrationResult | None = None
         result: PixelCalibrationResult | None = None
         try:
             transaction.apply()
@@ -318,11 +328,13 @@ class _CalibrationWorker(QObject):
             cancelled = True
             logger.info("Pixel calibration cancelled: %s", exc)
             failure = _describe_error(exc)
+            diagnostics = getattr(exc, "diagnostics", None)
         except BaseException as exc:
             # Full traceback goes to the log for developers; the GUI only
             # ever shows the short, human-readable message below.
             logger.exception("Pixel calibration failed")
             failure = _describe_error(exc)
+            diagnostics = getattr(exc, "diagnostics", None)
         try:
             transaction.restore()
         except BaseException as exc:
@@ -336,15 +348,15 @@ class _CalibrationWorker(QObject):
             )
 
         if cancelled:
-            self.cancelled.emit(failure)
+            self.cancelled.emit(failure, diagnostics)
         elif failure:
-            self.failed.emit(failure)
+            self.failed.emit(failure, diagnostics)
         elif self._preview_only:
             self.previewReady.emit()
         elif result is not None:
             self.resultReady.emit(result)
         else:  # pragma: no cover
-            self.failed.emit("Calibration completed without returning a result")
+            self.failed.emit("Calibration completed without returning a result", None)
         self.finished.emit()
 
 
@@ -531,6 +543,7 @@ class PixelCalibrationPanel(QWidget):
         self._progress.setRange(0, 1000)
         info_layout.addWidget(self._progress)
         self._result_text = QLabel()
+        self._result_text.setTextFormat(Qt.TextFormat.RichText)
         self._result_text.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
         )
@@ -542,6 +555,9 @@ class PixelCalibrationPanel(QWidget):
         self._result_text.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
+        self._result_icon_kind: Literal["error", "success"] | None = None
+        self._result_plain_message = ""
+        self._result_preserve_newlines = False
         self._set_result_message("No validated result")
         self._result_widget = QWidget()
         result_layout = QVBoxLayout(self._result_widget)
@@ -606,12 +622,11 @@ class PixelCalibrationPanel(QWidget):
 
     def changeEvent(self, a0: QEvent | None) -> None:
         super().changeEvent(a0)
-        if (
-            a0 is not None
-            and a0.type() == QEvent.Type.StyleChange
-            and hasattr(self, "_start_button")
-        ):
-            self._apply_action_icons()
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
+            if hasattr(self, "_start_button"):
+                self._apply_action_icons()
+            if hasattr(self, "_result_text"):
+                self._render_result_text()
 
     def _disconnect(self) -> None:
         if self._live_transaction is not None:
@@ -1221,6 +1236,7 @@ class PixelCalibrationPanel(QWidget):
                 f"Fit RMS/worst: {fit.rms_residual_px:.4f}/{fit.max_residual_px:.4f} px"
             )
         lines = [
+            "Calibration successful",
             f"Pixel size: {fit.pixel_size_um:.8f} µm/px "
             f"(stored raw: {result.raw_pixel_size_um:.8f})",
             f"Rotation: {fit.rotation_deg:.3f}° · "
@@ -1235,27 +1251,54 @@ class PixelCalibrationPanel(QWidget):
             '"Save to core" to update the current core instance, or '
             '"Save to file" to also save it to the .cfg file.'
         )
-        self._set_result_message("\n".join(lines), preserve_newlines=True)
+        self._set_result_message(
+            "\n".join(lines), preserve_newlines=True, icon="success"
+        )
         self._phase_label.setText("Validated result applied; configuration is dirty")
         self._progress.setValue(1000)
         self.resultReady.emit(result, self._target.resolution_id)
 
-    def _on_failure(self, message: str) -> None:
+    def _on_failure(
+        self, message: str, diagnostics: object = _DIAGNOSTICS_UNCHANGED
+    ) -> None:
         """Show a clean, user-facing failure message.
 
         ``message`` is already a short human-readable sentence (see
         ``_describe_error``); the full traceback is logged, not shown here.
+
+        ``diagnostics``, supplied only by the worker's ``failed`` signal for
+        an actual calibration/test-frame attempt, replaces the diagnostics
+        graph with whatever fit/holdout data that run produced (or clears it
+        to blank if none) -- so a run that fails holdout validation still
+        shows the measured-vs-predicted arrows that explain why. Direct
+        callers reporting an unrelated failure (e.g. live-preview setup)
+        omit it and leave the graph showing whatever the last calibration
+        attempt left there.
         """
         self._phase_label.setText("Calibration failed; hardware restoration attempted")
-        self._set_result_message(message or "Unknown error")
+        self._set_result_message(message or "Unknown error", icon="error")
+        if diagnostics is not _DIAGNOSTICS_UNCHANGED:
+            self._diagnostics.setResult(
+                diagnostics if isinstance(diagnostics, PixelCalibrationResult) else None
+            )
 
-    def _on_cancelled(self, message: str) -> None:
+    def _on_cancelled(
+        self, message: str, diagnostics: object = _DIAGNOSTICS_UNCHANGED
+    ) -> None:
         """Report a user-requested cancellation distinctly from a failure."""
         self._phase_label.setText("Calibration cancelled; hardware restored")
         self._set_result_message(message or "Calibration cancelled")
+        if diagnostics is not _DIAGNOSTICS_UNCHANGED:
+            self._diagnostics.setResult(
+                diagnostics if isinstance(diagnostics, PixelCalibrationResult) else None
+            )
 
     def _set_result_message(
-        self, message: str, *, preserve_newlines: bool = False
+        self,
+        message: str,
+        *,
+        preserve_newlines: bool = False,
+        icon: Literal["error", "success"] | None = None,
     ) -> None:
         r"""Show result text, with the full text available on hover.
 
@@ -1264,10 +1307,44 @@ class PixelCalibrationPanel(QWidget):
         instead keeps its line breaks so pixel size / rotation / the
         "applied to" note read as separate lines rather than one run-on
         sentence.
+
+        ``icon`` puts a small status glyph in front of the text -- red for
+        ``"error"``, green for ``"success"`` -- matching the outcome; other
+        messages (in-progress, informational) pass none and show no icon.
         """
-        text = message if preserve_newlines else message.replace("\n", " · ")
-        self._result_text.setText(text)
+        self._result_plain_message = message
+        self._result_preserve_newlines = preserve_newlines
+        self._result_icon_kind = icon
+        self._render_result_text()
+
+    def _render_result_text(self) -> None:
+        """Rebuild the result label's rich text from the current theme + state.
+
+        The status glyph is a plain Unicode character in a colored ``<span>``,
+        not an embedded icon image: a rendered image has to be manually
+        positioned against the text's baseline (fighting ``setMargin()`` and
+        font metrics -- ascent vs. cap-height vs. line-height all give a
+        different-looking result, none of them reliably centered), whereas a
+        real character is laid out by the same text shaper as the rest of the
+        line and aligns for free. ``✓``/``⚠`` are plain (non-emoji-presentation)
+        code points, so -- unlike ✅/❗/⛔ -- they render as ordinary colorable
+        glyphs rather than fixed-color emoji that would ignore this styling.
+        Rebuilt on every theme change since the color is baked into the span.
+        """
+        message = self._result_plain_message
+        text = (
+            message if self._result_preserve_newlines else message.replace("\n", " · ")
+        )
         self._result_text.setToolTip(text)
+        lines = [html.escape(line) for line in text.split("\n")]
+        kind = self._result_icon_kind
+        if kind is not None and lines:
+            color = qcolor(
+                theme().status_green if kind == "success" else theme().status_red
+            ).name()
+            glyph = "✓" if kind == "success" else "⚠"
+            lines[0] = f'<span style="color: {color};">{glyph}</span> {lines[0]}'
+        self._result_text.setText("<br>".join(lines))
 
     def _on_thread_finished(self) -> None:
         terminal_message = self._phase_label.text()

@@ -85,7 +85,21 @@ class CalibrationWarning:
 
 
 class PixelCalibrationError(RuntimeError):
-    """Base error for a failed or invalid pixel calibration."""
+    """Base error for a failed or invalid pixel calibration.
+
+    ``diagnostics``, when set by the routine, carries whatever fit/holdout
+    data existed at the point of failure -- e.g. a fit that measured fine but
+    failed independent holdout validation still has a matrix and observations
+    worth plotting. Callers (the GUI panel) can use it to show the same
+    measured-vs-predicted graph on a failed run that a successful one gets,
+    instead of leaving the diagnostics blank just because the run didn't pass.
+    """
+
+    def __init__(
+        self, message: str, *, diagnostics: PixelCalibrationResult | None = None
+    ) -> None:
+        super().__init__(message)
+        self.diagnostics = diagnostics
 
 
 class CalibrationCancelled(PixelCalibrationError):
@@ -105,7 +119,12 @@ class StageRestoreError(PixelCalibrationError):
         message = f"Failed to restore the XY stage: {restore_error}"
         if calibration_error is not None:
             message += f" (calibration had already failed: {calibration_error})"
-        super().__init__(message)
+        # Carry forward diagnostics from the original failure, if it has any,
+        # so a holdout-validation failure followed by a restore failure still
+        # shows the diagnostics graph instead of losing it to the wrapper.
+        super().__init__(
+            message, diagnostics=getattr(calibration_error, "diagnostics", None)
+        )
 
 
 class CalibrationCommitError(PixelCalibrationError):

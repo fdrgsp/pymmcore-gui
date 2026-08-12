@@ -229,7 +229,10 @@ def test_error_and_success_summary_use_same_information_area(
 
     panel._on_failure("Stage did not settle")
     assert panel._result_text is result_field
-    assert result_field.text() == "Stage did not settle"
+    # Text includes an inline icon (see _render_result_text); the tooltip is
+    # always the clean, un-annotated message.
+    assert "Stage did not settle" in result_field.text()
+    assert result_field.toolTip() == "Stage did not settle"
 
     panel._on_result(_result_for_selected_resolution(page))
     assert panel._result_text is result_field

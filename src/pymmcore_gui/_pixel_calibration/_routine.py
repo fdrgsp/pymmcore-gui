@@ -9,6 +9,7 @@ import numpy as np
 
 from ._fit import fit_affine, normalize_for_mmcore
 from ._models import (
+    AffineFitResult,
     CalibrationCancelled,
     CalibrationObservation,
     CalibrationOptions,
@@ -454,6 +455,36 @@ def _confidence_weights(
     return np.clip(psr / max(float(np.median(psr)), np.finfo(float).eps), 0.25, 2.0)
 
 
+def _diagnostics_snapshot(
+    fit: AffineFitResult,
+    fingerprint: HardwareFingerprint,
+    observations: Sequence[CalibrationObservation],
+    validation: Sequence[CalibrationObservation],
+) -> PixelCalibrationResult:
+    """Package a failed run's fit-so-far for the diagnostics graph only.
+
+    Attached to a validation failure's exception (see the ``except`` blocks
+    around ``_validate_fit``/``_validate_holdouts`` in ``_run_calibration``)
+    so the panel can still plot measured-vs-predicted arrows for a run that
+    didn't pass -- otherwise a failed calibration has nothing to show even
+    though the fit and observations that failed validation still exist.
+    Never returned as an actual result: it is not applied to core, not
+    persisted, and its "stage_returned" is unknown at this point.
+    """
+    raw_matrix, raw_size, _ = normalize_for_mmcore(
+        fit.matrix, binning=fingerprint.binning, magnification=fingerprint.magnification
+    )
+    return PixelCalibrationResult(
+        fit=fit,
+        raw_matrix=raw_matrix,
+        raw_pixel_size_um=raw_size,
+        fingerprint=fingerprint,
+        observations=tuple(observations),
+        validation_observations=tuple(validation),
+        stage_returned=False,
+    )
+
+
 def _validate_fit(
     fit: Any, observations: list[CalibrationObservation], options: CalibrationOptions
 ) -> None:
@@ -600,7 +631,11 @@ def _run_calibration(
         confidence_weights=_confidence_weights(accepted),
         minimum_points=6,
     )
-    _validate_fit(fit, accepted, options)
+    try:
+        _validate_fit(fit, accepted, options)
+    except PixelCalibrationError as exc:
+        exc.diagnostics = _diagnostics_snapshot(fit, fingerprint, observations, ())
+        raise
 
     validation: list[CalibrationObservation] = []
     validation_targets = _measurement_targets(
@@ -620,7 +655,13 @@ def _run_calibration(
             cancel_event,
         )
         validation.append(observation)
-    _validate_holdouts(fit.matrix, validation, options)
+    try:
+        _validate_holdouts(fit.matrix, validation, options)
+    except PixelCalibrationError as exc:
+        exc.diagnostics = _diagnostics_snapshot(
+            fit, fingerprint, observations, validation
+        )
+        raise
 
     if not fingerprint_matches(core, fingerprint):
         raise PixelCalibrationError(
