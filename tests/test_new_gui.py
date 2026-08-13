@@ -13,7 +13,7 @@ import useq
 from pymmcore_plus import PropertyType
 from pymmcore_widgets import MDAWidget as UpstreamMDAWidget
 from pymmcore_widgets.mda._core_channels import PROPERTY_SEPARATOR
-from pymmcore_widgets.useq_widgets._positions import MDAButton
+from pymmcore_widgets.useq_widgets._positions import MDAButton, _MDAPopup
 
 import pymmcore_gui._modern_gui._acquire_toolbar as acquire_toolbar_module
 import pymmcore_gui._modern_gui._acquire_viewers as acquire_viewers_module
@@ -42,6 +42,7 @@ from pymmcore_gui._qt.QtGui import QCursor
 from pymmcore_gui._qt.QtWidgets import (
     QWIDGETSIZE_MAX,
     QAbstractButton,
+    QAbstractSlider,
     QApplication,
     QComboBox,
     QDoubleSpinBox,
@@ -3513,6 +3514,53 @@ def test_mda_grid_bounds_icons_stay_visible_after_action_changes(
     assert_themed()
 
 
+def test_position_subsequence_popup_is_collapsed_and_themed(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Per-position editors start compact and use the main app's styling."""
+    set_theme(DARK_THEME)
+    widget = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(widget)
+    position_btn = widget.stage_positions.findChild(MDAButton)
+    assert position_btn is not None
+
+    popup = _MDAPopup(parent=position_btn)
+    qtbot.addWidget(popup)
+    popup.show()
+    QApplication.processEvents()
+
+    tabs = popup.mda_tabs
+    assert all(not section.expanded for section in tabs.sections)
+    assert all(
+        not child.styleSheet()
+        for child in (popup, *popup.findChildren(QWidget))
+        if not isinstance(child, QAbstractSlider)
+    )
+    assert all(
+        button.property("variant")
+        for button in popup.findChildren(QAbstractButton)
+    )
+
+    grid = tabs.grid_plan
+    bounds = grid._core_xy_bounds
+    grid._mode_bounds_radio.setChecked(True)
+    expected = qcolor(theme().text_primary)
+    expected_rgb = expected.red(), expected.green(), expected.blue()
+
+    def assert_bounds_icons_themed() -> None:
+        for button in bounds.findChildren(QPushButton):
+            rgb = _icon_avg_rgb(button.icon(), QSize(24, 24))
+            assert rgb is not None
+            assert all(
+                abs(actual - wanted) < 2
+                for actual, wanted in zip(rgb, expected_rgb, strict=True)
+            )
+
+    assert_bounds_icons_themed()
+    bounds.go_middle.setChecked(True)
+    assert_bounds_icons_themed()
+
+
 def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     """The shared Stage Explorer remains consistent in classic and modern GUIs."""
     set_theme(DARK_THEME)
@@ -3534,6 +3582,75 @@ def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert all(button.property("variant") == "subtle" for button in tool_buttons)
     assert explorer._contrast_slider._slider.styleSheet() == ""
     assert not toolbar.stop_scan_action.icon().isNull()
+
+    expected = qcolor(theme().text_primary)
+    expected_rgb = expected.red(), expected.green(), expected.blue()
+    marker_actions = (
+        toolbar.poll_stage_action,
+        *toolbar.marker_mode_action_group.actions(),
+    )
+    for action in marker_actions:
+        rgb = _icon_avg_rgb(action.icon(), QSize(24, 24))
+        assert rgb is not None
+        assert all(
+            abs(actual - wanted) < 2
+            for actual, wanted in zip(rgb, expected_rgb, strict=True)
+        )
+
+
+def test_stage_explorer_refreshes_all_pixel_dependent_geometry(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    explorer = ThemedStageExplorer(mmcore=mmcore)
+    qtbot.addWidget(explorer)
+    marker = explorer._stage_pos_marker
+    assert marker is not None
+
+    with (
+        patch.object(
+            explorer.roi_manager,
+            "update_fovs",
+            wraps=explorer.roi_manager.update_fovs,
+        ) as update_fovs,
+        patch.object(marker, "set_rect_size", wraps=marker.set_rect_size) as set_size,
+        patch.object(marker, "apply_transform", wraps=marker.apply_transform) as apply,
+    ):
+        explorer.refreshPixelGeometry()
+
+    width, height = explorer._fov_w_h()
+    update_fovs.assert_called_with((width, height))
+    set_size.assert_called_with(mmcore.getImageWidth(), mmcore.getImageHeight())
+    apply.assert_called_once()
+
+
+def test_pixel_config_commit_refreshes_open_stage_explorer(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+    window._acquire.panel_button(PanelKey.STAGE_EXPLORER).click()
+    explorer = window._acquire.panel_widget(PanelKey.STAGE_EXPLORER)
+    assert isinstance(explorer, ThemedStageExplorer)
+
+    with patch.object(explorer, "refreshPixelGeometry") as refresh:
+        window._configurations.pixelConfigurationsApplied.emit()
+    refresh.assert_called_once_with()
+
+
+def test_successful_embedded_pixel_apply_emits_geometry_refresh_signal(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    applied = Mock()
+    page.pixelConfigurationsApplied.connect(applied)
+
+    with (
+        patch.object(page._pixel_config, "_on_apply"),
+        patch.object(page._pixel_config, "isClean", return_value=True),
+    ):
+        page._pixel_config.apply()
+    applied.assert_called_once_with()
 
 
 def test_hardware_toolbar_buttons_use_primary_style(

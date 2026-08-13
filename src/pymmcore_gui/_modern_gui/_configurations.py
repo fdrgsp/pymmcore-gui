@@ -170,6 +170,8 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
     widget; embedded in a tab there is nothing to close, so Apply just applies.
     """
 
+    applied = Signal()
+
     def __init__(
         self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
     ) -> None:
@@ -190,6 +192,10 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
     def apply(self) -> None:
         """Apply the pixel configurations to the core (without closing)."""
         self._on_apply()
+        # Validation failures leave the editor dirty. Only announce a real
+        # commit so Stage Explorer is not reset for an apply that never landed.
+        if self.isClean():
+            self.applied.emit()
 
     def _on_apply(self) -> None:
         # _on_apply ends by calling self.close(); keep the widget open instead.
@@ -213,6 +219,7 @@ class ConfigurationsPage(TabPage):
     # write the whole configuration (hardware + groups + pixel) to a .cfg.
     saveToFileRequested = Signal()
     calibrationRunningChanged = Signal(bool)
+    pixelConfigurationsApplied = Signal()
 
     def __init__(
         self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
@@ -251,6 +258,7 @@ class ConfigurationsPage(TabPage):
         self._pixel_config.calibrationRunningChanged.connect(
             self._on_pixel_calibration_running
         )
+        self._pixel_config.applied.connect(self.pixelConfigurationsApplied)
 
         self._dirty_icon = QLabel()
         self._dirty_text = QLabel()

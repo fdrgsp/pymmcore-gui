@@ -437,6 +437,13 @@ class AcquirePage(TabPage):
         self._mda._collapsible_tabs().refresh_summaries()
         self.panel_button(PanelKey.MDA).setChecked(True)
 
+    def refresh_stage_explorer_pixel_geometry(self) -> None:
+        """Refresh an open Stage Explorer after pixel configs are committed."""
+        panel = self._panels[PanelKey.STAGE_EXPLORER]
+        if panel.widget is not None:
+            explorer = cast("ThemedStageExplorer", panel.widget)
+            explorer.refreshPixelGeometry()
+
     def _refresh_panel(self, key: str) -> None:
         panel = self._panels[key]
         if panel.widget is not None and panel.info.refresh is not None:

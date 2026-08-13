@@ -249,6 +249,9 @@ class MainWindow(QMainWindow):
         self._configurations.calibrationRunningChanged.connect(
             self._on_pixel_calibration_running
         )
+        self._configurations.pixelConfigurationsApplied.connect(
+            self._acquire.refresh_stage_explorer_pixel_geometry
+        )
 
         self._acquire.layoutReset.connect(self._on_acquire_layout_reset)
 
