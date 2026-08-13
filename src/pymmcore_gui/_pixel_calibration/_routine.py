@@ -530,7 +530,7 @@ def _validate_holdouts(
     matrix: NDArray[np.float64],
     observations: list[CalibrationObservation],
     options: CalibrationOptions,
-) -> None:
+) -> CalibrationWarning | None:
     if len(observations) < 3 or not all(obs.accepted for obs in observations):
         raise PixelCalibrationError("One or more holdout registrations failed")
     inverse = np.linalg.inv(matrix)
@@ -549,12 +549,21 @@ def _validate_holdouts(
     )
     rms = float(np.sqrt(np.mean(np.square(residuals))))
     worst = max(residuals)
-    if rms > rms_limit or worst > max_limit:
+    if worst > max_limit:
         raise PixelCalibrationError(
             "Holdout prediction residuals exceed the quality threshold: "
             f"RMS {rms:.3f} px (limit {rms_limit:.3f}), "
             f"worst {worst:.3f} px (limit {max_limit:.3f})"
         )
+    if rms > rms_limit:
+        return CalibrationWarning(
+            "holdout_rms_above_preferred",
+            "Independent validation RMS "
+            f"{rms:.3f} px exceeds the preferred {rms_limit:.3f} px; "
+            f"the worst prediction ({worst:.3f} px) remains within the hard "
+            f"{max_limit:.3f} px limit.",
+        )
+    return None
 
 
 def _run_calibration(
@@ -675,7 +684,7 @@ def _run_calibration(
         validation.append(observation)
         _notify_observation(observation_callback, observation, "validation")
     try:
-        _validate_holdouts(fit.matrix, validation, options)
+        validation_warning = _validate_holdouts(fit.matrix, validation, options)
     except PixelCalibrationError as exc:
         exc.diagnostics = _diagnostics_snapshot(
             fit, fingerprint, observations, validation
@@ -692,6 +701,8 @@ def _run_calibration(
         magnification=fingerprint.magnification,
     )
     warnings: list[CalibrationWarning] = list(fit.warnings)
+    if validation_warning is not None:
+        warnings.append(validation_warning)
     try:
         existing = float(core.getPixelSizeUm())
     except Exception:

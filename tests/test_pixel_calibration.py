@@ -9,14 +9,17 @@ import pytest
 from pymmcore_gui._pixel_calibration import (
     CalibrationCancelled,
     CalibrationCommitError,
+    CalibrationObservation,
     CalibrationOptions,
     PixelCalibrationError,
+    RegistrationResult,
     commit_pixel_calibration,
     fit_affine,
     normalize_for_mmcore,
     register_translation,
     run_pixel_calibration,
 )
+from pymmcore_gui._pixel_calibration._routine import _validate_holdouts
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -26,6 +29,41 @@ def test_default_motion_settings_match_the_gui() -> None:
     options = CalibrationOptions()
     assert options.safe_radius_um == 100
     assert options.settle_time_s == 0
+
+
+def test_holdout_rms_miss_is_warning_until_a_prediction_exceeds_hard_limit() -> None:
+    registration = RegistrationResult(
+        shift_xy=(0, 0),
+        psr=20,
+        peak_ratio=2,
+        overlap=0.9,
+        normalized_error=0,
+    )
+
+    def observation(
+        shift: tuple[float, float], error_px: float
+    ) -> CalibrationObservation:
+        return CalibrationObservation(
+            stage_position_um=(shift[0] + error_px, shift[1]),
+            stage_delta_um=(shift[0] + error_px, shift[1]),
+            registration=registration,
+            corrected_shift_xy=shift,
+        )
+
+    noisy = [
+        observation((100, 0), 2),
+        observation((-100, 0), 2),
+        observation((0, 100), 2),
+    ]
+    warning = _validate_holdouts(np.eye(2), noisy, CalibrationOptions())
+
+    assert warning is not None
+    assert warning.code == "holdout_rms_above_preferred"
+    assert "remains within the hard" in warning.message
+
+    unsafe = [*noisy[:2], observation((0, 100), 4)]
+    with pytest.raises(PixelCalibrationError, match="quality threshold"):
+        _validate_holdouts(np.eye(2), unsafe, CalibrationOptions())
 
 
 def _texture(shape: tuple[int, int] = (256, 320)) -> NDArray[np.float64]:

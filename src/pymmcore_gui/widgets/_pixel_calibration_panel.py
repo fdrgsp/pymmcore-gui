@@ -100,6 +100,22 @@ class CalibrationTarget:
     binding_is_saved: bool
 
 
+@dataclass(frozen=True)
+class _DiagnosticsState:
+    result: PixelCalibrationResult | None
+    observations: tuple[tuple[CalibrationObservation, str], ...]
+
+
+@dataclass(frozen=True)
+class _CalibrationDisplayState:
+    phase: str
+    progress: int
+    message: str
+    preserve_newlines: bool
+    icon: Literal["error", "success"] | None
+    diagnostics: _DiagnosticsState
+
+
 def _validation_residuals_px(result: PixelCalibrationResult) -> np.ndarray:
     """Return independent-validation prediction errors in image pixels."""
     inverse = np.linalg.inv(result.fit.matrix)
@@ -122,9 +138,10 @@ class CalibrationDiagnosticsWidget(QWidget):
         self._observations: list[tuple[CalibrationObservation, str]] = []
         self.setMinimumHeight(165)
         self.setToolTip(
-            "Blue spots are measured XY-stage displacements and appear as they "
-            "are acquired. Green spots are the final affine predictions. A good "
-            "calibration places each green spot on a blue spot."
+            "Blue spots are measured XY-stage positions and appear during capture. "
+            "After fitting, green predictions are within the preferred error limit; "
+            "red predictions are outside it. Good predictions overlap their blue "
+            "measurements."
         )
 
     def setResult(self, result: PixelCalibrationResult | None) -> None:
@@ -146,6 +163,16 @@ class CalibrationDiagnosticsWidget(QWidget):
         self._observations.append((observation, kind))
         self.update()
 
+    def state(self) -> _DiagnosticsState:
+        """Return a copyable snapshot of the currently displayed diagnostics."""
+        return _DiagnosticsState(self._result, tuple(self._observations))
+
+    def restoreState(self, state: _DiagnosticsState) -> None:
+        """Restore a previously displayed result or partial observation set."""
+        self._result = state.result
+        self._observations = list(state.observations)
+        self.update()
+
     @staticmethod
     def _point(point: Sequence[float], rect: QRectF, extent: float) -> QPointF:
         return QPointF(
@@ -155,26 +182,8 @@ class CalibrationDiagnosticsWidget(QWidget):
 
     def _draw_spots(self, painter: QPainter, rect: QRectF) -> None:
         observations = [obs for obs, _kind in self._observations]
-        completed = len(observations)
-        validation_count = sum(
-            kind == "validation" for _observation, kind in self._observations
-        )
-        painter.setPen(QColor("#aab3bd"))
-        painter.drawText(
-            rect.adjusted(3, 3, -3, -3),
-            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
-            "Blue: measured positions · Green: fitted predictions",
-        )
-        painter.drawText(
-            rect.adjusted(3, 21, -3, -3),
-            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
-            (
-                f"Acquiring points… {completed} captured"
-                if self._result is None
-                else "Good calibration: green and blue spots overlap"
-            ),
-        )
-        available = rect.adjusted(8, 43, -8, -22)
+        self._draw_legend(painter, rect)
+        available = rect.adjusted(8, 30, -8, -8)
         side = min(available.width(), available.height())
         plot = QRectF(
             available.center().x() - side / 2,
@@ -209,21 +218,21 @@ class CalibrationDiagnosticsWidget(QWidget):
             QPointF(plot.center().x(), plot.bottom()),
         )
         painter.setPen(QPen(QColor("#58a6ff"), 1))
-        for observation, actual in zip(observations, measured, strict=True):
+        painter.setBrush(QColor("#58a6ff"))
+        for actual in measured:
             point = self._point((float(actual[0]), float(actual[1])), plot, extent)
-            if observation.accepted:
-                painter.setBrush(QColor("#58a6ff"))
-                painter.drawEllipse(point, 5, 5)
-            else:
-                painter.setBrush(QColor("#f85149"))
-                painter.drawEllipse(point, 5, 5)
+            painter.drawEllipse(point, 5, 5)
 
-        painter.setPen(QPen(QColor("#3fb950"), 1))
-        for expected in predicted:
+        prediction_is_accurate = self._prediction_accuracy()
+        for expected, is_accurate in zip(
+            predicted, prediction_is_accurate, strict=True
+        ):
+            color = QColor("#3fb950" if is_accurate else "#f85149")
+            painter.setPen(QPen(color, 1))
+            painter.setBrush(color)
             expected_point = self._point(
                 (float(expected[0]), float(expected[1])), plot, extent
             )
-            painter.setBrush(QColor("#3fb950"))
             painter.drawEllipse(expected_point, 2.5, 2.5)
 
         origin = self._point((0, 0), plot, extent)
@@ -231,12 +240,54 @@ class CalibrationDiagnosticsWidget(QWidget):
         painter.setBrush(QColor("#aab3bd"))
         painter.drawEllipse(origin, 2, 2)
 
-        painter.setPen(QColor("#7d8590"))
-        painter.drawText(
-            rect.adjusted(3, 3, -3, -3),
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom,
-            f"{completed} points ({validation_count} validation) · ±{extent:.3g} µm",
+    @staticmethod
+    def _draw_legend(painter: QPainter, rect: QRectF) -> None:
+        entries = (
+            (QColor("#58a6ff"), "Measured position"),
+            (QColor("#3fb950"), "Accurate prediction"),
+            (QColor("#f85149"), "Inaccurate prediction"),
         )
+        metrics = painter.fontMetrics()
+        gap = 22
+        widths = [metrics.horizontalAdvance(label) + 14 for _color, label in entries]
+        x = rect.center().x() - (sum(widths) + gap * 2) / 2
+        baseline = rect.top() + metrics.ascent() + 5
+        for (color, label), width in zip(entries, widths, strict=True):
+            center = QPointF(x + 4, rect.top() + 10)
+            painter.setPen(QPen(color, 1))
+            painter.setBrush(color)
+            painter.drawEllipse(center, 4, 4)
+            painter.setPen(QColor("#aab3bd"))
+            painter.drawText(QPointF(x + 12, baseline), label)
+            x += width + gap
+
+    def _prediction_accuracy(self) -> list[bool]:
+        """Classify final predictions using the routine's preferred RMS limit."""
+        if self._result is None:
+            return []
+        inverse = np.linalg.inv(self._result.fit.matrix)
+        options = CalibrationOptions()
+        limits: dict[str, float] = {}
+        for kind in ("fit", "validation"):
+            shifts = [
+                np.linalg.norm(observation.corrected_shift_xy)
+                for observation, observation_kind in self._observations
+                if observation_kind == kind
+            ]
+            median_shift = float(np.median(shifts)) if shifts else 0.0
+            limits[kind] = max(
+                options.max_fit_rms_px,
+                options.max_fit_fraction * median_shift,
+            )
+        accurate = []
+        for observation, kind in self._observations:
+            shift = np.asarray(observation.corrected_shift_xy)
+            delta = np.asarray(observation.stage_delta_um)
+            residual = float(
+                np.linalg.norm(inverse @ (delta - self._result.fit.matrix @ shift))
+            )
+            accurate.append(observation.accepted and residual <= limits[kind])
+        return accurate
 
     def paintEvent(self, a0: QPaintEvent | None) -> None:
         painter = QPainter(self)
@@ -405,6 +456,7 @@ class PixelCalibrationPanel(QWidget):
         self._live_transaction: CaptureStateTransaction | None = None
         self._light_sources: dict[str, tuple[tuple[str, str], ...]] = {}
         self._channel_group_last = ""
+        self._display_states: dict[str, _CalibrationDisplayState] = {}
 
         self.setMinimumWidth(700)
         self.setEnabled(False)
@@ -681,6 +733,12 @@ class PixelCalibrationPanel(QWidget):
 
     def setTarget(self, target: CalibrationTarget | None) -> None:
         """Bind calibration output to one selected resolution row."""
+        previous_id = self._target.resolution_id if self._target is not None else None
+        next_id = target.resolution_id if target is not None else None
+        previous_state = self._display_state() if previous_id is not None else None
+        if previous_id is not None and previous_id != next_id:
+            assert previous_state is not None
+            self._display_states[previous_id] = previous_state
         if target != self._target and self._live_transaction is not None:
             self.stopLivePreview()
         self._target = target
@@ -688,9 +746,38 @@ class PixelCalibrationPanel(QWidget):
         self._resolution_label.setText(
             target.resolution_id if target is not None else "No resolution selected"
         )
-        self._diagnostics.setResult(None)
-        self._set_result_message("No validated result")
         self._update_availability()
+        state = (
+            previous_state
+            if next_id is not None and next_id == previous_id
+            else self._display_states.get(next_id or "")
+        )
+        if state is not None:
+            self._restore_display_state(state)
+        else:
+            self._progress.setValue(0)
+            self._diagnostics.setResult(None)
+            self._set_result_message("No validated result")
+
+    def _display_state(self) -> _CalibrationDisplayState:
+        return _CalibrationDisplayState(
+            phase=self._phase_label.text(),
+            progress=self._progress.value(),
+            message=self._result_plain_message,
+            preserve_newlines=self._result_preserve_newlines,
+            icon=self._result_icon_kind,
+            diagnostics=self._diagnostics.state(),
+        )
+
+    def _restore_display_state(self, state: _CalibrationDisplayState) -> None:
+        self._phase_label.setText(state.phase)
+        self._progress.setValue(state.progress)
+        self._set_result_message(
+            state.message,
+            preserve_newlines=state.preserve_newlines,
+            icon=state.icon,
+        )
+        self._diagnostics.restoreState(state.diagnostics)
 
     def refreshHardware(self, *_: object) -> None:
         """Refresh selectable devices, channels, light sources, and availability."""
@@ -1171,7 +1258,9 @@ class PixelCalibrationPanel(QWidget):
         self._ensure_preview()
         self._preview_only = preview_only
         self._progress.setValue(0)
-        self._diagnostics.setResult(None)
+        if not preview_only:
+            self._display_states.pop(self._target.resolution_id, None)
+            self._diagnostics.setResult(None)
         self._set_result_message("Running…" if not preview_only else "Snapping…")
         self._phase_label.setText(
             "Acquiring preview frame" if preview_only else "Preparing capture settings"

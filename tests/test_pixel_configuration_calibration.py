@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -241,7 +242,7 @@ def test_error_and_success_summary_use_same_information_area(
     assert panel._info_splitter.widget(1) is panel._diagnostics
     panel._diagnostics.resize(500, 240)
     assert not panel._diagnostics.grab().isNull()
-    assert "Green spots" in panel._diagnostics.toolTip()
+    assert "green predictions" in panel._diagnostics.toolTip()
 
 
 def test_diagnostic_spots_are_added_during_acquisition(
@@ -263,6 +264,47 @@ def test_diagnostic_spots_are_added_during_acquisition(
     assert len(panel._diagnostics._observations) == (
         len(result.observations) + len(result.validation_observations)
     )
+    assert all(panel._diagnostics._prediction_accuracy())
+
+    validation = list(result.validation_observations)
+    prediction_error_um = result.fit.matrix @ np.asarray((2.0, 0.0))
+    original_delta = np.asarray(validation[0].stage_delta_um)
+    validation[0] = replace(
+        validation[0],
+        stage_delta_um=(
+            float(original_delta[0] + prediction_error_um[0]),
+            float(original_delta[1] + prediction_error_um[1]),
+        ),
+    )
+    panel._diagnostics.setResult(
+        replace(result, validation_observations=tuple(validation))
+    )
+    assert panel._diagnostics._prediction_accuracy()[-3:] == [False, True, True]
+
+
+def test_calibration_outcome_is_preserved_per_resolution(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    panel = page._pixel_config._calibration_panel
+    first_target = panel._target
+    assert first_target is not None
+    diagnostics = _result_for_selected_resolution(page)
+
+    panel._progress.setValue(850)
+    panel._on_failure("Synthetic holdout failure", diagnostics)
+    other_target = type(first_target)("Other resolution", (), True)
+    panel.setTarget(other_target)
+
+    assert panel._progress.value() == 0
+    assert panel._diagnostics._result is None
+
+    panel.setTarget(first_target)
+
+    assert panel._progress.value() == 850
+    assert panel._result_text.toolTip() == "Synthetic holdout failure"
+    assert panel._diagnostics._result is diagnostics
 
 
 def test_no_resolution_selection_disables_entire_calibration_panel(
