@@ -195,7 +195,7 @@ class CalibrationDiagnosticsWidget(QWidget):
     def _draw_spots(self, painter: QPainter, rect: QRectF) -> None:
         observations = [obs for obs, _kind in self._observations]
         self._draw_legend(painter, rect)
-        available = rect.adjusted(8, 30, -8, -8)
+        available = rect.adjusted(8, 48, -8, -8)
         side = min(available.width(), available.height())
         plot = QRectF(
             available.center().x() - side / 2,

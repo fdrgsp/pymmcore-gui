@@ -40,6 +40,7 @@ from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget
 from pymmcore_gui._qt.QtCore import QPoint, QSize, Qt
 from pymmcore_gui._qt.QtGui import QCursor
 from pymmcore_gui._qt.QtWidgets import (
+    QWIDGETSIZE_MAX,
     QAbstractButton,
     QApplication,
     QComboBox,
@@ -3044,27 +3045,10 @@ def test_acquire_mda_dock_width_resists_relayout_but_stays_draggable(
     _assert_column_resists_relayout_but_stays_draggable(page, qtbot, mda_area, 500)
 
 
-def test_acquire_right_dock_width_resists_relayout_but_stays_draggable(
+def test_acquire_right_dock_is_always_resizable(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    """The right (Groups & Presets / Properties / Console) column gets the same lock.
-
-    Same regression as the MDA-column test above, but for the right-side
-    column -- opening it lazily is exactly the kind of dock-area-visibility
-    change elsewhere in the manager that used to be able to silently resize
-    it too, so it needs the same width lock installed once it exists (see
-    ``_add_side_dock``).
-
-    Checks the lock itself (resists a programmatic resize, and the hover
-    handler recognizes its own handle) rather than re-running a full
-    interactive mouse-drag simulation a second time: the MDA test above
-    already proves that mechanism end-to-end, and ``eventFilter`` doesn't
-    branch on which column's handle it's attached to, so a second real
-    ``QTest`` press/move/release cycle here would only double the suite's
-    exposure to real Qt event delivery -- on a non-offscreen display, the
-    kind of thing that can reach into ADS/paint internals -- without
-    covering any behavior the MDA test doesn't already cover.
-    """
+    """The right sidebar never depends on hover detection to become resizable."""
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
     page.resize(1400, 900)
@@ -3075,30 +3059,18 @@ def test_acquire_right_dock_width_resists_relayout_but_stays_draggable(
     page.panel_button(PanelKey.PRESETS).click()
     right_area = page._right_dock_area
     assert right_area is not None
-    starting_width = right_area.width()
+    right_column = page._column_widget(right_area)
+    starting_width = right_column.width()
     assert starting_width > 0
-    assert right_area.minimumWidth() == right_area.maximumWidth() == starting_width
+    assert right_column.minimumWidth() == 0
+    assert right_column.maximumWidth() == QWIDGETSIZE_MAX
+    assert right_column not in page._width_locked_areas.values()
 
-    # A direct, deliberate attempt to resize it away from the locked width
-    # must be clamped straight back -- exercising the same splitter API ADS
-    # itself uses internally when it recomputes proportions.
+    target_width = max(100, starting_width - 100)
     page._dock_manager.setSplitterSizes(
-        right_area, _resized_splitter_sizes(page, right_area, 50)
+        right_area, _resized_splitter_sizes(page, right_area, target_width)
     )
-    assert right_area.width() == starting_width
-
-    # The hover handler must recognize *this* column's handle, not just
-    # MDA's -- confirming _install_width_lock actually ran for the right
-    # column rather than being silently skipped.
-    handle = next(h for h, a in page._width_locked_areas.items() if a is right_area)
-    assert isinstance(handle, QWidget)
-    with patch("pymmcore_gui._modern_gui._acquire.QCursor") as cursor_cls:
-        cursor_cls.pos.return_value = handle.mapToGlobal(handle.rect().center())
-        page._update_width_handle_hover()
-        assert right_area.minimumWidth() == 0
-        cursor_cls.pos.return_value = QPoint(-10_000, -10_000)
-        page._update_width_handle_hover()
-        assert right_area.minimumWidth() == right_area.maximumWidth() == starting_width
+    assert right_column.width() == target_width
 
 
 def test_column_widget_locates_top_splitter_child_through_nesting(
@@ -3208,6 +3180,40 @@ def test_acquire_layout_round_trip(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     # Console was never opened on page_a, so restoring must not force every
     # registered panel open -- laziness survives a restore.
     assert page_b.panel_widget(PanelKey.CONSOLE) is None
+
+
+def test_acquire_restored_right_dock_is_resizable(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A right sidebar restored on relaunch has no stale fixed-width constraint."""
+    page_a = AcquirePage(mmcore)
+    page_a.resize(1400, 900)
+    page_a.panel_button(PanelKey.PRESETS).click()
+    state, keys = page_a.save_layout()
+    assert state is not None
+
+    page_a.close()
+    page_a.deleteLater()
+
+    page_b = AcquirePage(mmcore)
+    qtbot.addWidget(page_b)
+    page_b.resize(1400, 900)
+    assert page_b.restore_layout(state, keys)
+    page_b.show()
+    qtbot.waitExposed(page_b)
+    qtbot.waitUntil(lambda: page_b._mda_width_locked_at_real_size, timeout=2000)
+
+    right_area = page_b._right_dock_area
+    assert right_area is not None
+    right_column = page_b._column_widget(right_area)
+    assert right_column.minimumWidth() == 0
+    assert right_column.maximumWidth() == QWIDGETSIZE_MAX
+    starting_width = right_column.width()
+    target_width = max(100, starting_width - 100)
+    page_b._dock_manager.setSplitterSizes(
+        right_area, _resized_splitter_sizes(page_b, right_area, target_width)
+    )
+    assert right_column.width() == target_width
 
 
 def test_acquire_restore_does_not_repin_column_widths(
