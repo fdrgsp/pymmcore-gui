@@ -166,8 +166,28 @@ def test_calibration_panel_has_form_viewer_and_information_layout(
     widget = page._pixel_config
 
     assert not hasattr(panel, "_channels")
-    assert widget._content_splitter.widget(1) is panel
-    assert widget._content_splitter.widget(2) is widget._props_selector
+    assert widget._content_splitter.widget(0) is widget._px_table.parentWidget()
+    assert widget._content_splitter.widget(1) is widget._props_selector
+    assert widget._content_splitter.widget(2) is panel
+    assert [
+        widget._content_splitter.widget(i).sizePolicy().horizontalStretch()
+        for i in range(3)
+    ] == [
+        1,
+        1,
+        2,
+    ]
+    page._tabs.setCurrentWidget(widget)
+    # At this common desktop width, the Property Selector's upstream 500 px
+    # minimum-size hint must not override the requested equal left quarters.
+    page.resize(1920, 900)
+    page.show()
+    qtbot.waitExposed(page)
+    resolution_width, properties_width, calibration_width = (
+        widget._content_splitter.sizes()
+    )
+    assert abs(resolution_width - properties_width) <= 1
+    assert abs(calibration_width - 2 * resolution_width) <= 2
     assert panel._settings_group.title() == "Settings"
     assert not panel._settings_group.isCheckable()
     assert not hasattr(panel, "_advanced_button")

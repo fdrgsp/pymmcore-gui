@@ -50,13 +50,17 @@ from ._theme import qcolor, theme
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    import useq
+
     from pymmcore_gui._qt.QtAds import CDockAreaWidget
     from pymmcore_gui._qt.QtGui import QResizeEvent, QShowEvent
     from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
+    from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 
 _DOCK_MIN_WIDTH = 0
 _MDA_DOCK_WIDTH = 700
 _RIGHT_DOCK_MAX_WIDTH = 500
+_RIGHT_DOCK_MIN_USABLE_WIDTH = 200
 _WIDTH_SETTLE_DELAY_MS = 200
 _ADS_NEUTRAL_ICON_BUTTONS = frozenset(
     {
@@ -402,6 +406,9 @@ class AcquirePage(TabPage):
             panel.dock = self._add_dock(name, title, widget, panel.info.area)
         else:
             panel.dock = self._add_side_dock(name, title, widget)
+        if panel.info.key == PanelKey.STAGE_EXPLORER:
+            explorer = cast("ThemedStageExplorer", widget)
+            explorer.sendToMDARequested.connect(self._on_stage_explorer_send_to_mda)
         # Connects viewToggled (not toggleViewAction().toggled): pinning a
         # dock to an auto-hide side bar transiently unchecks and re-checks
         # that action without ever emitting viewToggled, so binding the
@@ -410,6 +417,25 @@ class AcquirePage(TabPage):
         # toggleView no-op when already in the target state), so this never
         # loops.
         panel.dock.viewToggled.connect(panel.button.setChecked)
+
+    def _on_stage_explorer_send_to_mda(
+        self, positions: list[useq.Position], replace: bool
+    ) -> None:
+        """Copy Stage Explorer regions into the MDA positions table."""
+        if not positions:
+            return
+        table = self._mda.stage_positions
+        combined = list(positions)
+        if not replace:
+            combined = [*table.value(exclude_unchecked=False), *combined]
+        table.setValue(combined)
+
+        # Make the result immediately visible and active in the acquisition.
+        section = self._mda._collapsible_tabs().section("p")
+        section.set_checked(True)
+        section.set_expanded(True)
+        self._mda._collapsible_tabs().refresh_summaries()
+        self.panel_button(PanelKey.MDA).setChecked(True)
 
     def _refresh_panel(self, key: str) -> None:
         panel = self._panels[key]
@@ -557,19 +583,65 @@ class AcquirePage(TabPage):
             new[idx] = remaining // len(middle)
         self._dock_manager.setSplitterSizes(mda_area, new)
 
-    def _lock_default_areas(self) -> bool:
-        """(Re)install width locks on the MDA area and the right column, if any.
+    def _repair_narrow_restored_right_column(self) -> bool:
+        """Expand a corrupted, unusably narrow restored tools column.
 
-        Returns whether every lock actually attempted (an area with nothing
-        docked in it yet is skipped, not a failure) took -- see
-        ``_install_width_lock``.
+        Normal restored widths are user choices and remain untouched.  Older
+        sessions may, however, contain the transient 47--60 px width that was
+        previously saved when a lazy dock was frozen before QtADS laid it out.
+        Repair only widths below a conservative usability floor, taking space
+        from the largest non-MDA sibling in the outer horizontal splitter.
+
+        Returns whether the restored dock tree was ready and the repair took.
+        A False result makes the startup settle timer retry after QtADS's next
+        deferred restore/layout pass.
         """
-        ok = True
+        area = self._resolve_right_dock_area()
+        if area is None:
+            return True
+        column = self._column_widget(area)
+        if column.width() >= _RIGHT_DOCK_MIN_USABLE_WIDTH:
+            return True
+
+        splitter = column.parentWidget()
+        if not isinstance(splitter, QSplitter):
+            return False
+        idx = splitter.indexOf(column)
+        sizes = list(splitter.sizes())
+        target = min(self._dock_manager.width() // 4, _RIGHT_DOCK_MAX_WIDTH)
+        if idx < 0 or len(sizes) < 2 or target < _RIGHT_DOCK_MIN_USABLE_WIDTH:
+            return False
+
+        excluded = {idx}
         if (mda_area := self._mda_dock.dockAreaWidget()) is not None:
-            ok = self._install_width_lock(mda_area) and ok
-        if self._right_dock_area is not None:
-            ok = self._install_width_lock(self._right_dock_area) and ok
-        return ok
+            mda_column = self._column_widget(mda_area)
+            if mda_column.parentWidget() is splitter:
+                excluded.add(splitter.indexOf(mda_column))
+        donors = [i for i in range(len(sizes)) if i not in excluded]
+        if not donors:
+            return False
+        donor = max(donors, key=sizes.__getitem__)
+        delta = target - sizes[idx]
+        if sizes[donor] < delta:
+            return False
+        sizes[idx] = target
+        sizes[donor] -= delta
+        splitter.setSizes(sizes)
+        return column.width() >= _RIGHT_DOCK_MIN_USABLE_WIDTH
+
+    def _lock_default_areas(self) -> bool:
+        """(Re)install the width lock on the MDA area, if available.
+
+        The right tools column deliberately remains unlocked: locking it as
+        soon as its first lazy dock is created can freeze QtADS's transient
+        pre-layout width (often only 47--60 px).  It also must remain directly
+        resizable without depending on hover detection to release a lock.
+
+        Returns whether the MDA lock took -- see ``_install_width_lock``.
+        """
+        if (mda_area := self._mda_dock.dockAreaWidget()) is not None:
+            return self._install_width_lock(mda_area)
+        return True
 
     def _column_widget(self, area: CDockAreaWidget) -> QWidget:
         """Return the outer splitter's direct child that *area* lives under.
@@ -834,8 +906,12 @@ class AcquirePage(TabPage):
         dock = self._add_dock(name, title, widget, DockWidgetArea.RightDockWidgetArea)
         self._right_dock_area = dock.dockAreaWidget()
         self._pin_dock_widths()
-        if self._right_dock_area is not None:
-            self._install_width_lock(self._right_dock_area)
+        # addDockWidget() has created the area, but QtADS does not insert and
+        # lay out its new splitter child until control returns to the event
+        # loop.  Re-pin once that deferred insertion is complete; otherwise
+        # the request above is discarded and the new tools column stays at
+        # its transient minimum width (typically 47--60 px).
+        QTimer.singleShot(0, self._pin_dock_widths)
         return dock
 
     # ------------------------------------------------------------------ theming
@@ -1017,6 +1093,8 @@ class AcquirePage(TabPage):
         binding can still lose.
         """
         ok = self._relock_widths(pin=not self._layout_restored)
+        if ok and self._layout_restored:
+            ok = self._repair_narrow_restored_right_column()
         if not ok:
             self._width_settle_timer.start()
             return

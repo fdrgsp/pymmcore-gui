@@ -260,6 +260,9 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert page.panel_widget(PanelKey.PROPERTIES) is None
     assert page.panel_dock(PanelKey.PROPERTIES) is None
     assert not page.panel_button(PanelKey.PROPERTIES).isChecked()
+    assert page.panel_widget(PanelKey.STAGE_EXPLORER) is None
+    assert page.panel_dock(PanelKey.STAGE_EXPLORER) is None
+    assert not page.panel_button(PanelKey.STAGE_EXPLORER).isChecked()
     assert page.panel_widget(PanelKey.CONSOLE) is None
     assert page.panel_dock(PanelKey.CONSOLE) is None
     assert not page.panel_button(PanelKey.CONSOLE).isChecked()
@@ -574,6 +577,66 @@ def test_acquire_console_dock_is_lazy(
     assert dock.isClosed()
     assert not page.panel_button(PanelKey.CONSOLE).isChecked()
     assert page.panel_widget(PanelKey.CONSOLE) is console  # not rebuilt
+
+
+def test_acquire_stage_explorer_is_a_lazy_toolbar_dock(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """The toolbar opens one themed Stage Explorer in the right dock area."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    button = page.panel_button(PanelKey.STAGE_EXPLORER)
+    assert not button.isChecked()
+    assert not button.icon().isNull()
+    assert page.panel_widget(PanelKey.STAGE_EXPLORER) is None
+
+    button.click()
+    explorer = page.panel_widget(PanelKey.STAGE_EXPLORER)
+    dock = page.panel_dock(PanelKey.STAGE_EXPLORER)
+    assert isinstance(explorer, ThemedStageExplorer)
+    assert dock is not None and not dock.isClosed()
+    assert dock.widget() is explorer
+    assert dock.windowTitle() == "Stage Explorer"
+    assert button.isChecked()
+
+    button.click()
+    assert dock.isClosed()
+    assert page.panel_widget(PanelKey.STAGE_EXPLORER) is explorer
+
+
+def test_stage_explorer_sends_positions_to_mda(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Stage Explorer's Replace/Add choices update and reveal MDA Positions."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.panel_button(PanelKey.STAGE_EXPLORER).click()
+    explorer = page.panel_widget(PanelKey.STAGE_EXPLORER)
+    assert isinstance(explorer, ThemedStageExplorer)
+
+    old = useq.Position(name="Old", x=1, y=2)
+    page._mda.stage_positions.setValue([old])
+    replacement = [
+        useq.Position(name="Explorer 1", x=10, y=20),
+        useq.Position(name="Explorer 2", x=30, y=40),
+    ]
+    explorer.sendToMDARequested.emit(replacement, True)
+    assert page._mda.stage_positions.value(exclude_unchecked=False) == tuple(
+        replacement
+    )
+
+    added = useq.Position(name="Explorer 3", x=50, y=60)
+    explorer.sendToMDARequested.emit([added], False)
+    assert page._mda.stage_positions.value(exclude_unchecked=False) == (
+        *replacement,
+        added,
+    )
+    section = page._mda._collapsible_tabs().section("p")
+    assert section.checked
+    assert section.expanded
+    assert section.summary == "On · 3 positions"
+    assert page.panel_button(PanelKey.MDA).isChecked()
 
 
 def test_acquire_panel_buttons_match_registry(
@@ -3060,6 +3123,8 @@ def test_acquire_right_dock_is_always_resizable(
     right_area = page._right_dock_area
     assert right_area is not None
     right_column = page._column_widget(right_area)
+    expected_width = min(page._dock_manager.width() // 4, 500)
+    qtbot.waitUntil(lambda: right_column.width() == expected_width, timeout=2000)
     starting_width = right_column.width()
     assert starting_width > 0
     assert right_column.minimumWidth() == 0
@@ -3214,6 +3279,46 @@ def test_acquire_restored_right_dock_is_resizable(
         right_area, _resized_splitter_sizes(page_b, right_area, target_width)
     )
     assert right_column.width() == target_width
+
+
+def test_acquire_repairs_an_unusably_narrow_restored_right_dock(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A previously persisted transient 60 px tools column is expanded."""
+    page_a = AcquirePage(mmcore)
+    page_a.resize(1400, 900)
+    page_a.show()
+    qtbot.waitExposed(page_a)
+    qtbot.waitUntil(lambda: page_a._mda_width_locked_at_real_size, timeout=2000)
+    page_a.panel_button(PanelKey.PRESETS).click()
+    right_area = page_a._right_dock_area
+    assert right_area is not None
+    right_column = page_a._column_widget(right_area)
+    qtbot.waitUntil(lambda: right_column.width() == 350, timeout=2000)
+    page_a._dock_manager.setSplitterSizes(
+        right_area, _resized_splitter_sizes(page_a, right_area, 60)
+    )
+    assert right_column.width() == 60
+    state, keys = page_a.save_layout()
+    assert state is not None
+
+    page_a.close()
+    page_a.deleteLater()
+
+    page_b = AcquirePage(mmcore)
+    qtbot.addWidget(page_b)
+    page_b.resize(1400, 900)
+    assert page_b.restore_layout(state, keys)
+    page_b.show()
+    qtbot.waitExposed(page_b)
+    qtbot.waitUntil(lambda: page_b._mda_width_locked_at_real_size, timeout=2000)
+
+    restored_area = page_b._right_dock_area
+    assert restored_area is not None
+    restored_column = page_b._column_widget(restored_area)
+    assert restored_column.width() == 350
+    assert restored_column.minimumWidth() == 0
+    assert restored_column.maximumWidth() == QWIDGETSIZE_MAX
 
 
 def test_acquire_restore_does_not_repin_column_widths(
@@ -3409,10 +3514,7 @@ def test_mda_grid_bounds_icons_stay_visible_after_action_changes(
 
 
 def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
-    """AcquirePage no longer shows the Stage Explorer, but the classic GUI still
-    ships it (``actions/widget_actions.py``'s ``stage_explorer_widget`` action),
-    so its theming stays covered directly rather than through AcquirePage.
-    """
+    """The shared Stage Explorer remains consistent in classic and modern GUIs."""
     set_theme(DARK_THEME)
     explorer = ThemedStageExplorer(mmcore=mmcore)
     qtbot.addWidget(explorer)

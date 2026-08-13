@@ -7,6 +7,7 @@ from superqt.utils import signals_blocked
 
 from pymmcore_gui._pixel_calibration import PixelCalibrationResult
 from pymmcore_gui._qt.QtCore import QTimer, Signal
+from pymmcore_gui._qt.QtWidgets import QSizePolicy
 from pymmcore_gui.widgets._pixel_calibration_panel import (
     CalibrationTarget,
     PixelCalibrationPanel,
@@ -52,12 +53,26 @@ class PixelConfigurationWidget(_UpstreamPixelConfiguration):
             splitter is None
         ):  # pragma: no cover - protects against upstream layout drift
             raise RuntimeError("PixelConfigurationWidget has no content splitter")
-        splitter.insertWidget(1, self._calibration_panel)
+        # Keep the two configuration editors together on the left and give
+        # calibration the wider right half of the page.
+        splitter.insertWidget(2, self._calibration_panel)
         self._content_splitter = splitter
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 4)
-        splitter.setStretchFactor(2, 3)
-        splitter.setSizes([300, 700, 430])
+        # The upstream property selector's device toolbar reports a 500 px
+        # minimum-size hint.  Let the splitter shrink both left panes below
+        # their hints when needed, otherwise that hint overrides equal weights
+        # on ordinary 1920 px windows and makes Properties visibly wider than
+        # the Resolution ID pane.
+        for pane in (splitter.widget(0), splitter.widget(1)):
+            policy = pane.sizePolicy()
+            policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+            pane.setSizePolicy(policy)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(2, 2)
+        # Seed above every child's minimum size hint.  QSplitter preserves its
+        # clamped initial sizes during later resizes, so smaller seed values
+        # would lose the intended 1:1:2 proportions before the page is shown.
+        splitter.setSizes([700, 700, 1400])
 
         self._calibration_panel.resultReady.connect(self._apply_calibration_result)
         self._calibration_panel.calibrationRunningChanged.connect(
