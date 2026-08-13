@@ -99,27 +99,36 @@ def fit_affine(
 
     weights = base_weights.copy()
     matrix = _solve(shifts, deltas, weights)
-    for _ in range(max_irls_iterations):
-        residuals = deltas - shifts @ matrix.T
-        robust = _huber_weights(np.linalg.norm(residuals, axis=1))
-        new_weights = base_weights * robust
-        new_matrix = _solve(shifts, deltas, new_weights)
-        if np.allclose(matrix, new_matrix, rtol=1e-10, atol=1e-12):
+
+    # Robust (median/MAD-based) outlier rejection needs enough points to
+    # spare -- with only two observations there's no way to identify which
+    # one is the "outlier" without losing the redundancy needed to fit at
+    # all, so skip straight to the plain least-squares result and treat both
+    # as inliers.
+    if len(shifts) >= 3:
+        for _ in range(max_irls_iterations):
+            residuals = deltas - shifts @ matrix.T
+            robust = _huber_weights(np.linalg.norm(residuals, axis=1))
+            new_weights = base_weights * robust
+            new_matrix = _solve(shifts, deltas, new_weights)
+            if np.allclose(matrix, new_matrix, rtol=1e-10, atol=1e-12):
+                matrix = new_matrix
+                weights = new_weights
+                break
             matrix = new_matrix
             weights = new_weights
-            break
-        matrix = new_matrix
-        weights = new_weights
 
-    inlier_mask = weights >= 0.25 * base_weights
-    outlier_count = int(np.count_nonzero(~inlier_mask))
-    if 0 < outlier_count <= 2 and np.count_nonzero(inlier_mask) >= minimum_points:
-        matrix = _solve(
-            shifts[inlier_mask], deltas[inlier_mask], base_weights[inlier_mask]
-        )
-        weights = np.where(inlier_mask, base_weights, 0.0)
-    elif outlier_count > 2:
-        raise ValueError("more than two affine observations are outliers")
+        inlier_mask = weights >= 0.25 * base_weights
+        outlier_count = int(np.count_nonzero(~inlier_mask))
+        if 0 < outlier_count <= 2 and np.count_nonzero(inlier_mask) >= minimum_points:
+            matrix = _solve(
+                shifts[inlier_mask], deltas[inlier_mask], base_weights[inlier_mask]
+            )
+            weights = np.where(inlier_mask, base_weights, 0.0)
+        elif outlier_count > 2:
+            raise ValueError("more than two affine observations are outliers")
+    else:
+        inlier_mask = np.ones(len(shifts), dtype=bool)
 
     determinant = float(np.linalg.det(matrix))
     if not np.isfinite(determinant) or abs(determinant) <= np.finfo(float).eps:

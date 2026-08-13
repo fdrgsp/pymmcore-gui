@@ -175,6 +175,26 @@ def test_fit_affine_recovers_rotated_reflected_matrix_with_outlier() -> None:
     assert result.rms_residual_px < 0.1
 
 
+def test_fit_affine_with_exactly_two_points_does_not_crash() -> None:
+    # Regression test: the calibration routine's coarse pre-fit calls
+    # fit_affine with exactly the two probe-axis measurements
+    # (minimum_points=2). That system is exactly determined, so residuals
+    # sit at floating-point noise -- median/MAD-based outlier rejection used
+    # to flag both points as unreliable in that regime, leaving an empty
+    # inlier mask and crashing inside np.max on an empty array with an
+    # unhelpful numpy-internal message instead of a real result.
+    matrix = np.asarray([[0.15, 0.01], [-0.02, 0.16]])
+    shifts = np.asarray([[80.0, 0.0], [0.0, 75.0]])
+    deltas = shifts @ matrix.T
+
+    result = fit_affine(shifts, deltas, minimum_points=2)
+
+    assert result.matrix == pytest.approx(matrix, abs=1e-6)
+    assert np.all(result.inlier_mask)
+    assert np.isfinite(result.max_residual_px)
+    assert np.isfinite(result.rms_residual_px)
+
+
 def test_fit_affine_rejects_collinear_design() -> None:
     shifts = np.asarray([[1, 0], [2, 0], [3, 0]], dtype=float)
     with pytest.raises(ValueError, match=r"singular|ill-conditioned"):

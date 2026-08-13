@@ -645,11 +645,17 @@ def _run_calibration(
         options,
         cancel_event,
     )
-    coarse = fit_affine(
-        np.asarray([probe_x.corrected_shift_xy, probe_y.corrected_shift_xy]),
-        np.asarray([probe_x.stage_delta_um, probe_y.stage_delta_um]),
-        minimum_points=2,
-    ).matrix
+    try:
+        coarse = fit_affine(
+            np.asarray([probe_x.corrected_shift_xy, probe_y.corrected_shift_xy]),
+            np.asarray([probe_x.stage_delta_um, probe_y.stage_delta_um]),
+            minimum_points=2,
+        ).matrix
+    except ValueError as exc:
+        raise PixelCalibrationError(
+            f"Could not build an initial estimate from the X/Y probe "
+            f"measurements: {exc}"
+        ) from exc
 
     origin_position = _position(core, fingerprint.xy_stage)
     origin_shift = np.asarray(
@@ -681,12 +687,15 @@ def _run_calibration(
         raise PixelCalibrationError(
             "Fewer than six calibration observations were usable"
         )
-    fit = fit_affine(
-        np.asarray([obs.corrected_shift_xy for obs in accepted]),
-        np.asarray([obs.stage_delta_um for obs in accepted]),
-        confidence_weights=_confidence_weights(accepted),
-        minimum_points=6,
-    )
+    try:
+        fit = fit_affine(
+            np.asarray([obs.corrected_shift_xy for obs in accepted]),
+            np.asarray([obs.stage_delta_um for obs in accepted]),
+            confidence_weights=_confidence_weights(accepted),
+            minimum_points=6,
+        )
+    except ValueError as exc:
+        raise PixelCalibrationError(f"Affine fit failed: {exc}") from exc
     # From this point onward the UI can compare every acquired position with
     # the fitted prediction. Validation observations will arrive one-by-one
     # after this callback and can therefore be classified immediately.

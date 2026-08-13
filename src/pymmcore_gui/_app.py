@@ -208,11 +208,21 @@ def create_mmgui(
             try:
                 win.mmcore.loadSystemConfiguration(config)
                 _notify_startup_configuration_loaded(win)
-            except Exception as e:  # pragma: no cover
+            except Exception as e:
                 warnings.warn(
                     f"Failed to load system configuration: {e}",
                     RuntimeWarning,
                     stacklevel=2,
+                )
+                # The user explicitly asked (via LoadConfigDialog, or a stored
+                # auto-load preference) for this file to be loaded, so a
+                # warning alone -- invisible in a windowed/frozen build with
+                # no console -- would leave them staring at an app that just
+                # silently didn't do what they asked. Show it.
+                QMessageBox.critical(
+                    None,
+                    "Failed to load configuration",
+                    f"Could not load the configuration file:\n\n{config}\n\n{e}",
                 )
 
     if install_sys_excepthook:
