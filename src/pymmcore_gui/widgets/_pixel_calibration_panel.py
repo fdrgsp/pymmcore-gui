@@ -15,6 +15,7 @@ from pymmcore_gui._light_sources import parse_light_source_comments
 from pymmcore_gui._modern_gui._acquire_toolbar import LiveButton, SnapButton
 from pymmcore_gui._modern_gui._theme import qcolor, theme
 from pymmcore_gui._pixel_calibration import (
+    AffineFitResult,
     CalibrationCancelled,
     CalibrationCaptureSettings,
     CalibrationObservation,
@@ -103,6 +104,7 @@ class CalibrationTarget:
 @dataclass(frozen=True)
 class _DiagnosticsState:
     result: PixelCalibrationResult | None
+    fit: AffineFitResult | None
     observations: tuple[tuple[CalibrationObservation, str], ...]
 
 
@@ -135,18 +137,20 @@ class CalibrationDiagnosticsWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._result: PixelCalibrationResult | None = None
+        self._fit: AffineFitResult | None = None
         self._observations: list[tuple[CalibrationObservation, str]] = []
         self.setMinimumHeight(165)
         self.setToolTip(
             "Blue spots are measured XY-stage positions and appear during capture. "
             "After fitting, green predictions are within the preferred error limit; "
-            "red predictions are outside it. Good predictions overlap their blue "
+            "magenta predictions are outside it. Prediction rings surround their blue "
             "measurements."
         )
 
     def setResult(self, result: PixelCalibrationResult | None) -> None:
         """Set the result rendered by the diagnostic graph."""
         self._result = result
+        self._fit = result.fit if result is not None else None
         self._observations = []
         if result is not None:
             self._observations.extend((obs, "fit") for obs in result.observations)
@@ -159,17 +163,25 @@ class CalibrationDiagnosticsWidget(QWidget):
         """Add one newly acquired fit or validation observation to the graph."""
         if not isinstance(observation, CalibrationObservation):
             return
-        self._result = None
         self._observations.append((observation, kind))
+        self.update()
+
+    def setFit(self, fit: object) -> None:
+        """Show predictions as soon as the affine fit becomes available."""
+        if not isinstance(fit, AffineFitResult):
+            return
+        self._result = None
+        self._fit = fit
         self.update()
 
     def state(self) -> _DiagnosticsState:
         """Return a copyable snapshot of the currently displayed diagnostics."""
-        return _DiagnosticsState(self._result, tuple(self._observations))
+        return _DiagnosticsState(self._result, self._fit, tuple(self._observations))
 
     def restoreState(self, state: _DiagnosticsState) -> None:
         """Restore a previously displayed result or partial observation set."""
         self._result = state.result
+        self._fit = state.fit
         self._observations = list(state.observations)
         self.update()
 
@@ -201,9 +213,9 @@ class CalibrationDiagnosticsWidget(QWidget):
 
         measured = np.asarray([obs.stage_delta_um for obs in observations])
         predicted = np.empty((0, 2), dtype=np.float64)
-        if self._result is not None:
+        if self._fit is not None:
             shifts = np.asarray([obs.corrected_shift_xy for obs in observations])
-            predicted = shifts @ self._result.fit.matrix.T
+            predicted = shifts @ self._fit.matrix.T
         extent = max(float(np.max(np.abs(measured))), 1e-9)
         if predicted.size:
             extent = max(extent, float(np.max(np.abs(predicted))))
@@ -227,13 +239,13 @@ class CalibrationDiagnosticsWidget(QWidget):
         for expected, is_accurate in zip(
             predicted, prediction_is_accurate, strict=True
         ):
-            color = QColor("#3fb950" if is_accurate else "#f85149")
-            painter.setPen(QPen(color, 1))
-            painter.setBrush(color)
+            color = QColor("#3fb950" if is_accurate else "#d65ad1")
+            painter.setPen(QPen(color, 2.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             expected_point = self._point(
                 (float(expected[0]), float(expected[1])), plot, extent
             )
-            painter.drawEllipse(expected_point, 2.5, 2.5)
+            painter.drawEllipse(expected_point, 7, 7)
 
         origin = self._point((0, 0), plot, extent)
         painter.setPen(QPen(QColor("#aab3bd"), 1))
@@ -245,27 +257,30 @@ class CalibrationDiagnosticsWidget(QWidget):
         entries = (
             (QColor("#58a6ff"), "Measured position"),
             (QColor("#3fb950"), "Accurate prediction"),
-            (QColor("#f85149"), "Inaccurate prediction"),
+            (QColor("#d65ad1"), "Inaccurate prediction"),
         )
         metrics = painter.fontMetrics()
         gap = 22
-        widths = [metrics.horizontalAdvance(label) + 14 for _color, label in entries]
+        dot = "●"
+        dot_width = metrics.horizontalAdvance(dot)
+        widths = [
+            dot_width + 6 + metrics.horizontalAdvance(label)
+            for _color, label in entries
+        ]
         x = rect.center().x() - (sum(widths) + gap * 2) / 2
         baseline = rect.top() + metrics.ascent() + 5
         for (color, label), width in zip(entries, widths, strict=True):
-            center = QPointF(x + 4, rect.top() + 10)
-            painter.setPen(QPen(color, 1))
-            painter.setBrush(color)
-            painter.drawEllipse(center, 4, 4)
+            painter.setPen(color)
+            painter.drawText(QPointF(x, baseline), dot)
             painter.setPen(QColor("#aab3bd"))
-            painter.drawText(QPointF(x + 12, baseline), label)
+            painter.drawText(QPointF(x + dot_width + 6, baseline), label)
             x += width + gap
 
     def _prediction_accuracy(self) -> list[bool]:
         """Classify final predictions using the routine's preferred RMS limit."""
-        if self._result is None:
+        if self._fit is None:
             return []
-        inverse = np.linalg.inv(self._result.fit.matrix)
+        inverse = np.linalg.inv(self._fit.matrix)
         options = CalibrationOptions()
         limits: dict[str, float] = {}
         for kind in ("fit", "validation"):
@@ -284,7 +299,7 @@ class CalibrationDiagnosticsWidget(QWidget):
             shift = np.asarray(observation.corrected_shift_xy)
             delta = np.asarray(observation.stage_delta_um)
             residual = float(
-                np.linalg.norm(inverse @ (delta - self._result.fit.matrix @ shift))
+                np.linalg.norm(inverse @ (delta - self._fit.matrix @ shift))
             )
             accurate.append(observation.accepted and residual <= limits[kind])
         return accurate
@@ -342,6 +357,7 @@ class _CalibrationWorker(QObject):
     progress = Signal(str, float)
     frameReady = Signal(object)
     observationReady = Signal(object, str)
+    fitReady = Signal(object)
     resultReady = Signal(object)
     previewReady = Signal()
     # str message, plus whatever diagnostics (PixelCalibrationResult | None)
@@ -396,6 +412,7 @@ class _CalibrationWorker(QObject):
                     cancel_event=self._cancel_event,
                     progress=self.progress.emit,
                     observation_callback=self.observationReady.emit,
+                    fit_callback=self.fitReady.emit,
                 )
         except CalibrationCancelled as exc:
             # A deliberate Cancel click, not a bug -- log at info, and only
@@ -1281,6 +1298,7 @@ class PixelCalibrationPanel(QWidget):
         self._worker.progress.connect(self._on_progress)
         self._worker.frameReady.connect(self._on_frame)
         self._worker.observationReady.connect(self._on_observation)
+        self._worker.fitReady.connect(self._on_fit)
         self._worker.resultReady.connect(self._on_result)
         self._worker.previewReady.connect(self._on_preview_ready)
         self._worker.failed.connect(self._on_failure)
@@ -1344,6 +1362,10 @@ class PixelCalibrationPanel(QWidget):
     def _on_observation(self, observation: object, kind: str) -> None:
         """Plot each completed calibration observation as soon as it arrives."""
         self._diagnostics.addObservation(observation, kind)
+
+    def _on_fit(self, fit: object) -> None:
+        """Plot predictions once fitted, then update them for each holdout point."""
+        self._diagnostics.setFit(fit)
 
     def _on_preview_ready(self) -> None:
         self._phase_label.setText("Frame snapped; hardware state restored")

@@ -336,6 +336,7 @@ def test_run_pixel_calibration_measures_affine_without_persisting() -> None:
     old_size = core.stored_size
     old_affine = core.stored_affine
     acquired: list[tuple[object, str]] = []
+    fits: list[object] = []
 
     result = run_pixel_calibration(
         core,
@@ -344,6 +345,7 @@ def test_run_pixel_calibration_measures_affine_without_persisting() -> None:
         observation_callback=lambda observation, kind: acquired.append(
             (observation, kind)
         ),
+        fit_callback=fits.append,
     )
 
     assert result.stage_returned
@@ -356,6 +358,8 @@ def test_run_pixel_calibration_measures_affine_without_persisting() -> None:
         *result.observations,
         *result.validation_observations,
     ]
+    assert len(fits) == 1
+    assert fits[0] is result.fit
     assert all(observation.accepted for observation in result.observations)
     assert core.position == pytest.approx(core.origin)
     assert (

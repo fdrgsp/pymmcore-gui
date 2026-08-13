@@ -243,6 +243,7 @@ def test_error_and_success_summary_use_same_information_area(
     panel._diagnostics.resize(500, 240)
     assert not panel._diagnostics.grab().isNull()
     assert "green predictions" in panel._diagnostics.toolTip()
+    assert "magenta predictions" in panel._diagnostics.toolTip()
 
 
 def test_diagnostic_spots_are_added_during_acquisition(
@@ -259,6 +260,12 @@ def test_diagnostic_spots_are_added_during_acquisition(
     assert panel._diagnostics._observations == [(result.observations[0], "fit")]
     panel._diagnostics.resize(500, 240)
     assert not panel._diagnostics.grab().isNull()
+
+    panel._on_fit(result.fit)
+    assert panel._diagnostics._fit is result.fit
+    assert panel._diagnostics._prediction_accuracy() == [True]
+    panel._on_observation(result.validation_observations[0], "validation")
+    assert panel._diagnostics._prediction_accuracy() == [True, True]
 
     panel._on_result(result)
     assert len(panel._diagnostics._observations) == (

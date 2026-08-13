@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 ProgressCallback = Callable[[str, float], None]
 ObservationKind = Literal["fit", "validation"]
 ObservationCallback = Callable[[CalibrationObservation, ObservationKind], None]
+FitCallback = Callable[[AffineFitResult], None]
 
 
 class CalibrationCore(Protocol):
@@ -92,6 +93,16 @@ def _notify_observation(
         return
     try:
         callback(observation, kind)
+    except Exception:
+        # UI/diagnostic reporting must not be able to interrupt stage restoration.
+        pass
+
+
+def _notify_fit(callback: FitCallback | None, fit: AffineFitResult) -> None:
+    if callback is None:
+        return
+    try:
+        callback(fit)
     except Exception:
         # UI/diagnostic reporting must not be able to interrupt stage restoration.
         pass
@@ -575,6 +586,7 @@ def _run_calibration(
     cancel_event: Event | None,
     progress: ProgressCallback | None,
     observation_callback: ObservationCallback | None,
+    fit_callback: FitCallback | None,
 ) -> tuple[PixelCalibrationResult, NDArray[np.float64], HardwareFingerprint]:
     camera = str(core.getCameraDevice())
     if not camera:
@@ -658,6 +670,10 @@ def _run_calibration(
         confidence_weights=_confidence_weights(accepted),
         minimum_points=6,
     )
+    # From this point onward the UI can compare every acquired position with
+    # the fitted prediction. Validation observations will arrive one-by-one
+    # after this callback and can therefore be classified immediately.
+    _notify_fit(fit_callback, fit)
     try:
         _validate_fit(fit, accepted, options)
     except PixelCalibrationError as exc:
@@ -738,8 +754,9 @@ def run_pixel_calibration(
     cancel_event: Event | None = None,
     progress: ProgressCallback | None = None,
     observation_callback: ObservationCallback | None = None,
+    fit_callback: FitCallback | None = None,
 ) -> PixelCalibrationResult:
-    """Run calibration, optionally reporting each completed 2-D observation."""
+    """Run calibration, optionally reporting observations and the fitted affine."""
     selected_options = options or CalibrationOptions()
     stage = str(xy_stage or core.getXYStageDevice())
     origin: NDArray[np.float64] | None = None
@@ -756,6 +773,7 @@ def run_pixel_calibration(
             cancel_event=cancel_event,
             progress=progress,
             observation_callback=observation_callback,
+            fit_callback=fit_callback,
         )
         origin = measured_origin
     except BaseException as error:
