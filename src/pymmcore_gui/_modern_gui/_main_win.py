@@ -389,7 +389,15 @@ class MainWindow(QMainWindow):
         continue_btn = msg.addButton(
             "Continue without saving", QMessageBox.ButtonRole.DestructiveRole
         )
-        msg.addButton(QMessageBox.StandardButton.Cancel)
+        cancel_btn = msg.addButton(QMessageBox.StandardButton.Cancel)
+        for button, variant in (
+            (save_core_btn, "subtle"),
+            (save_file_btn, "primary"),
+            (continue_btn, "danger"),
+            (cancel_btn, "subtle"),
+        ):
+            if button is not None:
+                button.setProperty("variant", variant)
         msg.setDefaultButton(save_file_btn)
         msg.exec()
 

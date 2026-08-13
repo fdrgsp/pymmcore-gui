@@ -149,6 +149,8 @@ def capture_fingerprint(
     *,
     resolution_id: str | None = None,
     xy_stage: str | None = None,
+    config_settings: Sequence[tuple[str, str, str]] | None = None,
+    require_resolution_match: bool = True,
 ) -> HardwareFingerprint:
     """Capture and validate the optical state relevant to a calibration."""
     camera = str(core.getCameraDevice())
@@ -170,10 +172,21 @@ def capture_fingerprint(
     if len(roi_values) != 4:
         raise PixelCalibrationError("MMCore returned an invalid camera ROI")
     current_config = _current_config(core)
-    if resolution_id and current_config != resolution_id:
+    if resolution_id and require_resolution_match and current_config != resolution_id:
         raise PixelCalibrationError(
             f"Pixel-size configuration {resolution_id!r} is not the current match"
         )
+    if config_settings is None:
+        fingerprint_settings = _config_settings(core, resolution_id)
+    else:
+        fingerprint_settings = tuple(sorted(config_settings))
+        for device, prop, expected in fingerprint_settings:
+            actual = str(core.getProperty(device, prop))
+            if actual != expected:
+                raise PixelCalibrationError(
+                    f"Hardware does not match resolution {resolution_id!r}: "
+                    f"{device}-{prop} is {actual!r}, expected {expected!r}"
+                )
     return HardwareFingerprint(
         camera=camera,
         xy_stage=stage,
@@ -184,7 +197,7 @@ def capture_fingerprint(
         dtype=str(image.dtype),
         channel_count=int(core.getNumberOfCameraChannels()),
         pixel_size_config=current_config,
-        config_settings=_config_settings(core, resolution_id),
+        config_settings=fingerprint_settings,
     )
 
 
@@ -587,6 +600,8 @@ def _run_calibration(
     progress: ProgressCallback | None,
     observation_callback: ObservationCallback | None,
     fit_callback: FitCallback | None,
+    config_settings: Sequence[tuple[str, str, str]] | None,
+    require_resolution_match: bool,
 ) -> tuple[PixelCalibrationResult, NDArray[np.float64], HardwareFingerprint]:
     camera = str(core.getCameraDevice())
     if not camera:
@@ -601,6 +616,8 @@ def _run_calibration(
         first,
         resolution_id=resolution_id,
         xy_stage=xy_stage,
+        config_settings=config_settings,
+        require_resolution_match=require_resolution_match,
     )
     if fingerprint.channel_count != 1:
         raise PixelCalibrationError("Automatic calibration requires one camera channel")
@@ -755,6 +772,8 @@ def run_pixel_calibration(
     progress: ProgressCallback | None = None,
     observation_callback: ObservationCallback | None = None,
     fit_callback: FitCallback | None = None,
+    config_settings: Sequence[tuple[str, str, str]] | None = None,
+    require_resolution_match: bool = True,
 ) -> PixelCalibrationResult:
     """Run calibration, optionally reporting observations and the fitted affine."""
     selected_options = options or CalibrationOptions()
@@ -774,6 +793,8 @@ def run_pixel_calibration(
             progress=progress,
             observation_callback=observation_callback,
             fit_callback=fit_callback,
+            config_settings=config_settings,
+            require_resolution_match=require_resolution_match,
         )
         origin = measured_origin
     except BaseException as error:

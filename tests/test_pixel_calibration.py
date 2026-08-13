@@ -398,6 +398,22 @@ def test_run_pixel_calibration_can_use_explicit_nondefault_stage() -> None:
     assert core.position == pytest.approx(core.origin)
 
 
+def test_run_pixel_calibration_accepts_an_unsaved_resolution_binding() -> None:
+    core = _SyntheticCore()
+
+    result = run_pixel_calibration(
+        core,
+        _fast_options(),
+        resolution_id="New4x",
+        config_settings=(),
+        require_resolution_match=False,
+    )
+
+    assert result.fingerprint.pixel_size_config == "Resolution"
+    assert result.fingerprint.config_settings == ()
+    assert result.fit.matrix == pytest.approx(core.true_matrix, abs=2e-3)
+
+
 def test_run_pixel_calibration_aborts_if_acquisition_starts_mid_run() -> None:
     class InterruptedCore(_SyntheticCore):
         def isSequenceRunning(self, label: str) -> bool:

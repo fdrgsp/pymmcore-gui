@@ -420,6 +420,28 @@ def test_snap_frame_worker_restores_and_finishes_cleanly(
     assert panel._phase_label.text() == "Frame snapped; hardware state restored"
 
 
+def test_unsaved_resolution_row_can_preview_before_first_core_save(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    panel = page._pixel_config._calibration_panel
+    target = panel._target
+    assert target is not None
+    panel.setTarget(replace(target, resolution_id="New4x", binding_is_saved=False))
+
+    assert not panel._unavailable_reason()
+    assert panel._snap_button.isEnabled()
+    assert panel._live_button.isEnabled()
+    assert panel._start_button.isEnabled()
+
+    with patch.object(panel._ensure_preview(), "append"):
+        panel.snapFrame()
+        qtbot.waitUntil(lambda: panel._thread is None, timeout=5000)
+
+    assert panel._phase_label.text() == "Frame snapped; hardware state restored"
+
+
 def test_live_preview_applies_settings_restores_them_and_retains_fov(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:

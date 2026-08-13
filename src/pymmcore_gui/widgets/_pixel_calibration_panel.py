@@ -392,6 +392,8 @@ class _CalibrationWorker(QObject):
             cast("Any", self._core),
             self._capture,
             resolution_id=self._target.resolution_id,
+            verify_resolution=self._target.binding_is_saved,
+            expected_resolution_settings=self._target.settings,
         )
         failure = ""
         cancelled = False
@@ -413,6 +415,8 @@ class _CalibrationWorker(QObject):
                     progress=self.progress.emit,
                     observation_callback=self.observationReady.emit,
                     fit_callback=self.fitReady.emit,
+                    config_settings=self._target.settings,
+                    require_resolution_match=self._target.binding_is_saved,
                 )
         except CalibrationCancelled as exc:
             # A deliberate Cancel click, not a bug -- log at info, and only
@@ -629,7 +633,7 @@ class PixelCalibrationPanel(QWidget):
 
         self._info_group = QGroupBox("Calibration information")
         info_layout = QVBoxLayout(self._info_group)
-        self._phase_label = QLabel("Select a saved resolution to calibrate")
+        self._phase_label = QLabel("Select a resolution to calibrate")
         self._phase_label.setWordWrap(True)
         info_layout.addWidget(self._phase_label)
         self._progress = QProgressBar()
@@ -1013,8 +1017,6 @@ class PixelCalibrationPanel(QWidget):
     def _unavailable_reason(self, *, allow_live: bool = False) -> str:
         if self._target is None or not self._target.resolution_id:
             return "Select one resolution ID"
-        if not self._target.binding_is_saved:
-            return "Save this resolution ID to core first"
         if not self._camera_combo.currentText():
             return "Load and select a physical camera"
         if not self._xy_stage():
@@ -1066,14 +1068,12 @@ class PixelCalibrationPanel(QWidget):
     def _capture_settings(self) -> CalibrationCaptureSettings:
         """Build the settings Snap/Live/Start calibration apply -- Settings-panel only.
 
-        Never includes the selected resolution's own identifying device/property
-        values (e.g. an objective-turret position): this panel only applies what
-        the Settings group itself controls (channel, camera, exposure, light
-        source/power). Which objective or other resolution-defining hardware is
-        in place is entirely up to the user to prepare beforehand -- Snap and
-        Start calibration still verify (via ``CaptureStateTransaction``'s
-        ``verify_resolution``) that the current pixel-size config matches the
-        selected resolution before proceeding, they just never set it themselves.
+        Never applies the selected resolution's own identifying device/property
+        values (e.g. an objective-turret position): which objective or other
+        resolution-defining hardware is in place remains up to the user. Snap and
+        Start calibration verify those properties directly. For an existing core
+        resolution they additionally verify the matched Resolution ID; a newly
+        added editor row can therefore be calibrated safely before its first save.
         """
         assert self._target is not None
         identity = self._channel_identity()

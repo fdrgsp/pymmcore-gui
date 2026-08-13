@@ -65,12 +65,14 @@ class CaptureStateTransaction:
         *,
         resolution_id: str,
         verify_resolution: bool = True,
+        expected_resolution_settings: tuple[tuple[str, str, str], ...] | None = None,
     ) -> None:
         # Generated CMMCorePlus overloads use adapter-specific parameter names,
         # so static structural matching is narrower than the runtime API.
         self._core = cast("CaptureCore", core)
         self._settings = settings
         self._resolution_id = resolution_id
+        self._expected_resolution_settings = expected_resolution_settings
         # Snap/Test-frame/Start-calibration must land on the target resolution's
         # exact optical state to measure anything meaningful, so they verify it.
         # A plain live preview isn't calibrating a specific resolution -- it's
@@ -144,6 +146,17 @@ class CaptureStateTransaction:
             self._core.setProperty(device, prop, light_value)
             self._core.waitForDevice(device)
 
+        if self._expected_resolution_settings is not None:
+            mismatches = [
+                f"{device}-{prop}={actual!r} (expected {expected!r})"
+                for device, prop, expected in self._expected_resolution_settings
+                if (actual := str(self._core.getProperty(device, prop))) != expected
+            ]
+            if mismatches:
+                raise PixelCalibrationError(
+                    f"Hardware does not match resolution {self._resolution_id!r}: "
+                    + "; ".join(mismatches)
+                )
         if self._verify_resolution:
             current = str(self._core.getCurrentPixelSizeConfig())
             if current != self._resolution_id:

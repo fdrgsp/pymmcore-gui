@@ -162,6 +162,31 @@ def test_pixel_calibration_locks_other_main_window_modes(
     assert window._mode_tabs._tabs[acquire_index].isEnabled()
 
 
+def test_unsaved_configuration_prompt_uses_button_variants(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+    messages: list[QMessageBox] = []
+
+    def inspect_without_showing(message: QMessageBox) -> int:
+        messages.append(message)
+        return 0
+
+    with (
+        patch.object(window._configurations, "dirty_parts", return_value=["Pixel"]),
+        patch.object(QMessageBox, "exec", inspect_without_showing),
+    ):
+        assert window._prompt_unsaved_configuration_changes() == "cancel"
+
+    assert len(messages) == 1
+    buttons = {button.text(): button for button in messages[0].buttons()}
+    assert buttons["Save to core"].property("variant") == "subtle"
+    assert buttons["Save to file…"].property("variant") == "primary"
+    assert buttons["Continue without saving"].property("variant") == "danger"
+    assert buttons["Cancel"].property("variant") == "subtle"
+
+
 def test_new_gui_uses_one_application_font(
     mmcore: CMMCorePlus,
     qtbot: QtBot,
