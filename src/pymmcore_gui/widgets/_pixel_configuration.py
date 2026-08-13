@@ -113,23 +113,21 @@ class PixelConfigurationWidget(_UpstreamPixelConfiguration):
             )
         )
 
-    def _binding_is_saved(
-        self,
-        resolution_id: str,
-        settings: tuple[tuple[str, str, str], ...],
-    ) -> bool:
+    def _binding_is_saved(self, resolution_id: str) -> bool:
+        """Whether ``resolution_id`` is a real, already-saved core pixel-size config.
+
+        Deliberately does *not* also require the property selector's current
+        device/property list to match what's saved to core: that list only
+        matters when it's actually used (to apply this resolution's optical
+        state before a Snap/Test-frame/Start-calibration run), where a
+        mismatch already surfaces as its own clear error. Gating calibration
+        itself on it too just blocked runs whenever the property selector's
+        UI state was unsaved or empty -- e.g. a resolution with no
+        identifying property at all, such as a manually-swapped objective
+        with no state device tracking it.
+        """
         try:
-            if resolution_id not in self._mmc.getAvailablePixelSizeConfigs():
-                return False
-            live = tuple(
-                sorted(
-                    (str(device), str(prop), str(value))
-                    for device, prop, value in self._mmc.getPixelSizeConfigData(
-                        resolution_id
-                    )
-                )
-            )
-            return live == settings
+            return resolution_id in self._mmc.getAvailablePixelSizeConfigs()
         except Exception:
             return False
 
@@ -153,7 +151,7 @@ class PixelConfigurationWidget(_UpstreamPixelConfiguration):
             CalibrationTarget(
                 resolution_id=str(preset.name),
                 settings=settings,
-                binding_is_saved=self._binding_is_saved(str(preset.name), settings),
+                binding_is_saved=self._binding_is_saved(str(preset.name)),
             )
         )
 

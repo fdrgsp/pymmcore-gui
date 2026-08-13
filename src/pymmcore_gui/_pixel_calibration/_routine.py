@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import numpy as np
 
@@ -29,6 +29,8 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 ProgressCallback = Callable[[str, float], None]
+ObservationKind = Literal["fit", "validation"]
+ObservationCallback = Callable[[CalibrationObservation, ObservationKind], None]
 
 
 class CalibrationCore(Protocol):
@@ -78,6 +80,20 @@ def _notify(progress: ProgressCallback | None, phase: str, fraction: float) -> N
         progress(phase, min(max(fraction, 0.0), 1.0))
     except Exception:
         # Progress reporting must not be able to corrupt a hardware operation.
+        pass
+
+
+def _notify_observation(
+    callback: ObservationCallback | None,
+    observation: CalibrationObservation,
+    kind: ObservationKind,
+) -> None:
+    if callback is None:
+        return
+    try:
+        callback(observation, kind)
+    except Exception:
+        # UI/diagnostic reporting must not be able to interrupt stage restoration.
         pass
 
 
@@ -549,6 +565,7 @@ def _run_calibration(
     xy_stage: str,
     cancel_event: Event | None,
     progress: ProgressCallback | None,
+    observation_callback: ObservationCallback | None,
 ) -> tuple[PixelCalibrationResult, NDArray[np.float64], HardwareFingerprint]:
     camera = str(core.getCameraDevice())
     if not camera:
@@ -620,6 +637,7 @@ def _run_calibration(
             cancel_event,
         )
         observations.append(observation)
+        _notify_observation(observation_callback, observation, "fit")
     accepted = [obs for obs in observations if obs.accepted]
     if len(accepted) < 6:
         raise PixelCalibrationError(
@@ -655,6 +673,7 @@ def _run_calibration(
             cancel_event,
         )
         validation.append(observation)
+        _notify_observation(observation_callback, observation, "validation")
     try:
         _validate_holdouts(fit.matrix, validation, options)
     except PixelCalibrationError as exc:
@@ -707,8 +726,9 @@ def run_pixel_calibration(
     xy_stage: str | None = None,
     cancel_event: Event | None = None,
     progress: ProgressCallback | None = None,
+    observation_callback: ObservationCallback | None = None,
 ) -> PixelCalibrationResult:
-    """Run an automatic calibration without modifying MMCore calibration data."""
+    """Run calibration, optionally reporting each completed 2-D observation."""
     selected_options = options or CalibrationOptions()
     stage = str(xy_stage or core.getXYStageDevice())
     origin: NDArray[np.float64] | None = None
@@ -724,6 +744,7 @@ def run_pixel_calibration(
             xy_stage=stage,
             cancel_event=cancel_event,
             progress=progress,
+            observation_callback=observation_callback,
         )
         origin = measured_origin
     except BaseException as error:

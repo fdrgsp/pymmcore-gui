@@ -297,11 +297,15 @@ def test_run_pixel_calibration_measures_affine_without_persisting() -> None:
     core = _SyntheticCore()
     old_size = core.stored_size
     old_affine = core.stored_affine
+    acquired: list[tuple[object, str]] = []
 
     result = run_pixel_calibration(
         core,
         _fast_options(),
         resolution_id="Resolution",
+        observation_callback=lambda observation, kind: acquired.append(
+            (observation, kind)
+        ),
     )
 
     assert result.stage_returned
@@ -309,6 +313,11 @@ def test_run_pixel_calibration_measures_affine_without_persisting() -> None:
     assert result.fit.determinant < 0
     assert len(result.observations) == 8
     assert len(result.validation_observations) == 3
+    assert [kind for _observation, kind in acquired] == ["fit"] * 8 + ["validation"] * 3
+    assert [observation for observation, _kind in acquired] == [
+        *result.observations,
+        *result.validation_observations,
+    ]
     assert all(observation.accepted for observation in result.observations)
     assert core.position == pytest.approx(core.origin)
     assert (

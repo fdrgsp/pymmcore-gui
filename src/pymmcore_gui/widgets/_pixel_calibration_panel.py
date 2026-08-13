@@ -17,6 +17,7 @@ from pymmcore_gui._modern_gui._theme import qcolor, theme
 from pymmcore_gui._pixel_calibration import (
     CalibrationCancelled,
     CalibrationCaptureSettings,
+    CalibrationObservation,
     CalibrationOptions,
     CaptureStateTransaction,
     PixelCalibrationResult,
@@ -113,69 +114,90 @@ def _validation_residuals_px(result: PixelCalibrationResult) -> np.ndarray:
 
 
 class CalibrationDiagnosticsWidget(QWidget):
-    """Compare measured stage moves with affine predictions without matplotlib."""
+    """Show acquired stage positions and final affine predictions in 2-D."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._result: PixelCalibrationResult | None = None
+        self._observations: list[tuple[CalibrationObservation, str]] = []
         self.setMinimumHeight(165)
         self.setToolTip(
-            "Each blue arrow is a measured XY-stage move. Each green point is "
-            "the endpoint predicted from the corresponding image shift. A good "
-            "calibration places the green points on the blue arrow tips."
+            "Blue spots are measured XY-stage displacements and appear as they "
+            "are acquired. Green spots are the final affine predictions. A good "
+            "calibration places each green spot on a blue spot."
         )
 
     def setResult(self, result: PixelCalibrationResult | None) -> None:
         """Set the result rendered by the diagnostic graph."""
         self._result = result
+        self._observations = []
+        if result is not None:
+            self._observations.extend((obs, "fit") for obs in result.observations)
+            self._observations.extend(
+                (obs, "validation") for obs in result.validation_observations
+            )
+        self.update()
+
+    def addObservation(self, observation: object, kind: str) -> None:
+        """Add one newly acquired fit or validation observation to the graph."""
+        if not isinstance(observation, CalibrationObservation):
+            return
+        self._result = None
+        self._observations.append((observation, kind))
         self.update()
 
     @staticmethod
     def _point(point: Sequence[float], rect: QRectF, extent: float) -> QPointF:
         return QPointF(
-            rect.center().x() + float(point[0]) * rect.width() * 0.40 / extent,
-            rect.center().y() - float(point[1]) * rect.height() * 0.40 / extent,
+            rect.center().x() + float(point[0]) * rect.width() * 0.45 / extent,
+            rect.center().y() - float(point[1]) * rect.height() * 0.45 / extent,
         )
 
-    def _draw_vectors(self, painter: QPainter, rect: QRectF) -> None:
-        assert self._result is not None
-        observations = [
-            obs
-            for obs in (
-                *self._result.observations,
-                *self._result.validation_observations,
-            )
-            if obs.accepted
-        ]
+    def _draw_spots(self, painter: QPainter, rect: QRectF) -> None:
+        observations = [obs for obs, _kind in self._observations]
+        completed = len(observations)
+        validation_count = sum(
+            kind == "validation" for _observation, kind in self._observations
+        )
         painter.setPen(QColor("#aab3bd"))
         painter.drawText(
             rect.adjusted(3, 3, -3, -3),
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
-            "Blue arrows: measured moves · Green dots: predicted endpoints",
+            "Blue: measured positions · Green: fitted predictions",
         )
         painter.drawText(
             rect.adjusted(3, 21, -3, -3),
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
-            "Good calibration: green dots coincide with arrow tips",
+            (
+                f"Acquiring points… {completed} captured"
+                if self._result is None
+                else "Good calibration: green and blue spots overlap"
+            ),
         )
-        plot = rect.adjusted(8, 43, -8, -18)
+        available = rect.adjusted(8, 43, -8, -22)
+        side = min(available.width(), available.height())
+        plot = QRectF(
+            available.center().x() - side / 2,
+            available.center().y() - side / 2,
+            side,
+            side,
+        )
         if not observations:
             painter.drawText(
                 plot,
                 Qt.AlignmentFlag.AlignCenter,
-                "No diagnostic observations available",
+                "Acquired positions will appear here",
             )
             return
 
         measured = np.asarray([obs.stage_delta_um for obs in observations])
-        shifts = np.asarray([obs.corrected_shift_xy for obs in observations])
-        predicted = shifts @ self._result.fit.matrix.T
-        extent = max(
-            float(np.max(np.abs(measured))),
-            float(np.max(np.abs(predicted))),
-            1e-9,
-        )
-        origin = self._point((0, 0), plot, extent)
+        predicted = np.empty((0, 2), dtype=np.float64)
+        if self._result is not None:
+            shifts = np.asarray([obs.corrected_shift_xy for obs in observations])
+            predicted = shifts @ self._result.fit.matrix.T
+        extent = max(float(np.max(np.abs(measured))), 1e-9)
+        if predicted.size:
+            extent = max(extent, float(np.max(np.abs(predicted))))
 
         painter.setPen(QPen(QColor("#59636e"), 1))
         painter.drawLine(
@@ -186,41 +208,41 @@ class CalibrationDiagnosticsWidget(QWidget):
             QPointF(plot.center().x(), plot.top()),
             QPointF(plot.center().x(), plot.bottom()),
         )
-        for actual, expected in zip(measured, predicted, strict=True):
-            actual_point = self._point(actual, plot, extent)
-            expected_point = self._point(expected, plot, extent)
-            painter.setPen(QPen(QColor("#58a6ff"), 1.5))
-            painter.drawLine(origin, actual_point)
-            delta = actual_point - origin
-            length = float(np.hypot(delta.x(), delta.y()))
-            if length > 8:
-                along = delta / length
-                normal = QPointF(-along.y(), along.x())
-                painter.drawLine(
-                    actual_point,
-                    actual_point - along * 7 + normal * 3.5,
-                )
-                painter.drawLine(
-                    actual_point,
-                    actual_point - along * 7 - normal * 3.5,
-                )
+        painter.setPen(QPen(QColor("#58a6ff"), 1))
+        for observation, actual in zip(observations, measured, strict=True):
+            point = self._point((float(actual[0]), float(actual[1])), plot, extent)
+            if observation.accepted:
+                painter.setBrush(QColor("#58a6ff"))
+                painter.drawEllipse(point, 5, 5)
+            else:
+                painter.setBrush(QColor("#f85149"))
+                painter.drawEllipse(point, 5, 5)
 
-            painter.setPen(QPen(QColor("#3fb950"), 1.5))
+        painter.setPen(QPen(QColor("#3fb950"), 1))
+        for expected in predicted:
+            expected_point = self._point(
+                (float(expected[0]), float(expected[1])), plot, extent
+            )
             painter.setBrush(QColor("#3fb950"))
-            painter.drawEllipse(expected_point, 3.5, 3.5)
+            painter.drawEllipse(expected_point, 2.5, 2.5)
+
+        origin = self._point((0, 0), plot, extent)
+        painter.setPen(QPen(QColor("#aab3bd"), 1))
+        painter.setBrush(QColor("#aab3bd"))
+        painter.drawEllipse(origin, 2, 2)
 
         painter.setPen(QColor("#7d8590"))
         painter.drawText(
             rect.adjusted(3, 3, -3, -3),
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom,
-            f"extent ±{extent:.3g} µm",
+            f"{completed} points ({validation_count} validation) · ±{extent:.3g} µm",
         )
 
     def paintEvent(self, a0: QPaintEvent | None) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), self.palette().window())
-        if self._result is None:
+        if self._result is None and not self._observations:
             painter.setPen(self.palette().text().color())
             painter.drawText(
                 self.rect(),
@@ -228,7 +250,7 @@ class CalibrationDiagnosticsWidget(QWidget):
                 "Calibration diagnostics will appear here",
             )
             return
-        self._draw_vectors(painter, QRectF(self.rect()).adjusted(5, 5, -5, -5))
+        self._draw_spots(painter, QRectF(self.rect()).adjusted(5, 5, -5, -5))
 
 
 class _FrameCore:
@@ -268,6 +290,7 @@ class _CalibrationWorker(QObject):
 
     progress = Signal(str, float)
     frameReady = Signal(object)
+    observationReady = Signal(object, str)
     resultReady = Signal(object)
     previewReady = Signal()
     # str message, plus whatever diagnostics (PixelCalibrationResult | None)
@@ -321,6 +344,7 @@ class _CalibrationWorker(QObject):
                     xy_stage=self._xy_stage,
                     cancel_event=self._cancel_event,
                     progress=self.progress.emit,
+                    observation_callback=self.observationReady.emit,
                 )
         except CalibrationCancelled as exc:
             # A deliberate Cancel click, not a bug -- log at info, and only
@@ -886,9 +910,7 @@ class PixelCalibrationPanel(QWidget):
         if self._target is None or not self._target.resolution_id:
             return "Select one resolution ID"
         if not self._target.binding_is_saved:
-            return (
-                "Save this resolution ID and its identifying properties to core first"
-            )
+            return "Save this resolution ID to core first"
         if not self._camera_combo.currentText():
             return "Load and select a physical camera"
         if not self._xy_stage():
@@ -938,6 +960,17 @@ class PixelCalibrationPanel(QWidget):
         )
 
     def _capture_settings(self) -> CalibrationCaptureSettings:
+        """Build the settings Snap/Live/Start calibration apply -- Settings-panel only.
+
+        Never includes the selected resolution's own identifying device/property
+        values (e.g. an objective-turret position): this panel only applies what
+        the Settings group itself controls (channel, camera, exposure, light
+        source/power). Which objective or other resolution-defining hardware is
+        in place is entirely up to the user to prepare beforehand -- Snap and
+        Start calibration still verify (via ``CaptureStateTransaction``'s
+        ``verify_resolution``) that the current pixel-size config matches the
+        selected resolution before proceeding, they just never set it themselves.
+        """
         assert self._target is not None
         identity = self._channel_identity()
         if identity is None:
@@ -946,7 +979,7 @@ class PixelCalibrationPanel(QWidget):
         intensity = float(self._light_intensity.value())
         properties = tuple((device, prop, intensity) for device, prop in pairs)
         return CalibrationCaptureSettings(
-            resolution_settings=self._target.settings,
+            resolution_settings=(),
             channel_group=identity[0],
             channel_config=identity[1],
             exposure_ms=float(self._exposure.value()),
@@ -973,7 +1006,14 @@ class PixelCalibrationPanel(QWidget):
         self._start_worker(preview_only=False)
 
     def toggleLivePreview(self) -> None:
-        """Start or stop live viewing with the selected calibration settings."""
+        """Start or stop live viewing with the channel, camera, and light source.
+
+        Unlike Snap/Test-frame/Start-calibration, this also skips verifying
+        that the current pixel-size config matches the selected resolution
+        (see ``_capture_settings``): Live is for looking at whatever is
+        actually on the microscope right now, regardless of which resolution
+        row happens to be selected in the table.
+        """
         if self._mmc.isSequenceRunning():
             self.stopLivePreview()
             return
@@ -989,6 +1029,7 @@ class PixelCalibrationPanel(QWidget):
             cast("Any", self._mmc),
             self._capture_settings(),
             resolution_id=self._target.resolution_id,
+            verify_resolution=False,
         )
         try:
             transaction.apply()
@@ -997,8 +1038,10 @@ class PixelCalibrationPanel(QWidget):
             self._set_inputs_enabled(False)
             self.calibrationRunningChanged.emit(True)
             self._set_result_message(
-                "Live preview uses the selected calibration settings. Move to the "
-                "desired starting field of view, then stop Live or start calibration."
+                "Live preview uses the selected channel, camera, and light "
+                "source (not the resolution's objective/hardware state). Move "
+                "to the desired starting field of view, then stop Live or "
+                "start calibration."
             )
             self._mmc.startContinuousSequenceAcquisition()
         except BaseException as exc:
@@ -1148,6 +1191,7 @@ class PixelCalibrationPanel(QWidget):
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._on_progress)
         self._worker.frameReady.connect(self._on_frame)
+        self._worker.observationReady.connect(self._on_observation)
         self._worker.resultReady.connect(self._on_result)
         self._worker.previewReady.connect(self._on_preview_ready)
         self._worker.failed.connect(self._on_failure)
@@ -1207,6 +1251,10 @@ class PixelCalibrationPanel(QWidget):
         self._frame_label.setText(
             f"frame {int(payload['number'])} · XY {x:.3f}, {y:.3f} µm"
         )
+
+    def _on_observation(self, observation: object, kind: str) -> None:
+        """Plot each completed calibration observation as soon as it arrives."""
+        self._diagnostics.addObservation(observation, kind)
 
     def _on_preview_ready(self) -> None:
         self._phase_label.setText("Frame snapped; hardware state restored")

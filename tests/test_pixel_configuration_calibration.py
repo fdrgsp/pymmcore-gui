@@ -241,7 +241,28 @@ def test_error_and_success_summary_use_same_information_area(
     assert panel._info_splitter.widget(1) is panel._diagnostics
     panel._diagnostics.resize(500, 240)
     assert not panel._diagnostics.grab().isNull()
-    assert "green points" in panel._diagnostics.toolTip()
+    assert "Green spots" in panel._diagnostics.toolTip()
+
+
+def test_diagnostic_spots_are_added_during_acquisition(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    panel = page._pixel_config._calibration_panel
+    result = _result_for_selected_resolution(page)
+
+    panel._diagnostics.setResult(None)
+    panel._on_observation(result.observations[0], "fit")
+    assert panel._diagnostics._result is None
+    assert panel._diagnostics._observations == [(result.observations[0], "fit")]
+    panel._diagnostics.resize(500, 240)
+    assert not panel._diagnostics.grab().isNull()
+
+    panel._on_result(result)
+    assert len(panel._diagnostics._observations) == (
+        len(result.observations) + len(result.validation_observations)
+    )
 
 
 def test_no_resolution_selection_disables_entire_calibration_panel(

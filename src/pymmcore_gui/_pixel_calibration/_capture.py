@@ -64,12 +64,21 @@ class CaptureStateTransaction:
         settings: CalibrationCaptureSettings,
         *,
         resolution_id: str,
+        verify_resolution: bool = True,
     ) -> None:
         # Generated CMMCorePlus overloads use adapter-specific parameter names,
         # so static structural matching is narrower than the runtime API.
         self._core = cast("CaptureCore", core)
         self._settings = settings
         self._resolution_id = resolution_id
+        # Snap/Test-frame/Start-calibration must land on the target resolution's
+        # exact optical state to measure anything meaningful, so they verify it.
+        # A plain live preview isn't calibrating a specific resolution -- it's
+        # just supposed to show whatever's actually on the microscope right
+        # now, so callers that already omit resolution_settings from `settings`
+        # pass this False to skip a check that would otherwise reject whatever
+        # objective happens to be mounted.
+        self._verify_resolution = verify_resolution
         self._snapshot: dict[tuple[str, str], str] = {}
         self._property_order: list[tuple[str, str]] = []
         self._old_exposure: float | None = None
@@ -135,12 +144,14 @@ class CaptureStateTransaction:
             self._core.setProperty(device, prop, light_value)
             self._core.waitForDevice(device)
 
-        current = str(self._core.getCurrentPixelSizeConfig())
-        if current != self._resolution_id:
-            raise PixelCalibrationError(
-                f"Capture settings do not match resolution {self._resolution_id!r}; "
-                f"MMCore currently matches {current or '<none>'!r}"
-            )
+        if self._verify_resolution:
+            current = str(self._core.getCurrentPixelSizeConfig())
+            if current != self._resolution_id:
+                raise PixelCalibrationError(
+                    f"Capture settings do not match resolution "
+                    f"{self._resolution_id!r}; MMCore currently matches "
+                    f"{current or '<none>'!r}"
+                )
 
     def restore(self) -> None:
         """Restore the exact pre-transaction properties and exposure."""

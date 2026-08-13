@@ -292,6 +292,15 @@ class ConfigurationsPage(TabPage):
         """Whether either editor has edits not yet persisted to a file."""
         return self._group_dirty or self._pixel_dirty
 
+    def dirty_parts(self) -> list[str]:
+        """Names of the editors that currently have unsaved edits."""
+        parts = []
+        if self._group_dirty:
+            parts.append("Group Editor")
+        if self._pixel_dirty:
+            parts.append("Pixel Configuration")
+        return parts
+
     def mark_saved(self) -> None:
         """Mark both editors as persisted to the configuration file."""
         with suppress(Exception):
@@ -371,11 +380,7 @@ class ConfigurationsPage(TabPage):
         self._update_dirty_label()
 
     def _update_dirty_label(self) -> None:
-        parts = []
-        if self._group_dirty:
-            parts.append("Group Editor")
-        if self._pixel_dirty:
-            parts.append("Pixel Configuration")
+        parts = self.dirty_parts()
         if parts:
             self._dirty_text.setText(f"Unsaved changes: {', '.join(parts)}")
             self._dirty_label.show()
