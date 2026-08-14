@@ -180,9 +180,7 @@ class ActiveChannelCollapsibleCoreMDATabs(CollapsibleCoreMDATabs):
         self._apply_subsequence_theme()
         self.grid_plan.valueChanged.connect(self._apply_subsequence_theme)
         bounds = cast("Any", self.grid_plan)._core_xy_bounds
-        bounds.go_middle.toggled.connect(
-            self._refresh_subsequence_bounds_icons
-        )
+        bounds.go_middle.toggled.connect(self._refresh_subsequence_bounds_icons)
 
         # _MDAPopup creates its OK/Cancel button box after constructing us.
         # Re-run once its constructor has completed so the dialog chrome, not
@@ -226,11 +224,11 @@ class ActiveChannelCollapsibleCoreMDATabs(CollapsibleCoreMDATabs):
             set_source_icon(button, button.icon())
             ensure_visible_icon(button)
 
-    def changeEvent(self, event: QEvent | None) -> None:
-        super().changeEvent(event)
+    def changeEvent(self, a0: QEvent | None) -> None:
+        super().changeEvent(a0)
         if (
-            event is not None
-            and event.type() == QEvent.Type.StyleChange
+            a0 is not None
+            and a0.type() == QEvent.Type.StyleChange
             and getattr(self, "_is_subsequence_editor", False)
         ):
             self._apply_subsequence_theme()

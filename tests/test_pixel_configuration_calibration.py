@@ -169,14 +169,12 @@ def test_calibration_panel_has_form_viewer_and_information_layout(
     assert widget._content_splitter.widget(0) is widget._px_table.parentWidget()
     assert widget._content_splitter.widget(1) is widget._props_selector
     assert widget._content_splitter.widget(2) is panel
-    assert [
-        widget._content_splitter.widget(i).sizePolicy().horizontalStretch()
-        for i in range(3)
-    ] == [
-        1,
-        1,
-        2,
-    ]
+    stretches = []
+    for i in range(3):
+        w = widget._content_splitter.widget(i)
+        assert w is not None
+        stretches.append(w.sizePolicy().horizontalStretch())
+    assert stretches == [1, 1, 2]
     page._tabs.setCurrentWidget(widget)
     # At this common desktop width, the Property Selector's upstream 500 px
     # minimum-size hint must not override the requested equal left quarters.

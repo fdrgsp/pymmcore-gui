@@ -63,6 +63,7 @@ class PixelConfigurationWidget(_UpstreamPixelConfiguration):
         # on ordinary 1920 px windows and makes Properties visibly wider than
         # the Resolution ID pane.
         for pane in (splitter.widget(0), splitter.widget(1)):
+            assert pane is not None
             policy = pane.sizePolicy()
             policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
             pane.setSizePolicy(policy)
