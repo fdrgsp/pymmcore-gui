@@ -10,10 +10,7 @@ from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from pymmcore_plus import CMMCorePlus
-from pymmcore_widgets import (
-    ConfigGroupsEditor,
-    PixelConfigurationWidget,
-)
+from pymmcore_widgets import ConfigGroupsEditor
 from pymmcore_widgets._util import block_core
 from superqt.iconify import QIconifyIcon
 
@@ -30,6 +27,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from pymmcore_gui.widgets._pixel_configuration import PixelConfigurationWidget
 
 from ._busy import BusyOverlay, busy
 from ._tab_page import TabPage
@@ -172,6 +170,8 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
     widget; embedded in a tab there is nothing to close, so Apply just applies.
     """
 
+    applied = Signal()
+
     def __init__(
         self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
     ) -> None:
@@ -192,6 +192,10 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
     def apply(self) -> None:
         """Apply the pixel configurations to the core (without closing)."""
         self._on_apply()
+        # Validation failures leave the editor dirty. Only announce a real
+        # commit so Stage Explorer is not reset for an apply that never landed.
+        if self.isClean():
+            self.applied.emit()
 
     def _on_apply(self) -> None:
         # _on_apply ends by calling self.close(); keep the widget open instead.
@@ -214,6 +218,8 @@ class ConfigurationsPage(TabPage):
     # "Save to core" commits to the live core only; this asks the window to
     # write the whole configuration (hardware + groups + pixel) to a .cfg.
     saveToFileRequested = Signal()
+    calibrationRunningChanged = Signal(bool)
+    pixelConfigurationsApplied = Signal()
 
     def __init__(
         self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
@@ -249,6 +255,10 @@ class ConfigurationsPage(TabPage):
         )
         self._save_file_btn.clicked.connect(self.saveToFileRequested.emit)
         self.toolbar.add_widget(self._save_file_btn)
+        self._pixel_config.calibrationRunningChanged.connect(
+            self._on_pixel_calibration_running
+        )
+        self._pixel_config.applied.connect(self.pixelConfigurationsApplied)
 
         self._dirty_icon = QLabel()
         self._dirty_text = QLabel()
@@ -290,6 +300,15 @@ class ConfigurationsPage(TabPage):
         """Whether either editor has edits not yet persisted to a file."""
         return self._group_dirty or self._pixel_dirty
 
+    def dirty_parts(self) -> list[str]:
+        """Names of the editors that currently have unsaved edits."""
+        parts = []
+        if self._group_dirty:
+            parts.append("Group Editor")
+        if self._pixel_dirty:
+            parts.append("Pixel Configuration")
+        return parts
+
     def mark_saved(self) -> None:
         """Mark both editors as persisted to the configuration file."""
         with suppress(Exception):
@@ -323,6 +342,17 @@ class ConfigurationsPage(TabPage):
         """Write the group and pixel editors' contents into the core."""
         self._group_tab.save()
         self._pixel_config.apply()
+
+    def _on_pixel_calibration_running(self, running: bool) -> None:
+        """Prevent configuration rewrites or tab changes during stage motion."""
+        self._save_core_btn.setEnabled(not running)
+        self._save_file_btn.setEnabled(not running)
+        self._tabs.setTabEnabled(self._tabs.indexOf(self._group_tab), not running)
+        self.calibrationRunningChanged.emit(running)
+
+    def shutdownCalibration(self) -> None:
+        """Cancel calibration and wait for stage/capture-state restoration."""
+        self._pixel_config.shutdownCalibration()
 
     def _on_group_clean_changed(self, clean: bool) -> None:
         """QUndoStack.cleanChanged — the accurate source for group-dirty state.
@@ -358,11 +388,7 @@ class ConfigurationsPage(TabPage):
         self._update_dirty_label()
 
     def _update_dirty_label(self) -> None:
-        parts = []
-        if self._group_dirty:
-            parts.append("Group Editor")
-        if self._pixel_dirty:
-            parts.append("Pixel Configuration")
+        parts = self.dirty_parts()
         if parts:
             self._dirty_text.setText(f"Unsaved changes: {', '.join(parts)}")
             self._dirty_label.show()

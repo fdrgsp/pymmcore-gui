@@ -37,6 +37,7 @@ class PanelKey:
     """
 
     MDA: Final = "mda"
+    STAGE_EXPLORER: Final = "stage_explorer"
     PRESETS: Final = "presets"
     PROPERTIES: Final = "properties"
     CONSOLE: Final = "console"
@@ -62,6 +63,12 @@ def _create_presets(_parent: QWidget, core: CMMCorePlus) -> QWidget:
     from ._acquire_presets import AcquisitionPresetSelector
 
     return AcquisitionPresetSelector(mmcore=core)
+
+
+def _create_stage_explorer(parent: QWidget, core: CMMCorePlus) -> QWidget:
+    from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
+
+    return ThemedStageExplorer(parent=parent, mmcore=core)
 
 
 def _create_console(_parent: QWidget, core: CMMCorePlus) -> QWidget:
@@ -126,6 +133,13 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
         default_open=True,
         refresh=_refresh_mda,
         always_visible=True,
+    ),
+    PanelInfo(
+        key=PanelKey.STAGE_EXPLORER,
+        title="Stage Explorer",
+        icon="mdi:map-search",
+        tooltip="Stage Explorer — show or hide the stage exploration panel",
+        create=_create_stage_explorer,
     ),
     PanelInfo(
         key=PanelKey.PRESETS,

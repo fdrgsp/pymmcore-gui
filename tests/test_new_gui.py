@@ -13,13 +13,17 @@ import useq
 from pymmcore_plus import PropertyType
 from pymmcore_widgets import MDAWidget as UpstreamMDAWidget
 from pymmcore_widgets.mda._core_channels import PROPERTY_SEPARATOR
-from pymmcore_widgets.useq_widgets._positions import MDAButton
+from pymmcore_widgets.useq_widgets._positions import MDAButton, _MDAPopup
 
 import pymmcore_gui._modern_gui._acquire_toolbar as acquire_toolbar_module
 import pymmcore_gui._modern_gui._acquire_viewers as acquire_viewers_module
 from pymmcore_gui._app import LoadConfigDialog, create_mmgui
 from pymmcore_gui._array_viewer import _icon_avg_rgb
-from pymmcore_gui._modern_gui._acquire import _MDA_DOCK_WIDTH, AcquirePage
+from pymmcore_gui._modern_gui._acquire import (
+    _MDA_DOCK_WIDTH,
+    _RIGHT_DOCK_MAX_WIDTH,
+    AcquirePage,
+)
 from pymmcore_gui._modern_gui._acquire_presets import AcquisitionPresetSelector
 from pymmcore_gui._modern_gui._configurations import ConfigurationsPage
 from pymmcore_gui._modern_gui._hardware import HardwareSetupPage
@@ -40,7 +44,9 @@ from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget
 from pymmcore_gui._qt.QtCore import QPoint, QSize, Qt
 from pymmcore_gui._qt.QtGui import QCursor
 from pymmcore_gui._qt.QtWidgets import (
+    QWIDGETSIZE_MAX,
     QAbstractButton,
+    QAbstractSlider,
     QApplication,
     QComboBox,
     QDoubleSpinBox,
@@ -61,6 +67,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from pymmcore_plus import CMMCorePlus
+    from pymmcore_widgets.mda._collapsible_mda import CollapsibleCoreMDATabs
+    from pymmcore_widgets.mda._core_grid import CoreConnectedGridPlanWidget
     from pymmcore_widgets.useq_widgets._data_table import DataTable
     from pytestqt.qtbot import QtBot
     from qtpy.QtCore import QModelIndex
@@ -138,6 +146,55 @@ def test_explicit_startup_config_selects_acquire(
     assert window._stack.currentWidget() is window._acquire
 
 
+def test_pixel_calibration_locks_other_main_window_modes(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+) -> None:
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+    config_index = window._stack.indexOf(window._configurations)
+    hardware_index = window._stack.indexOf(window._hardware)
+    acquire_index = window._stack.indexOf(window._acquire)
+    window._mode_tabs._select(config_index)
+
+    window._configurations.calibrationRunningChanged.emit(True)
+
+    assert window._stack.currentWidget() is window._configurations
+    assert not window._mode_tabs._tabs[hardware_index].isEnabled()
+    assert not window._mode_tabs._tabs[acquire_index].isEnabled()
+    window._mode_tabs._select(acquire_index)
+    assert window._stack.currentWidget() is window._configurations
+
+    window._configurations.calibrationRunningChanged.emit(False)
+    assert window._mode_tabs._tabs[hardware_index].isEnabled()
+    assert window._mode_tabs._tabs[acquire_index].isEnabled()
+
+
+def test_unsaved_configuration_prompt_uses_button_variants(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+    messages: list[QMessageBox] = []
+
+    def inspect_without_showing(message: QMessageBox) -> int:
+        messages.append(message)
+        return 0
+
+    with (
+        patch.object(window._configurations, "dirty_parts", return_value=["Pixel"]),
+        patch.object(QMessageBox, "exec", inspect_without_showing),
+    ):
+        assert window._prompt_unsaved_configuration_changes() == "cancel"
+
+    assert len(messages) == 1
+    buttons = {button.text(): button for button in messages[0].buttons()}
+    assert buttons["Save to core"].property("variant") == "subtle"
+    assert buttons["Save to file…"].property("variant") == "primary"
+    assert buttons["Continue without saving"].property("variant") == "danger"
+    assert buttons["Cancel"].property("variant") == "subtle"
+
+
 def test_new_gui_uses_one_application_font(
     mmcore: CMMCorePlus,
     qtbot: QtBot,
@@ -210,6 +267,9 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert page.panel_widget(PanelKey.PROPERTIES) is None
     assert page.panel_dock(PanelKey.PROPERTIES) is None
     assert not page.panel_button(PanelKey.PROPERTIES).isChecked()
+    assert page.panel_widget(PanelKey.STAGE_EXPLORER) is None
+    assert page.panel_dock(PanelKey.STAGE_EXPLORER) is None
+    assert not page.panel_button(PanelKey.STAGE_EXPLORER).isChecked()
     assert page.panel_widget(PanelKey.CONSOLE) is None
     assert page.panel_dock(PanelKey.CONSOLE) is None
     assert not page.panel_button(PanelKey.CONSOLE).isChecked()
@@ -407,6 +467,58 @@ def test_acquire_dock_style_and_fonts_follow_theme_toggle(
     set_theme(DARK_THEME)
 
 
+def test_acquire_dock_close_icon_stays_red_after_tab_switch(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Switching which tab is current must not un-tint any tab's close X.
+
+    Regression test: ADS's own stylesheet drives each tab close button's icon
+    via a ``qproperty-icon`` rule keyed on the dynamic ``activeTab`` property
+    (see ``_apply_dock_style``). Switching which tab is current in an area
+    flips that property on both the tab losing and the tab gaining focus, and
+    Qt re-polishing either one re-applies that rule -- silently overwriting
+    the red tint ``_refresh_dock_icons`` set, on *both* tabs, not just the one
+    that changed. This used to only be corrected again on the next theme
+    toggle or newly-added dock; nothing re-ran it on a plain tab switch.
+    """
+    set_theme(DARK_THEME)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    page.panel_button(PanelKey.PRESETS).click()
+    page.panel_button(PanelKey.PROPERTIES).click()
+    presets_dock = page.panel_dock(PanelKey.PRESETS)
+    properties_dock = page.panel_dock(PanelKey.PROPERTIES)
+    assert presets_dock is not None and properties_dock is not None
+
+    def close_buttons() -> list[QAbstractButton]:
+        return [
+            btn
+            for btn in page._dock_manager.findChildren(QAbstractButton)
+            if btn.objectName() == "tabCloseButton"
+        ]
+
+    red = qcolor(theme().status_red)
+    expected = (red.red(), red.green(), red.blue())
+
+    def assert_all_red() -> None:
+        for btn in close_buttons():
+            rgb = _icon_avg_rgb(btn.icon(), QSize(24, 24))
+            assert rgb is not None
+            assert all(abs(a - e) < 2 for a, e in zip(rgb, expected, strict=True))
+
+    # Switching to the tab added most recently (Properties) must not un-tint
+    # either its own close button or the one it stole focus from (Presets).
+    # No manual refresh call here -- this exercises the real signal wiring
+    # (CDockAreaWidget.currentChanged -> _queue_dock_icon_refresh) end to end.
+    properties_dock.setAsCurrentTab()
+    qtbot.waitUntil(assert_all_red, timeout=1000)
+
+    # And switching back must not un-tint them either.
+    presets_dock.setAsCurrentTab()
+    qtbot.waitUntil(assert_all_red, timeout=1000)
+
+
 def test_acquire_dock_contents_follow_zoom(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     """Widgets inside the dock manager rescale with Cmd+Shift+±, in both directions.
 
@@ -524,6 +636,66 @@ def test_acquire_console_dock_is_lazy(
     assert dock.isClosed()
     assert not page.panel_button(PanelKey.CONSOLE).isChecked()
     assert page.panel_widget(PanelKey.CONSOLE) is console  # not rebuilt
+
+
+def test_acquire_stage_explorer_is_a_lazy_toolbar_dock(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """The toolbar opens one themed Stage Explorer in the right dock area."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    button = page.panel_button(PanelKey.STAGE_EXPLORER)
+    assert not button.isChecked()
+    assert not button.icon().isNull()
+    assert page.panel_widget(PanelKey.STAGE_EXPLORER) is None
+
+    button.click()
+    explorer = page.panel_widget(PanelKey.STAGE_EXPLORER)
+    dock = page.panel_dock(PanelKey.STAGE_EXPLORER)
+    assert isinstance(explorer, ThemedStageExplorer)
+    assert dock is not None and not dock.isClosed()
+    assert dock.widget() is explorer
+    assert dock.windowTitle() == "Stage Explorer"
+    assert button.isChecked()
+
+    button.click()
+    assert dock.isClosed()
+    assert page.panel_widget(PanelKey.STAGE_EXPLORER) is explorer
+
+
+def test_stage_explorer_sends_positions_to_mda(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Stage Explorer's Replace/Add choices update and reveal MDA Positions."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.panel_button(PanelKey.STAGE_EXPLORER).click()
+    explorer = page.panel_widget(PanelKey.STAGE_EXPLORER)
+    assert isinstance(explorer, ThemedStageExplorer)
+
+    old = useq.Position(name="Old", x=1, y=2)
+    page._mda.stage_positions.setValue([old])
+    replacement = [
+        useq.Position(name="Explorer 1", x=10, y=20),
+        useq.Position(name="Explorer 2", x=30, y=40),
+    ]
+    explorer.sendToMDARequested.emit(replacement, True)
+    assert page._mda.stage_positions.value(exclude_unchecked=False) == tuple(
+        replacement
+    )
+
+    added = useq.Position(name="Explorer 3", x=50, y=60)
+    explorer.sendToMDARequested.emit([added], False)
+    assert page._mda.stage_positions.value(exclude_unchecked=False) == (
+        *replacement,
+        added,
+    )
+    section = page._mda._collapsible_tabs().section("p")
+    assert section.checked
+    assert section.expanded
+    assert section.summary == "On · 3 positions"
+    assert page.panel_button(PanelKey.MDA).isChecked()
 
 
 def test_acquire_panel_buttons_match_registry(
@@ -2995,27 +3167,10 @@ def test_acquire_mda_dock_width_resists_relayout_but_stays_draggable(
     _assert_column_resists_relayout_but_stays_draggable(page, qtbot, mda_area, 500)
 
 
-def test_acquire_right_dock_width_resists_relayout_but_stays_draggable(
+def test_acquire_right_dock_is_always_resizable(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    """The right (Groups & Presets / Properties / Console) column gets the same lock.
-
-    Same regression as the MDA-column test above, but for the right-side
-    column -- opening it lazily is exactly the kind of dock-area-visibility
-    change elsewhere in the manager that used to be able to silently resize
-    it too, so it needs the same width lock installed once it exists (see
-    ``_add_side_dock``).
-
-    Checks the lock itself (resists a programmatic resize, and the hover
-    handler recognizes its own handle) rather than re-running a full
-    interactive mouse-drag simulation a second time: the MDA test above
-    already proves that mechanism end-to-end, and ``eventFilter`` doesn't
-    branch on which column's handle it's attached to, so a second real
-    ``QTest`` press/move/release cycle here would only double the suite's
-    exposure to real Qt event delivery -- on a non-offscreen display, the
-    kind of thing that can reach into ADS/paint internals -- without
-    covering any behavior the MDA test doesn't already cover.
-    """
+    """The right sidebar never depends on hover detection to become resizable."""
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
     page.resize(1400, 900)
@@ -3026,30 +3181,20 @@ def test_acquire_right_dock_width_resists_relayout_but_stays_draggable(
     page.panel_button(PanelKey.PRESETS).click()
     right_area = page._right_dock_area
     assert right_area is not None
-    starting_width = right_area.width()
+    right_column = page._column_widget(right_area)
+    expected_width = min(page._dock_manager.width() // 4, 500)
+    qtbot.waitUntil(lambda: right_column.width() == expected_width, timeout=2000)
+    starting_width = right_column.width()
     assert starting_width > 0
-    assert right_area.minimumWidth() == right_area.maximumWidth() == starting_width
+    assert right_column.minimumWidth() == 0
+    assert right_column.maximumWidth() == QWIDGETSIZE_MAX
+    assert right_column not in page._width_locked_areas.values()
 
-    # A direct, deliberate attempt to resize it away from the locked width
-    # must be clamped straight back -- exercising the same splitter API ADS
-    # itself uses internally when it recomputes proportions.
+    target_width = max(100, starting_width - 100)
     page._dock_manager.setSplitterSizes(
-        right_area, _resized_splitter_sizes(page, right_area, 50)
+        right_area, _resized_splitter_sizes(page, right_area, target_width)
     )
-    assert right_area.width() == starting_width
-
-    # The hover handler must recognize *this* column's handle, not just
-    # MDA's -- confirming _install_width_lock actually ran for the right
-    # column rather than being silently skipped.
-    handle = next(h for h, a in page._width_locked_areas.items() if a is right_area)
-    assert isinstance(handle, QWidget)
-    with patch("pymmcore_gui._modern_gui._acquire.QCursor") as cursor_cls:
-        cursor_cls.pos.return_value = handle.mapToGlobal(handle.rect().center())
-        page._update_width_handle_hover()
-        assert right_area.minimumWidth() == 0
-        cursor_cls.pos.return_value = QPoint(-10_000, -10_000)
-        page._update_width_handle_hover()
-        assert right_area.minimumWidth() == right_area.maximumWidth() == starting_width
+    assert right_column.width() == target_width
 
 
 def test_column_widget_locates_top_splitter_child_through_nesting(
@@ -3159,6 +3304,96 @@ def test_acquire_layout_round_trip(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     # Console was never opened on page_a, so restoring must not force every
     # registered panel open -- laziness survives a restore.
     assert page_b.panel_widget(PanelKey.CONSOLE) is None
+
+
+def test_acquire_restored_right_dock_is_resizable(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A right sidebar restored on relaunch has no stale fixed-width constraint."""
+    page_a = AcquirePage(mmcore)
+    page_a.resize(1400, 900)
+    page_a.panel_button(PanelKey.PRESETS).click()
+    state, keys = page_a.save_layout()
+    assert state is not None
+
+    page_a.close()
+    page_a.deleteLater()
+
+    page_b = AcquirePage(mmcore)
+    qtbot.addWidget(page_b)
+    page_b.resize(1400, 900)
+    assert page_b.restore_layout(state, keys)
+    page_b.show()
+    qtbot.waitExposed(page_b)
+    qtbot.waitUntil(lambda: page_b._mda_width_locked_at_real_size, timeout=2000)
+
+    right_area = page_b._right_dock_area
+    assert right_area is not None
+    right_column = page_b._column_widget(right_area)
+    assert right_column.minimumWidth() == 0
+    assert right_column.maximumWidth() == QWIDGETSIZE_MAX
+    starting_width = right_column.width()
+    target_width = max(100, starting_width - 100)
+    page_b._dock_manager.setSplitterSizes(
+        right_area, _resized_splitter_sizes(page_b, right_area, target_width)
+    )
+    assert right_column.width() == target_width
+
+
+def test_acquire_repairs_an_unusably_narrow_restored_right_dock(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A previously persisted transient 60 px tools column is expanded.
+
+    The pinned width itself is derived from whatever width the window
+    actually ends up with (``min(dock_manager.width() // 4,
+    _RIGHT_DOCK_MAX_WIDTH)``, matching ``_pin_dock_widths``) rather than
+    hardcoded to the requested ``resize(1400, 900)`` -- CI's real (not
+    virtual/configurable) macOS/Windows runner displays can silently clamp a
+    top-level window smaller than requested, unlike a local dev machine.
+    """
+    page_a = AcquirePage(mmcore)
+    page_a.resize(1400, 900)
+    page_a.show()
+    qtbot.waitExposed(page_a)
+    qtbot.waitUntil(lambda: page_a._mda_width_locked_at_real_size, timeout=2000)
+    page_a.panel_button(PanelKey.PRESETS).click()
+    right_area = page_a._right_dock_area
+    assert right_area is not None
+    right_column = page_a._column_widget(right_area)
+    expected_pinned_width_a = min(
+        page_a._dock_manager.width() // 4, _RIGHT_DOCK_MAX_WIDTH
+    )
+    qtbot.waitUntil(
+        lambda: right_column.width() == expected_pinned_width_a, timeout=2000
+    )
+    page_a._dock_manager.setSplitterSizes(
+        right_area, _resized_splitter_sizes(page_a, right_area, 60)
+    )
+    assert right_column.width() == 60
+    state, keys = page_a.save_layout()
+    assert state is not None
+
+    page_a.close()
+    page_a.deleteLater()
+
+    page_b = AcquirePage(mmcore)
+    qtbot.addWidget(page_b)
+    page_b.resize(1400, 900)
+    assert page_b.restore_layout(state, keys)
+    page_b.show()
+    qtbot.waitExposed(page_b)
+    qtbot.waitUntil(lambda: page_b._mda_width_locked_at_real_size, timeout=2000)
+
+    restored_area = page_b._right_dock_area
+    assert restored_area is not None
+    restored_column = page_b._column_widget(restored_area)
+    expected_pinned_width_b = min(
+        page_b._dock_manager.width() // 4, _RIGHT_DOCK_MAX_WIDTH
+    )
+    assert restored_column.width() == expected_pinned_width_b
+    assert restored_column.minimumWidth() == 0
+    assert restored_column.maximumWidth() == QWIDGETSIZE_MAX
 
 
 def test_acquire_restore_does_not_repin_column_widths(
@@ -3353,11 +3588,57 @@ def test_mda_grid_bounds_icons_stay_visible_after_action_changes(
     assert_themed()
 
 
+def test_position_subsequence_popup_is_collapsed_and_themed(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Per-position editors start compact and use the main app's styling."""
+    set_theme(DARK_THEME)
+    widget = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(widget)
+    position_btn = widget.stage_positions.findChild(MDAButton)
+    assert position_btn is not None
+
+    popup = _MDAPopup(parent=position_btn)
+    qtbot.addWidget(popup)
+    popup.show()
+    QApplication.processEvents()
+
+    # _MDAPopup.mda_tabs is typed as the base MDATabs since its concrete type
+    # is chosen dynamically at runtime (see _MDAPopup.__init__); this popup is
+    # opened from a Collapsible/CoreConnected tree, so it's always these here.
+    tabs = cast("CollapsibleCoreMDATabs", popup.mda_tabs)
+    assert all(not section.expanded for section in tabs.sections)
+    assert all(
+        not child.styleSheet()
+        for child in (popup, *popup.findChildren(QWidget))
+        if not isinstance(child, QAbstractSlider)
+    )
+    assert all(
+        button.property("variant") for button in popup.findChildren(QAbstractButton)
+    )
+
+    grid = cast("CoreConnectedGridPlanWidget", tabs.grid_plan)
+    bounds = grid._core_xy_bounds
+    grid._mode_bounds_radio.setChecked(True)
+    expected = qcolor(theme().text_primary)
+    expected_rgb = expected.red(), expected.green(), expected.blue()
+
+    def assert_bounds_icons_themed() -> None:
+        for button in bounds.findChildren(QPushButton):
+            rgb = _icon_avg_rgb(button.icon(), QSize(24, 24))
+            assert rgb is not None
+            assert all(
+                abs(actual - wanted) < 2
+                for actual, wanted in zip(rgb, expected_rgb, strict=True)
+            )
+
+    assert_bounds_icons_themed()
+    bounds.go_middle.setChecked(True)
+    assert_bounds_icons_themed()
+
+
 def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
-    """AcquirePage no longer shows the Stage Explorer, but the classic GUI still
-    ships it (``actions/widget_actions.py``'s ``stage_explorer_widget`` action),
-    so its theming stays covered directly rather than through AcquirePage.
-    """
+    """The shared Stage Explorer remains consistent in classic and modern GUIs."""
     set_theme(DARK_THEME)
     explorer = ThemedStageExplorer(mmcore=mmcore)
     qtbot.addWidget(explorer)
@@ -3377,6 +3658,75 @@ def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert all(button.property("variant") == "subtle" for button in tool_buttons)
     assert explorer._contrast_slider._slider.styleSheet() == ""
     assert not toolbar.stop_scan_action.icon().isNull()
+
+    expected = qcolor(theme().text_primary)
+    expected_rgb = expected.red(), expected.green(), expected.blue()
+    marker_actions = (
+        toolbar.poll_stage_action,
+        *toolbar.marker_mode_action_group.actions(),
+    )
+    for action in marker_actions:
+        rgb = _icon_avg_rgb(action.icon(), QSize(24, 24))
+        assert rgb is not None
+        assert all(
+            abs(actual - wanted) < 2
+            for actual, wanted in zip(rgb, expected_rgb, strict=True)
+        )
+
+
+def test_stage_explorer_refreshes_all_pixel_dependent_geometry(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    explorer = ThemedStageExplorer(mmcore=mmcore)
+    qtbot.addWidget(explorer)
+    marker = explorer._stage_pos_marker
+    assert marker is not None
+
+    with (
+        patch.object(
+            explorer.roi_manager,
+            "update_fovs",
+            wraps=explorer.roi_manager.update_fovs,
+        ) as update_fovs,
+        patch.object(marker, "set_rect_size", wraps=marker.set_rect_size) as set_size,
+        patch.object(marker, "apply_transform", wraps=marker.apply_transform) as apply,
+    ):
+        explorer.refreshPixelGeometry()
+
+    width, height = explorer._fov_w_h()
+    update_fovs.assert_called_with((width, height))
+    set_size.assert_called_with(mmcore.getImageWidth(), mmcore.getImageHeight())
+    apply.assert_called_once()
+
+
+def test_pixel_config_commit_refreshes_open_stage_explorer(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+    window._acquire.panel_button(PanelKey.STAGE_EXPLORER).click()
+    explorer = window._acquire.panel_widget(PanelKey.STAGE_EXPLORER)
+    assert isinstance(explorer, ThemedStageExplorer)
+
+    with patch.object(explorer, "refreshPixelGeometry") as refresh:
+        window._configurations.pixelConfigurationsApplied.emit()
+    refresh.assert_called_once_with()
+
+
+def test_successful_embedded_pixel_apply_emits_geometry_refresh_signal(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    applied = Mock()
+    page.pixelConfigurationsApplied.connect(applied)
+
+    with (
+        patch.object(page._pixel_config, "_on_apply"),
+        patch.object(page._pixel_config, "isClean", return_value=True),
+    ):
+        page._pixel_config.apply()
+    applied.assert_called_once_with()
 
 
 def test_hardware_toolbar_buttons_use_primary_style(

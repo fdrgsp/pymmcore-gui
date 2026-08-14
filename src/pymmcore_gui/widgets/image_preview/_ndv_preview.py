@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import ndv.models
 from ndv.models import RingBuffer
+from superqt.cmap import QColormapComboBox
 
 from pymmcore_gui._array_viewer import MMArrayViewer
 from pymmcore_gui._qt.QtCore import QTimer
@@ -29,10 +30,21 @@ class NDVPreview(ImagePreviewBase):
         parent: QWidget | None = None,
         *,
         use_with_mda: bool = False,
+        viewer_options: dict[str, Any] | None = None,
+        show_save_button: bool = True,
+        show_roll_axes_button: bool = True,
+        show_colormap_selector: bool = True,
     ):
         super().__init__(parent, mmcore, use_with_mda=use_with_mda)
         px = (self._mmc.getPixelSizeUm() or None) if self._mmc else None
-        self._viewer = MMArrayViewer(scales=({"x": px, "y": px} if px else {}))
+        self._viewer = MMArrayViewer(
+            scales=({"x": px, "y": px} if px else {}),
+            viewer_options=viewer_options,
+            show_save_button=show_save_button,
+            show_roll_axes_button=show_roll_axes_button,
+        )
+        self._viewer_options = dict(viewer_options or {})
+        self._show_colormap_selector = show_colormap_selector
         self._buffer: RingBuffer | None = None
         self._buffer_applied = False
         self._core_dtype: tuple[str, tuple[int, ...]] | None = None
@@ -40,6 +52,7 @@ class NDVPreview(ImagePreviewBase):
         self.process_events_on_update = True
         qwdg = self._viewer.widget()
         qwdg.setParent(self)
+        self._apply_control_visibility()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -118,6 +131,30 @@ class NDVPreview(ImagePreviewBase):
         else:
             self._viewer.display_model.channel_mode = ndv.models.ChannelMode.GRAYSCALE
             self._viewer.display_model.channel_axis = None
+        self._apply_control_visibility()
+
+    def _apply_control_visibility(self) -> None:
+        """Apply initial NDV control options and optional colormap hiding.
+
+        Some NDV Qt controls currently only react when their option changes after
+        construction, rather than honoring the model's initial value. Applying
+        the same options to the concrete controls keeps embedded previews
+        deterministic while retaining the public viewer-options model.
+        """
+        widget = self._viewer.widget()
+        by_option = {
+            "show_3d_button": "ndims_btn",
+            "show_roi_button": "add_roi_btn",
+            "show_channel_mode_selector": "channel_mode_combo",
+            "show_reset_zoom_button": "set_range_btn",
+        }
+        for option, attribute in by_option.items():
+            if option in self._viewer_options:
+                visible = bool(self._viewer_options[option])
+                getattr(widget, attribute).setVisible(visible)
+        if not self._show_colormap_selector:
+            for combo in widget.findChildren(QColormapComboBox):
+                combo.hide()
 
     def _setup_viewer(self) -> None:
         """Prepare a buffer that is swapped in after its first frame arrives.

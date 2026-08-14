@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from pymmcore_widgets import StageExplorer
@@ -49,6 +51,54 @@ class ThemedStageExplorer(StageExplorer):
 
         self._normalize_style()
 
+    def _fov_w_h(self) -> tuple[float, float]:
+        """Return camera-axis FOV dimensions from the active affine transform."""
+        width = self._mmc.getImageWidth()
+        height = self._mmc.getImageHeight()
+        matrix = self._affine_state.system_affine
+        # Each affine column is the stage-space vector for one camera pixel.
+        # Its norm remains correct for rotated, mirrored, and sheared
+        # calibrations, unlike getPixelSizeUm() alone.
+        pixel_width = math.hypot(float(matrix[0, 0]), float(matrix[1, 0]))
+        pixel_height = math.hypot(float(matrix[0, 1]), float(matrix[1, 1]))
+        return width * pixel_width, height * pixel_height
+
+    def _on_roi_changed(self) -> None:
+        """Refresh ROI tiling with affine-aware FOV dimensions."""
+        super()._on_roi_changed()
+        if self._mmc.getImageWidth() and self._mmc.getImageHeight():
+            self.roi_manager.update_fovs(self._fov_w_h())
+
+    def refreshPixelGeometry(self) -> None:
+        """Recompute every Stage Explorer visual derived from pixel calibration."""
+        self._affine_state.refresh()
+        self._on_roi_changed()
+
+        # Updating the cached affine is not enough: the marker retains the old
+        # Vispy transform until the stage poller next reports movement. Apply
+        # the new calibration immediately at the current stage position.
+        if self._stage_pos_marker is not None:
+            stage_x = stage_y = 0.0
+            if self._mmc.getXYStageDevice():
+                with suppress(Exception):
+                    stage_x, stage_y = self._mmc.getXYPosition()
+            matrix = self._affine_state.system_affine_translated(stage_x, stage_y)
+            self._stage_pos_marker.apply_transform(matrix.T)
+
+        # ROI data-change signals redraw their FOV divisions; explicitly ask
+        # the canvas for a frame as well so an idle Explorer updates at once.
+        with suppress(Exception):
+            self._stage_viewer.canvas.update()
+        if self._auto_zoom_to_fit:
+            self.zoom_to_fit()
+
+    def _on_pixel_size_changed(self, value: float) -> None:
+        del value
+        self.refreshPixelGeometry()
+
+    def _on_pixel_size_affine_changed(self) -> None:
+        self.refreshPixelGeometry()
+
     def _normalize_style(self) -> None:
         """Remove upstream one-off styling and use the application's QStyle."""
         # Unlike ndv's functional contrast-limit stylesheet, StageExplorer's
@@ -84,6 +134,23 @@ class ThemedStageExplorer(StageExplorer):
         self._apply_themed_icons()
 
     def _apply_themed_icons(self) -> None:
+        foreground = qcolor(theme().text_primary).name()
+        marker_icon = QIconifyIcon("mdi:map-marker-outline", color=foreground)
+        marker_action = self.toolBar().poll_stage_action
+        marker_action.setIcon(marker_icon)
+        marker_button = self.toolBar().widgetForAction(marker_action)
+        if isinstance(marker_button, QToolButton):
+            set_source_icon(marker_button, marker_icon)
+
+        marker_mode_icons = {
+            "FOV Rectangle": "ic:outline-check-box-outline-blank",
+            "FOV Center": "ic:baseline-plus",
+            "Both": "ic:outline-add-box",
+        }
+        for action in self.toolBar().marker_mode_action_group.actions():
+            if glyph := marker_mode_icons.get(action.text()):
+                action.setIcon(QIconifyIcon(glyph, color=foreground))
+
         green = qcolor(theme().status_green).name()
         icon = QIconifyIcon("mdi:send", color=green)
         self._send_to_mda_action.setIcon(icon)

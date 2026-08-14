@@ -17,6 +17,7 @@ from pymmcore_gui._qt.QtGui import (
     QPaintEvent,
     QShortcut,
 )
+from pymmcore_gui._qt.QtOpenGLWidgets import QOpenGLWidget
 from pymmcore_gui._qt.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
@@ -93,7 +94,9 @@ class ModeTab(QWidget):
         underline_h = t.scaled(3)
 
         # Text
-        if self._active:
+        if not self.isEnabled():
+            text_color = qcolor(t.text_disabled)
+        elif self._active:
             text_color = qcolor(t.accent)
         elif self._hovered:
             text_color = qcolor(t.text_primary)
@@ -130,7 +133,11 @@ class ModeTab(QWidget):
         self.update()
 
     def mousePressEvent(self, a0: QMouseEvent | None) -> None:
-        if a0 is not None and a0.button() == Qt.MouseButton.LeftButton:
+        if (
+            self.isEnabled()
+            and a0 is not None
+            and a0.button() == Qt.MouseButton.LeftButton
+        ):
             self.clicked.emit()
 
 
@@ -159,9 +166,16 @@ class ModeTabBar(QWidget):
             self._tabs[0].active = True
 
     def _select(self, index: int) -> None:
+        if not 0 <= index < len(self._tabs) or not self._tabs[index].isEnabled():
+            return
         for i, tab in enumerate(self._tabs):
             tab.active = i == index
         self.current_changed.emit(index)
+
+    def setTabEnabled(self, index: int, enabled: bool) -> None:
+        """Enable or disable a mode tab."""
+        if 0 <= index < len(self._tabs):
+            self._tabs[index].setEnabled(enabled)
 
     def changeEvent(self, a0: QEvent | None) -> None:
         if a0 is not None and a0.type() == QEvent.Type.StyleChange:
@@ -217,15 +231,31 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(self._acquire)
         self.setCentralWidget(self._stack)
 
+        # Adding a QOpenGLWidget (e.g. ndv canvas) to a window that uses raster
+        # rendering forces Qt to destroy and recreate the native window with an
+        # OpenGL-compatible surface, causing a visible flash. Adding a zero-size
+        # QOpenGLWidget before the first show() ensures the window is born with
+        # the right surface type, avoiding the flash. Without this, the first
+        # snap/MDA run -- whichever creates the first viewer canvas -- flickers.
+        _gl = QOpenGLWidget(self)
+        _gl.setFixedSize(0, 0)
+        _gl.close()
+
         # The toolbar action commits its selected editor, then saves the whole
         # configuration. Closing with unsaved changes still commits both.
         self._configurations.saveToFileRequested.connect(
             self._save_current_configuration
         )
+        self._configurations.calibrationRunningChanged.connect(
+            self._on_pixel_calibration_running
+        )
+        self._configurations.pixelConfigurationsApplied.connect(
+            self._acquire.refresh_stage_explorer_pixel_geometry
+        )
 
         self._acquire.layoutReset.connect(self._on_acquire_layout_reset)
 
-        self._mode_tabs.current_changed.connect(self._stack.setCurrentIndex)
+        self._mode_tabs.current_changed.connect(self._on_mode_tab_changed)
         self._stack.setCurrentIndex(0)
 
         if status_bar := self.statusBar():
@@ -313,8 +343,98 @@ class MainWindow(QMainWindow):
             self._mode_tabs._select(idx)
             self._stack.setCurrentIndex(idx)
 
+    def _on_mode_tab_changed(self, index: int) -> None:
+        """Gate leaving Configurations with unsaved group/pixel edits.
+
+        ``ModeTabBar._select`` already flipped the clicked tab's visual state
+        (and emitted this signal) before this runs, so a cancelled switch has
+        to explicitly flip it back -- calling it again with the *current*
+        stack index does that and re-emits this signal, which is a no-op
+        next time since index == the (unchanged) current index by then.
+        """
+        current_index = self._stack.currentIndex()
+        if index == current_index:
+            return
+        configuration_index = self._stack.indexOf(self._configurations)
+        if current_index == configuration_index and self._configurations.is_dirty():
+            choice = self._prompt_unsaved_configuration_changes()
+            if choice == "cancel":
+                self._mode_tabs._select(current_index)
+                return
+            if choice == "save_core":
+                self._configurations.commit_current_to_core()
+            elif choice == "save_file" and not self._save_current_configuration():
+                # cancelled or failed (e.g. the file dialog was dismissed) —
+                # stay on Configurations rather than navigate away silently
+                self._mode_tabs._select(current_index)
+                return
+            # "continue": leave the edits pending and navigate away anyway
+        self._stack.setCurrentIndex(index)
+
+    def _prompt_unsaved_configuration_changes(self) -> str:
+        """Ask how to handle unsaved group/pixel edits before leaving the page.
+
+        Returns "save_core", "save_file", "continue", or "cancel".
+        """
+        dirty_parts = self._configurations.dirty_parts()
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle("Unsaved changes")
+        msg.setText(
+            f"There are unsaved changes in {' and '.join(dirty_parts)}.\n\n"
+            '"Save to core" applies them to the running session only. '
+            '"Save to file" also writes them to the .cfg file.'
+        )
+        save_core_btn = msg.addButton("Save to core", QMessageBox.ButtonRole.AcceptRole)
+        save_file_btn = msg.addButton(
+            "Save to file…", QMessageBox.ButtonRole.AcceptRole
+        )
+        continue_btn = msg.addButton(
+            "Continue without saving", QMessageBox.ButtonRole.DestructiveRole
+        )
+        cancel_btn = msg.addButton(QMessageBox.StandardButton.Cancel)
+        for button, variant in (
+            (save_core_btn, "subtle"),
+            (save_file_btn, "primary"),
+            (continue_btn, "danger"),
+            (cancel_btn, "subtle"),
+        ):
+            if button is not None:
+                button.setProperty("variant", variant)
+        msg.setDefaultButton(save_file_btn)
+        msg.exec()
+
+        clicked = msg.clickedButton()
+        if clicked is save_core_btn:
+            return "save_core"
+        if clicked is save_file_btn:
+            return "save_file"
+        if clicked is continue_btn:
+            return "continue"
+        return "cancel"
+
+    def _on_pixel_calibration_running(self, running: bool) -> None:
+        """Keep other microscope workflows unavailable during stage calibration."""
+        configuration_index = self._stack.indexOf(self._configurations)
+        hardware_index = self._stack.indexOf(self._hardware)
+        acquire_index = self._stack.indexOf(self._acquire)
+        self._mode_tabs.setTabEnabled(hardware_index, not running)
+        self._mode_tabs.setTabEnabled(acquire_index, not running)
+        if running and configuration_index >= 0:
+            self._mode_tabs._select(configuration_index)
+            self._stack.setCurrentIndex(configuration_index)
+        if status_bar := self.statusBar():
+            status_bar.showMessage(
+                "Pixel calibration is controlling the camera and XY stage"
+                if running
+                else "Ready"
+            )
+
     def closeEvent(self, a0: QCloseEvent | None) -> None:
         """Offer to save hardware / group / pixel edits before closing."""
+        # Restoration is part of the calibration transaction.  Do not destroy
+        # its worker (or ask the user to save) until that transaction has ended.
+        self._configurations.shutdownCalibration()
         if self._hardware.is_dirty() or self._configurations.is_dirty():
             choice = QMessageBox.question(
                 self,
