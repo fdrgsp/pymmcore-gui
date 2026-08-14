@@ -164,6 +164,15 @@ class AcquirePage(TabPage):
         _configure_ads()
         self._dock_manager = CDockManager(self.content)
         self._dock_manager.dockWidgetAdded.connect(self._queue_dock_icon_refresh)
+        # ADS's own stylesheet drives each tab close button's icon via a
+        # ``qproperty-icon`` rule keyed on the dynamic ``activeTab`` property
+        # (see _apply_dock_style). Switching which tab is current in an area
+        # flips that property on both the tab losing and the tab gaining
+        # focus, and Qt re-polishing either one re-applies that qproperty-icon
+        # rule -- silently wiping out our red tint on both, not just the one
+        # that changed. There's no manager-wide "current tab changed" signal,
+        # so hook each area's own ``currentChanged`` as it's created.
+        self._dock_manager.dockAreaCreated.connect(self._connect_dock_area_tab_switch)
         self.add_content_widget(self._dock_manager)
         self._base_dock_style = self._dock_manager.styleSheet()
         self._apply_dock_style()
@@ -957,8 +966,26 @@ class AcquirePage(TabPage):
             """
         )
 
-    def _queue_dock_icon_refresh(self, _dock: CDockWidget) -> None:
-        """Refresh after ADS has finished constructing a newly added dock's chrome."""
+    def _connect_dock_area_tab_switch(self, area: CDockAreaWidget) -> None:
+        """Refresh dock icons whenever *area*'s current tab changes.
+
+        There's no dock-manager-wide signal for this (only per-area), so this
+        is wired for every area as it's created -- see the comment where
+        ``dockAreaCreated`` is connected, and ``_refresh_dock_icons`` for why
+        a tab switch needs this at all.
+        """
+        with suppress(RuntimeError):
+            area.currentChanged.connect(self._queue_dock_icon_refresh)
+
+    def _queue_dock_icon_refresh(self, *_args: object) -> None:
+        """Refresh once ADS has finished whatever chrome change triggered this.
+
+        Shared by ``dockWidgetAdded`` (a newly added dock's chrome is still
+        being constructed) and each dock area's ``currentChanged`` (switching
+        tabs triggers a Qt re-polish that ADS's stylesheet responds to -- see
+        ``_refresh_dock_icons``); queuing to the next event-loop turn covers
+        both callers' in-progress state the same way.
+        """
         QTimer.singleShot(0, self._refresh_dock_icons)
 
     def _refresh_dock_icons(self) -> None:
@@ -972,9 +999,12 @@ class AcquirePage(TabPage):
         The close button beside each dock tab is semantic rather than neutral:
         force it to the active theme's status-red. ``set_icon_tint`` records
         that intent so the application-wide contrast sweep cannot turn it
-        white again on the next theme change.
+        white again on the next theme change -- and so this same method,
+        re-run after a tab gains or loses focus, can restore it again after
+        ADS's stylesheet (``qproperty-icon``, keyed on the ``activeTab``
+        dynamic property) overwrites it on every such repolish.
         """
-        # dockWidgetAdded queues this method for the next event-loop turn. A
+        # _queue_dock_icon_refresh defers to the next event-loop turn. A
         # short-lived window may be gone by then, especially under PySide6,
         # whose wrappers immediately reject access to deleted C++ objects.
         with suppress(RuntimeError):

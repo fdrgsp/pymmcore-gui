@@ -63,6 +63,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from pymmcore_plus import CMMCorePlus
+    from pymmcore_widgets.mda._collapsible_mda import CollapsibleCoreMDATabs
+    from pymmcore_widgets.mda._core_grid import CoreConnectedGridPlanWidget
     from pymmcore_widgets.useq_widgets._data_table import DataTable
     from pytestqt.qtbot import QtBot
     from qtpy.QtCore import QModelIndex
@@ -459,6 +461,58 @@ def test_acquire_dock_style_and_fonts_follow_theme_toggle(
         )
     )
     set_theme(DARK_THEME)
+
+
+def test_acquire_dock_close_icon_stays_red_after_tab_switch(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Switching which tab is current must not un-tint any tab's close X.
+
+    Regression test: ADS's own stylesheet drives each tab close button's icon
+    via a ``qproperty-icon`` rule keyed on the dynamic ``activeTab`` property
+    (see ``_apply_dock_style``). Switching which tab is current in an area
+    flips that property on both the tab losing and the tab gaining focus, and
+    Qt re-polishing either one re-applies that rule -- silently overwriting
+    the red tint ``_refresh_dock_icons`` set, on *both* tabs, not just the one
+    that changed. This used to only be corrected again on the next theme
+    toggle or newly-added dock; nothing re-ran it on a plain tab switch.
+    """
+    set_theme(DARK_THEME)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    page.panel_button(PanelKey.PRESETS).click()
+    page.panel_button(PanelKey.PROPERTIES).click()
+    presets_dock = page.panel_dock(PanelKey.PRESETS)
+    properties_dock = page.panel_dock(PanelKey.PROPERTIES)
+    assert presets_dock is not None and properties_dock is not None
+
+    def close_buttons() -> list[QAbstractButton]:
+        return [
+            btn
+            for btn in page._dock_manager.findChildren(QAbstractButton)
+            if btn.objectName() == "tabCloseButton"
+        ]
+
+    red = qcolor(theme().status_red)
+    expected = (red.red(), red.green(), red.blue())
+
+    def assert_all_red() -> None:
+        for btn in close_buttons():
+            rgb = _icon_avg_rgb(btn.icon(), QSize(24, 24))
+            assert rgb is not None
+            assert all(abs(a - e) < 2 for a, e in zip(rgb, expected, strict=True))
+
+    # Switching to the tab added most recently (Properties) must not un-tint
+    # either its own close button or the one it stole focus from (Presets).
+    # No manual refresh call here -- this exercises the real signal wiring
+    # (CDockAreaWidget.currentChanged -> _queue_dock_icon_refresh) end to end.
+    properties_dock.setAsCurrentTab()
+    qtbot.waitUntil(assert_all_red, timeout=1000)
+
+    # And switching back must not un-tint them either.
+    presets_dock.setAsCurrentTab()
+    qtbot.waitUntil(assert_all_red, timeout=1000)
 
 
 def test_acquire_dock_contents_follow_zoom(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
@@ -3529,7 +3583,10 @@ def test_position_subsequence_popup_is_collapsed_and_themed(
     popup.show()
     QApplication.processEvents()
 
-    tabs = popup.mda_tabs
+    # _MDAPopup.mda_tabs is typed as the base MDATabs since its concrete type
+    # is chosen dynamically at runtime (see _MDAPopup.__init__); this popup is
+    # opened from a Collapsible/CoreConnected tree, so it's always these here.
+    tabs = cast("CollapsibleCoreMDATabs", popup.mda_tabs)
     assert all(not section.expanded for section in tabs.sections)
     assert all(
         not child.styleSheet()
@@ -3537,11 +3594,10 @@ def test_position_subsequence_popup_is_collapsed_and_themed(
         if not isinstance(child, QAbstractSlider)
     )
     assert all(
-        button.property("variant")
-        for button in popup.findChildren(QAbstractButton)
+        button.property("variant") for button in popup.findChildren(QAbstractButton)
     )
 
-    grid = tabs.grid_plan
+    grid = cast("CoreConnectedGridPlanWidget", tabs.grid_plan)
     bounds = grid._core_xy_bounds
     grid._mode_bounds_radio.setChecked(True)
     expected = qcolor(theme().text_primary)
