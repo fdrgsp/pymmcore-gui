@@ -19,7 +19,11 @@ import pymmcore_gui._modern_gui._acquire_toolbar as acquire_toolbar_module
 import pymmcore_gui._modern_gui._acquire_viewers as acquire_viewers_module
 from pymmcore_gui._app import LoadConfigDialog, create_mmgui
 from pymmcore_gui._array_viewer import _icon_avg_rgb
-from pymmcore_gui._modern_gui._acquire import _MDA_DOCK_WIDTH, AcquirePage
+from pymmcore_gui._modern_gui._acquire import (
+    _MDA_DOCK_WIDTH,
+    _RIGHT_DOCK_MAX_WIDTH,
+    AcquirePage,
+)
 from pymmcore_gui._modern_gui._acquire_presets import AcquisitionPresetSelector
 from pymmcore_gui._modern_gui._configurations import ConfigurationsPage
 from pymmcore_gui._modern_gui._hardware import HardwareSetupPage
@@ -3339,7 +3343,15 @@ def test_acquire_restored_right_dock_is_resizable(
 def test_acquire_repairs_an_unusably_narrow_restored_right_dock(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    """A previously persisted transient 60 px tools column is expanded."""
+    """A previously persisted transient 60 px tools column is expanded.
+
+    The pinned width itself is derived from whatever width the window
+    actually ends up with (``min(dock_manager.width() // 4,
+    _RIGHT_DOCK_MAX_WIDTH)``, matching ``_pin_dock_widths``) rather than
+    hardcoded to the requested ``resize(1400, 900)`` -- CI's real (not
+    virtual/configurable) macOS/Windows runner displays can silently clamp a
+    top-level window smaller than requested, unlike a local dev machine.
+    """
     page_a = AcquirePage(mmcore)
     page_a.resize(1400, 900)
     page_a.show()
@@ -3349,7 +3361,12 @@ def test_acquire_repairs_an_unusably_narrow_restored_right_dock(
     right_area = page_a._right_dock_area
     assert right_area is not None
     right_column = page_a._column_widget(right_area)
-    qtbot.waitUntil(lambda: right_column.width() == 350, timeout=2000)
+    expected_pinned_width_a = min(
+        page_a._dock_manager.width() // 4, _RIGHT_DOCK_MAX_WIDTH
+    )
+    qtbot.waitUntil(
+        lambda: right_column.width() == expected_pinned_width_a, timeout=2000
+    )
     page_a._dock_manager.setSplitterSizes(
         right_area, _resized_splitter_sizes(page_a, right_area, 60)
     )
@@ -3371,7 +3388,10 @@ def test_acquire_repairs_an_unusably_narrow_restored_right_dock(
     restored_area = page_b._right_dock_area
     assert restored_area is not None
     restored_column = page_b._column_widget(restored_area)
-    assert restored_column.width() == 350
+    expected_pinned_width_b = min(
+        page_b._dock_manager.width() // 4, _RIGHT_DOCK_MAX_WIDTH
+    )
+    assert restored_column.width() == expected_pinned_width_b
     assert restored_column.minimumWidth() == 0
     assert restored_column.maximumWidth() == QWIDGETSIZE_MAX
 

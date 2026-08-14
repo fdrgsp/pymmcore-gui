@@ -295,7 +295,7 @@ class AcquirePage(TabPage):
         # yet, instead of relying on someone finding and wiring a new signal
         # every time ADS invalidates chrome a new way.
         self._dock_icon_poll_timer = QTimer(self)
-        self._dock_icon_poll_timer.setInterval(500)
+        self._dock_icon_poll_timer.setInterval(1500)
         self._dock_icon_poll_timer.timeout.connect(self._refresh_dock_icons)
         self._dock_icon_poll_timer.start()
         self._refresh_dock_icons()

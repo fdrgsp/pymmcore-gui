@@ -184,6 +184,20 @@ def test_calibration_panel_has_form_viewer_and_information_layout(
     resolution_width, properties_width, calibration_width = (
         widget._content_splitter.sizes()
     )
+    total_width = resolution_width + properties_width + calibration_width
+    if total_width < 1800:
+        # Unlike Linux CI (Xvfb, an arbitrary virtual resolution), macOS/
+        # Windows runners expose a real, fixed-size display that the window
+        # manager can silently clamp resize(1920, 900) down to -- there's no
+        # way to make this window actually reach the width this check needs
+        # to say anything meaningful about the 500 px minimum not
+        # dominating. Skip rather than assert something the environment
+        # cannot provide the conditions for.
+        pytest.skip(
+            "window manager did not honor resize(1920, 900) "
+            f"(actual splitter width: {total_width}px) -- cannot exercise "
+            "the equal-quarters-at-a-wide-desktop behavior here"
+        )
     assert abs(resolution_width - properties_width) <= 1
     assert abs(calibration_width - 2 * resolution_width) <= 2
     assert panel._settings_group.title() == "Settings"
