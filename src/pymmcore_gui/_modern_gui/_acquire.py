@@ -281,6 +281,23 @@ class AcquirePage(TabPage):
         self._width_handle_hover_timer.setInterval(20)
         self._width_handle_hover_timer.timeout.connect(self._update_width_handle_hover)
         self._width_handle_hover_timer.start()
+
+        # dockWidgetAdded / dockAreaCreated->currentChanged (see __init__ above)
+        # give instant correction for the two known triggers, but ADS resets a
+        # tab close button's icon by calling setIcon() directly from its own
+        # C++ tab-switch code -- confirmed by installing a raw event filter on
+        # the button and switching tabs: no Polish/StyleChange/anything else
+        # reaches it, and the button is the same instance before and after (it
+        # isn't destroyed and recreated either). There is no Qt event to
+        # intercept, so -- like ``_width_handle_hover_timer`` above, for the
+        # same reason -- this polls instead: a low-cost backstop that self-
+        # heals from any cause, including ones this app doesn't know about
+        # yet, instead of relying on someone finding and wiring a new signal
+        # every time ADS invalidates chrome a new way.
+        self._dock_icon_poll_timer = QTimer(self)
+        self._dock_icon_poll_timer.setInterval(500)
+        self._dock_icon_poll_timer.timeout.connect(self._refresh_dock_icons)
+        self._dock_icon_poll_timer.start()
         self._refresh_dock_icons()
 
     def _ensure_preview_for_roi_auto_snap(self, *_args: object) -> None:
@@ -982,9 +999,9 @@ class AcquirePage(TabPage):
 
         Shared by ``dockWidgetAdded`` (a newly added dock's chrome is still
         being constructed) and each dock area's ``currentChanged`` (switching
-        tabs triggers a Qt re-polish that ADS's stylesheet responds to -- see
-        ``_refresh_dock_icons``); queuing to the next event-loop turn covers
-        both callers' in-progress state the same way.
+        tabs makes ADS overwrite the outgoing and incoming tab's close-button
+        icon -- see ``_refresh_dock_icons``); queuing to the next event-loop
+        turn covers both callers' in-progress state the same way.
         """
         QTimer.singleShot(0, self._refresh_dock_icons)
 
@@ -999,10 +1016,17 @@ class AcquirePage(TabPage):
         The close button beside each dock tab is semantic rather than neutral:
         force it to the active theme's status-red. ``set_icon_tint`` records
         that intent so the application-wide contrast sweep cannot turn it
-        white again on the next theme change -- and so this same method,
-        re-run after a tab gains or loses focus, can restore it again after
-        ADS's stylesheet (``qproperty-icon``, keyed on the ``activeTab``
-        dynamic property) overwrites it on every such repolish.
+        white again on the next theme change -- and so this same method, when
+        re-run, can restore it after ADS's own C++ tab-switch code calls
+        ``setIcon()`` directly on both the outgoing and incoming tab's close
+        button, reverting it to the fixed black source. That call isn't
+        reachable through Qt's event system at all (confirmed: the same
+        button instance survives a switch -- it isn't destroyed and recreated
+        -- and installing a raw event filter on it sees no Polish,
+        StyleChange, or any other event when the icon flips), which is why
+        this is invoked from a *timer* (``_dock_icon_poll_timer``) as a
+        backstop in addition to the two known-trigger signals above: it
+        self-heals from any cause, including ones not enumerated here.
         """
         # _queue_dock_icon_refresh defers to the next event-loop turn. A
         # short-lived window may be gone by then, especially under PySide6,
