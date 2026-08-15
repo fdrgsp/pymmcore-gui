@@ -59,6 +59,20 @@ def settings() -> Iterator[Settings]:
         yield settings
 
 
+# empty, throw-away layouts directory for every test
+@pytest.fixture(autouse=True)
+def layouts_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Redirect saved layouts away from the real user data directory.
+
+    Unlike ``Settings``, layouts are plain files that ``_layouts`` writes
+    eagerly -- without this, running the tests would litter (and read back)
+    the developer's actual ``USER_DATA_DIR/layouts``.
+    """
+    directory = tmp_path / "layouts"
+    monkeypatch.setenv("MMGUI_LAYOUTS_DIR", str(directory))
+    return directory
+
+
 # install the _modern_gui theme/style before every test that has a QApplication
 @pytest.fixture(autouse=True)
 def _init_gui_theme() -> None:

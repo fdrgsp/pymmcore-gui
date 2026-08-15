@@ -20,14 +20,17 @@ from superqt.iconify import QIconifyIcon
 from superqt.utils import create_worker
 
 from pymmcore_gui._array_viewer import ensure_visible_icon, set_source_icon
-from pymmcore_gui._qt.QtCore import QEvent, QPoint, QSize, Signal
-from pymmcore_gui._qt.QtGui import QAction
+from pymmcore_gui._layouts import RESERVED_LAYOUT_NAMES
+from pymmcore_gui._qt.QtCore import QEvent, QPoint, QSize, Qt, QTimer, Signal
+from pymmcore_gui._qt.QtGui import QAction, QEnterEvent, QMouseEvent, QPainter
 from pymmcore_gui._qt.QtWidgets import (
     QFrame,
     QHBoxLayout,
+    QLabel,
     QMenu,
     QPushButton,
     QWidget,
+    QWidgetAction,
 )
 
 from ._theme import qcolor, theme
@@ -35,6 +38,9 @@ from ._theme import qcolor, theme
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from qtpy.QtCore import SignalInstance  # type: ignore[attr-defined]
+
+    from pymmcore_gui._qt.QtGui import QPaintEvent
     from pymmcore_gui._qt.QtWidgets import QLayout
 
     from ._panels import PanelInfo
@@ -284,6 +290,215 @@ class ShuttersBar(QWidget):
             self._layout.addWidget(widget)
 
 
+class _LayoutMenuRow(QWidget):
+    """One layout in the layout menu: name on the left, trash can on the right.
+
+    A plain ``QAction`` can't carry a second, independently clickable target,
+    so each row is a widget hosted in a ``QWidgetAction``. That costs the
+    menu's built-in hover highlight, which ``paintEvent`` repaints from the
+    theme, but buys one-click deletion instead of a "Delete ▸" submenu that
+    makes the user find the same name twice.
+    """
+
+    _TRASH_ICON = "mdi:trash-can-outline"
+    _BASE_HEIGHT = 26
+    _BASE_MIN_WIDTH = 200
+
+    selected = Signal()
+    deleteRequested = Signal()
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        checked: bool,
+        deletable: bool,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._hovered = False
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+
+        t = theme()
+        row = QHBoxLayout(self)
+        row.setContentsMargins(t.sp_xs, 0, t.sp_xxs, 0)
+        row.setSpacing(t.sp_xs)
+
+        check = QLabel("✓" if checked else "")
+        check.setFixedWidth(t.scaled(14))
+        row.addWidget(check)
+        row.addWidget(QLabel(name))
+        row.addStretch()
+
+        # Reserve the trash column even on undeletable rows, so every name
+        # starts and every row ends at the same x.
+        self._trash = QPushButton(self)
+        # "ghost", not "subtle": a persistently-boxed button on every row
+        # would read as the primary action. Transparent until hovered keeps
+        # the row about its name, with the trash there when wanted.
+        self._trash.setProperty("variant", "ghost")
+        self._trash.setToolTip(f"Delete the {name!r} layout")
+        self._trash.setCursor(Qt.CursorShape.ArrowCursor)
+        self._trash.setFixedSize(_icon_size() * 1.4)
+        self._trash.clicked.connect(self.deleteRequested)
+        self._trash.setVisible(deletable)
+        row.addWidget(self._trash)
+
+        self.setMinimumHeight(t.scaled(self._BASE_HEIGHT))
+        self.setMinimumWidth(t.scaled(self._BASE_MIN_WIDTH))
+        self._apply_icon()
+
+    def mouseReleaseEvent(self, a0: QMouseEvent | None) -> None:
+        # The trash button consumes its own clicks, so anything reaching here
+        # is a click on the row itself.
+        if a0 is not None and a0.button() == Qt.MouseButton.LeftButton:
+            self.selected.emit()
+        super().mouseReleaseEvent(a0)
+
+    def enterEvent(self, event: QEnterEvent | None) -> None:
+        self._hovered = True
+        self.update()
+
+    def leaveEvent(self, a0: QEvent | None) -> None:
+        self._hovered = False
+        self.update()
+
+    def paintEvent(self, a0: QPaintEvent | None) -> None:
+        if self._hovered:
+            painter = QPainter(self)
+            painter.fillRect(self.rect(), qcolor(theme().bg_hover))
+            painter.end()
+        super().paintEvent(a0)
+
+    def _apply_icon(self) -> None:
+        color = qcolor(theme().status_red).name()
+        set_source_icon(self._trash, QIconifyIcon(self._TRASH_ICON, color=color))
+        self._trash.setIconSize(_icon_size())
+
+    def changeEvent(self, a0: QEvent | None) -> None:
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
+            self._apply_icon()
+        super().changeEvent(a0)
+
+
+class LayoutMenuButton(QPushButton):
+    """Drop-down for switching, saving, resetting and deleting layouts.
+
+    Deliberately *not* folded into ``PanelButtonBar``'s ⋯ menu, whose job is
+    "which tool buttons are shown": these are whole-arrangement operations,
+    and burying "Save Layout" behind a button tooltipped "Choose which tool
+    buttons to show" is where nobody would look for it.
+
+    The widget owns no layout state -- it's told what to display via
+    :meth:`set_layouts`, and reports intent through the signals below.
+    """
+
+    _ICON = "mdi:view-dashboard-outline"
+
+    layoutSelected = Signal(str)
+    """A layout name was picked from the list (the built-in name included)."""
+    saveLayoutRequested = Signal()
+    """"Save Layout…" was chosen."""
+    deleteLayoutRequested = Signal(str)
+    """A saved layout's trash icon was clicked."""
+
+    def __init__(self, default_name: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._default_name = default_name
+        self._names: list[str] = [default_name]
+        self._current = default_name
+
+        self.setProperty("variant", "subtle")
+        self.setIconSize(_icon_size())
+        self.setToolTip("Layout — switch, save, or reset the panel arrangement")
+        self.clicked.connect(self._popup)
+        self._apply_icon()
+
+    # ── state ─────────────────────────────────────────────────────
+
+    def set_layouts(self, names: Iterable[str], current: str) -> None:
+        """Set the selectable layout names and which one is active."""
+        self._names = list(names)
+        self._current = current
+
+    @property
+    def current_layout(self) -> str:
+        """The layout name shown as active in the menu."""
+        return self._current
+
+    # ── menu ──────────────────────────────────────────────────────
+
+    def build_menu(self) -> QMenu:
+        """Build the layout menu. Rebuilt per invocation, like the ⋯ menu."""
+        menu = QMenu(self)
+        for name in self._names:
+            # Only saved layouts get a trash can -- the built-in layout is
+            # code, and the auto-saved session one regenerates on the next
+            # close, so neither is meaningfully deletable.
+            row = _LayoutMenuRow(
+                name,
+                checked=name == self._current,
+                deletable=name not in RESERVED_LAYOUT_NAMES,
+            )
+            action = QWidgetAction(menu)
+            # Carried for the benefit of anything that walks menu.actions()
+            # (tests included); the row widget is what actually gets drawn.
+            action.setText(name)
+            action.setDefaultWidget(row)
+            # Routing the row's click through the action's own trigger keeps
+            # a programmatic action.trigger() equivalent to a real click.
+            row.selected.connect(action.trigger)
+            action.triggered.connect(
+                partial(self._emit, menu, self.layoutSelected, name)
+            )
+            row.deleteRequested.connect(
+                partial(self._emit, menu, self.deleteLayoutRequested, name)
+            )
+            menu.addAction(action)
+        menu.addSeparator()
+
+        save = QAction("Save Layout…", menu)
+        save.setToolTip("Save the current arrangement under a name")
+        save.triggered.connect(self.saveLayoutRequested.emit)
+        menu.addAction(save)
+        return menu
+
+    def _emit(self, menu: QMenu, signal: SignalInstance, name: str) -> None:
+        """Close the menu, then emit *signal* once its event loop has unwound.
+
+        Both handlers do heavy work -- rebuilding the dock tree, or opening a
+        modal confirmation -- which must not run inside the nested event loop
+        that ``QMenu.exec`` is in the middle of tearing down.
+        """
+        menu.close()
+        QTimer.singleShot(0, partial(signal.emit, name))
+
+    def _popup(self) -> None:
+        self.build_menu().exec(self.mapToGlobal(self.rect().bottomLeft()))
+
+    # ── theming ───────────────────────────────────────────────────
+
+    def _apply_icon(self) -> None:
+        # Same reason as PanelButtonBar._apply_icons: QIconifyIcon bakes its
+        # color in at construction, and set_source_icon (not setIcon) keeps
+        # the app-wide contrast sweep deriving from the current theme's icon.
+        #
+        # text_secondary, not text_primary: this is chrome, not a status
+        # indicator, and a full-strength white glyph reads louder than the
+        # panel toggles it sits beside. It still clears
+        # ``ensure_visible_icon``'s contrast floor against either theme's
+        # background, so the sweep leaves it at this gray.
+        color = qcolor(theme().text_secondary).name()
+        set_source_icon(self, QIconifyIcon(self._ICON, color=color))
+        self.setIconSize(_icon_size())
+
+    def changeEvent(self, e: QEvent | None) -> None:
+        if e is not None and e.type() == QEvent.Type.StyleChange:
+            self._apply_icon()
+        super().changeEvent(e)
+
+
 class PanelButtonBar(QWidget):
     """Icon-only toggle buttons for the registry panels (see ``_panels.py``).
 
@@ -293,6 +508,9 @@ class PanelButtonBar(QWidget):
     * the trailing ``⋯`` menu (also reachable by right-clicking the toolbar
       row that hosts this bar) toggles whether that button is *present at
       all*, so users can pare the bar down to the tools they actually use.
+
+    Saving/switching/resetting the whole arrangement is a separate concern
+    and lives in :class:`LayoutMenuButton`, next door on the same row.
 
     A self-contained content strip: no background painting, no assumptions
     about its parent. That's what makes it relocatable -- today it shares the
@@ -305,9 +523,6 @@ class PanelButtonBar(QWidget):
 
     panelVisibilityChanged = Signal(str, bool)
     """Emitted with (key, visible) when the customize menu shows/hides a button."""
-
-    resetLayoutRequested = Signal()
-    """Emitted when the customize menu's "Reset Layout" entry is chosen."""
 
     def __init__(
         self, panels: Iterable[PanelInfo], parent: QWidget | None = None
@@ -385,11 +600,6 @@ class PanelButtonBar(QWidget):
             action.setChecked(not self._buttons[info.key].isHidden())
             action.toggled.connect(partial(self.panelVisibilityChanged.emit, info.key))
             menu.addAction(action)
-        menu.addSeparator()
-        reset = QAction("Reset Layout", menu)
-        reset.setToolTip("Restore the default panel arrangement")
-        reset.triggered.connect(self.resetLayoutRequested.emit)
-        menu.addAction(reset)
         return menu
 
     def popup_menu(self, global_pos: QPoint) -> None:
@@ -414,7 +624,10 @@ class PanelButtonBar(QWidget):
             # in the panels-toolbar design doc.
             set_source_icon(btn, QIconifyIcon(info.icon, color=panel_color))
             btn.setIconSize(_icon_size())
-        menu_color = qcolor(theme().text_primary).name()
+        # text_secondary, matching LayoutMenuButton: both are chrome sitting
+        # beside the panel toggles, and a full-strength white glyph reads
+        # louder than the buttons it's meant to support.
+        menu_color = qcolor(theme().text_secondary).name()
         set_source_icon(
             self._menu_btn,
             QIconifyIcon(self._MENU_ICON, color=menu_color),

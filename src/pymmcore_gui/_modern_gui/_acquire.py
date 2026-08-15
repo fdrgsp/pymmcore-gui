@@ -14,6 +14,17 @@ from pymmcore_gui._array_viewer import (
     set_icon_tint,
     unstyle_widgets,
 )
+from pymmcore_gui._layouts import (
+    DEFAULT_LAYOUT_NAME,
+    RESERVED_LAYOUT_NAMES,
+    AcquireLayout,
+    available_layouts,
+    delete_layout,
+    is_valid_layout_name,
+    list_layouts,
+    resolve_layout,
+    save_layout,
+)
 from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget, DockWidgetArea
 from pymmcore_gui._qt.QtCore import (
     QEvent,
@@ -29,12 +40,15 @@ from pymmcore_gui._qt.QtWidgets import (
     QWIDGETSIZE_MAX,
     QAbstractButton,
     QAbstractSlider,
+    QInputDialog,
+    QMessageBox,
     QPushButton,
     QSplitter,
     QWidget,
 )
 
 from ._acquire_toolbar import (
+    LayoutMenuButton,
     LiveButton,
     PanelButtonBar,
     ShuttersBar,
@@ -149,6 +163,9 @@ class AcquirePage(TabPage):
     layoutReset = Signal()
     """Emitted after :meth:`reset_layout` restores the default arrangement."""
 
+    layoutNameChanged = Signal(str)
+    """Emitted with the new name whenever the selected layout changes."""
+
     def __init__(
         self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
     ) -> None:
@@ -226,6 +243,9 @@ class AcquirePage(TabPage):
         self._dragging_width_handles: set[QObject] = set()
         self._mda_width_locked_at_real_size = False
         self._layout_restored = False
+        # Bumped whenever the whole arrangement is replaced (restore or
+        # reset). See ``_pin_dock_widths_for_epoch``.
+        self._layout_epoch = 0
         # Debounced rather than a plain one-shot on the first showEvent:
         # MainWindow requests WindowMaximized before it's ever shown, and on
         # real window managers that maximize is applied asynchronously --
@@ -249,6 +269,13 @@ class AcquirePage(TabPage):
         self.toolbar.add_widget(toolbar_separator())
         self.toolbar.add_widget(self._shutters)
 
+        self._layout_name = DEFAULT_LAYOUT_NAME
+        self._layout_btn = LayoutMenuButton(DEFAULT_LAYOUT_NAME, self)
+        self._layout_btn.layoutSelected.connect(self.select_layout)
+        self._layout_btn.saveLayoutRequested.connect(self._prompt_save_layout)
+        self._layout_btn.deleteLayoutRequested.connect(self._delete_layout)
+        self.refresh_layout_menu()
+
         self._panel_bar = PanelButtonBar(PANELS, self)
         self._place_panel_bar()
 
@@ -261,15 +288,18 @@ class AcquirePage(TabPage):
                 partial(self._toggle_panel, info.key)
             )
         self._panel_bar.panelVisibilityChanged.connect(self._set_panel_visible)
-        self._panel_bar.resetLayoutRequested.connect(self.reset_layout)
 
-        # Default-open panels (MDA) build now, before any width pinning.
-        for info in PANELS:
-            if info.default_open:
-                self._panel_bar.button_for(info.key).setChecked(True)
-
+        # Default-open panels build now, before any width pinning. MDA goes
+        # first and is bound immediately: opening any *other* panel creates
+        # the right column, which pins the column widths -- and that reads
+        # ``self._mda_dock``.
+        self._panel_bar.button_for(PanelKey.MDA).setChecked(True)
         self._mda = cast("MemoryMDAWidget", self.panel_widget(PanelKey.MDA))
         self._mda_dock = cast("CDockWidget", self.panel_dock(PanelKey.MDA))
+        for info in PANELS:
+            if info.default_open and info.key != PanelKey.MDA:
+                self._panel_bar.button_for(info.key).setChecked(True)
+
         self._snap_btn.snapRequested.connect(self._mda.apply_active_channel_for_capture)
         self._snap_btn.snapRequested.connect(self._viewers.ensure_preview)
         self._live_btn.liveStartedRequested.connect(
@@ -339,10 +369,16 @@ class AcquirePage(TabPage):
 
         Moving it into ``MainWindow`` as a draggable ``QToolBar`` is the same
         shape: the bar itself needs no changes, only a different host.
+
+        The layout drop-down shares the row, separated from the panel
+        buttons: switching/saving the whole arrangement is a different
+        concern from toggling one panel.
         """
         self.toolbar.add_stretch()
         self.toolbar.add_widget(toolbar_separator())
         self.toolbar.add_widget(self._panel_bar)
+        self.toolbar.add_widget(toolbar_separator())
+        self.toolbar.add_widget(self._layout_btn)
         # Right-clicking anywhere on the host row opens the same customize
         # menu as the bar's own ⋯ button -- the Qt convention for toolbars.
         self.toolbar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -490,12 +526,130 @@ class AcquirePage(TabPage):
 
     # ------------------------------------------------------------------ layout
 
-    def save_layout(self) -> tuple[bytes | None, set[str]]:
-        """Return ``(dock_manager_state, open_panel_keys)`` for persistence."""
+    def current_layout(self) -> AcquireLayout:
+        """Capture the current arrangement (docks, open panels, hidden buttons)."""
         open_keys = self.open_panels()
         if not open_keys:
-            return None, set()
-        return self._dock_manager.saveState().data(), open_keys
+            return AcquireLayout(hidden_panels=frozenset(self.hidden_panels()))
+        return AcquireLayout(
+            dock_state=self._dock_manager.saveState().data(),
+            panels=frozenset(open_keys),
+            hidden_panels=frozenset(self.hidden_panels()),
+        )
+
+    def apply_layout(self, layout: AcquireLayout) -> bool:
+        """Apply a saved *layout*, falling back to the default if it can't be.
+
+        The single entry point for "make the page look like this", used both
+        at startup and when the user picks a layout from the toolbar menu.
+        Buttons are applied before the docks for the reason given in
+        :meth:`apply_hidden_panels`: hiding a button closes its panel, which
+        would undo part of the arrangement being restored.
+
+        Returns True if *layout* was restored, False if the page fell back to
+        the built-in arrangement.
+        """
+        self.apply_hidden_panels(layout.hidden_panels)
+        if self.restore_layout(layout.dock_state, layout.panels):
+            if self.isVisible():
+                # Startup goes through the showEvent/resize settle path with
+                # the window not yet shown; a *live* switch has real geometry
+                # already, but ADS applies the restored splitter tree in its
+                # own deferred pass -- so re-arm the same debounced settle
+                # rather than locking widths against a half-applied tree.
+                self._mda_width_locked_at_real_size = False
+                self._schedule_width_settle()
+            return True
+        self.reset_layout()
+        return False
+
+    # ------------------------------------------------- named layouts
+
+    @property
+    def layout_name(self) -> str:
+        """Name of the layout currently selected in the toolbar menu."""
+        return self._layout_name
+
+    def select_layout(self, name: str) -> None:
+        """Switch to the layout called *name*, live.
+
+        An unknown or vanished name resolves to the built-in arrangement
+        rather than doing nothing, so a layout deleted outside the app can't
+        leave the menu pointing at something unreachable.
+        """
+        layout = resolve_layout(name)
+        if layout is None or layout.is_empty():
+            self.reset_layout()
+            # reset_layout() reports the built-in arrangement, which is what
+            # the page now shows even if *name* was a (broken) saved layout.
+            return
+        self._set_layout_name(name)
+        self.apply_layout(layout)
+
+    def refresh_layout_menu(self) -> None:
+        """Re-read the available layouts into the toolbar drop-down."""
+        names = available_layouts()
+        if self._layout_name not in names:
+            self._layout_name = DEFAULT_LAYOUT_NAME
+        self._layout_btn.set_layouts(names, self._layout_name)
+
+    def _set_layout_name(self, name: str) -> None:
+        self._layout_name = name
+        self.refresh_layout_menu()
+        self.layoutNameChanged.emit(name)
+
+    def _prompt_save_layout(self) -> None:
+        """Ask for a name, then write the current arrangement under it."""
+        suggestion = (
+            self._layout_name if self._layout_name not in RESERVED_LAYOUT_NAMES else ""
+        )
+        name, ok = QInputDialog.getText(
+            self, "Save Layout", "Layout name:", text=suggestion
+        )
+        if not ok:
+            return
+        name = name.strip()
+        if not is_valid_layout_name(name):
+            QMessageBox.warning(
+                self,
+                "Save Layout",
+                f"{name!r} is not a usable layout name."
+                if name
+                else "Please enter a layout name.",
+            )
+            return
+        if name in list_layouts() and not self._confirm_overwrite(name):
+            return
+        save_layout(name, self.current_layout())
+        self._set_layout_name(name)
+
+    def _confirm_overwrite(self, name: str) -> bool:
+        choice = QMessageBox.question(
+            self,
+            "Save Layout",
+            f"A layout named {name!r} already exists.\n\nReplace it?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return choice == QMessageBox.StandardButton.Yes
+
+    def _delete_layout(self, name: str) -> None:
+        choice = QMessageBox.question(
+            self,
+            "Delete Layout",
+            f"Delete the layout {name!r}?\n\nThis cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if choice != QMessageBox.StandardButton.Yes:
+            return
+        delete_layout(name)
+        # Deleting the layout doesn't rearrange anything -- the page keeps
+        # showing it -- but it's no longer a name that can be selected.
+        if self._layout_name == name:
+            self._set_layout_name(DEFAULT_LAYOUT_NAME)
+        else:
+            self.refresh_layout_menu()
 
     def restore_layout(self, state: bytes | None, keys: Iterable[str]) -> bool:
         """Recreate the given panels and restore a previously saved dock layout.
@@ -527,6 +681,7 @@ class AcquirePage(TabPage):
                     panel.button.setChecked(not panel.dock.isClosed())
         self._rediscover_areas()
         self._layout_restored = True
+        self._layout_epoch += 1
         # Deliberately *not* re-locking widths here: restore_layout runs
         # before the window has ever been shown (``_app`` defers it to a
         # singleShot that itself calls ``show()``), so every dock area is
@@ -537,11 +692,16 @@ class AcquirePage(TabPage):
     def reset_layout(self) -> None:
         """Restore the out-of-the-box Acquire arrangement.
 
+        This *is* the "Default" layout -- there is no stored record of it, so
+        selecting Default from the layout menu comes straight here.
+
         Un-hides every toolbar button, un-pins anything the user sent to an
-        auto-hide side bar, closes every panel except the default-open ones,
-        puts the MDA column back on the left, and re-applies the default
-        column widths. Panel *widgets* are kept alive, exactly as a normal
-        close does -- this resets the arrangement, not the session.
+        auto-hide side bar, closes every panel except the default-open ones
+        (MDA on the left, Groups and Presets on the right -- see
+        ``_panels.PANELS``), puts the MDA column back on the left, and
+        re-applies the default column widths. Panel *widgets* are kept alive,
+        exactly as a normal close does -- this resets the arrangement, not the
+        session.
 
         Only the layout is affected: window geometry, theme and zoom are
         deliberately left alone, since losing those to a "reset layout"
@@ -570,7 +730,9 @@ class AcquirePage(TabPage):
         # A reset supersedes whatever was restored, so the canonical widths
         # apply again (see showEvent's one-shot pin).
         self._layout_restored = False
+        self._layout_epoch += 1
         self._relock_widths(pin=True)
+        self._set_layout_name(DEFAULT_LAYOUT_NAME)
         self.layoutReset.emit()
 
     def _mda_is_home(self) -> bool:
@@ -952,8 +1114,27 @@ class AcquirePage(TabPage):
         # loop.  Re-pin once that deferred insertion is complete; otherwise
         # the request above is discarded and the new tools column stays at
         # its transient minimum width (typically 47--60 px).
-        QTimer.singleShot(0, self._pin_dock_widths)
+        pin = partial(self._pin_dock_widths_for_epoch, self._layout_epoch)
+        QTimer.singleShot(0, pin)
         return dock
+
+    def _pin_dock_widths_for_epoch(self, epoch: int) -> None:
+        """Run the deferred pin only if the layout hasn't changed under it.
+
+        A default-open side panel queues this from ``__init__``, so it can
+        still be pending when ``restore_layout`` runs on the very next line
+        (that's the launch sequence: construct, restore, show). Firing it
+        then would overwrite the restored splitter sizes with the canonical
+        defaults -- the user's dragged column widths, silently reset on every
+        launch. Comparing epochs skips exactly that case while leaving a pin
+        queued by a panel opened *after* a restore free to do its job.
+        """
+        # A default-open panel queues this from ``__init__``, so a page that
+        # is built and torn down inside a single event-loop turn (common in
+        # tests) reaches here with its docks already destroyed.
+        with suppress(RuntimeError):
+            if epoch == self._layout_epoch:
+                self._pin_dock_widths()
 
     # ------------------------------------------------------------------ theming
 

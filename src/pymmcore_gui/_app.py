@@ -28,6 +28,7 @@ from pymmcore_gui._settings import Settings
 from . import _sentry
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
     from types import TracebackType
 
@@ -40,6 +41,22 @@ if TYPE_CHECKING:
         @property
         def mmcore(self) -> CMMCorePlus: ...
         def show(self) -> None: ...
+
+    class StartupChoiceProtocol(Protocol):
+        """What a window's startup dialog reports back.
+
+        Structural rather than an import of ``_modern_gui._startup.
+        StartupChoice``: ``create_mmgui`` must stay usable (and importable)
+        without pulling in the modern GUI.
+        """
+
+        @property
+        def layout(self) -> str: ...
+        @property
+        def config(self) -> str | None: ...
+
+    StartupPrompt = Callable[[str | None], "StartupChoiceProtocol | None"]
+    """Signature of an optional ``window_cls.prompt_startup_choices``."""
 
 
 APP_NAME = "pyMM"
@@ -95,6 +112,7 @@ class MMQApplication(QApplication):
 def create_mmgui(
     *,
     mm_config: Path | str | Literal[False] | None = None,
+    layout: str | None = None,
     mmcore: CMMCorePlus | None = None,
     install_sys_excepthook: bool = True,
     install_sentry: bool = True,
@@ -112,9 +130,16 @@ def create_mmgui(
         The path to the Micro-Manager configuration file to load.
         - If `False`, no configuration will be loaded.
         - If a non-empty string, that configuration will be loaded.
-        - If None (or the empty string), auto-deciding logic will be used based on the
-          stored user settings (based on the settings values for
-          `Settings.last_config` and `Settings.auto_load_last_config`).
+        - If None (or the empty string), the user is asked. `window_cls` may
+          supply a `prompt_startup_choices()` staticmethod (the modern GUI's
+          launch dialog, which picks the layout at the same time); otherwise
+          auto-deciding logic is used, based on the stored `Settings.last_config`
+          and `Settings.auto_load_last_config`.
+    layout : str | None
+        Name of the window layout to open with (see `pymmcore_gui._layouts`).
+        Only meaningful for a `window_cls` that supports layouts. If a startup
+        dialog is shown, this preselects its layout field; otherwise it is
+        applied directly. If None, the window restores its last session.
     mmcore : CMMCorePlus | None
         The CMMCorePlus instance to use.  If `None` (default), the global
         `CMMCorePlus.instance()` will be used if it exists, or a new (global) instance
@@ -190,9 +215,26 @@ def create_mmgui(
     if not issubclass(window_cls, QMainWindow):
         raise TypeError(f"{window_cls} is not a subclass of QMainWindow")
 
+    # A window class may ask the user what to launch with (layout + config)
+    # before it is built -- see `_modern_gui.MainWindow.prompt_startup_choices`.
+    # `-c` (and `mm_config=False`) already answer the config question, so
+    # they skip the dialog entirely; `-l` only preselects its layout field,
+    # since it leaves the config question open.
+    prompt: StartupPrompt | None = getattr(window_cls, "prompt_startup_choices", None)
+    supports_layouts = prompt is not None
+    if mm_config is None and prompt is not None:
+        if (startup := prompt(layout)) is None:
+            # the user chose to quit from the startup dialog
+            raise SystemExit(0)
+        mm_config = startup.config or False
+        layout = startup.layout
+
     win = window_cls(mmcore=mmcore)
     if hasattr(win, "restore_state"):
-        QTimer.singleShot(0, lambda: win.restore_state(show=True))
+        # Only windows that offer a startup dialog understand `layout`;
+        # the classic GUI's restore_state takes `show` alone.
+        extra = {"layout": layout} if supports_layouts else {}
+        QTimer.singleShot(0, lambda: win.restore_state(show=True, **extra))
     else:
         win.show()
 

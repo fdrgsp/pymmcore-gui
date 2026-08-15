@@ -6,6 +6,11 @@ from typing import TYPE_CHECKING
 
 from pymmcore_plus import CMMCorePlus
 
+from pymmcore_gui._layouts import (
+    LAST_SESSION_LAYOUT_NAME,
+    AcquireLayout,
+    store_session_layout,
+)
 from pymmcore_gui._qt.QtCore import QEvent, QRectF, QSize, Qt, QTimer, Signal
 from pymmcore_gui._qt.QtGui import (
     QCloseEvent,
@@ -19,6 +24,7 @@ from pymmcore_gui._qt.QtGui import (
 )
 from pymmcore_gui._qt.QtOpenGLWidgets import QOpenGLWidget
 from pymmcore_gui._qt.QtWidgets import (
+    QDialog,
     QHBoxLayout,
     QMainWindow,
     QMessageBox,
@@ -33,6 +39,7 @@ from pymmcore_gui._settings import Settings
 from ._acquire import AcquirePage
 from ._configurations import ConfigurationsPage
 from ._hardware import HardwareSetupPage
+from ._startup import StartupChoice, StartupDialog
 from ._theme import (
     qcolor,
     reset_zoom,
@@ -49,6 +56,29 @@ from ._theme._light import LIGHT_THEME
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+
+def apply_saved_appearance() -> bool:
+    """Apply the user's saved theme/zoom, returning whether the theme is dark.
+
+    ``_app.create_mmgui`` already calls ``set_theme(DARK_THEME)`` before any
+    window exists (installing ``MicroscopeStyle``, which the classic GUI also
+    depends on) -- that call stays. This applies the user's actual preference
+    before the first widget is constructed and before the window is ever
+    shown (``show()`` happens in ``restore_state``), so there's no flash and
+    no risk of unconditionally clobbering a restored light theme.
+
+    Module-level rather than a ``MainWindow`` method because the startup
+    dialog is themed too and runs before any window exists. Calling it twice
+    (dialog, then window) is harmless -- it only ever re-applies the same
+    stored values.
+    """
+    prefs = Settings.instance().modern_window
+    is_dark = prefs.theme != "light"
+    set_theme(DARK_THEME if is_dark else LIGHT_THEME)
+    if prefs.zoom is not None:
+        set_zoom_step(prefs.zoom)
+    return is_dark
 
 
 class ModeTab(QWidget):
@@ -254,6 +284,8 @@ class MainWindow(QMainWindow):
         )
 
         self._acquire.layoutReset.connect(self._on_acquire_layout_reset)
+        self._acquire.layoutNameChanged.connect(self._on_layout_name_changed)
+        self._mmc.events.systemConfigurationLoaded.connect(self._on_config_loaded)
 
         self._mode_tabs.current_changed.connect(self._on_mode_tab_changed)
         self._stack.setCurrentIndex(0)
@@ -269,64 +301,98 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(mods | Qt.Key.Key_0), self, reset_zoom)  # type: ignore
 
     def _apply_saved_appearance(self) -> None:
-        """Apply the saved theme/zoom before any widget exists, so nothing flashes.
+        """Apply the saved theme/zoom before any widget exists, so nothing flashes."""
+        self._is_dark = apply_saved_appearance()
 
-        ``_app.create_mmgui`` already calls ``set_theme(DARK_THEME)`` before
-        any window exists (installing ``MicroscopeStyle``, which the classic
-        GUI also depends on) -- that call stays. This one applies the user's
-        actual preference before the first widget is constructed and before
-        the window is ever shown (``show()`` now happens in
-        ``restore_state``), so there's no flash and no risk of this
-        unconditionally clobbering a restored light theme.
+    @staticmethod
+    def prompt_startup_choices(layout: str | None = None) -> StartupChoice | None:
+        """Ask which layout and configuration to launch with.
+
+        Called by ``_app.create_mmgui`` (via ``getattr``, like
+        :meth:`restore_state`) when no config was given on the command line,
+        *before* any window exists -- hence the staticmethod. *layout* is the
+        ``-l`` flag, which preselects the layout field rather than skipping
+        the dialog: it answers only half of what the dialog asks. Returns
+        None if the user chose to quit.
         """
-        prefs = Settings.instance().modern_window
-        self._is_dark = prefs.theme != "light"
-        set_theme(DARK_THEME if self._is_dark else LIGHT_THEME)
-        if prefs.zoom is not None:
-            set_zoom_step(prefs.zoom)
+        # The dialog is themed, and it's shown before MainWindow.__init__ has
+        # had a chance to apply the user's saved theme, so do that here.
+        apply_saved_appearance()
+        dialog = StartupDialog(preselect_layout=layout)
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return None
+            choice = dialog.value()
+        finally:
+            dialog.deleteLater()
 
-    def restore_state(self, *, show: bool = False) -> None:
-        """Restore window geometry and the Acquire dock layout, then optionally show.
+        settings = Settings.instance()
+        settings.modern_window.last_layout = choice.layout
+        settings.flush()
+        return choice
+
+    def restore_state(self, *, show: bool = False, layout: str | None = None) -> None:
+        """Restore window geometry and an Acquire dock layout, then optionally show.
 
         Detected and called by ``_app.create_mmgui`` via ``hasattr`` --
         adding this method means the app no longer calls ``show()`` directly,
         so *this* method must, when ``show`` is True.
+
+        *layout* is the name chosen in the startup dialog. When it's None --
+        no dialog ran, e.g. a ``-c`` launch or an embedding caller -- the
+        last-session arrangement is restored, which is what this always did.
         """
         prefs = Settings.instance().modern_window
         if geo := prefs.geometry:
             self.restoreGeometry(geo)
-        # Buttons first: hiding one closes its panel, so applying this after
-        # restore_layout would undo part of the layout it just restored.
-        self._acquire.apply_hidden_panels(prefs.acquire_hidden_panels)
-        self._acquire.restore_layout(prefs.acquire_dock_state, prefs.acquire_panels)
+        name = layout or LAST_SESSION_LAYOUT_NAME
+        self._acquire.select_layout(name)
         if show:
             self.show()
 
     def _on_acquire_layout_reset(self) -> None:
-        """Drop the persisted Acquire layout so a crash can't resurrect it.
+        """Drop the persisted "Last session" layout so a crash can't resurrect it.
 
         ``_save_state`` would write the freshly-reset arrangement on close
         anyway; clearing now just means the reset also survives an abnormal
         exit. Scoped to the layout keys only -- geometry, theme and zoom are
-        preferences, not layout.
+        preferences, not layout. Named layouts are untouched: resetting the
+        page is not deleting anything the user saved.
         """
         settings = Settings.instance()
-        prefs = settings.modern_window
-        prefs.acquire_dock_state = None
-        prefs.acquire_panels = set()
-        prefs.acquire_hidden_panels = set()
+        store_session_layout(AcquireLayout())
+        settings.flush()
+
+    def _on_layout_name_changed(self, name: str) -> None:
+        """Remember which layout to preselect in the next startup dialog."""
+        settings = Settings.instance()
+        settings.modern_window.last_layout = name
         settings.flush()
 
     def _save_state(self) -> None:
-        """Persist geometry, the Acquire dock layout, theme, and zoom."""
+        """Persist geometry, the "Last session" layout, theme, and zoom.
+
+        The live arrangement is always written to the reserved session slot,
+        never back into whichever named layout it came from -- a named layout
+        changes only when the user explicitly saves it.
+        """
         settings = Settings.instance()
         prefs = settings.modern_window
         prefs.geometry = self.saveGeometry().data()
-        prefs.acquire_dock_state, prefs.acquire_panels = self._acquire.save_layout()
-        prefs.acquire_hidden_panels = self._acquire.hidden_panels()
+        store_session_layout(self._acquire.current_layout())
         prefs.theme = "dark" if self._is_dark else "light"
         prefs.zoom = zoom_factor()
         settings.flush(timeout=5000)
+
+    def _on_config_loaded(self, *_: object) -> None:
+        """Offer whatever config the core just loaded in the next startup dialog.
+
+        Covers every route into the core -- the startup dialog, ``-c``, and
+        the Hardware page's own Load button -- since they all end in
+        ``loadSystemConfiguration``.
+        """
+        if cfg := self._mmc.systemConfigurationFile():
+            Settings.instance().remember_config(cfg)
 
     def on_startup_configuration_loaded(self) -> None:
         """Land on Acquire after the application loads its initial config."""

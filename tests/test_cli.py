@@ -59,3 +59,27 @@ def test_modern_flag_uses_modern_gui() -> None:
         mock_create.call_args.kwargs["window_cls"]
         == "pymmcore_gui._modern_gui.MainWindow"
     )
+
+
+def test_layout_flag_is_forwarded(tmp_path: Path) -> None:
+    with patch("pymmcore_gui.create_mmgui") as mock_create:
+        result = runner.invoke(app, ["run", "--modern", "-l", "My rig"])
+
+    assert result.exit_code == 0
+    assert mock_create.call_args.kwargs["layout"] == "My rig"
+
+
+def test_unknown_layout_warns_but_still_launches() -> None:
+    """A stale `-l` should open the app on the default layout, not refuse to start."""
+    with patch("pymmcore_gui.create_mmgui") as mock_create:
+        result = runner.invoke(app, ["run", "--modern", "-l", "nope"])
+
+    assert result.exit_code == 0
+    assert "No layout named 'nope'" in result.stdout
+    mock_create.assert_called_once()
+
+
+def test_layouts_command_lists_the_built_in_layout() -> None:
+    result = runner.invoke(app, ["layouts"])
+    assert result.exit_code == 0
+    assert "Default" in result.stdout

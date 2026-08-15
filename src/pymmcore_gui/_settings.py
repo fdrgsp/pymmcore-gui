@@ -2,8 +2,9 @@ import json
 import os
 import threading
 import warnings
+from contextlib import suppress
 from pathlib import Path
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, ClassVar, Literal, cast
 
 from platformdirs import user_data_dir
 from pydantic import (
@@ -197,6 +198,18 @@ class ModernWindowSettingsV1(BaseMMSettings):
     """Active color theme."""
     zoom: float | None = None
     """Active zoom step (one of ``_modern_gui._theme.ZOOM_STEPS``)."""
+    last_layout: str | None = None
+    """Name of the layout chosen in the startup dialog last time.
+
+    Either a saved layout (see ``pymmcore_gui._layouts``) or one of the two
+    reserved names. Used only to preselect the combo; a name that no longer
+    exists is ignored.
+    """
+
+    @property
+    def has_last_session_layout(self) -> bool:
+        """Whether the auto-saved "Last session" arrangement holds anything."""
+        return bool(self.acquire_dock_state and self.acquire_panels)
 
 
 class SettingsV1(BaseMMSettings):
@@ -219,9 +232,50 @@ class SettingsV1(BaseMMSettings):
     last_config: Path | None = None
     """Path to the last used config file."""
     auto_load_last_config: bool | None = None
-    """Load the last used config on startup. None means undecided."""
+    """Load the last used config on startup. None means undecided.
+
+    Only the classic ``MicroManagerGUI`` still consults this; the modern GUI
+    asks up front in its startup dialog instead (see ``recent_configs``).
+    """
     fallback_to_demo_config: bool = False
     """Load demo config if no config is found."""
+
+    recent_configs: list[Path] = Field(default_factory=list)
+    """Config files the user has loaded, most-recent-first.
+
+    Offered by the modern GUI's startup dialog. Entries whose file has since
+    disappeared are dropped by :meth:`existing_recent_configs` rather than
+    shown and then failing to load.
+    """
+
+    MAX_RECENT_CONFIGS: ClassVar[int] = 10
+
+    def remember_config(self, path: Path | str) -> None:
+        """Record *path* as the most recently used config file.
+
+        Idempotent for a path that is already first, so the common case (one
+        config loaded at startup and never changed) doesn't rewrite settings.
+        """
+        resolved = Path(path).expanduser()
+        with suppress(OSError):
+            resolved = resolved.resolve()
+        remaining = [p for p in self.recent_configs if p != resolved]
+        if self.recent_configs and self.recent_configs[0] == resolved:
+            return
+        self.recent_configs = [resolved, *remaining][: self.MAX_RECENT_CONFIGS]
+        self.flush()
+
+    def existing_recent_configs(self) -> list[Path]:
+        """Return the recent configs that still exist, forgetting the rest.
+
+        A file the user has moved or deleted is not something to offer and
+        then fail on, so it's dropped from the stored list too.
+        """
+        existing = [p for p in self.recent_configs if p.is_file()]
+        if existing != self.recent_configs:
+            self.recent_configs = existing
+            self.flush()
+        return existing
 
     @property
     def version_tuple(self) -> tuple[int, int, str]:

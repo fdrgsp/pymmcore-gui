@@ -111,6 +111,7 @@ class PanelInfo:
     create: PanelFactory
     area: DockWidgetArea = DockWidgetArea.RightDockWidgetArea
     default_open: bool = False
+    """Open in the built-in "Default" layout (see ``AcquirePage.reset_layout``)."""
     unstyle: bool = False
     refresh: Callable[[QWidget], None] | None = None
     always_visible: bool = False
@@ -147,6 +148,7 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
         icon="mdi:format-list-group",
         tooltip="Groups and Presets — show or hide the group/preset panel",
         create=_create_presets,
+        default_open=True,
         refresh=_refresh_presets,
     ),
     PanelInfo(
