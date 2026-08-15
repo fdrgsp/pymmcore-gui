@@ -170,6 +170,11 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
     widget; embedded in a tab there is nothing to close, so Apply just applies.
     """
 
+    # Redeclare the inherited signal alongside this subclass's own signal.
+    # PySide6 otherwise appends the inherited Python signal after inherited
+    # slots in _EmbeddedPixelConfig's dynamic QMetaObject, making emit() a
+    # no-op (and producing a "Signals and slots ... not ordered" warning).
+    calibrationRunningChanged = Signal(bool)
     applied = Signal()
 
     def __init__(
