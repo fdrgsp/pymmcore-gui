@@ -3,10 +3,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 from pymmcore_widgets import PixelConfigurationWidget as _UpstreamPixelConfiguration
+from pymmcore_widgets._icons import StandardIcon
 from superqt.utils import signals_blocked
 
+from pymmcore_gui._modern_gui._theme import qcolor, theme
 from pymmcore_gui._pixel_calibration import PixelCalibrationResult
-from pymmcore_gui._qt.QtCore import QTimer, Signal
+from pymmcore_gui._qt.QtCore import QEvent, QTimer, Signal
 from pymmcore_gui._qt.QtWidgets import QSizePolicy
 from pymmcore_gui.widgets._pixel_calibration_panel import (
     CalibrationTarget,
@@ -102,7 +104,17 @@ class PixelConfigurationWidget(_UpstreamPixelConfiguration):
             model.rowsInserted.connect(self._schedule_precision_update)
 
         self._set_numeric_precision()
+        self._apply_themed_action_icons()
         self._sync_calibration_target()
+
+    def _apply_themed_action_icons(self) -> None:
+        """Apply semantic theme colors to the pixel-configuration actions."""
+        green = qcolor(theme().status_green).name()
+        red = qcolor(theme().status_red).name()
+        self._px_table.act_remove_row.setIcon(StandardIcon.DELETE.icon(red))
+        self._px_table.act_clear.setIcon(StandardIcon.DELETE_ALL.icon(red))
+        self._value_table.act_edit_props.setIcon(StandardIcon.PROPERTY_ADD.icon(green))
+        self._value_table.act_remove_props.setIcon(StandardIcon.DELETE.icon(red))
 
     def _schedule_precision_update(self, *_: object) -> None:
         # A child-owned timer is cancelled when this widget is destroyed.  A
@@ -227,6 +239,15 @@ class PixelConfigurationWidget(_UpstreamPixelConfiguration):
     def closeEvent(self, a0: QCloseEvent | None) -> None:
         self.shutdownCalibration()
         super().closeEvent(a0)
+
+    def changeEvent(self, a0: QEvent | None) -> None:
+        super().changeEvent(a0)
+        if (
+            a0 is not None
+            and a0.type() == QEvent.Type.StyleChange
+            and hasattr(self, "_value_table")
+        ):
+            self._apply_themed_action_icons()
 
 
 __all__ = ["PixelConfigurationWidget"]

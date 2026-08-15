@@ -192,7 +192,8 @@ class LiveButton(QPushButton):
         with suppress(RuntimeError):
             self.setChecked(running)
         if running:
-            self.setIcon(QIconifyIcon("mdi:video-off-outline", color="magenta"))
+            color = qcolor(theme().status_red).name()
+            self.setIcon(QIconifyIcon("mdi:video-off-outline", color=color))
             self.setToolTip("Stop")
         else:
             color = qcolor(theme().status_green).name()
@@ -200,16 +201,14 @@ class LiveButton(QPushButton):
             self.setToolTip("Live")
 
     def changeEvent(self, e: QEvent | None) -> None:
-        # status_green differs between light/dark themes -- re-derive the
-        # idle icon's color from whichever theme is now active. The running
-        # (magenta) icon isn't theme-derived, so no re-render needed there.
-        # The icon size is re-applied too since it's zoom-scaled and this
-        # button (a QPushButton, not a QToolBar) isn't touched by the app's
-        # zoom pass over QToolBar instances.
+        # status_green/status_red differ between light/dark themes -- re-derive
+        # the icon's color from whichever theme is now active, keeping the
+        # current running state. The icon size is re-applied too since it's
+        # zoom-scaled and this button (a QPushButton, not a QToolBar) isn't
+        # touched by the app's zoom pass over QToolBar instances.
         is_style_change = e is not None and e.type() == QEvent.Type.StyleChange
         if is_style_change:
-            if not self.isChecked():
-                self._set_running(False)
+            self._set_running(self.isChecked())
             self.setIconSize(_icon_size())
         super().changeEvent(e)
 

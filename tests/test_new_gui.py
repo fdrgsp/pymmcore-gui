@@ -41,8 +41,8 @@ from pymmcore_gui._modern_gui._theme import (
 from pymmcore_gui._modern_gui._theme._dark import DARK_THEME
 from pymmcore_gui._modern_gui._theme._light import LIGHT_THEME
 from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget, DockWidgetArea
-from pymmcore_gui._qt.QtCore import QPoint, QSize, Qt
-from pymmcore_gui._qt.QtGui import QCursor
+from pymmcore_gui._qt.QtCore import QPoint, QRect, QSize, Qt
+from pymmcore_gui._qt.QtGui import QAction, QCursor, QImage, QPainter, QPalette
 from pymmcore_gui._qt.QtWidgets import (
     QWIDGETSIZE_MAX,
     QAbstractButton,
@@ -56,6 +56,9 @@ from pymmcore_gui._qt.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSplitter,
+    QStyle,
+    QStyleOption,
+    QToolBar,
     QToolButton,
     QWidget,
 )
@@ -3640,6 +3643,7 @@ def test_mda_action_icons_use_theme_status_colors(
     assert_icon_color(widget.channels.act_add_row.icon(), green)
     assert_icon_color(widget.control_btns.cancel_btn.icon(), red)
     assert_icon_color(widget.channels.act_remove_row.icon(), red)
+    assert_icon_color(widget.channels.act_clear.icon(), red)
 
     # Upstream replaces this icon at runtime; our later signal handler must
     # replace its literal "lime" icon with the theme green again.
@@ -3659,6 +3663,42 @@ def test_mda_action_icons_use_theme_status_colors(
     QApplication.processEvents()
     assert_icon_color(widget.control_btns.run_btn.icon(), theme().status_green)
     assert_icon_color(widget.channels.act_remove_row.icon(), theme().status_red)
+
+
+def test_toolbar_action_separators_follow_theme(qtbot: QtBot) -> None:
+    """Standard QToolBar separators stay visible in both application themes."""
+    toolbar = QToolBar()
+    qtbot.addWidget(toolbar)
+
+    try:
+        for app_theme in (DARK_THEME, LIGHT_THEME):
+            set_theme(app_theme)
+            option = QStyleOption()
+            option.initFrom(toolbar)
+            option.rect = QRect(0, 0, 9, 40)
+            option.state |= QStyle.StateFlag.State_Horizontal
+            image = QImage(option.rect.size(), QImage.Format.Format_ARGB32)
+            background = option.palette.color(QPalette.ColorRole.Window)
+            image.fill(background)
+
+            painter = QPainter(image)
+            style = QApplication.style()
+            assert style is not None
+            style.drawPrimitive(
+                QStyle.PrimitiveElement.PE_IndicatorToolBarSeparator,
+                option,
+                painter,
+                toolbar,
+            )
+            painter.end()
+
+            center_x = option.rect.width() // 2
+            separator = image.pixelColor(center_x, option.rect.height() // 2)
+            assert separator == option.palette.color(QPalette.ColorRole.Mid)
+            assert separator == qcolor(theme().border_default)
+            assert separator != background
+    finally:
+        set_theme(DARK_THEME)
 
 
 def test_mda_grid_bounds_icons_stay_visible_after_action_changes(
@@ -4018,6 +4058,58 @@ def test_configuration_save_buttons_are_in_toolbar(
 
     with qtbot.waitSignal(page.saveToFileRequested):
         page._save_file_btn.click()
+
+
+def test_configuration_editor_action_icons_follow_theme(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    group_actions = {
+        action.text(): action for action in page._group_editor._tb.actions()
+    }
+
+    def assert_color(action: QAction, expected: Color) -> None:
+        rgb = _icon_avg_rgb(action.icon(), QSize(24, 24))
+        assert rgb is not None
+        color = qcolor(expected)
+        assert all(
+            abs(actual - wanted) < 2
+            for actual, wanted in zip(
+                rgb, (color.red(), color.green(), color.blue()), strict=True
+            )
+        )
+
+    try:
+        for app_theme in (DARK_THEME, LIGHT_THEME):
+            set_theme(app_theme)
+            QApplication.processEvents()
+            for name in (
+                "Add Group",
+                "Add Preset",
+                "Edit Properties",
+                "Duplicate",
+            ):
+                assert_color(group_actions[name], theme().status_green)
+            assert_color(group_actions["Remove"], theme().status_red)
+            assert_color(
+                page._pixel_config._value_table.act_edit_props,
+                theme().status_green,
+            )
+            assert_color(
+                page._pixel_config._value_table.act_remove_props,
+                theme().status_red,
+            )
+            assert_color(
+                page._pixel_config._px_table.act_remove_row,
+                theme().status_red,
+            )
+            assert_color(
+                page._pixel_config._px_table.act_clear,
+                theme().status_red,
+            )
+    finally:
+        set_theme(DARK_THEME)
 
 
 def test_save_to_core_commits_only_selected_config_tab(
