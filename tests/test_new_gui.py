@@ -15,6 +15,7 @@ from pymmcore_widgets import MDAWidget as UpstreamMDAWidget
 from pymmcore_widgets.mda._core_channels import PROPERTY_SEPARATOR
 from pymmcore_widgets.useq_widgets._positions import MDAButton, _MDAPopup
 
+import pymmcore_gui._modern_gui._acquire as acquire_module
 import pymmcore_gui._modern_gui._acquire_toolbar as acquire_toolbar_module
 import pymmcore_gui._modern_gui._acquire_viewers as acquire_viewers_module
 from pymmcore_gui._app import create_mmgui
@@ -23,7 +24,6 @@ from pymmcore_gui._layouts import DEFAULT_LAYOUT_NAME
 from pymmcore_gui._modern_gui._acquire import (
     _MDA_DOCK_WIDTH,
     _RIGHT_DOCK_MAX_WIDTH,
-    _RIGHT_DOCK_MIN_USABLE_WIDTH,
     AcquirePage,
 )
 from pymmcore_gui._modern_gui._acquire_presets import AcquisitionPresetSelector
@@ -3514,13 +3514,53 @@ def test_acquire_repairs_an_unusably_narrow_restored_right_dock(
     expected_pinned_width_b = min(
         page_b._dock_manager.width() // 4, _RIGHT_DOCK_MAX_WIDTH
     )
-    # The repair aims for the pinned width but can only take what the donor
-    # column has to spare above its own minimum, so this is a range, not an
-    # equality: comfortably usable again, and never wider than the target.
-    assert _RIGHT_DOCK_MIN_USABLE_WIDTH <= restored_column.width()
-    assert restored_column.width() <= expected_pinned_width_b
+    # A range, not an equality. The repair aims for the pinned width but can
+    # only take what the donor column has to spare above its own minimum --
+    # and on a runner that clamped the window below the requested size, that
+    # target is smaller still. What must hold either way: the corrupt 60 px
+    # was expanded, and the repair never overshoots the target.
+    assert 60 < restored_column.width() <= expected_pinned_width_b
     assert restored_column.minimumWidth() == 0
     assert restored_column.maximumWidth() == QWIDGETSIZE_MAX
+
+
+def test_acquire_narrow_column_repair_gives_up_instead_of_retrying_forever(
+    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A column the repair cannot widen far enough must still finish settling.
+
+    Regression test for a hang caught only on CI: the repair reported "not
+    ready, retry" both when QtADS hadn't finished rebuilding the dock tree
+    *and* when it simply could not widen the column any further. The second
+    case recomputes identical numbers forever, so a display that clamps the
+    window below the requested size (or any donor column with nothing to
+    spare) left the settle timer firing every 200ms for the life of the page
+    with ``_mda_width_locked_at_real_size`` never set -- so the MDA width
+    lock was never installed either.
+
+    Raising the usability floor out of reach reproduces that state without
+    depending on the display size, which can't be forced below the MDA
+    column's own minimum anyway.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.resize(1400, 900)
+    page.show()
+    qtbot.waitExposed(page)
+    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
+
+    right_area = page._right_dock_area
+    assert right_area is not None
+    monkeypatch.setattr(acquire_module, "_RIGHT_DOCK_MIN_USABLE_WIDTH", 10_000)
+
+    # Now behave as a restore does: the layout came from disk, so the settle
+    # takes the repair path rather than the canonical pin.
+    page._layout_restored = True
+    page._mda_width_locked_at_real_size = False
+    assert page._repair_narrow_restored_right_column() is True
+
+    page._settle_and_lock_widths()
+    assert page._mda_width_locked_at_real_size
 
 
 def test_acquire_restore_does_not_repin_column_widths(

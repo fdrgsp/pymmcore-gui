@@ -197,6 +197,12 @@ def test_the_chosen_layout_is_remembered_for_next_time(
     mmcore: CMMCorePlus, qtbot: QtBot, settings: Settings
 ) -> None:
     save_layout("My rig", _layout())
+    # Offer (and pick) the config the fixture already loaded. Letting the
+    # dialog fall back to the demo config would swap the core's devices out
+    # from under the window's live ShuttersBar, whose upstream
+    # ``ShuttersWidget`` then warns about the now-missing shutter labels --
+    # noise from a device swap this test isn't about.
+    settings.recent_configs = [Path(__file__).with_name("test_config.cfg")]
 
     def choose_my_rig(dialog: StartupDialog) -> int:
         dialog._layout_combo.setCurrentText("My rig")

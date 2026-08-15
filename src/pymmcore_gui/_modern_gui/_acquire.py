@@ -800,9 +800,17 @@ class AcquirePage(TabPage):
         Repair only widths below a conservative usability floor, taking space
         from the largest non-MDA sibling in the outer horizontal splitter.
 
-        Returns whether the restored dock tree was ready and the repair took.
-        A False result makes the startup settle timer retry after QtADS's next
-        deferred restore/layout pass.
+        Returns whether the caller can stop retrying -- *not* whether the
+        column reached the width it aimed for. Only a dock tree QtADS has not
+        finished rebuilding reports False, so the startup settle timer runs
+        again after its next deferred pass. Every other outcome is final,
+        including "the donor column had less to spare than we asked for":
+        retrying recomputes identical numbers forever, which would leave the
+        settle timer firing for the life of the page and -- because
+        ``_settle_and_lock_widths`` bails before setting it -- the MDA width
+        lock never marked as installed. A CI runner (or any small display)
+        that clamps the window below the requested size lands in exactly that
+        case, so it has to be a normal outcome rather than a retry.
         """
         area = self._resolve_right_dock_area()
         if area is None:
@@ -816,8 +824,10 @@ class AcquirePage(TabPage):
             return False
         idx = splitter.indexOf(column)
         sizes = list(splitter.sizes())
-        target = min(self._dock_manager.width() // 4, _RIGHT_DOCK_MAX_WIDTH)
-        if idx < 0 or len(sizes) < 2 or target < _RIGHT_DOCK_MIN_USABLE_WIDTH:
+        total = self._dock_manager.width()
+        # A manager still at its pre-layout width gives nothing to size
+        # against -- that is genuinely "not ready", so retry.
+        if idx < 0 or len(sizes) < 2 or total <= 0:
             return False
 
         excluded = {idx}
@@ -827,15 +837,22 @@ class AcquirePage(TabPage):
                 excluded.add(splitter.indexOf(mda_column))
         donors = [i for i in range(len(sizes)) if i not in excluded]
         if not donors:
-            return False
+            return True
+
+        # Aim for the canonical width but settle for whatever the donor can
+        # actually spare, so a too-small window still gets the widest usable
+        # column available instead of staying at the corrupt one. Asking for
+        # more than the donor's own minimum allows is harmless either way --
+        # the splitter clamps the request.
+        target = min(total // 4, _RIGHT_DOCK_MAX_WIDTH)
         donor = max(donors, key=sizes.__getitem__)
-        delta = target - sizes[idx]
-        if sizes[donor] < delta:
-            return False
-        sizes[idx] = target
+        delta = min(target - sizes[idx], sizes[donor])
+        if delta <= 0:
+            return True
+        sizes[idx] += delta
         sizes[donor] -= delta
         splitter.setSizes(sizes)
-        return column.width() >= _RIGHT_DOCK_MIN_USABLE_WIDTH
+        return True
 
     def _lock_default_areas(self) -> bool:
         """(Re)install the width lock on the MDA area, if available.
