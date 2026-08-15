@@ -108,12 +108,21 @@ class StartupDialog(QDialog):
         form.addRow("Layout:", self._layout_combo)
         form.addRow("Configuration:", self._config_combo)
 
-        self._start_btn = QPushButton("Start")
+        # Both buttons are parented to the dialog at construction, before
+        # setDefault: QPushButton.setDefault only registers with the dialog it
+        # can find by walking up its parents, so calling it on a parentless
+        # button silently does nothing. Qt then falls back to making the first
+        # autoDefault button the default -- which is Quit, since it sits left
+        # of Start -- and Enter quit the application instead of starting it.
+        self._start_btn = QPushButton("Start", self)
         self._start_btn.setProperty("variant", "primary")
         self._start_btn.setDefault(True)
         self._start_btn.clicked.connect(self.accept)
-        quit_btn = QPushButton("Quit")
+        quit_btn = QPushButton("Quit", self)
         quit_btn.setProperty("variant", "subtle")
+        # Belt and braces: without this, Enter *while Quit itself has focus*
+        # still activates it, default button or not.
+        quit_btn.setAutoDefault(False)
         quit_btn.clicked.connect(self.reject)
 
         buttons = QHBoxLayout()
@@ -131,6 +140,11 @@ class StartupDialog(QDialog):
         outer.addWidget(logo)
         outer.addLayout(form)
         outer.addLayout(buttons)
+
+        # Start on the first field rather than letting Qt pick, so Enter
+        # reaches the default button (Start) from a predictable place on
+        # every platform and binding.
+        self._layout_combo.setFocus()
 
     # ── value ─────────────────────────────────────────────────────
 

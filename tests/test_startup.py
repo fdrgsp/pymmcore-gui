@@ -27,11 +27,13 @@ from pymmcore_gui._modern_gui._acquire_toolbar import _LayoutMenuRow
 from pymmcore_gui._modern_gui._main_win import MainWindow
 from pymmcore_gui._modern_gui._panels import PanelKey
 from pymmcore_gui._modern_gui._startup import DEMO_CONFIG, StartupDialog
+from pymmcore_gui._qt.QtCore import Qt
 from pymmcore_gui._qt.QtWidgets import (
     QDialog,
     QFileDialog,
     QInputDialog,
     QMessageBox,
+    QPushButton,
     QWidgetAction,
 )
 
@@ -149,6 +151,58 @@ def test_cancelling_browse_reverts_to_the_previous_choice(qtbot: QtBot) -> None:
         dialog._config_combo.activated.emit(browse_index)
 
     assert dialog.value().config == before
+
+
+def test_enter_starts_and_escape_quits(qtbot: QtBot) -> None:
+    """Enter must activate Start, never Quit.
+
+    Regression test: ``QPushButton.setDefault`` only registers with the
+    ``QDialog`` it can reach through its parents, so calling it on a
+    parentless button did nothing and Qt fell back to the first autoDefault
+    button -- Quit, which sits left of Start. Pressing Enter closed the app.
+    """
+    dialog = StartupDialog()
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+
+    buttons = {b.text(): b for b in dialog.findChildren(QPushButton)}
+    assert buttons["Start"].isDefault()
+    assert not buttons["Quit"].isDefault()
+    # Enter while Quit holds focus would otherwise activate it regardless of
+    # which button is the dialog's default.
+    assert not buttons["Quit"].autoDefault()
+
+    with qtbot.waitSignal(dialog.accepted, timeout=1000):
+        qtbot.keyClick(dialog, Qt.Key.Key_Return)  # type: ignore[no-untyped-call]
+
+
+def test_enter_starts_even_while_quit_has_focus(qtbot: QtBot) -> None:
+    """The half ``setDefault`` alone doesn't cover: Enter *on* the Quit button.
+
+    Delivered straight to the button rather than via ``setFocus`` -- an
+    offscreen window is never activated, so Qt refuses it real focus. With
+    ``autoDefault`` left on, Quit consumes this key itself and rejects the
+    dialog no matter which button is the default.
+    """
+    dialog = StartupDialog()
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+
+    quit_btn = next(b for b in dialog.findChildren(QPushButton) if b.text() == "Quit")
+    with qtbot.waitSignal(dialog.accepted, timeout=1000):
+        qtbot.keyClick(quit_btn, Qt.Key.Key_Return)  # type: ignore[no-untyped-call]
+
+
+def test_escape_quits(qtbot: QtBot) -> None:
+    dialog = StartupDialog()
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+
+    with qtbot.waitSignal(dialog.rejected, timeout=1000):
+        qtbot.keyClick(dialog, Qt.Key.Key_Escape)  # type: ignore[no-untyped-call]
 
 
 # ── how create_mmgui uses it ──────────────────────────────────────

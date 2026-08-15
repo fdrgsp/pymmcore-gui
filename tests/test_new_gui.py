@@ -24,6 +24,7 @@ from pymmcore_gui._layouts import DEFAULT_LAYOUT_NAME
 from pymmcore_gui._modern_gui._acquire import (
     _MDA_DOCK_WIDTH,
     _RIGHT_DOCK_MAX_WIDTH,
+    _RIGHT_DOCK_MIN_USABLE_WIDTH,
     AcquirePage,
 )
 from pymmcore_gui._modern_gui._acquire_presets import AcquisitionPresetSelector
@@ -3524,6 +3525,53 @@ def test_acquire_repairs_an_unusably_narrow_restored_right_dock(
     assert restored_column.maximumWidth() == QWIDGETSIZE_MAX
 
 
+def test_acquire_opening_a_panel_widens_an_unusable_column(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Opening a tool panel must never leave the column at ADS's 47--60px sliver.
+
+    Regression test for the reported "why is Groups and Presets tiny?".
+    ``_add_side_dock`` pins the width only when it *creates* the column, so
+    every other way a panel gets shown -- re-showing a dock that already
+    exists (``_toggle_panel`` calls ``toggleView`` and never reaches
+    ``_add_side_dock``), or tabbing into a column that is already a sliver --
+    used to leave it unusable, with no way back except dragging it.
+
+    The sliver is forced here rather than provoked through a real
+    close/reopen: on the offscreen test platform ADS happens to lay a
+    re-shown column out at a usable width anyway, so only a real display
+    reproduces the original report. What this pins down is the behaviour that
+    fixes it -- opening a panel widens a below-floor column -- which is
+    platform independent.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.resize(1400, 900)
+    page.show()
+    qtbot.waitExposed(page)
+    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
+
+    right_area = page._right_dock_area
+    assert right_area is not None
+    column = page._column_widget(right_area)
+    page._dock_manager.setSplitterSizes(
+        right_area, _resized_splitter_sizes(page, right_area, 60)
+    )
+    assert column.width() == 60
+
+    page.panel_button(PanelKey.EXCEPTION_LOG).setChecked(True)
+    qtbot.waitUntil(
+        lambda: column.width() >= _RIGHT_DOCK_MIN_USABLE_WIDTH, timeout=2000
+    )
+
+    # A width the user chose is still theirs -- widening only ever rescues a
+    # column that is below the usability floor.
+    usable = column.width()
+    page.panel_button(PanelKey.PROPERTIES).setChecked(True)
+    qtbot.wait(50)
+    assert column.width() == usable
+
+
 def test_acquire_narrow_column_repair_gives_up_instead_of_retrying_forever(
     mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3557,7 +3605,7 @@ def test_acquire_narrow_column_repair_gives_up_instead_of_retrying_forever(
     # takes the repair path rather than the canonical pin.
     page._layout_restored = True
     page._mda_width_locked_at_real_size = False
-    assert page._repair_narrow_restored_right_column() is True
+    assert page._widen_unusable_right_column() is True
 
     page._settle_and_lock_widths()
     assert page._mda_width_locked_at_real_size

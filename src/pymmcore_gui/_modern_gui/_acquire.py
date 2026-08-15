@@ -460,6 +460,15 @@ class AcquirePage(TabPage):
         dock.toggleView(checked)
         if checked:
             dock.setAsCurrentTab()
+            # Closing the last dock in the right column makes ADS destroy it;
+            # re-showing one builds a *new* column, which starts at the same
+            # transient sliver width (47--60 px) a freshly created one does.
+            # ``_add_side_dock``'s pin only covers first creation -- this path
+            # never goes through it, since the dock already exists -- so the
+            # column would otherwise stay unusably narrow with no way back
+            # except dragging it. Widening only kicks in below the usability
+            # floor, so a column the user deliberately sized is left alone.
+            self._widen_right_column_soon()
             if panel.info.refresh is not None:
                 QTimer.singleShot(0, partial(self._refresh_panel, key))
 
@@ -791,14 +800,35 @@ class AcquirePage(TabPage):
             new[idx] = remaining // len(middle)
         self._dock_manager.setSplitterSizes(mda_area, new)
 
-    def _repair_narrow_restored_right_column(self) -> bool:
-        """Expand a corrupted, unusably narrow restored tools column.
+    def _widen_right_column_soon(self, attempts: int = 5) -> None:
+        """Widen an unusably narrow right column once QtADS has laid it out.
 
-        Normal restored widths are user choices and remain untouched.  Older
-        sessions may, however, contain the transient 47--60 px width that was
-        previously saved when a lazy dock was frozen before QtADS laid it out.
-        Repair only widths below a conservative usability floor, taking space
-        from the largest non-MDA sibling in the outer horizontal splitter.
+        Both callers act on a column that does not exist yet at the moment
+        they run -- reopening a dock into a column ADS destroyed when it was
+        emptied, or restoring one -- so this has to wait for ADS's own
+        deferred layout pass. Bounded retries rather than a single shot
+        because that pass may take more than one event-loop turn on a slower
+        machine, and no retries at all would silently leave the sliver.
+        """
+
+        def _attempt() -> None:
+            # The page (or its docks) may be gone by the next turn.
+            with suppress(RuntimeError):
+                if not self._widen_unusable_right_column() and attempts > 1:
+                    self._widen_right_column_soon(attempts - 1)
+
+        QTimer.singleShot(0, _attempt)
+
+    def _widen_unusable_right_column(self) -> bool:
+        """Expand an unusably narrow tools column to a workable width.
+
+        Widths at or above the usability floor are user choices and remain
+        untouched. Below it, the column is one of QtADS's transient 47--60 px
+        slivers -- what a freshly created (or re-shown, or restored) column
+        starts at before anything sizes it, and what older sessions persisted
+        when a lazy dock was frozen before QtADS laid it out. Widen those,
+        taking space from the largest non-MDA sibling in the outer horizontal
+        splitter.
 
         Returns whether the caller can stop retrying -- *not* whether the
         column reached the width it aimed for. Only a dock tree QtADS has not
@@ -1360,7 +1390,7 @@ class AcquirePage(TabPage):
         """
         ok = self._relock_widths(pin=not self._layout_restored)
         if ok and self._layout_restored:
-            ok = self._repair_narrow_restored_right_column()
+            ok = self._widen_unusable_right_column()
         if not ok:
             self._width_settle_timer.start()
             return
