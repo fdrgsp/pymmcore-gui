@@ -90,14 +90,12 @@ def _configure_ads() -> None:
     every ``CDockManager`` in the process, and only the *first* call before
     any manager is constructed has an effect.
 
-    Note: emptying a dock area (moving its last widget elsewhere, whether to
-    another regular area or to auto-hide) reproducibly segfaults under
-    ``QT_QPA_PLATFORM=offscreen`` + pytest-qt, independent of any app code,
-    on both PyQt6Ads 4.4.0.post2 and 5.0.0 -- confirmed test-harness-only,
-    since interactive drag-and-drop on a real display does not reproduce it.
-    Automated tests therefore stick to what doesn't empty an area (open/close
-    toggling, tabbing a dock into an existing one); actual rearranging is a
-    manual smoke-test item (see the PR description).
+    Note: emptying an area in the outer tools manager by moving its last dock
+    reproduces an offscreen pytest-qt crash on PyQt6Ads 4.4.0.post2 and 5.0.0,
+    despite working interactively on a real display. Automated tests therefore
+    verify outer-manager membership and allowed drop areas rather than simulate
+    those drags. Viewer splitting is exercised directly because it happens in
+    the isolated nested manager and is stable under the harness.
 
     A second, related harness-only quirk: running *several* of the
     ``restore_layout`` tests together via a partial ``-k`` selection can
@@ -175,25 +173,40 @@ class AcquirePage(TabPage):
         self._dock_manager.dockAreaCreated.connect(self._connect_dock_area_tab_switch)
         self.add_content_widget(self._dock_manager)
         self._base_dock_style = self._dock_manager.styleSheet()
-        self._apply_dock_style()
 
-        # ── central: blank placeholder; Preview / MDA-run viewers are each a
-        # real CDockWidget tabbed into its dock area (see AcquireViewersManager) ──
+        # The outer manager owns every movable tool panel.  Its central widget
+        # is a second, independent manager that owns viewers only.  Changes to
+        # the inner viewer splitter tree therefore cannot make the outer
+        # manager recompute the MDA/tools widths, while MDA and every tool can
+        # still be dragged to any side of the outer workspace.
+        self._viewer_dock_manager = CDockManager()
+        self._viewer_dock_manager.dockWidgetAdded.connect(self._queue_dock_icon_refresh)
+        self._viewer_dock_manager.dockAreaCreated.connect(
+            self._connect_dock_area_tab_switch
+        )
+        self._viewer_base_dock_style = self._viewer_dock_manager.styleSheet()
+
+        # The outer central dock is only a non-movable shell for the viewer
+        # manager.  Restricting its area to outer drops prevents an MDA/tool
+        # panel from being tabbed into the viewer workspace: it may only dock
+        # around it on the left, right, top, or bottom.
         self._central = CDockWidget(self._dock_manager, "Viewers", self)
         self._central.setObjectName("acquire_viewers")
         self._central.setFeature(CDockWidget.DockWidgetFeature.NoTab, True)
-        self._central.setFeature(
-            CDockWidget.DockWidgetFeature.DockWidgetClosable, False
+        self._central.setWidget(
+            self._viewer_dock_manager,
+            CDockWidget.eInsertMode.ForceNoScrollArea,
         )
-        blank = QWidget()
-        blank.setObjectName("blank")
-        self._central.setWidget(blank)
         central_dock_area = self._dock_manager.setCentralWidget(self._central)
         assert central_dock_area is not None
+        central_dock_area.setAllowedAreas(DockWidgetArea.OuterDockAreas)
         self._central_dock_area = central_dock_area
+        self._apply_dock_style()
 
         self._viewers = AcquireViewersManager(
-            self._dock_manager, self._central_dock_area, self._core, parent=self
+            self._viewer_dock_manager,
+            self._core,
+            parent=self,
         )
         # Connect before the MDA panel constructs CameraRoiWidget.  Its roiSet
         # handler performs Auto Snap synchronously, so a lazy Preview must be
@@ -575,7 +588,7 @@ class AcquirePage(TabPage):
         central = self._dock_manager.centralWidget()
         if central is not None and (area := central.dockAreaWidget()) is not None:
             self._central_dock_area = area
-            self._viewers.set_central_dock_area(area)
+            area.setAllowedAreas(DockWidgetArea.OuterDockAreas)
 
         # Drop the stale cache and re-derive from the rebuilt tree, so the
         # next panel opened tabs into the restored right column instead of
@@ -722,15 +735,10 @@ class AcquirePage(TabPage):
     def _install_width_lock(self, area: CDockAreaWidget) -> bool:
         """Freeze *area*'s column width except while it's actively being dragged.
 
-        ADS recomputes splitter proportions for the *whole* manager whenever
-        any dock area's visibility changes anywhere in it -- not just areas
-        adjacent to the one that changed -- so a central viewer opening or
-        closing can silently resize the MDA or right (Groups & Presets /
-        Properties / Console) columns even though the user never touched
-        them. Reactively re-applying a width after the fact (via a dock's
-        ``closed`` signal, even retried across several deferred event-loop
-        turns) is a race against ADS's own relayout passes, which can be
-        arbitrarily delayed -- proved unreliable in practice. A hard
+        Viewer changes cannot reach this splitter because viewers now live in
+        their own nested manager. The outer manager can still recompute its
+        proportions when an MDA/tool area is opened, closed, moved, restored,
+        or pinned, however. A hard
         ``minimumWidth == maximumWidth`` constraint is the only thing a
         splitter must respect in *every* layout pass it computes, regardless
         of what triggers that pass or when, so this locks the column there
@@ -962,9 +970,7 @@ class AcquirePage(TabPage):
         ``qproperty-icon`` rules in that sheet -- is left intact.
         """
         t = theme()
-        self._dock_manager.setStyleSheet(
-            self._base_dock_style
-            + f"""
+        override = f"""
             ads--CDockWidgetTab QLabel {{
                 color: {qcolor(t.text_secondary).name()};
             }}
@@ -981,7 +987,8 @@ class AcquirePage(TabPage):
                 background-color: {qcolor(t.bg_deepest).name()};
             }}
             """
-        )
+        self._dock_manager.setStyleSheet(self._base_dock_style + override)
+        self._viewer_dock_manager.setStyleSheet(self._viewer_base_dock_style + override)
 
     def _connect_dock_area_tab_switch(self, area: CDockAreaWidget) -> None:
         """Refresh dock icons whenever *area*'s current tab changes.
@@ -1033,7 +1040,7 @@ class AcquirePage(TabPage):
         # whose wrappers immediately reject access to deleted C++ objects.
         with suppress(RuntimeError):
             red = qcolor(theme().status_red)
-            for btn in self._dock_manager.findChildren(QAbstractButton):
+            for btn in self.findChildren(QAbstractButton):
                 name = btn.objectName()
                 if name == _ADS_TAB_CLOSE_BUTTON:
                     set_icon_tint(btn, red)
@@ -1056,13 +1063,13 @@ class AcquirePage(TabPage):
         makes it re-inherit the now-current app font. Same fix, same reason, as
         ``_GroupEditorTab.changeEvent`` in ``_configurations.py``.
         """
-        dm = self._dock_manager
-        for w in (dm, *dm.findChildren(QWidget)):
-            # QAbstractSlider is excluded for the same reason as in
-            # _configurations.py: its groove/handle metrics are derived from
-            # the font, and resetting it mid-StyleChange fights the style.
-            if not isinstance(w, QAbstractSlider):
-                w.setFont(QFont())
+        for dm in (self._dock_manager, self._viewer_dock_manager):
+            for w in (dm, *dm.findChildren(QWidget)):
+                # QAbstractSlider is excluded for the same reason as in
+                # _configurations.py: its groove/handle metrics are derived from
+                # the font, and resetting it mid-StyleChange fights the style.
+                if not isinstance(w, QAbstractSlider):
+                    w.setFont(QFont())
 
     def changeEvent(self, a0: QEvent | None) -> None:
         """Re-apply dock theming and un-freeze dock fonts after a theme/zoom change."""

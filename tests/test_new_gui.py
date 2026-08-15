@@ -40,7 +40,7 @@ from pymmcore_gui._modern_gui._theme import (
 )
 from pymmcore_gui._modern_gui._theme._dark import DARK_THEME
 from pymmcore_gui._modern_gui._theme._light import LIGHT_THEME
-from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget
+from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget, DockWidgetArea
 from pymmcore_gui._qt.QtCore import QPoint, QSize, Qt
 from pymmcore_gui._qt.QtGui import QCursor
 from pymmcore_gui._qt.QtWidgets import (
@@ -242,7 +242,8 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     tabs = page._mda._collapsible_tabs()
 
     assert page._viewers.preview is None
-    assert page._central_dock_area.dockWidgetsCount() == 1  # just the blank placeholder
+    assert page._central_dock_area.dockWidgetsCount() == 1  # outer viewer shell
+    assert page._viewer_dock_manager.dockAreaCount() == 0
     # AcquirePage doesn't use TabPage's left sidebar or its (now-removed)
     # right/bottom regions -- the dock manager supplies all docking itself.
     assert page.left.isHidden()
@@ -251,9 +252,15 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
 
     dm = page._dock_manager
     assert dm.centralWidget() is page._central
+    assert page._central.widget() is page._viewer_dock_manager
+    assert page._viewer_dock_manager.centralWidget() is None
     DF = CDockWidget.DockWidgetFeature
     assert page._central.features().value & DF.NoTab.value
     assert not page._central.features().value & DF.DockWidgetClosable.value
+    assert page._central_dock_area.allowedAreas() == DockWidgetArea.OuterDockAreas
+    assert page._mda_dock.dockManager() is dm
+    assert page._viewers._dock_manager is page._viewer_dock_manager
+    assert page._viewers._dock_manager is not dm
 
     assert page._mda_dock.widget() is page._mda
     assert not page._mda_dock.isClosed()
@@ -278,6 +285,7 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
         "acquire_mda",
         "acquire_viewers",
     ]
+    assert page._viewer_dock_manager.dockWidgetsMap() == {}
     assert not hasattr(page, "_channels")
     assert not {
         button.text() for button in page.toolbar.findChildren(QPushButton)
@@ -397,6 +405,7 @@ def test_acquire_inactive_dock_tab_labels_are_visible(
     page.panel_button(PanelKey.PROPERTIES).click()
 
     ss = page._dock_manager.styleSheet()
+    viewer_ss = page._viewer_dock_manager.styleSheet()
     inactive = qcolor(theme().text_secondary).name()
     active = qcolor(theme().text_primary).name()
     assert f"ads--CDockWidgetTab QLabel {{\n                color: {inactive};" in ss
@@ -407,6 +416,8 @@ def test_acquire_inactive_dock_tab_labels_are_visible(
     # base ADS chrome (e.g. the qproperty-icon rules for title-bar buttons)
     # must survive -- this appends overrides, it doesn't replace the sheet.
     assert "qproperty-icon" in ss
+    assert inactive in viewer_ss
+    assert active in viewer_ss
 
 
 def test_acquire_dock_icons_are_themed_on_initial_dark_startup(
@@ -573,6 +584,13 @@ def test_acquire_docks_are_movable_and_pinnable(
     page.panel_button(PanelKey.PRESETS).click()
     presets_dock = page.panel_dock(PanelKey.PRESETS)
     assert presets_dock is not None
+    # Every non-viewer panel belongs to the same outer manager, so users can
+    # move them across the full left/right/top/bottom perimeter. Viewers use a
+    # nested manager and can only rearrange within the central workspace.
+    assert page._mda_dock.dockManager() is page._dock_manager
+    assert presets_dock.dockManager() is page._dock_manager
+    assert page._viewers._dock_manager is page._viewer_dock_manager
+    assert page._viewer_dock_manager is not page._dock_manager
     DF = CDockWidget.DockWidgetFeature
     for dock in (page._mda_dock, presets_dock):
         assert dock.features().value & DF.DockWidgetPinnable.value
@@ -2888,28 +2906,7 @@ def test_acquire_viewer_close_reclaims_space_without_moving_mda(
     qtbot: QtBot,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Closing a viewer actually destroys its dock area, but MDA still holds.
-
-    Viewer docks use ADS's ``DockWidgetDeleteOnClose`` feature so a closed
-    viewer's dock-area/splitter node is genuinely removed (freeing its Qt
-    widget/canvas resources and letting any remaining side-by-side viewer
-    reclaim the freed space) rather than left behind as permanently-empty
-    dead space. Destroying a dock area makes ADS recompute splitter
-    proportions for the *whole* manager, which used to also resize unrelated
-    docks like the MDA panel -- that's now prevented by the MDA column's
-    width lock (see ``AcquirePage._install_width_lock``), not by avoiding
-    real deletion.
-
-    This can't be exercised through the actual "split two viewers side by
-    side, then close the one left alone in its area" scenario that motivated
-    the width lock: per the note in ``_configure_ads`` (``_acquire.py``),
-    emptying a dock area reproducibly segfaults under
-    ``QT_QPA_PLATFORM=offscreen`` + pytest-qt, independent of app code -- the
-    same reason the app's own tests stick to non-emptying dock moves (this
-    viewer is tabbed alongside the always-present central placeholder, so
-    closing it doesn't empty the area). Instead this verifies the two things
-    that matter: the feature flag is set, and the MDA column doesn't move.
-    """
+    """Viewer relayout stays inside the nested manager and reclaims dead space."""
 
     class Emitter:
         def emit(self) -> None:
@@ -2934,6 +2931,11 @@ def test_acquire_viewer_close_reclaims_space_without_moving_mda(
     monkeypatch.setattr(acquire_viewers_module, "MMArrayViewer", FakeViewer)
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
+    page.resize(1400, 900)
+    page.show()
+    qtbot.waitExposed(page)
+    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
+    page.panel_button(PanelKey.PRESETS).click()
 
     mmcore.mda.run(
         useq.MDASequence(channels=(useq.Channel(config="DAPI", exposure=10),)),
@@ -2949,14 +2951,89 @@ def test_acquire_viewer_close_reclaims_space_without_moving_mda(
     assert dock.features().value & DF.DockWidgetDeleteOnClose.value
 
     mda_area = page._mda_dock.dockAreaWidget()
-    assert mda_area is not None
+    right_area = page._right_dock_area
+    assert mda_area is not None and right_area is not None
     mda_width_before = mda_area.width()
+    right_width_before = right_area.width()
+
+    # Split another viewer beside the active one inside the nested manager.
+    # Emptying that split area must not affect either outer tools column.
+    second = CDockWidget(page._viewer_dock_manager, "Viewer2")
+    second.setWidget(QWidget())
+    second.setFeature(DF.DockWidgetDeleteOnClose, True)
+    page._viewer_dock_manager.addDockWidget(
+        DockWidgetArea.RightDockWidgetArea, second, dock.dockAreaWidget()
+    )
+    qtbot.wait(20)
+    second.closeDockWidget()
+    qtbot.wait(20)
+
+    assert page._viewers.active_viewer is viewer
+    assert not viewer.closed
+    assert mda_area.width() == mda_width_before
+    assert right_area.width() == right_width_before
+
+    # Closing one side of an inner split should let its sibling reclaim the
+    # space, and a later viewer should tab into that remaining area.
+    third = CDockWidget(page._viewer_dock_manager, "Viewer3")
+    third.setWidget(QWidget())
+    third.setFeature(DF.DockWidgetDeleteOnClose, True)
+    page._viewer_dock_manager.addDockWidget(
+        DockWidgetArea.RightDockWidgetArea, third, dock.dockAreaWidget()
+    )
+    qtbot.wait(20)
+    third_area = third.dockAreaWidget()
+    assert third_area is not None
+    third_width_before = third_area.width()
 
     dock.closeDockWidget()
+    qtbot.wait(20)
 
     assert page._viewers.active_viewer is None
     assert viewer.closed
+    assert third_area.width() > third_width_before * 1.5
     assert mda_area.width() == mda_width_before
+    assert right_area.width() == right_width_before
+
+    fourth = page._viewers._new_dock("Viewer4")
+    fourth.setWidget(QWidget())
+    assert fourth.dockAreaWidget() is third_area
+
+
+def test_acquire_new_viewer_split_is_equal(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    """Dragging one of two viewer tabs aside creates an equal 50/50 split."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.resize(1200, 800)
+    page.show()
+    qtbot.waitExposed(page)
+
+    first = page._viewers._new_dock("Viewer1")
+    first.setWidget(QWidget())
+    second = page._viewers._new_dock("Viewer2")
+    second.setWidget(QWidget())
+    shared_area = first.dockAreaWidget()
+    assert shared_area is not None
+    assert second.dockAreaWidget() is shared_area
+
+    # Disable ADS's programmatic-insertion helper so this specifically verifies
+    # our relocation fallback instead of merely retesting the global flag.
+    flag = CDockManager.eConfigFlag.EqualSplitOnInsertion
+    CDockManager.setConfigFlag(flag, False)
+    try:
+        page._viewer_dock_manager.addDockWidget(
+            DockWidgetArea.RightDockWidgetArea, second, shared_area
+        )
+        qtbot.wait(20)
+    finally:
+        CDockManager.setConfigFlag(flag, True)
+
+    second_area = second.dockAreaWidget()
+    assert second_area is not None and second_area is not shared_area
+    splitter = second_area.parentWidget()
+    assert isinstance(splitter, QSplitter)
+    first_size, second_size = splitter.sizes()
+    assert abs(first_size - second_size) <= 1
 
 
 def test_acquire_viewer_records_frame_metadata_regardless_of_follow_lock(
@@ -3124,11 +3201,9 @@ def test_acquire_mda_dock_width_resists_relayout_but_stays_draggable(
 ) -> None:
     """The MDA dock area's width resists relayout, but a real drag can change it.
 
-    Regression test for a bug where ADS's own splitter relayout -- triggered
-    whenever any dock area's visibility changes anywhere in the manager, not
-    just areas adjacent to the one that changed -- could silently resize the
-    MDA (or right, Groups & Presets / Properties / Console) column when a
-    central viewer opened or closed. A *reactive* fix (re-applying
+    Viewer relayout is now isolated in the nested viewer manager, but changes
+    to areas in the outer MDA/tools manager can still recompute that manager's
+    splitter proportions. A *reactive* fix (re-applying
     ``setSplitterSizes`` after the fact, even across several deferred
     event-loop turns) proved unreliable in practice: it's a race against
     ADS's own relayout passes, which can be arbitrarily delayed. The actual
@@ -3138,12 +3213,7 @@ def test_acquire_mda_dock_width_resists_relayout_but_stays_draggable(
     pass, regardless of what triggers it or when -- except for the exact
     duration of a real mouse drag on the handle to its right, caught via
     ``eventFilter`` (mouse press unlocks; release re-locks at the new
-    width). This can't be exercised through the actual "split two viewers
-    side by side, close the one left alone in its area" scenario that
-    motivated the fix -- per the note in ``_configure_ads``
-    (``_acquire.py``), emptying a dock area reproducibly segfaults under
-    ``QT_QPA_PLATFORM=offscreen`` + pytest-qt, independent of app code. This
-    instead verifies both halves directly: an explicit, deliberate attempt
+    width). This verifies both halves directly: an explicit, deliberate attempt
     to resize the splitter away from the locked width has no effect while
     locked, and a simulated press-drag-release on the handle both unlocks it
     for the drag and re-locks it at the resulting (user-chosen) width
@@ -3461,18 +3531,10 @@ def test_acquire_restore_does_not_repin_column_widths(
     assert mda_area_b.minimumWidth() == mda_area_b.maximumWidth() == 500
 
 
-def test_acquire_restore_repoints_viewer_central_area(
+def test_acquire_restore_preserves_nested_viewer_manager(
     mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The first snap after a restore must not tab into a deleted C++ area.
-
-    Regression test for ``AcquireViewersManager`` caching
-    ``_central_dock_area`` at construction: ``CDockManager.restoreState``
-    tears down and rebuilds the whole dock-area tree, so without
-    ``AcquireViewersManager.set_central_dock_area`` the manager would hold a
-    dangling reference and crash on the first preview/viewer opened after a
-    restore.
-    """
+    """Restoring the outer tools layout leaves the inner viewer tree intact."""
 
     class FakePreview(QWidget):
         def __init__(self, mmcore: CMMCorePlus, parent: QWidget | None = None) -> None:
@@ -3500,12 +3562,16 @@ def test_acquire_restore_repoints_viewer_central_area(
 
     page_b = AcquirePage(mmcore)
     qtbot.addWidget(page_b)
+    inner_manager = page_b._viewer_dock_manager
     assert page_b.restore_layout(state, keys)
+    assert page_b._viewers._dock_manager is inner_manager
+    assert inner_manager.centralWidget() is None
 
-    # Must not raise/crash: ensure_preview tabs into the *current* central
-    # area, not the one captured when AcquireViewersManager was constructed.
+    # Must not raise/crash: the outer manager's restore does not rebuild the
+    # independent inner viewer area used by ensure_preview.
     page_b._snap_btn.click()
     assert page_b._viewers.preview is not None
+    assert inner_manager.dockAreaCount() == 1
 
 
 def test_mda_action_icons_use_theme_status_colors(
