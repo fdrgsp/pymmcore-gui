@@ -331,6 +331,11 @@ class ConfigurationsPage(TabPage):
             self._pixel_dirty = False
         self._update_dirty_label()
 
+    def discard_changes(self) -> None:
+        """Replace unsaved group and pixel edits with the live core state."""
+        self._refresh(reload_configs=True)
+        self.mark_saved()
+
     def commit_current_to_core(self) -> None:
         """Write the selected editor's contents into the live core."""
         if self._tabs.currentWidget() is self._group_tab:

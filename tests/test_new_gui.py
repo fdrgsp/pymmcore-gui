@@ -191,8 +191,51 @@ def test_unsaved_configuration_prompt_uses_button_variants(
     buttons = {button.text(): button for button in messages[0].buttons()}
     assert buttons["Save to core"].property("variant") == "subtle"
     assert buttons["Save to file…"].property("variant") == "primary"
-    assert buttons["Continue without saving"].property("variant") == "danger"
+    assert buttons["Discard changes and continue"].property("variant") == "danger"
     assert buttons["Cancel"].property("variant") == "subtle"
+
+
+def test_discarding_configuration_changes_before_switching_cleans_page(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+    configurations = window._configurations
+    configurations_index = window._stack.indexOf(configurations)
+    acquire_index = window._stack.indexOf(window._acquire)
+    window._mode_tabs._select(configurations_index)
+
+    saved_groups = [group.name for group in configurations._group_editor.data()]
+    configurations._group_editor._add_group()
+    selected = configurations._pixel_config._selected_preset()
+    assert selected is not None
+    row, preset = selected
+    resolution_id = str(preset.name)
+    saved_pixel_size = float(mmcore.getPixelSizeUmByID(resolution_id))
+    pixel_size = configurations._pixel_config._px_table.table().cellWidget(row, 1)
+    assert isinstance(pixel_size, QDoubleSpinBox)
+    pixel_size.setValue(saved_pixel_size + 0.25)
+    assert configurations._group_dirty
+    assert configurations._pixel_dirty
+
+    with patch.object(
+        window, "_prompt_unsaved_configuration_changes", return_value="discard"
+    ):
+        window._mode_tabs._select(acquire_index)
+
+    assert window._stack.currentWidget() is window._acquire
+    assert not configurations.is_dirty()
+    assert [group.name for group in configurations._group_editor.data()] == saved_groups
+    reloaded_preset = next(
+        preset
+        for preset in configurations._pixel_config._resID_map.values()
+        if str(preset.name) == resolution_id
+    )
+    assert reloaded_preset.pixel_size_um == saved_pixel_size
+
+    window._mode_tabs._select(configurations_index)
+    assert window._stack.currentWidget() is configurations
+    assert not configurations.is_dirty()
 
 
 def test_new_gui_uses_one_application_font(

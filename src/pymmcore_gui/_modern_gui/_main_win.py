@@ -368,13 +368,14 @@ class MainWindow(QMainWindow):
                 # stay on Configurations rather than navigate away silently
                 self._mode_tabs._select(current_index)
                 return
-            # "continue": leave the edits pending and navigate away anyway
+            elif choice == "discard":
+                self._configurations.discard_changes()
         self._stack.setCurrentIndex(index)
 
     def _prompt_unsaved_configuration_changes(self) -> str:
         """Ask how to handle unsaved group/pixel edits before leaving the page.
 
-        Returns "save_core", "save_file", "continue", or "cancel".
+        Returns "save_core", "save_file", "discard", or "cancel".
         """
         dirty_parts = self._configurations.dirty_parts()
         msg = QMessageBox(self)
@@ -389,14 +390,14 @@ class MainWindow(QMainWindow):
         save_file_btn = msg.addButton(
             "Save to file…", QMessageBox.ButtonRole.AcceptRole
         )
-        continue_btn = msg.addButton(
-            "Continue without saving", QMessageBox.ButtonRole.DestructiveRole
+        discard_btn = msg.addButton(
+            "Discard changes and continue", QMessageBox.ButtonRole.DestructiveRole
         )
         cancel_btn = msg.addButton(QMessageBox.StandardButton.Cancel)
         for button, variant in (
             (save_core_btn, "subtle"),
             (save_file_btn, "primary"),
-            (continue_btn, "danger"),
+            (discard_btn, "danger"),
             (cancel_btn, "subtle"),
         ):
             if button is not None:
@@ -409,8 +410,8 @@ class MainWindow(QMainWindow):
             return "save_core"
         if clicked is save_file_btn:
             return "save_file"
-        if clicked is continue_btn:
-            return "continue"
+        if clicked is discard_btn:
+            return "discard"
         return "cancel"
 
     def _on_pixel_calibration_running(self, running: bool) -> None:
