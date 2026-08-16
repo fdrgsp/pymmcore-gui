@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,6 +31,10 @@ from pymmcore_gui._modern_gui._acquire import (
 from pymmcore_gui._modern_gui._acquire_presets import AcquisitionPresetSelector
 from pymmcore_gui._modern_gui._configurations import ConfigurationsPage
 from pymmcore_gui._modern_gui._hardware import HardwareSetupPage
+from pymmcore_gui._modern_gui._installation import (
+    InstallationPage,
+    InstallReleaseDialog,
+)
 from pymmcore_gui._modern_gui._main_win import MainWindow
 from pymmcore_gui._modern_gui._panels import PANELS, PanelKey
 from pymmcore_gui._modern_gui._startup import StartupDialog
@@ -72,7 +77,7 @@ from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
 from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Iterator, Sequence
 
     from pymmcore_plus import CMMCorePlus
     from pymmcore_widgets.mda._collapsible_mda import CollapsibleCoreMDATabs
@@ -121,10 +126,10 @@ def test_accepting_startup_config_selects_acquire(
     qtbot.addWidget(window)
 
     assert window._stack.currentWidget() is window._acquire
-    assert window._mode_tabs._tabs[2].active
+    assert window._mode_tabs._tabs[window._stack.indexOf(window._acquire)].active
 
     # A config loaded later from inside the running UI must not force a tab switch.
-    window._mode_tabs._select(1)
+    window._mode_tabs._select(window._stack.indexOf(window._configurations))
     mmcore.loadSystemConfiguration(str(config))
     assert window._stack.currentWidget() is window._configurations
 
@@ -158,6 +163,7 @@ def test_pixel_calibration_locks_other_main_window_modes(
     window = MainWindow(mmcore=mmcore)
     qtbot.addWidget(window)
     config_index = window._stack.indexOf(window._configurations)
+    install_index = window._stack.indexOf(window._installation)
     hardware_index = window._stack.indexOf(window._hardware)
     acquire_index = window._stack.indexOf(window._acquire)
     window._mode_tabs._select(config_index)
@@ -165,14 +171,319 @@ def test_pixel_calibration_locks_other_main_window_modes(
     window._configurations.calibrationRunningChanged.emit(True)
 
     assert window._stack.currentWidget() is window._configurations
+    assert not window._mode_tabs._tabs[install_index].isEnabled()
     assert not window._mode_tabs._tabs[hardware_index].isEnabled()
     assert not window._mode_tabs._tabs[acquire_index].isEnabled()
     window._mode_tabs._select(acquire_index)
     assert window._stack.currentWidget() is window._configurations
 
     window._configurations.calibrationRunningChanged.emit(False)
+    assert window._mode_tabs._tabs[install_index].isEnabled()
     assert window._mode_tabs._tabs[hardware_index].isEnabled()
     assert window._mode_tabs._tabs[acquire_index].isEnabled()
+
+
+@contextmanager
+def _fake_installs(paths: Sequence[Path]) -> Iterator[None]:
+    """Show *paths* to ``InstallWidget`` without touching the network.
+
+    Its constructor otherwise fetches the release listing from micro-manager.org
+    and ctypes-loads every installed ``mmgr_dal`` library. Discovery stays
+    honest about the disk -- only directories that still exist are reported --
+    so uninstalling really has to remove one for it to leave the table.
+    """
+    module = "pymmcore_widgets._install_widget"
+
+    def find(return_first: bool = True) -> str | list[str] | None:
+        live = [str(p) for p in paths if p.is_dir()]
+        if not return_first:
+            return live
+        return live[0] if live else None
+
+    with (
+        patch(f"{module}.available_versions", return_value={}),
+        patch(f"{module}.find_micromanager", find),
+        patch(f"{module}._try_get_device_interface_version", return_value="75"),
+    ):
+        yield
+
+
+def _fake_install_dir(parent: Path, name: str) -> Path:
+    """Create a directory that looks like a Micro-Manager install."""
+    path = parent / name
+    path.mkdir()
+    (path / "libmmgr_dal_DemoCamera").write_bytes(b"")
+    return path
+
+
+def test_installation_page_builds_its_widget_on_demand(
+    qtbot: QtBot, tmp_path: Path
+) -> None:
+    page = InstallationPage()
+    qtbot.addWidget(page)
+    # constructing the page must not construct (or reach out on behalf of) the
+    # wrapped widget
+    assert page.install_widget is None
+
+    older = _fake_install_dir(tmp_path, "Micro-Manager-75.20240101")
+    newer = _fake_install_dir(tmp_path, "Micro-Manager-75.20250202")
+    with _fake_installs([older, newer]):
+        widget = page.ensure_loaded()
+        assert page.ensure_loaded() is widget  # built once
+
+    assert widget is not None
+    assert page.install_widget is widget
+    assert widget.toolbar.isHidden()  # the page toolbar stands in for it
+    assert widget.install_row.isHidden()  # the Install button + dialog replace it
+    assert widget.table.rowCount() == 2
+
+    # Install sits directly before Uninstall in the toolbar
+    assert list(page._buttons) == [
+        "Refresh",
+        "Reveal",
+        "Set Active",
+        "Install",
+        "Uninstall",
+    ]
+
+    # buttons follow the actions they replace: nothing selected, nothing to do
+    assert page._buttons["Refresh"].isEnabled()
+    assert page._buttons["Install"].isEnabled()  # never depends on a selection
+    assert not page._buttons["Uninstall"].isEnabled()
+    assert not page._buttons["Set Active"].isEnabled()
+
+    # rows are sorted newest first, and `older` is the active one
+    widget.table.selectRow(0)
+    assert page._buttons["Uninstall"].isEnabled()
+    assert page._buttons["Set Active"].isEnabled()
+    widget.table.selectRow(1)
+    assert not page._buttons["Set Active"].isEnabled()  # already active
+
+
+def test_installation_page_reports_a_changed_active_install(
+    qtbot: QtBot, tmp_path: Path
+) -> None:
+    older = _fake_install_dir(tmp_path, "Micro-Manager-75.20240101")
+    newer = _fake_install_dir(tmp_path, "Micro-Manager-75.20250202")
+    with patch(
+        "pymmcore_gui._modern_gui._installation.find_micromanager",
+        return_value=str(older),
+    ):
+        page = InstallationPage()
+    qtbot.addWidget(page)
+    with _fake_installs([older, newer]):
+        widget = page.ensure_loaded()
+    assert widget is not None
+    assert page.active_install == str(older)
+
+    # every path that can change the active install (these buttons, the table's
+    # own Delete-key uninstall, a finished download) ends in a table refresh
+    with (
+        patch(
+            "pymmcore_gui._modern_gui._installation.find_micromanager",
+            return_value=str(newer),
+        ),
+        _fake_installs([newer, older]),
+        qtbot.waitSignal(page.activeInstallChanged) as blocker,
+    ):
+        widget.table.refresh()
+
+    assert blocker.args == [str(newer)]
+    assert page.active_install == str(newer)
+
+
+def test_uninstalling_an_install_removes_it_from_the_table(
+    qtbot: QtBot, tmp_path: Path
+) -> None:
+    """The row must not come back: pymmcore-plus keeps listing deleted installs.
+
+    ``find_micromanager(return_first=False)`` returns a module-level cache that
+    nothing evicts from, so a table that simply re-lists itself after deleting
+    shows the row it just removed.
+    """
+    page = InstallationPage()
+    qtbot.addWidget(page)
+    older = _fake_install_dir(tmp_path, "Micro-Manager-75.20240101")
+    newer = _fake_install_dir(tmp_path, "Micro-Manager-75.20250202")
+
+    with _fake_installs([older, newer]):
+        widget = page.ensure_loaded()
+        assert widget is not None
+        widget.table.selectRow(1)  # rows are newest first, so this is `older`
+        with patch.object(
+            QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
+        ):
+            page._buttons["Uninstall"].click()
+
+        assert not older.exists()
+        assert newer.is_dir()
+        assert widget.table.rowCount() == 1
+        remaining = widget.table.item(0, widget.table.VER_COL)
+        assert remaining is not None
+        assert remaining.text() == newer.name
+
+
+def test_install_button_asks_which_release_then_installs(
+    qtbot: QtBot, tmp_path: Path
+) -> None:
+    page = InstallationPage()
+    qtbot.addWidget(page)
+    install = _fake_install_dir(tmp_path, "Micro-Manager-75.20240101")
+
+    with _fake_installs([install]):
+        widget = page.ensure_loaded()
+        assert widget is not None
+
+        dialogs: list[InstallReleaseDialog] = []
+
+        def choose_second_release(dialog: InstallReleaseDialog) -> int:
+            dialogs.append(dialog)
+            dialog._releases.setCurrentIndex(1)
+            return QDialog.DialogCode.Accepted
+
+        with (
+            patch.object(InstallReleaseDialog, "exec", choose_second_release),
+            patch.object(widget, "install") as start,
+        ):
+            page._buttons["Install"].click()
+
+    assert len(dialogs) == 1
+    # the dialog offers exactly what the widget resolved as installable
+    combo = widget.version_combo
+    assert [
+        dialogs[0]._releases.itemText(i) for i in range(dialogs[0]._releases.count())
+    ] == [combo.itemText(i) for i in range(combo.count())]
+    # ...and the choice goes through the widget's public install API
+    start.assert_called_once_with("latest")
+
+
+def test_cancelling_the_release_dialog_installs_nothing(
+    qtbot: QtBot, tmp_path: Path
+) -> None:
+    page = InstallationPage()
+    qtbot.addWidget(page)
+    install = _fake_install_dir(tmp_path, "Micro-Manager-75.20240101")
+
+    with _fake_installs([install]):
+        widget = page.ensure_loaded()
+        assert widget is not None
+        before = widget.version_combo.currentText()
+        with (
+            patch.object(
+                InstallReleaseDialog, "exec", return_value=QDialog.DialogCode.Rejected
+            ),
+            patch.object(widget, "install") as start,
+        ):
+            page._buttons["Install"].click()
+
+    start.assert_not_called()
+    assert widget.version_combo.currentText() == before
+
+
+def test_an_uninstall_that_fails_says_so(qtbot: QtBot, tmp_path: Path) -> None:
+    page = InstallationPage()
+    qtbot.addWidget(page)
+    install = _fake_install_dir(tmp_path, "Micro-Manager-75.20240101")
+
+    with _fake_installs([install]):
+        widget = page.ensure_loaded()
+        assert widget is not None
+        widget.table.selectRow(0)
+        with (
+            patch(
+                "shutil.rmtree", side_effect=PermissionError("Operation not permitted")
+            ),
+            patch.object(
+                QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
+            ),
+            patch.object(QMessageBox, "warning") as warning,
+        ):
+            page._buttons["Uninstall"].click()
+
+    # silently swallowing the failure (what ignore_errors=True does upstream)
+    # would leave the row in place with no explanation
+    assert install.is_dir()
+    warning.assert_called_once()
+    assert "Operation not permitted" in warning.call_args[0][2]
+
+
+def test_window_opens_on_hardware_setup(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+    assert window._stack.currentWidget() is window._hardware
+    # Installation leads the tab order but is not built until it's opened.
+    assert window._stack.indexOf(window._installation) == 0
+    assert window._installation.install_widget is None
+
+
+def test_window_without_micromanager_opens_on_installation(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    with patch(
+        "pymmcore_gui._modern_gui._main_win.find_micromanager", return_value=None
+    ):
+        window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+    assert window._stack.currentWidget() is window._installation
+    assert window._mode_tabs._tabs[0].active
+
+
+def test_switching_active_install_repoints_the_running_core(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+    assert [d for d in mmcore.getLoadedDevices() if d != "Core"]
+
+    new_install = tmp_path / "Micro-Manager-75.20250202"
+    new_install.mkdir()
+    with patch.object(window, "_confirm_install_switch", return_value=True) as confirm:
+        window._installation.activeInstallChanged.emit(str(new_install))
+
+    confirm.assert_called_once_with(str(new_install))
+    assert list(mmcore.getDeviceAdapterSearchPaths()) == [str(new_install)]
+    # everything that belonged to the replaced installation is gone
+    assert [d for d in mmcore.getLoadedDevices() if d != "Core"] == []
+    assert not mmcore.getAvailableConfigGroups()
+    assert not window._hardware.model.devices
+
+
+def test_declining_an_install_switch_keeps_the_session(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+    loaded = list(mmcore.getLoadedDevices())
+    paths = list(mmcore.getDeviceAdapterSearchPaths())
+
+    new_install = tmp_path / "Micro-Manager-75.20250202"
+    new_install.mkdir()
+    with patch.object(window, "_confirm_install_switch", return_value=False):
+        window._installation.activeInstallChanged.emit(str(new_install))
+
+    assert list(mmcore.getLoadedDevices()) == loaded
+    assert list(mmcore.getDeviceAdapterSearchPaths()) == paths
+
+
+def test_install_switch_prompt_uses_button_variants(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+    messages: list[QMessageBox] = []
+
+    def inspect_without_showing(message: QMessageBox) -> int:
+        messages.append(message)
+        return 0
+
+    with patch.object(QMessageBox, "exec", inspect_without_showing):
+        # no button was clicked -> the session is kept, the switch deferred
+        assert not window._confirm_install_switch(str(tmp_path / "Micro-Manager"))
+
+    assert len(messages) == 1
+    buttons = {button.text(): button for button in messages[0].buttons()}
+    assert buttons["Switch now"].property("variant") == "danger"
+    assert buttons["Keep this session"].property("variant") == "subtle"
 
 
 def test_unsaved_configuration_prompt_uses_button_variants(
