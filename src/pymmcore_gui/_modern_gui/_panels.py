@@ -127,7 +127,7 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
     PanelInfo(
         key=PanelKey.MDA,
         title="MDA",
-        icon="qlementine-icons:cube-16",
+        icon="f7:cube",
         tooltip="MDA — show or hide the multi-dimensional acquisition panel",
         create=_create_mda,
         area=DockWidgetArea.LeftDockWidgetArea,
@@ -145,7 +145,7 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
     PanelInfo(
         key=PanelKey.PRESETS,
         title="Groups and Presets",
-        icon="mdi:format-list-group",
+        icon="hugeicons:property-new",
         tooltip="Groups and Presets — show or hide the group/preset panel",
         create=_create_presets,
         default_open=True,
@@ -154,7 +154,7 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
     PanelInfo(
         key=PanelKey.PROPERTIES,
         title="Properties",
-        icon="mdi-light:format-list-bulleted",
+        icon="hugeicons:property-edit",
         tooltip="Properties — open the device property browser panel",
         create=_ignoring_core(create_property_browser),
         unstyle=True,
@@ -163,14 +163,14 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
     PanelInfo(
         key=PanelKey.CONSOLE,
         title="Console",
-        icon="iconoir:terminal",
+        icon="griddy-icons:console",
         tooltip="Console — open an IPython console panel",
         create=_create_console,
     ),
     PanelInfo(
         key=PanelKey.EXCEPTION_LOG,
         title="Exception Log",
-        icon="mdi-light:alert",
+        icon="si:alert-line",
         tooltip="Exception Log — show or hide the exception log panel",
         create=_ignoring_core(create_exception_log),
         unstyle=True,

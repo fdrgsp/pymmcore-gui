@@ -300,9 +300,10 @@ class _LayoutMenuRow(QWidget):
     makes the user find the same name twice.
     """
 
-    _TRASH_ICON = "mdi:trash-can-outline"
+    _TRASH_ICON = "fluent:delete-16-regular"
     _BASE_HEIGHT = 26
     _BASE_MIN_WIDTH = 200
+    _TRASH_ICON_SIZE = 14
 
     selected = Signal()
     deleteRequested = Signal()
@@ -340,7 +341,7 @@ class _LayoutMenuRow(QWidget):
         self._trash.setProperty("variant", "ghost")
         self._trash.setToolTip(f"Delete the {name!r} layout")
         self._trash.setCursor(Qt.CursorShape.ArrowCursor)
-        self._trash.setFixedSize(_icon_size() * 1.4)
+        self._trash.setFixedSize(self._trash_icon_size() * 1.4)
         self._trash.clicked.connect(self.deleteRequested)
         self._trash.setVisible(deletable)
         row.addWidget(self._trash)
@@ -372,10 +373,14 @@ class _LayoutMenuRow(QWidget):
                 painter.end()
         super().paintEvent(a0)
 
+    def _trash_icon_size(self) -> QSize:
+        size = theme().scaled(self._TRASH_ICON_SIZE)
+        return QSize(size, size)
+
     def _apply_icon(self) -> None:
         color = qcolor(theme().status_red).name()
         set_source_icon(self._trash, QIconifyIcon(self._TRASH_ICON, color=color))
-        self._trash.setIconSize(_icon_size())
+        self._trash.setIconSize(self._trash_icon_size())
 
     def changeEvent(self, a0: QEvent | None) -> None:
         if a0 is not None and a0.type() == QEvent.Type.StyleChange:
@@ -395,7 +400,7 @@ class LayoutMenuButton(QPushButton):
     :meth:`set_layouts`, and reports intent through the signals below.
     """
 
-    _ICON = "mdi:view-dashboard-outline"
+    _ICON = "lucide:layout"
 
     layoutSelected = Signal(str)
     """A layout name was picked from the list (the built-in name included)."""
