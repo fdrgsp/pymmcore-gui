@@ -41,8 +41,32 @@ jobs:
           uv run pyinstaller app/mmgui.spec --clean --noconfirm
           ls -la dist/pymmgui
 
+      - name: Enable Windows crash dumps
+        # Test Bundle has been crashing natively (STATUS_ACCESS_VIOLATION)
+        # on windows-latest with no diagnostics of any kind. Ask WER to
+        # write a minidump so a failure can actually be root-caused.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dumpDir = "$env:LOCALAPPDATA\CrashDumps"
+          New-Item -ItemType Directory -Path $dumpDir -Force | Out-Null
+          $key = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps"
+          New-Item -Path $key -Force | Out-Null
+          New-ItemProperty -Path $key -Name DumpFolder -PropertyType ExpandString -Value $dumpDir -Force | Out-Null
+          New-ItemProperty -Path $key -Name DumpType -PropertyType DWord -Value 2 -Force | Out-Null
+          New-ItemProperty -Path $key -Name DumpCount -PropertyType DWord -Value 5 -Force | Out-Null
+          "CRASH_DUMP_DIR=$dumpDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Test Bundle
         run: uv run pytest -v --color=yes tests/test_bundle.py
+
+      - name: Upload crash dump
+        if: runner.os == 'Windows' && failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pymmgui-crash-dump-${{ runner.os }}
+          path: ${{ env.CRASH_DUMP_DIR }}\*.dmp
+          if-no-files-found: warn
 
       - name: Upload bundle
         # upload-artifact@v2 does not preserve symlinks, this fork does
