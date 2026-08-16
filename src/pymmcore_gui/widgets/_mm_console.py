@@ -133,6 +133,16 @@ class MMConsole(QtConsole):
         if self.kernel_client is not None:
             self.kernel_client.stop_channels()
         if self.kernel_manager is not None and self.kernel_manager.has_kernel:
+            # IPython's HistoryManager runs a daemon thread that saves the
+            # command history to a shared on-disk sqlite file. Nothing else
+            # joins it, so it otherwise keeps running (and writing to that
+            # shared file) after the kernel and shell are gone, which races
+            # with history threads from other, later console instances.
+            shell = getattr(self.kernel_manager.kernel, "shell", None)
+            history_manager = getattr(shell, "history_manager", None)
+            save_thread = getattr(history_manager, "save_thread", None)
+            if save_thread is not None:
+                save_thread.stop()
             self.kernel_manager.shutdown_kernel()
 
         # RichJupyterWidget doesn't clean these up

@@ -40,17 +40,18 @@ def test_main_window_widget_actions(
     with patch.object(QDialog, "exec", lambda x: x.show()):
         wdg = gui.get_widget(w_action)
         assert w_action in gui._qactions
-    try:
-        if not isinstance(wdg, QDialog):
-            assert w_action in gui._action_widgets
-            assert action.isChecked()
-            gui.get_dock_widget(w_action).toggleView(False)
-            assert not action.isChecked()
-    finally:
-        # _action_widgets is a weak cache.  Close the concrete widget while
-        # this test still owns its Python wrapper so threaded widgets cannot
-        # outlive the fixture and the per-test core.
+    if isinstance(wdg, QDialog):
+        # QDialogs are never added to _action_widgets, so MainWindow.closeEvent
+        # never closes them; the test must close it explicitly so it (and any
+        # threaded resources it owns) doesn't outlive the fixture.
         wdg.close()
+    else:
+        assert w_action in gui._action_widgets
+        assert action.isChecked()
+        gui.get_dock_widget(w_action).toggleView(False)
+        assert not action.isChecked()
+        # Left open: MainWindow.closeEvent (run once, via the `gui` fixture's
+        # qtbot teardown) closes dock-owned widgets like this one already.
 
 
 @pytest.mark.parametrize("c_action", list(CoreAction))
