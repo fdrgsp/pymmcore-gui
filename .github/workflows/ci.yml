@@ -90,7 +90,14 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dumps -Force | Out-Null
-          procdump -accepteula -ma -e -x dumps `
+          # First attempt (exit 0xC0000409 / STATUS_STACK_BUFFER_OVERRUN) used
+          # -e alone and procdump logged "Dump count not reached" -- __fastfail
+          # -style termination bypasses normal structured-exception dispatch,
+          # so -e (which watches for dispatched exceptions) never saw it. -t
+          # dumps on any process termination regardless of how it exits; -e 1
+          # additionally catches first-chance exceptions in case it recurs as
+          # a plain access violation.
+          procdump -accepteula -ma -e 1 -t -x dumps `
             .venv\Scripts\python.exe -m coverage run -p -m pytest -v --color=yes
           exit $LASTEXITCODE
 
