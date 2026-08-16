@@ -15,8 +15,8 @@ from pymmcore_widgets._icons import StandardIcon
 from pymmcore_widgets._util import block_core
 from superqt.iconify import QIconifyIcon
 
-from pymmcore_gui._array_viewer import unstyle_widgets
-from pymmcore_gui._qt.QtCore import QEvent, QTimer, Signal
+from pymmcore_gui._array_viewer import set_source_icon, unstyle_widgets
+from pymmcore_gui._qt.QtCore import QEvent, QSize, QTimer, Signal
 from pymmcore_gui._qt.QtGui import QFont, QPalette
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractSlider,
@@ -279,6 +279,7 @@ class ConfigurationsPage(TabPage):
         )
         self._save_file_btn.clicked.connect(self.saveToFileRequested.emit)
         self.toolbar.add_widget(self._save_file_btn)
+        self._apply_save_button_icons()
         self._pixel_config.calibrationRunningChanged.connect(
             self._on_pixel_calibration_running
         )
@@ -442,9 +443,20 @@ class ConfigurationsPage(TabPage):
         pal.setColor(QPalette.ColorRole.WindowText, color)
         self._dirty_text.setPalette(pal)
 
+    def _apply_save_button_icons(self) -> None:
+        color = qcolor(theme().text_secondary).name()
+        size = theme().scaled(16)
+        for btn, icon in (
+            (self._save_core_btn, "material-symbols:upload-file-outline-rounded"),
+            (self._save_file_btn, "material-symbols:file-save-outline-rounded"),
+        ):
+            set_source_icon(btn, QIconifyIcon(icon, color=color))
+            btn.setIconSize(QSize(size, size))
+
     def changeEvent(self, a0: QEvent | None) -> None:
         if a0 is not None and a0.type() == QEvent.Type.StyleChange:
             self._apply_dirty_style()
+            self._apply_save_button_icons()
         super().changeEvent(a0)
 
     def _on_system_config_loaded(self) -> None:

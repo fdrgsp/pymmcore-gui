@@ -618,43 +618,46 @@ class MicroscopeStyle(QProxyStyle):
 
         r = opt.rect
 
-        # Icon
-        if not opt.icon.isNull():
+        # drawItemText processes the '&' mnemonic (e.g. "&Yes" → "Yes"),
+        # honoring the platform's underline-shortcut style hint.
+        flags = int(Qt.AlignmentFlag.AlignCenter) | int(Qt.TextFlag.TextShowMnemonic)
+        if not self.styleHint(QStyle.StyleHint.SH_UnderlineShortcut, opt, widget):
+            flags |= int(Qt.TextFlag.TextHideMnemonic)
+        enabled = bool(opt.state & QStyle.StateFlag.State_Enabled)
+
+        if not opt.icon.isNull() and opt.text:
+            # Icon + text: center the pair as one group rather than pinning
+            # the icon to the button's left edge -- on a button wider than
+            # its content (e.g. a full-width CTA) a left-pinned icon reads
+            # as stranded, far from the label it belongs to.
             icon_size = opt.iconSize
-            if opt.text:
-                # Icon + text: pin the icon to the left, text fills the rest.
-                icon_rect = QRect(
-                    r.left() + 8,
-                    r.top() + (r.height() - icon_size.height()) // 2,
-                    icon_size.width(),
-                    icon_size.height(),
-                )
-                r = QRect(
-                    icon_rect.right() + 4,
-                    r.top(),
-                    r.width() - icon_rect.width() - 12,
-                    r.height(),
-                )
-            else:
-                # Icon-only: nothing to justify against on the right, so
-                # center it in the button instead of pinning it to the left.
-                icon_rect = QRect(
-                    r.left() + (r.width() - icon_size.width()) // 2,
-                    r.top() + (r.height() - icon_size.height()) // 2,
-                    icon_size.width(),
-                    icon_size.height(),
-                )
+            gap = 6
+            text_w = p.fontMetrics().size(flags, opt.text).width()
+            content_w = icon_size.width() + gap + text_w
+            start = r.left() + max(0, (r.width() - content_w) // 2)
+            icon_rect = QRect(
+                start,
+                r.top() + (r.height() - icon_size.height()) // 2,
+                icon_size.width(),
+                icon_size.height(),
+            )
+            opt.icon.paint(p, icon_rect)
+            text_rect = QRect(icon_rect.right() + gap, r.top(), text_w, r.height())
+            self.drawItemText(p, text_rect, flags, opt.palette, enabled, opt.text)
+            return
+
+        if not opt.icon.isNull():
+            # Icon-only: center it in the button.
+            icon_size = opt.iconSize
+            icon_rect = QRect(
+                r.left() + (r.width() - icon_size.width()) // 2,
+                r.top() + (r.height() - icon_size.height()) // 2,
+                icon_size.width(),
+                icon_size.height(),
+            )
             opt.icon.paint(p, icon_rect)
 
-        # Text — drawItemText processes the '&' mnemonic (e.g. "&Yes" → "Yes"),
-        # honoring the platform's underline-shortcut style hint.
         if opt.text:
-            flags = int(Qt.AlignmentFlag.AlignCenter) | int(
-                Qt.TextFlag.TextShowMnemonic
-            )
-            if not self.styleHint(QStyle.StyleHint.SH_UnderlineShortcut, opt, widget):
-                flags |= int(Qt.TextFlag.TextHideMnemonic)
-            enabled = bool(opt.state & QStyle.StateFlag.State_Enabled)
             self.drawItemText(p, r, flags, opt.palette, enabled, opt.text)
 
     # ═══════════════════════════════════════════════════════════

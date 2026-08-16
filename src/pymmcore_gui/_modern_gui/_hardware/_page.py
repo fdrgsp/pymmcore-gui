@@ -13,7 +13,9 @@ from typing import TYPE_CHECKING, cast
 
 from pymmcore_plus import CMMCorePlus, DeviceType, Keyword
 from pymmcore_plus.model import Device, Microscope
+from superqt.iconify import QIconifyIcon
 
+from pymmcore_gui._array_viewer import set_source_icon
 from pymmcore_gui._light_sources import (
     Declarations,
     parse_light_source_comments,
@@ -21,7 +23,8 @@ from pymmcore_gui._light_sources import (
 )
 from pymmcore_gui._modern_gui._busy import BusyOverlay, busy
 from pymmcore_gui._modern_gui._tab_page import TabPage
-from pymmcore_gui._qt.QtCore import Qt
+from pymmcore_gui._modern_gui._theme import qcolor, theme
+from pymmcore_gui._qt.QtCore import QEvent, QSize, Qt
 from pymmcore_gui._qt.QtWidgets import (
     QFileDialog,
     QMessageBox,
@@ -79,16 +82,19 @@ class HardwareSetupPage(TabPage):
         self._detail_split.setStretchFactor(1, 1)
         self.add_content_widget(self._detail_split)
 
-        for text, slot in (
-            ("New", self.new_config),
-            ("Load…", self.load_config),
-            ("Save…", self.save_config),
+        self._toolbar_buttons: list[tuple[QPushButton, str]] = []
+        for text, icon, slot in (
+            ("New", "material-symbols:add-box-outline-rounded", self.new_config),
+            ("Load…", "material-symbols:upload-rounded", self.load_config),
+            ("Save…", "material-symbols:download-rounded", self.save_config),
         ):
             btn = QPushButton(text)
             btn.setProperty("variant", "primary")
             btn.clicked.connect(slot)
             self.toolbar.add_widget(btn)
+            self._toolbar_buttons.append((btn, icon))
         self.toolbar.add_stretch()
+        self._apply_toolbar_icons()
 
         self._available.deviceSelected.connect(self._on_available_selected)
         self._installed.deviceSelected.connect(self._on_installed_selected)
@@ -149,6 +155,18 @@ class HardwareSetupPage(TabPage):
     def resizeEvent(self, a0: QResizeEvent | None) -> None:
         super().resizeEvent(a0)
         self._overlay.setGeometry(self.rect())
+
+    def _apply_toolbar_icons(self) -> None:
+        color = qcolor(theme().text_secondary).name()
+        size = theme().scaled(16)
+        for btn, icon in self._toolbar_buttons:
+            set_source_icon(btn, QIconifyIcon(icon, color=color))
+            btn.setIconSize(QSize(size, size))
+
+    def changeEvent(self, a0: QEvent | None) -> None:
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
+            self._apply_toolbar_icons()
+        super().changeEvent(a0)
 
     # ── config files ──────────────────────────────────────────────
 

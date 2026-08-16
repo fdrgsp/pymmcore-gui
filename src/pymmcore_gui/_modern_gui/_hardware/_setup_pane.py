@@ -10,9 +10,11 @@ from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from pymmcore_plus import DeviceType, Keyword, PropertyType
+from superqt.iconify import QIconifyIcon
 
-from pymmcore_gui._modern_gui._theme import theme
-from pymmcore_gui._qt.QtCore import Qt, Signal
+from pymmcore_gui._array_viewer import set_source_icon
+from pymmcore_gui._modern_gui._theme import qcolor, theme
+from pymmcore_gui._qt.QtCore import QEvent, QSize, Qt, Signal
 from pymmcore_gui._qt.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -90,6 +92,11 @@ class DeviceSetupPane(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
+        # "Add Device" is rebuilt from scratch by show_available() every time
+        # (see _reset), so this tracks whichever instance currently exists —
+        # or None the rest of the time — for changeEvent to re-theme.
+        self._add_btn: QPushButton | None = None
+
         self._title = pane_title("Device Setup")
 
         self._body = QWidget()
@@ -140,6 +147,8 @@ class DeviceSetupPane(QWidget):
         add_btn.setProperty("variant", "primary")
         add_btn.clicked.connect(_emit_add)
         label_edit.returnPressed.connect(_emit_add)
+        self._add_btn = add_btn
+        self._apply_add_icon()
 
         self._body_layout.addStretch()
         self._body_layout.addWidget(add_btn)
@@ -256,6 +265,21 @@ class DeviceSetupPane(QWidget):
         """Clear the body and set the pane title."""
         self._title.setText(title)
         _clear_layout(self._body_layout)
+        self._add_btn = None
+
+    def _apply_add_icon(self) -> None:
+        if self._add_btn is None:
+            return
+        color = qcolor(theme().text_secondary).name()
+        size = theme().scaled(16)
+        icon = QIconifyIcon("material-symbols:add-link-rounded", color=color)
+        set_source_icon(self._add_btn, icon)
+        self._add_btn.setIconSize(QSize(size, size))
+
+    def changeEvent(self, a0: QEvent | None) -> None:
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
+            self._apply_add_icon()
+        super().changeEvent(a0)
 
     def _add_section(self, title: str) -> None:
         """Add a sub-heading separating groups of settings."""

@@ -15,9 +15,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from pymmcore_plus import find_micromanager
+from superqt.iconify import QIconifyIcon
 
-from pymmcore_gui._array_viewer import unstyle_widgets
-from pymmcore_gui._qt.QtCore import Qt, QTimer, Signal
+from pymmcore_gui._array_viewer import set_source_icon, unstyle_widgets
+from pymmcore_gui._qt.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from pymmcore_gui._qt.QtWidgets import (
     QComboBox,
     QDialog,
@@ -32,7 +33,7 @@ from pymmcore_gui._qt.QtWidgets import (
 
 from ._busy import BusyOverlay, busy
 from ._tab_page import TabPage
-from ._theme import theme
+from ._theme import qcolor, theme
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -43,17 +44,35 @@ if TYPE_CHECKING:
 
 LOADING_MSG: Final = "Looking for Micro-Manager releases…"
 
-# label, button variant, handler on this page, InstallWidget QAction gating it
+# label, icon, button variant, handler on this page, InstallWidget QAction gating it
 #
 # "primary" for the action buttons and "danger" for the destructive one is what
 # the other tab-page toolbars do (Hardware Setup's New/Load/Save, Configurations'
 # two Save buttons) -- leaving only Install primary made it the odd one out.
 _ACTIONS: Final = (
-    ("Refresh", "primary", "_refresh", ""),
-    ("Reveal", "primary", "_reveal", "_act_reveal"),
-    ("Set Active", "primary", "_set_active", "_act_use"),
-    ("Install", "primary", "_install", ""),
-    ("Uninstall", "danger", "_uninstall", "_act_uninstall"),
+    ("Refresh", "material-symbols:refresh-rounded", "primary", "_refresh", ""),
+    ("Reveal", "material-symbols:search-rounded", "primary", "_reveal", "_act_reveal"),
+    (
+        "Set Active",
+        "material-symbols:check-rounded",
+        "primary",
+        "_set_active",
+        "_act_use",
+    ),
+    (
+        "Install",
+        "material-symbols:install-desktop-rounded",
+        "primary",
+        "_install",
+        "",
+    ),
+    (
+        "Uninstall",
+        "material-symbols:delete-forever-outline-rounded",
+        "danger",
+        "_uninstall",
+        "_act_uninstall",
+    ),
 )
 
 
@@ -195,7 +214,7 @@ class InstallationPage(TabPage):
         # they stand in for, so the upstream selection rules remain the only
         # place those rules live.
         self._buttons: dict[str, QPushButton] = {}
-        for label, variant, handler, _action in _ACTIONS:
+        for label, _icon, variant, handler, _action in _ACTIONS:
             btn = QPushButton(label)
             btn.setProperty("variant", variant)
             btn.setEnabled(False)
@@ -203,6 +222,7 @@ class InstallationPage(TabPage):
             self.toolbar.add_widget(btn)
             self._buttons[label] = btn
         self.toolbar.add_stretch()
+        self._apply_button_icons()
 
         # Replaced by the real widget once it loads; also carries the error if
         # the release listing can't be fetched.
@@ -291,6 +311,21 @@ class InstallationPage(TabPage):
     def resizeEvent(self, a0: QResizeEvent | None) -> None:
         super().resizeEvent(a0)
         self._overlay.setGeometry(self.rect())
+
+    def _apply_button_icons(self) -> None:
+        default_color = qcolor(theme().text_secondary).name()
+        danger_color = qcolor(theme().status_red).name()
+        size = theme().scaled(16)
+        for label, icon, variant, _handler, _action in _ACTIONS:
+            color = danger_color if variant == "danger" else default_color
+            btn = self._buttons[label]
+            set_source_icon(btn, QIconifyIcon(icon, color=color))
+            btn.setIconSize(QSize(size, size))
+
+    def changeEvent(self, a0: QEvent | None) -> None:
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
+            self._apply_button_icons()
+        super().changeEvent(a0)
 
     # ── toolbar ───────────────────────────────────────────────────
 
@@ -400,7 +435,7 @@ class InstallationPage(TabPage):
         """Follow the enabled state of the actions these buttons stand in for."""
         if (widget := self._widget) is None:  # pragma: no cover
             return
-        for label, _variant, _method, action in _ACTIONS:
+        for label, _icon, _variant, _method, action in _ACTIONS:
             enabled = True
             if action:
                 enabled = bool(getattr(widget, action).isEnabled())
