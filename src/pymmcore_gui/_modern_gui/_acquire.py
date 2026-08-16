@@ -775,6 +775,19 @@ class AcquirePage(TabPage):
         Called once at startup (before the MDA column's width lock -- see
         ``_install_width_lock`` -- takes over) and whenever the right column
         is first created.
+
+        A width the MDA column is already locked to -- the user's own drag,
+        or a restored/named layout that saved a non-default width -- is kept
+        rather than overwritten with the canonical ``_MDA_DOCK_WIDTH``.
+        Regression test for the splitter silently caching the canonical width
+        anyway: opening the *first* right-side panel after loading a layout
+        with a narrower MDA visibly clamped the column at its custom width
+        (the lock held), but the very next hover-triggered unlock -- any
+        mouse movement over the MDA/viewer boundary -- snapped it straight to
+        the canonical width, and moving the mouse away then *locked that in*
+        as the new, permanently wrong, width. Only a genuinely unset MDA
+        (fresh construction, or just after ``reset_layout`` releases every
+        lock) falls through to the canonical default.
         """
         mda_area = self._mda_dock.dockAreaWidget()
         if mda_area is None:
@@ -790,7 +803,11 @@ class AcquirePage(TabPage):
             return
         total = self._dock_manager.width()
         new = [0] * len(sizes)
-        new[0] = _MDA_DOCK_WIDTH
+        locked_width = mda_area.width()
+        is_locked = (
+            mda_area.minimumWidth() == mda_area.maximumWidth() and locked_width > 0
+        )
+        new[0] = locked_width if is_locked else _MDA_DOCK_WIDTH
         middle = range(1, len(sizes))
         if len(sizes) > 2:
             new[-1] = min(total // 4, _RIGHT_DOCK_MAX_WIDTH)

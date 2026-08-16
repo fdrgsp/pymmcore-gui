@@ -3700,6 +3700,62 @@ def test_acquire_restore_does_not_repin_column_widths(
     assert mda_area_b.minimumWidth() == mda_area_b.maximumWidth() == 500
 
 
+def test_pin_dock_widths_preserves_a_locked_custom_mda_width(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """``_pin_dock_widths`` must reuse MDA's current locked width, not the default.
+
+    Regression test for a reported bug: a layout saved with MDA resized
+    narrower and *no* right column open (a "minimal" layout, loaded with
+    ``-l``) looked fine on restore -- the visible size stayed clamped to the
+    saved width -- but the moment the first tool panel was opened afterward
+    (creating the right column for the first time, via ``_add_side_dock``),
+    the very next hover near the MDA/viewer boundary snapped the column back
+    to the canonical default width, and moving the mouse away then locked
+    that wrong width in permanently. Verified by hand against a real running
+    app (before the fix: opening the first side panel after restoring a
+    narrower MDA left the splitter's cached slot for MDA at the canonical
+    700px even though the visible/locked width was 400px; hovering then
+    unlocked and snapped to the stale 700; after the fix, both stay 400).
+
+    ``_pin_dock_widths`` unconditionally wrote the canonical
+    ``_MDA_DOCK_WIDTH`` into the splitter's *cached* slot for MDA whenever it
+    ran, regardless of what MDA was actually locked to. The lock clamped what
+    was *visible*, so nothing looked wrong until later, when something
+    (a hover-triggered unlock) let Qt fall through to that stale cached
+    value. That downstream Qt relayout isn't reliably reproducible inside the
+    synthetic pytest-qt harness even when driven through a full
+    ``create_mmgui`` two-window restore -- confirmed by hand -- so this
+    instead asserts on ``_pin_dock_widths``' own output (what it writes into
+    the splitter for MDA's slot) the moment MDA is already locked to a custom
+    width, which is the actual defect and is deterministic regardless of
+    platform/timing.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.resize(1400, 900)
+    page.show()
+    qtbot.waitExposed(page)
+    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
+
+    mda_area = page._mda_dock.dockAreaWidget()
+    assert mda_area is not None
+    # A custom width already locked in -- from a user's own drag, or from a
+    # restored/named layout -- is exactly what _pin_dock_widths sees whenever
+    # it runs; how it got there doesn't matter to this function.
+    mda_area.setMinimumWidth(400)
+    mda_area.setMaximumWidth(400)
+    qtbot.wait(20)
+    assert mda_area.width() == 400
+
+    splitter = mda_area.parentWidget()
+    assert isinstance(splitter, QSplitter)
+    idx = splitter.indexOf(mda_area)
+
+    page._pin_dock_widths()
+    assert splitter.sizes()[idx] == 400
+
+
 def test_acquire_restore_preserves_nested_viewer_manager(
     mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
 ) -> None:
