@@ -72,7 +72,35 @@ jobs:
       - uses: pymmcore-plus/setup-mm-test-adapters@main
 
       - name: Test
+        if: matrix.qt != 'PySide6'
         run: uv run coverage run -p -m pytest -v --color=yes
+
+      - name: Install procdump
+        # windows-latest py3.13PySide6 has hit a silent (zero-diagnostics)
+        # crash that occurs *after* pytest's own "N passed" summary line --
+        # consistent with a native fault during interpreter shutdown, past
+        # the point where Python's own faulthandler can catch it. procdump
+        # monitors the process from the outside and writes a real minidump.
+        if: matrix.qt == 'PySide6'
+        shell: pwsh
+        run: choco install procdump -y --no-progress
+
+      - name: Test (procdump-wrapped)
+        if: matrix.qt == 'PySide6'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dumps -Force | Out-Null
+          procdump -accepteula -ma -e -x dumps `
+            .venv\Scripts\python.exe -m coverage run -p -m pytest -v --color=yes
+          exit $LASTEXITCODE
+
+      - name: Upload crash dump
+        if: matrix.qt == 'PySide6' && failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pytest-crash-dump-${{ matrix.os }}-py${{ matrix.python-version }}${{ matrix.qt }}
+          path: dumps\*.dmp
+          if-no-files-found: warn
 
       - name: Upload coverage
         uses: actions/upload-artifact@v6
