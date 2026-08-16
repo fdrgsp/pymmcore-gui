@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import replace
 from typing import TYPE_CHECKING
 from unittest.mock import patch
@@ -187,6 +188,10 @@ def test_property_value_edit_updates_calibration_target(
     ) in panel._target.settings
 
 
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="requires the resizable virtual display provided by Linux CI",
+)
 def test_calibration_panel_has_form_viewer_and_information_layout(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:

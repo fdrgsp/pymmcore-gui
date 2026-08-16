@@ -40,13 +40,17 @@ def test_main_window_widget_actions(
     with patch.object(QDialog, "exec", lambda x: x.show()):
         wdg = gui.get_widget(w_action)
         assert w_action in gui._qactions
-    if isinstance(wdg, QDialog):
-        ...
-    else:
-        assert w_action in gui._action_widgets
-        assert action.isChecked()
-        gui.get_dock_widget(w_action).toggleView(False)
-        assert not action.isChecked()
+    try:
+        if not isinstance(wdg, QDialog):
+            assert w_action in gui._action_widgets
+            assert action.isChecked()
+            gui.get_dock_widget(w_action).toggleView(False)
+            assert not action.isChecked()
+    finally:
+        # _action_widgets is a weak cache.  Close the concrete widget while
+        # this test still owns its Python wrapper so threaded widgets cannot
+        # outlive the fixture and the per-test core.
+        wdg.close()
 
 
 @pytest.mark.parametrize("c_action", list(CoreAction))
