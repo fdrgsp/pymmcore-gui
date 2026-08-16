@@ -39,15 +39,6 @@ def qapp_cls() -> type[QApplication]:
     return _app.MMQApplication
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _flush_deletion_queue(qapp: QApplication) -> Iterator[None]:
-    # Drain deleteLater() objects before interpreter shutdown; PySide6/Windows
-    # crashes (exit code 1) if they're flushed after extension modules are torn down.
-    yield
-    for _ in range(5):
-        qapp.processEvents()
-
-
 # to create a new CMMCorePlus() for every test
 @pytest.fixture(autouse=True)
 def mmcore() -> Iterator[CMMCorePlus]:
