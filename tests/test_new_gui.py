@@ -3543,6 +3543,14 @@ def test_acquire_opening_a_panel_widens_an_unusable_column(
     reproduces the original report. What this pins down is the behaviour that
     fixes it -- opening a panel widens a below-floor column -- which is
     platform independent.
+
+    The target itself, not a hardcoded floor, is what the assertions compare
+    against: CI's headless display (real, just small and fixed-resolution --
+    see the other width tests in this file) can silently clamp the requested
+    1400px window, in which case ``min(dm.width() // 4, _RIGHT_DOCK_MAX_WIDTH)``
+    -- the same number ``_widen_unusable_right_column`` aims for -- can itself
+    land under the usability floor. The widen still helps in that case; it
+    just can't promise reaching a floor the window has no room for.
     """
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
@@ -3554,22 +3562,37 @@ def test_acquire_opening_a_panel_widens_an_unusable_column(
     right_area = page._right_dock_area
     assert right_area is not None
     column = page._column_widget(right_area)
+    target = min(page._dock_manager.width() // 4, _RIGHT_DOCK_MAX_WIDTH)
+
+    # Pre-build the dock so the re-show path (toggleView, not addDockWidget)
+    # is exercised: addDockWidget schedules an ADS layout pass that can race
+    # with _widen_right_column_soon on the offscreen platform.
+    page.panel_button(PanelKey.EXCEPTION_LOG).setChecked(True)
+    assert page.panel_dock(PanelKey.EXCEPTION_LOG) is not None
+    page.panel_button(PanelKey.EXCEPTION_LOG).setChecked(False)
+
     page._dock_manager.setSplitterSizes(
         right_area, _resized_splitter_sizes(page, right_area, 60)
     )
     assert column.width() == 60
 
+    # Re-show via toggleView -- no addDockWidget, no competing ADS layout.
     page.panel_button(PanelKey.EXCEPTION_LOG).setChecked(True)
-    qtbot.waitUntil(
-        lambda: column.width() >= _RIGHT_DOCK_MIN_USABLE_WIDTH, timeout=2000
-    )
+    qtbot.waitUntil(lambda: column.width() > 60, timeout=2000)
+    assert column.width() <= target
+    if target >= _RIGHT_DOCK_MIN_USABLE_WIDTH:
+        assert column.width() >= _RIGHT_DOCK_MIN_USABLE_WIDTH
 
     # A width the user chose is still theirs -- widening only ever rescues a
-    # column that is below the usability floor.
-    usable = column.width()
-    page.panel_button(PanelKey.PROPERTIES).setChecked(True)
-    qtbot.wait(50)
-    assert column.width() == usable
+    # column that is below the usability floor. Only meaningful once the
+    # first widen actually reached that floor -- otherwise opening another
+    # panel legitimately widens it further, toward the same unreachable
+    # target the first one settled for.
+    if column.width() >= _RIGHT_DOCK_MIN_USABLE_WIDTH:
+        usable = column.width()
+        page.panel_button(PanelKey.PROPERTIES).setChecked(True)
+        qtbot.wait(50)
+        assert column.width() == usable
 
 
 def test_acquire_narrow_column_repair_gives_up_instead_of_retrying_forever(

@@ -367,8 +367,9 @@ class _LayoutMenuRow(QWidget):
     def paintEvent(self, a0: QPaintEvent | None) -> None:
         if self._hovered:
             painter = QPainter(self)
-            painter.fillRect(self.rect(), qcolor(theme().bg_hover))
-            painter.end()
+            if painter.isActive():
+                painter.fillRect(self.rect(), qcolor(theme().bg_hover))
+                painter.end()
         super().paintEvent(a0)
 
     def _apply_icon(self) -> None:

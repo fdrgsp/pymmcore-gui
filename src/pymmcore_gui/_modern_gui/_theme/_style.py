@@ -478,7 +478,7 @@ class MicroscopeStyle(QProxyStyle):
         painter: QPainter | None,
         widget: QWidget | None = None,
     ) -> None:
-        if option is None or painter is None:
+        if option is None or painter is None or not painter.isActive():
             return
         CE = QStyle.ControlElement
 
@@ -527,7 +527,7 @@ class MicroscopeStyle(QProxyStyle):
         painter: QPainter | None,
         widget: QWidget | None = None,
     ) -> None:
-        if option is None or painter is None:
+        if option is None or painter is None or not painter.isActive():
             return
         CC = QStyle.ComplexControl
 
