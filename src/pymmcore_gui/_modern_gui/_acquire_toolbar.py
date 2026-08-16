@@ -94,7 +94,7 @@ class SnapButton(QPushButton):
 
     def _apply_icon(self) -> None:
         color = qcolor(theme().status_green).name()
-        self.setIcon(QIconifyIcon("mdi:camera-outline", color=color))
+        self.setIcon(QIconifyIcon("fluent:camera-24-regular", color=color))
 
     def changeEvent(self, e: QEvent | None) -> None:
         # status_green differs between light/dark themes -- a static icon
@@ -199,11 +199,11 @@ class LiveButton(QPushButton):
             self.setChecked(running)
         if running:
             color = qcolor(theme().status_red).name()
-            self.setIcon(QIconifyIcon("mdi:video-off-outline", color=color))
+            self.setIcon(QIconifyIcon("fluent:video-off-24-regular", color=color))
             self.setToolTip("Stop")
         else:
             color = qcolor(theme().status_green).name()
-            self.setIcon(QIconifyIcon("mdi:video-outline", color=color))
+            self.setIcon(QIconifyIcon("fluent:video-24-regular", color=color))
             self.setToolTip("Live")
 
     def changeEvent(self, e: QEvent | None) -> None:
