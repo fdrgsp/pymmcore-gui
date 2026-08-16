@@ -524,6 +524,7 @@ class MainWindow(QMainWindow):
                     a0.ignore()
                 return
         self._save_state()
+        self._acquire.shutdown()
         super().closeEvent(a0)
 
     def _save_all(self) -> bool:

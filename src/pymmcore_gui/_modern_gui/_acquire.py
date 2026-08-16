@@ -67,7 +67,7 @@ if TYPE_CHECKING:
     import useq
 
     from pymmcore_gui._qt.QtAds import CDockAreaWidget
-    from pymmcore_gui._qt.QtGui import QResizeEvent, QShowEvent
+    from pymmcore_gui._qt.QtGui import QCloseEvent, QResizeEvent, QShowEvent
     from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
     from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 
@@ -1324,6 +1324,26 @@ class AcquirePage(TabPage):
                 self._apply_dock_style()
                 self._refresh_dock_icons()
                 self._refresh_dock_fonts()
+
+    def shutdown(self) -> None:
+        """Stop resources owned by lazily created acquisition panels."""
+        for timer_name in (
+            "_width_settle_timer",
+            "_width_handle_hover_timer",
+            "_dock_icon_poll_timer",
+        ):
+            if timer := getattr(self, timer_name, None):
+                timer.stop()
+        if roi_sync := getattr(self, "_roi_sync", None):
+            roi_sync.stop()
+        for panel in self._panels.values():
+            if panel.widget is not None:
+                with suppress(RuntimeError):
+                    panel.widget.close()
+
+    def closeEvent(self, a0: QCloseEvent | None) -> None:
+        self.shutdown()
+        super().closeEvent(a0)
 
     def showEvent(self, a0: QShowEvent | None) -> None:
         # Devices added on the Hardware tab load into the core but don't fire

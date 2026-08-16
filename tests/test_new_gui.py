@@ -723,6 +723,7 @@ def test_acquire_stage_explorer_is_a_lazy_toolbar_dock(
     explorer = page.panel_widget(PanelKey.STAGE_EXPLORER)
     dock = page.panel_dock(PanelKey.STAGE_EXPLORER)
     assert isinstance(explorer, ThemedStageExplorer)
+    assert explorer._stage_poller.isRunning()
     assert dock is not None and not dock.isClosed()
     assert dock.widget() is explorer
     assert dock.windowTitle() == "Stage Explorer"
@@ -731,6 +732,9 @@ def test_acquire_stage_explorer_is_a_lazy_toolbar_dock(
     button.click()
     assert dock.isClosed()
     assert page.panel_widget(PanelKey.STAGE_EXPLORER) is explorer
+
+    page.close()
+    assert not explorer._stage_poller.isRunning()
 
 
 def test_stage_explorer_sends_positions_to_mda(

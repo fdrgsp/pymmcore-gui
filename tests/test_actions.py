@@ -1,4 +1,5 @@
 import pytest
+from pytestqt.qtbot import QtBot
 
 from pymmcore_gui import MicroManagerGUI
 from pymmcore_gui._qt.QtWidgets import QMenu, QWidget
@@ -17,8 +18,7 @@ def test_action_registry() -> None:
     info = WidgetActionInfo.for_key(WidgetAction.ABOUT)
 
 
-@pytest.mark.usefixtures("qapp")
-def test_actions_in_menus() -> None:
+def test_actions_in_menus(qtbot: QtBot) -> None:
     # people can add new ones
     text = "My Widget!!!!"
     act = WidgetActionInfo(
@@ -31,6 +31,7 @@ def test_actions_in_menus() -> None:
     assert act in ActionInfo.widget_actions().values()
 
     win = MicroManagerGUI()
+    qtbot.addWidget(win)
     mb = win.menuBar()
     assert mb
     window_menu = next(
