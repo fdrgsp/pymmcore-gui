@@ -226,8 +226,8 @@ class MainWindow(QMainWindow):
         self._apply_saved_appearance()
 
         self._mmc = mmcore or CMMCorePlus.instance()
-        self.setObjectName("MicroManagerGUI")
-        self.setWindowTitle("pymmcore-gui")
+        self.setObjectName("pyMMGUI")
+        self.setWindowTitle("pyMM")
         self.setWindowState(Qt.WindowState.WindowMaximized)
 
         # ── top toolbar: mode tabs + theme toggle ─────────────────
