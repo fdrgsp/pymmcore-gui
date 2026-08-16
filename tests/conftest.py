@@ -39,6 +39,15 @@ def qapp_cls() -> type[QApplication]:
     return _app.MMQApplication
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _flush_deletion_queue(qapp: QApplication) -> Iterator[None]:
+    # Drain deleteLater() objects before interpreter shutdown; PySide6/Windows
+    # crashes (exit code 1) if they're flushed after extension modules are torn down.
+    yield
+    for _ in range(5):
+        qapp.processEvents()
+
+
 # to create a new CMMCorePlus() for every test
 @pytest.fixture(autouse=True)
 def mmcore() -> Iterator[CMMCorePlus]:
@@ -129,6 +138,28 @@ def check_leaks(request: FixtureRequest, qapp: QApplication) -> Iterator[None]:
             print(r, r.parent())
         test = f"{request.node.path.name}::{request.node.originalname}"
         raise AssertionError(f"topLevelWidgets remaining after {test!r}: {remaining}")
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Explicitly flush Qt state before interpreter shutdown begins.
+
+    pytest-qt's own ``qapp`` fixture creates the QApplication but never tears
+    it down (it's a plain ``return``, not a generator) -- destruction is left
+    to whatever order CPython's interpreter-shutdown GC happens to run in.
+    On windows-latest py3.13PySide6 that has produced a silent
+    STATUS_ACCESS_VIOLATION well after pytest's own "N passed" summary, with
+    no diagnostics at all (faulthandler is itself torn down by that point in
+    shutdown). Closing windows and pumping events here, while still in a
+    normal monitored execution context, flushes any pending deferred
+    deletions/timers instead of leaving them for uncontrolled GC ordering.
+    """
+    from pymmcore_gui._qt.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if not isinstance(app, QApplication):
+        return
+    app.closeAllWindows()
+    app.processEvents()
 
 
 @pytest.fixture(autouse=True)
