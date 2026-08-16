@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from pymmcore_plus import CMMCorePlus, Keyword, find_micromanager
+from superqt.iconify import QIconifyIcon
 
+from pymmcore_gui._array_viewer import set_source_icon
 from pymmcore_gui._layouts import (
     LAST_SESSION_LAYOUT_NAME,
     AcquireLayout,
     store_session_layout,
 )
+from pymmcore_gui._notification_manager import NotificationManager
 from pymmcore_gui._qt.QtCore import QEvent, QRectF, QSize, Qt, QTimer, Signal
 from pymmcore_gui._qt.QtGui import (
+    QAction,
     QCloseEvent,
     QEnterEvent,
     QFontMetricsF,
@@ -25,9 +31,11 @@ from pymmcore_gui._qt.QtGui import (
 )
 from pymmcore_gui._qt.QtOpenGLWidgets import QOpenGLWidget
 from pymmcore_gui._qt.QtWidgets import (
+    QApplication,
     QDialog,
     QHBoxLayout,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSizePolicy,
@@ -41,6 +49,7 @@ from ._acquire import AcquirePage
 from ._configurations import ConfigurationsPage
 from ._hardware import HardwareSetupPage
 from ._installation import InstallationPage
+from ._panels import PanelKey
 from ._startup import StartupChoice, StartupDialog
 from ._theme import (
     qcolor,
@@ -58,6 +67,10 @@ from ._theme._light import LIGHT_THEME
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from pymmcore_gui._app import MMQApplication
+    from pymmcore_gui._notification_manager import Notification
+    from pymmcore_gui.widgets._exception_log import ExceptionLog
 
 
 def apply_saved_appearance() -> bool:
@@ -217,6 +230,90 @@ class ModeTabBar(QWidget):
         super().changeEvent(a0)
 
 
+class NotificationBellButton(QPushButton):
+    """Status-bar bell that pops up recent notification history.
+
+    Chrome, not a state indicator -- same "text_secondary, rebuild on
+    StyleChange" treatment as ``LayoutMenuButton`` in ``_acquire_toolbar``,
+    except it turns ``status_red`` while notifications are waiting to be
+    looked at, resetting the moment the bell is clicked open.
+    """
+
+    _ICON = "codicon:bell"
+    _MAX_HISTORY = 20
+    _SEVERITY_ICON: ClassVar[dict[str, tuple[str, str]]] = {
+        "error": ("codicon:error", "status_red"),
+        "warning": ("codicon:warning", "status_amber"),
+        "info": ("codicon:info", "accent"),
+    }
+
+    def __init__(
+        self, manager: NotificationManager, parent: QWidget | None = None
+    ) -> None:
+        super().__init__(parent)
+        self._manager = manager
+        self._unread = 0
+        self.setFlat(True)
+        self.setProperty("variant", "subtle")
+        self.setFixedSize(24, 24)
+        self.setToolTip("Notifications")
+        self.clicked.connect(self._popup)
+        manager.notificationAdded.connect(self._on_notification_added)
+        self._apply_icon()
+
+    def _on_notification_added(self, _notification: Notification) -> None:
+        self._unread += 1
+        self._apply_icon()
+
+    def _popup(self) -> None:
+        self._unread = 0
+        self._apply_icon()
+        self._build_menu().exec(self.mapToGlobal(self.rect().bottomLeft()))
+
+    def _build_menu(self) -> QMenu:
+        menu = QMenu(self)
+        history = list(self._manager.notifications())[-self._MAX_HISTORY :]
+        if not history:
+            empty = QAction("No notifications", menu)
+            empty.setEnabled(False)
+            menu.addAction(empty)
+            return menu
+        for notification in reversed(history):
+            icon_name, color_attr = self._SEVERITY_ICON.get(
+                notification.severity, self._SEVERITY_ICON["info"]
+            )
+            icon = QIconifyIcon(
+                icon_name, color=qcolor(getattr(theme(), color_attr)).name()
+            )
+            when = datetime.fromtimestamp(notification.timestamp).strftime("%H:%M:%S")
+            text = (notification.message.splitlines() or [""])[0]
+            if len(text) > 80:
+                text = text[:77] + "…"
+            action = QAction(icon, f"{when}   {text}", menu)
+            # Only notifications with a primary action (e.g. the exception
+            # toast's "See traceback") are actionable from here; plain info
+            # entries are just a read-only record of what happened.
+            if notification.actions and notification.on_action is not None:
+                action.triggered.connect(
+                    partial(notification.on_action, notification.actions[0])
+                )
+            else:
+                action.setEnabled(False)
+            menu.addAction(action)
+        return menu
+
+    def _apply_icon(self) -> None:
+        color = theme().status_red if self._unread else theme().text_secondary
+        set_source_icon(self, QIconifyIcon(self._ICON, color=qcolor(color).name()))
+        size = theme().scaled(16)
+        self.setIconSize(QSize(size, size))
+
+    def changeEvent(self, e: QEvent | None) -> None:
+        if e is not None and e.type() == QEvent.Type.StyleChange:
+            self._apply_icon()
+        super().changeEvent(e)
+
+
 class MainWindow(QMainWindow):
     """Top-level window: mode tabs over a stack of (empty) tab pages."""
 
@@ -231,6 +328,12 @@ class MainWindow(QMainWindow):
         self.setObjectName("pyMMGUI")
         self.setWindowTitle("pyMM")
         self.setWindowState(Qt.WindowState.WindowMaximized)
+
+        self._notification_manager = NotificationManager(self)
+        self._bell_button = NotificationBellButton(self._notification_manager, self)
+        if app := QApplication.instance():
+            if hasattr(app, "exceptionRaised"):
+                cast("MMQApplication", app).exceptionRaised.connect(self._on_exception)
 
         # ── top toolbar: mode tabs + theme toggle ─────────────────
         self._toolbar = QToolBar()
@@ -297,6 +400,7 @@ class MainWindow(QMainWindow):
 
         if status_bar := self.statusBar():
             status_bar.showMessage("Ready")
+            status_bar.addPermanentWidget(self._bell_button)
 
         # ── zoom shortcuts ────────────────────────────────────────
         mods = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
@@ -354,6 +458,7 @@ class MainWindow(QMainWindow):
         self._acquire.select_layout(name)
         if show:
             self.show()
+            self._notification_manager.reposition_notifications()
 
     def _on_acquire_layout_reset(self) -> None:
         """Drop the persisted "Last session" layout so a crash can't resurrect it.
@@ -616,6 +721,29 @@ class MainWindow(QMainWindow):
         self._is_dark = not self._is_dark
         set_theme(DARK_THEME if self._is_dark else LIGHT_THEME)
         self._theme_btn.setText("☀" if self._is_dark else "🌙")
+
+    def _on_exception(self, exc: BaseException) -> None:
+        """Show a toast notification when an unhandled exception is raised."""
+        see_tb = "See traceback"
+
+        def _open_traceback(choice: str | None) -> None:
+            if choice != see_tb:
+                return
+            self._activate_acquire()
+            self._acquire.panel_button(PanelKey.EXCEPTION_LOG).setChecked(True)
+            log = cast(
+                "ExceptionLog", self._acquire.panel_widget(PanelKey.EXCEPTION_LOG)
+            )
+            log.show_exception(exc)
+
+        self._notification_manager.show_error_message(
+            str(exc), see_tb, on_action=_open_traceback
+        )
+
+    @property
+    def nm(self) -> NotificationManager:
+        """Toast notification manager for this window."""
+        return self._notification_manager
 
     @property
     def mmcore(self) -> CMMCorePlus | None:
