@@ -45,9 +45,12 @@ class _DeviceTable(QTableWidget):
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setAlternatingRowColors(True)
         self.setWordWrap(False)
-        if vh := self.verticalHeader():
+        # NOTE: `is not None`, not truthiness -- a QHeaderView with no sections
+        # (this table starts empty) is falsy, so `if vh := ...` would silently
+        # skip and leave the row-number gutter on screen.
+        if (vh := self.verticalHeader()) is not None:
             vh.setVisible(False)
-        if hh := self.horizontalHeader():
+        if (hh := self.horizontalHeader()) is not None:
             hh.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
             hh.setHighlightSections(False)
 

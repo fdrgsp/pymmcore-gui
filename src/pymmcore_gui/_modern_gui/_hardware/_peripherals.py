@@ -45,9 +45,10 @@ class PeripheralsDialog(QDialog):
         self._table.setHorizontalHeaderLabels(list(self.HEADERS))
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self._table.itemChanged.connect(self._sync_select_all)
-        if vh := self._table.verticalHeader():
+        # `is not None`: an empty QHeaderView is falsy (see _panes.py)
+        if (vh := self._table.verticalHeader()) is not None:
             vh.setVisible(False)
-        if hh := self._table.horizontalHeader():
+        if (hh := self._table.horizontalHeader()) is not None:
             hh.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
             hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
 

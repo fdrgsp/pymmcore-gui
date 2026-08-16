@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pymmcore_plus import CMMCorePlus
+from pymmcore_plus import CMMCorePlus, Keyword, find_micromanager
 
 from pymmcore_gui._layouts import (
     LAST_SESSION_LAYOUT_NAME,
@@ -39,6 +40,7 @@ from pymmcore_gui._settings import Settings
 from ._acquire import AcquirePage
 from ._configurations import ConfigurationsPage
 from ._hardware import HardwareSetupPage
+from ._installation import InstallationPage
 from ._startup import StartupChoice, StartupDialog
 from ._theme import (
     qcolor,
@@ -218,7 +220,7 @@ class ModeTabBar(QWidget):
 class MainWindow(QMainWindow):
     """Top-level window: mode tabs over a stack of (empty) tab pages."""
 
-    TAB_LABELS = ("Hardware Setup", "Configurations", "Acquire")
+    TAB_LABELS = ("Installation", "Hardware Setup", "Configurations", "Acquire")
 
     def __init__(self, *, mmcore: CMMCorePlus | None = None) -> None:
         super().__init__()
@@ -253,9 +255,11 @@ class MainWindow(QMainWindow):
 
         # ── central stack: one page per tab ───────────────────────
         self._stack = QStackedWidget()
+        self._installation = InstallationPage()
         self._hardware = HardwareSetupPage(self._mmc)
         self._configurations = ConfigurationsPage(self._mmc)
         self._acquire = AcquirePage(self._mmc)
+        self._stack.addWidget(self._installation)
         self._stack.addWidget(self._hardware)
         self._stack.addWidget(self._configurations)
         self._stack.addWidget(self._acquire)
@@ -286,9 +290,10 @@ class MainWindow(QMainWindow):
         self._acquire.layoutReset.connect(self._on_acquire_layout_reset)
         self._acquire.layoutNameChanged.connect(self._on_layout_name_changed)
         self._mmc.events.systemConfigurationLoaded.connect(self._on_config_loaded)
+        self._installation.activeInstallChanged.connect(self._on_active_install_changed)
 
         self._mode_tabs.current_changed.connect(self._on_mode_tab_changed)
-        self._stack.setCurrentIndex(0)
+        self._select_startup_tab()
 
         if status_bar := self.statusBar():
             status_bar.showMessage("Ready")
@@ -409,6 +414,69 @@ class MainWindow(QMainWindow):
             self._mode_tabs._select(idx)
             self._stack.setCurrentIndex(idx)
 
+    def _select_startup_tab(self) -> None:
+        """Open on Hardware Setup — or on Installation if there's nothing to run.
+
+        Installation leads the tab order because it leads the workflow, but
+        it's a once-in-a-while errand: landing there every launch would put a
+        page nobody asked for (and the network fetch that fills it) in front of
+        the actual work. Without a Micro-Manager install, though, every other
+        tab is a dead end, so that's where the session starts.
+        """
+        found = find_micromanager(return_first=True)
+        index = self._stack.indexOf(self._hardware if found else self._installation)
+        self._mode_tabs._select(index)
+        self._stack.setCurrentIndex(index)
+
+    def _on_active_install_changed(self, path: str) -> None:
+        """Follow a switch of the active Micro-Manager install, or defer it.
+
+        ``use_micromanager`` (behind the Installation page's "Set Active")
+        writes a preference that every *future* session reads, but the running
+        core took its adapter search path at construction and keeps it. Rather
+        than let the two disagree silently, offer to restart this session's
+        hardware on the newly chosen install right away.
+        """
+        if not path:
+            # the last install was removed; there's nothing to point the core at
+            self._status("No Micro-Manager installation left.")
+            return
+        core_device = Keyword.CoreDevice.value
+        loaded = [d for d in self._mmc.getLoadedDevices() if d != core_device]
+        at_stake = (
+            bool(loaded) or self._hardware.is_dirty() or self._configurations.is_dirty()
+        )
+        if at_stake and not self._confirm_install_switch(path):
+            self._status(f"{Path(path).name} will be used the next time pyMM starts.")
+            return
+        self._hardware.use_adapter_path(path)
+        self._status(f"Now using the device adapters in {path}")
+
+    def _confirm_install_switch(self, path: str) -> bool:
+        """Ask before tearing down a live session to change installs."""
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle("Switch Micro-Manager installation")
+        msg.setText(
+            f"Switching to {Path(path).name} unloads every device and discards "
+            "the current configuration, including any unsaved changes — the "
+            "loaded devices come from the installation being replaced.\n\n"
+            "Switch now, or keep this session and use it from the next launch?"
+        )
+        switch_btn = msg.addButton("Switch now", QMessageBox.ButtonRole.DestructiveRole)
+        keep_btn = msg.addButton("Keep this session", QMessageBox.ButtonRole.RejectRole)
+        for button, variant in ((switch_btn, "danger"), (keep_btn, "subtle")):
+            if button is not None:
+                button.setProperty("variant", variant)
+        msg.setDefaultButton(keep_btn)
+        msg.exec()
+        return msg.clickedButton() is switch_btn
+
+    def _status(self, message: str) -> None:
+        """Show a transient message in the status bar."""
+        if status_bar := self.statusBar():
+            status_bar.showMessage(message, 5000)
+
     def _on_mode_tab_changed(self, index: int) -> None:
         """Gate leaving Configurations with unsaved group/pixel edits.
 
@@ -483,10 +551,8 @@ class MainWindow(QMainWindow):
     def _on_pixel_calibration_running(self, running: bool) -> None:
         """Keep other microscope workflows unavailable during stage calibration."""
         configuration_index = self._stack.indexOf(self._configurations)
-        hardware_index = self._stack.indexOf(self._hardware)
-        acquire_index = self._stack.indexOf(self._acquire)
-        self._mode_tabs.setTabEnabled(hardware_index, not running)
-        self._mode_tabs.setTabEnabled(acquire_index, not running)
+        for page in (self._installation, self._hardware, self._acquire):
+            self._mode_tabs.setTabEnabled(self._stack.indexOf(page), not running)
         if running and configuration_index >= 0:
             self._mode_tabs._select(configuration_index)
             self._stack.setCurrentIndex(configuration_index)

@@ -156,10 +156,28 @@ class HardwareSetupPage(TabPage):
         """Discard the current configuration and start from scratch."""
         if not self._confirm_discard("Start a new configuration?"):
             return
+        self._start_over("Starting a new configuration…")
+
+    def use_adapter_path(self, path: str) -> None:
+        """Point the core at a different Micro-Manager install and rescan.
+
+        Everything currently loaded belongs to the adapters being swapped out
+        — devices, config groups and pixel configs alike — so the session is
+        reset first, the search path changes next, and only then are the new
+        install's available devices scanned (the other order would scan the
+        old install and throw the result away).
+
+        Asks nothing: the caller (the main window, which also knows about
+        unsaved edits on the Configurations page) has already confirmed.
+        """
+        self._start_over(f"Switching to {Path(path).name}…", adapter_path=path)
+
+    def _start_over(self, message: str, adapter_path: str | None = None) -> None:
+        """Unload everything and start from an empty model, no questions asked."""
         self._cancel_add()
         self._loading = True
         try:
-            with busy(self._overlay, "Starting a new configuration…"):
+            with busy(self._overlay, message):
                 with suppress(Exception):
                     self._core.unloadAllDevices()
                 # unloadAllDevices() only clears devices — config groups and
@@ -175,11 +193,26 @@ class HardwareSetupPage(TabPage):
                     with suppress(Exception):
                         self._core.deletePixelSizeConfig(pixel_config_name)
                 self._model = Microscope()
+                if adapter_path is not None:
+                    self._set_adapter_path(adapter_path)
                 self._refresh_all()
             self._dirty = False
         finally:
             self._loading = False
         self._core.events.systemConfigurationLoaded.emit()
+
+    def _set_adapter_path(self, path: str) -> None:
+        """Repoint the running core at the Micro-Manager install in *path*."""
+        try:
+            self._core.setDeviceAdapterSearchPaths([path])
+        except Exception as e:
+            self._warn(f"Failed to use the device adapters in {path}:\n\n{e}")
+            return
+        # CMMCorePlus resolves relative config names (e.g. "MMConfig_demo.cfg")
+        # against the install it was *constructed* with, which is no longer the
+        # one in use. There is no public setter for it.
+        with suppress(Exception):
+            self._core._mm_path = path
 
     def load_config(self) -> None:
         """Load a .cfg file into the model and into the core."""
