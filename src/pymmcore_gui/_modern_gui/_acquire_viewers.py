@@ -11,8 +11,9 @@ from pymmcore_plus.mda import OmeWritersSink, frame_meta_to_ome
 from pymmcore_gui._array_viewer import MMArrayViewer
 from pymmcore_gui._mda_export import AcquisitionRecord
 from pymmcore_gui._ndv_viewers import _add_follow_lock_button, _extract_scales
-from pymmcore_gui._qt.QtAds import CDockWidget
+from pymmcore_gui._qt.QtAds import CDockWidget, DockWidgetArea
 from pymmcore_gui._qt.QtCore import QObject, QTimer, Signal
+from pymmcore_gui._qt.QtWidgets import QSplitter
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
 
 if TYPE_CHECKING:
@@ -55,8 +56,8 @@ class AcquireViewersManager(QObject):
     """Lazy snap preview plus one dock-tabbed viewer for each MDA run.
 
     Every Preview/MDA-viewer instance is wrapped in its own ``CDockWidget`` and
-    tabbed into the shared ``central_dock_area`` via ``addDockWidgetTabToArea``,
-    mirroring the classic GUI's ``NDVViewersManager`` docking mechanics.
+    tabbed into a dedicated nested ``CDockManager``, mirroring the classic
+    GUI's ``NDVViewersManager`` docking mechanics.
 
     Closed viewer docks use ADS's ``DockWidgetDeleteOnClose`` feature so a
     closed viewer's dock-area/splitter node is actually removed (freeing its
@@ -64,12 +65,10 @@ class AcquireViewersManager(QObject):
     than left behind as a permanently-empty, still-space-occupying shell --
     otherwise splitting several viewers side by side and closing some of them
     leaves unreclaimable dead space that the remaining ones can't expand
-    into. Destroying a dock area makes ADS recompute splitter proportions
-    for the *whole* manager, which used to also resize unrelated docks (e.g.
-    the MDA panel) just because a viewer tab was closed -- that's now
-    prevented at the source (see ``AcquirePage._install_width_lock``, which
-    hard-locks the MDA/right columns against any relayout regardless of
-    cause), so it's safe to let ADS actually reclaim the space here.
+    into. The supplied dock manager is dedicated to viewers and nested inside
+    the outer MDA/tools manager. Destroying or splitting a viewer area can
+    therefore relayout only the viewer workspace, never the surrounding tool
+    panels.
     """
 
     _sequenceStarted = Signal(object, object)
@@ -83,14 +82,12 @@ class AcquireViewersManager(QObject):
     def __init__(
         self,
         dock_manager: CDockManager,
-        central_dock_area: CDockAreaWidget,
         mmcore: CMMCorePlus,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._parent_widget = parent
         self._dock_manager = dock_manager
-        self._central_dock_area = central_dock_area
         self._core = mmcore
         self._records: dict[CDockWidget, _ViewerRecord] = {}
         self._active_viewer: ndv.ArrayViewer | None = None
@@ -100,6 +97,12 @@ class AcquireViewersManager(QObject):
 
         self.preview: NDVPreview | None = None
         self._preview_dock: CDockWidget | None = None
+
+        # PyQt6Ads 4.4 does not reliably honor EqualSplitOnInsertion when an
+        # existing tab is dragged out into a new viewer area. Normalize only
+        # the newly-created inner splitter after ADS finishes the relocation;
+        # later user resizing of its handle remains untouched.
+        self._dock_manager.dockAreaCreated.connect(self._equalize_new_split)
 
         # pymmcore-plus MDA events may be emitted by the acquisition thread.
         # Re-emitting through QObject signals guarantees that all QWidget and ndv
@@ -117,23 +120,39 @@ class AcquireViewersManager(QObject):
         events.sequenceFinished.connect(self._sequence_finished_callback)
         self.destroyed.connect(self._disconnect)
 
-    def set_central_dock_area(self, area: CDockAreaWidget) -> None:
-        """Re-point at the central area after a layout restore rebuilt it.
-
-        ``CDockManager.restoreState()`` tears down and rebuilds the entire
-        dock-area tree, so the area captured at construction time becomes a
-        dangling wrapper around a destroyed C++ object -- without this, the
-        first viewer opened after a restore would tab into that deleted area.
-        """
-        self._central_dock_area = area
-
     def _new_dock(self, title: str) -> CDockWidget:
-        """Create a dock widget for a viewer/preview, tabbed into the central area."""
+        """Create a viewer dock, tabbed with an existing viewer when possible."""
         dw = CDockWidget(self._dock_manager, title, self._parent_widget)
         dw.setFeature(CDockWidget.DockWidgetFeature.DockWidgetFloatable, False)
         dw.setFeature(CDockWidget.DockWidgetFeature.DockWidgetDeleteOnClose, True)
-        self._dock_manager.addDockWidgetTabToArea(dw, self._central_dock_area)
+        if (target := self._viewer_target_area()) is None:
+            self._dock_manager.addDockWidget(DockWidgetArea.CenterDockWidgetArea, dw)
+        else:
+            self._dock_manager.addDockWidgetTabToArea(dw, target)
         return dw
+
+    def _viewer_target_area(self) -> CDockAreaWidget | None:
+        """Return a visible viewer area to receive a newly-created viewer."""
+        with suppress(RuntimeError):
+            focused = self._dock_manager.focusedDockWidget()
+            if focused is not None and (area := focused.dockAreaWidget()) is not None:
+                return area
+            for dock in self._dock_manager.openedDockWidgets():
+                area = dock.dockAreaWidget()
+                if area is not None and area.width() > 0:
+                    return area
+        return None
+
+    def _equalize_new_split(self, area: CDockAreaWidget) -> None:
+        """Share a newly-created viewer split equally between its siblings."""
+        QTimer.singleShot(0, lambda: self._equalize_area_splitter(area))
+
+    @staticmethod
+    def _equalize_area_splitter(area: CDockAreaWidget) -> None:
+        with suppress(RuntimeError):
+            splitter = area.parentWidget()
+            if isinstance(splitter, QSplitter) and splitter.count() > 1:
+                splitter.setSizes([1] * splitter.count())
 
     def ensure_preview(self) -> NDVPreview:
         """Create and select the snap preview if it is not already open."""

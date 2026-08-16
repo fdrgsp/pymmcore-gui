@@ -55,6 +55,11 @@ def _main(
         resolve_path=True,
         help="Path to MM hardware config file.",
     ),
+    # Declared here as well as on `run` so `mmgui -l Foo` (which this callback
+    # forwards to `run`) isn't rejected as an unknown option first.
+    layout: str | None = typer.Option(
+        None, "-l", "--layout", help="Name of the saved window layout to open with."
+    ),
 ) -> None:
     """mmgui: pymmcore-gui command line (v{version}).
 
@@ -91,6 +96,16 @@ def run(
         resolve_path=True,
         help="Path to MM hardware config file.",
     ),
+    layout: str | None = typer.Option(
+        None,
+        "-l",
+        "--layout",
+        help=(
+            "Name of the saved window layout to open with (use "
+            "`mmgui layouts` to list them). Without -c, this preselects the "
+            "startup dialog's layout instead of skipping the dialog."
+        ),
+    ),
     demo_config: bool = typer.Option(
         False,
         "--demo-config",
@@ -101,28 +116,65 @@ def run(
         "--no-telemetry",
         help="Disable telemetry.",
     ),
-    modern: bool = typer.Option(
+    old: bool = typer.Option(
         False,
-        "--modern",
-        help="Use the modern Micro-Manager GUI.",
+        "--old",
+        help="Use the old Micro-Manager GUI.",
     ),
 ) -> None:
     """Run the Micro-Manager GUI (this is the default command)."""
     from pymmcore_gui import create_mmgui
 
     window_cls: str | None
-    if modern:
-        window_cls = "pymmcore_gui._modern_gui.MainWindow"
+    if old:
+        window_cls = None
     else:
-        window_cls = None  # create_mmgui falls back to MicroManagerGUI
+        window_cls = "pymmcore_gui._modern_gui.MainWindow"
+    if layout is not None:
+        _check_layout(layout, old=old)
     mm_config = "MMConfig_demo.cfg" if demo_config else config
     create_mmgui(
         mm_config=mm_config,
+        layout=layout,
         exec_app=True,
         install_sentry=not no_telemetry,
         window_cls=window_cls,
     )
     sys.exit(0)
+
+
+def _check_layout(layout: str, *, old: bool) -> None:
+    """Warn about a `-l` that will not do what the user expects.
+
+    Deliberately a warning rather than an error: an unknown name still opens
+    the app, on the default layout.
+    """
+    from pymmcore_gui._layouts import available_layouts
+
+    if old:
+        typer.secho(
+            "--layout only applies to the modern GUI; ignoring it.",
+            fg=typer.colors.YELLOW,
+        )
+        return
+    if layout not in (names := available_layouts()):
+        typer.secho(
+            f"No layout named {layout!r}. Available: {', '.join(names)}.\n"
+            "Starting with the default layout.",
+            fg=typer.colors.YELLOW,
+        )
+
+
+@app.command()
+def layouts() -> None:
+    """List the saved window layouts that `--layout` accepts."""
+    from pymmcore_gui._layouts import available_layouts, layouts_dir
+
+    for name in available_layouts():
+        typer.echo(name)
+    typer.secho(
+        f"\nSaved layouts live in: {layouts_dir()}", fg=typer.colors.BRIGHT_BLACK
+    )
 
 
 def _open_path(path: Path, just_reveal: bool = False) -> None:  # pragma: no cover

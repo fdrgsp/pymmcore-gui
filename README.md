@@ -130,8 +130,8 @@ dependencies. Just download and extract the archive, then run the application.
 
 | Platform | Latest Nightly Build |
 | :--: | :--- |
-| Windows | [pymmgui-Windows.zip](https://nightly.link/pymmcore-plus/pymmcore-gui/workflows/bundle/main/pymmgui-Windows.zip) |
-| macOS | [pymmgui-macOS.zip](https://nightly.link/pymmcore-plus/pymmcore-gui/workflows/bundle/main/pymmgui-macOS.zip) |
+| Windows | [pymmgui-Windows.zip](https://nightly.link/fdrgsp/pymmcore-gui/workflows/bundle/cite/pymmgui-Windows.zip) |
+| macOS | [pymmgui-macOS.zip](https://nightly.link/fdrgsp/pymmcore-gui/workflows/bundle/cite/pymmgui-macOS.zip) |
 
 > [!IMPORTANT]
 > The bundled application does *not* include Micro-Manager device adapters,

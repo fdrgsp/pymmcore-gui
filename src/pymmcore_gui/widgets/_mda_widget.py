@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from pymmcore_widgets import MDAWidgetCollapsible
+from pymmcore_widgets._icons import StandardIcon
 from pymmcore_widgets.mda import (
     ChannelProperty,
     CollapsibleCoreMDATabs,
@@ -889,12 +890,8 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
 
         for table in (self.channels, self.stage_positions, self.time_plan):
             table.act_add_row.setIcon(QIconifyIcon("mdi:plus-thick", color=green))
-            table.act_remove_row.setIcon(
-                QIconifyIcon("mdi:close-box-outline", color=red)
-            )
-            table.act_clear.setIcon(
-                QIconifyIcon("mdi:close-box-multiple-outline", color=red)
-            )
+            table.act_remove_row.setIcon(StandardIcon.DELETE.icon(red))
+            table.act_clear.setIcon(StandardIcon.DELETE_ALL.icon(red))
 
         for btn in self.findChildren(MDAButton):
             configured = not btn.clear_btn.isHidden()

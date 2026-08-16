@@ -430,6 +430,14 @@ class MicroManagerGUI(QMainWindow):
 
     def closeEvent(self, a0: QCloseEvent | None) -> None:
         self._save_state()
+        # Closing a QMainWindow does not send close events to its child widgets.
+        # Some action widgets own background resources that are released from
+        # their closeEvent implementations (notably the Stage Explorer poller
+        # and the IPython console kernel).  Close them explicitly before the
+        # dock hierarchy is torn down so those resources cannot outlive us.
+        for widget in tuple(self._action_widgets.values()):
+            with suppress(RuntimeError):
+                widget.close()
         return super().closeEvent(a0)
 
     def restore_state(self, *, show: bool = False) -> None:

@@ -14,6 +14,17 @@ from pymmcore_gui._array_viewer import (
     set_icon_tint,
     unstyle_widgets,
 )
+from pymmcore_gui._layouts import (
+    DEFAULT_LAYOUT_NAME,
+    RESERVED_LAYOUT_NAMES,
+    AcquireLayout,
+    available_layouts,
+    delete_layout,
+    is_valid_layout_name,
+    list_layouts,
+    resolve_layout,
+    save_layout,
+)
 from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget, DockWidgetArea
 from pymmcore_gui._qt.QtCore import (
     QEvent,
@@ -29,12 +40,15 @@ from pymmcore_gui._qt.QtWidgets import (
     QWIDGETSIZE_MAX,
     QAbstractButton,
     QAbstractSlider,
+    QInputDialog,
+    QMessageBox,
     QPushButton,
     QSplitter,
     QWidget,
 )
 
 from ._acquire_toolbar import (
+    LayoutMenuButton,
     LiveButton,
     PanelButtonBar,
     ShuttersBar,
@@ -53,7 +67,7 @@ if TYPE_CHECKING:
     import useq
 
     from pymmcore_gui._qt.QtAds import CDockAreaWidget
-    from pymmcore_gui._qt.QtGui import QResizeEvent, QShowEvent
+    from pymmcore_gui._qt.QtGui import QCloseEvent, QResizeEvent, QShowEvent
     from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
     from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 
@@ -90,14 +104,12 @@ def _configure_ads() -> None:
     every ``CDockManager`` in the process, and only the *first* call before
     any manager is constructed has an effect.
 
-    Note: emptying a dock area (moving its last widget elsewhere, whether to
-    another regular area or to auto-hide) reproducibly segfaults under
-    ``QT_QPA_PLATFORM=offscreen`` + pytest-qt, independent of any app code,
-    on both PyQt6Ads 4.4.0.post2 and 5.0.0 -- confirmed test-harness-only,
-    since interactive drag-and-drop on a real display does not reproduce it.
-    Automated tests therefore stick to what doesn't empty an area (open/close
-    toggling, tabbing a dock into an existing one); actual rearranging is a
-    manual smoke-test item (see the PR description).
+    Note: emptying an area in the outer tools manager by moving its last dock
+    reproduces an offscreen pytest-qt crash on PyQt6Ads 4.4.0.post2 and 5.0.0,
+    despite working interactively on a real display. Automated tests therefore
+    verify outer-manager membership and allowed drop areas rather than simulate
+    those drags. Viewer splitting is exercised directly because it happens in
+    the isolated nested manager and is stable under the harness.
 
     A second, related harness-only quirk: running *several* of the
     ``restore_layout`` tests together via a partial ``-k`` selection can
@@ -151,6 +163,9 @@ class AcquirePage(TabPage):
     layoutReset = Signal()
     """Emitted after :meth:`reset_layout` restores the default arrangement."""
 
+    layoutNameChanged = Signal(str)
+    """Emitted with the new name whenever the selected layout changes."""
+
     def __init__(
         self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
     ) -> None:
@@ -175,25 +190,40 @@ class AcquirePage(TabPage):
         self._dock_manager.dockAreaCreated.connect(self._connect_dock_area_tab_switch)
         self.add_content_widget(self._dock_manager)
         self._base_dock_style = self._dock_manager.styleSheet()
-        self._apply_dock_style()
 
-        # ── central: blank placeholder; Preview / MDA-run viewers are each a
-        # real CDockWidget tabbed into its dock area (see AcquireViewersManager) ──
+        # The outer manager owns every movable tool panel.  Its central widget
+        # is a second, independent manager that owns viewers only.  Changes to
+        # the inner viewer splitter tree therefore cannot make the outer
+        # manager recompute the MDA/tools widths, while MDA and every tool can
+        # still be dragged to any side of the outer workspace.
+        self._viewer_dock_manager = CDockManager()
+        self._viewer_dock_manager.dockWidgetAdded.connect(self._queue_dock_icon_refresh)
+        self._viewer_dock_manager.dockAreaCreated.connect(
+            self._connect_dock_area_tab_switch
+        )
+        self._viewer_base_dock_style = self._viewer_dock_manager.styleSheet()
+
+        # The outer central dock is only a non-movable shell for the viewer
+        # manager.  Restricting its area to outer drops prevents an MDA/tool
+        # panel from being tabbed into the viewer workspace: it may only dock
+        # around it on the left, right, top, or bottom.
         self._central = CDockWidget(self._dock_manager, "Viewers", self)
         self._central.setObjectName("acquire_viewers")
         self._central.setFeature(CDockWidget.DockWidgetFeature.NoTab, True)
-        self._central.setFeature(
-            CDockWidget.DockWidgetFeature.DockWidgetClosable, False
+        self._central.setWidget(
+            self._viewer_dock_manager,
+            CDockWidget.eInsertMode.ForceNoScrollArea,
         )
-        blank = QWidget()
-        blank.setObjectName("blank")
-        self._central.setWidget(blank)
         central_dock_area = self._dock_manager.setCentralWidget(self._central)
         assert central_dock_area is not None
+        central_dock_area.setAllowedAreas(DockWidgetArea.OuterDockAreas)
         self._central_dock_area = central_dock_area
+        self._apply_dock_style()
 
         self._viewers = AcquireViewersManager(
-            self._dock_manager, self._central_dock_area, self._core, parent=self
+            self._viewer_dock_manager,
+            self._core,
+            parent=self,
         )
         # Connect before the MDA panel constructs CameraRoiWidget.  Its roiSet
         # handler performs Auto Snap synchronously, so a lazy Preview must be
@@ -213,6 +243,9 @@ class AcquirePage(TabPage):
         self._dragging_width_handles: set[QObject] = set()
         self._mda_width_locked_at_real_size = False
         self._layout_restored = False
+        # Bumped whenever the whole arrangement is replaced (restore or
+        # reset). See ``_pin_dock_widths_for_epoch``.
+        self._layout_epoch = 0
         # Debounced rather than a plain one-shot on the first showEvent:
         # MainWindow requests WindowMaximized before it's ever shown, and on
         # real window managers that maximize is applied asynchronously --
@@ -236,6 +269,13 @@ class AcquirePage(TabPage):
         self.toolbar.add_widget(toolbar_separator())
         self.toolbar.add_widget(self._shutters)
 
+        self._layout_name = DEFAULT_LAYOUT_NAME
+        self._layout_btn = LayoutMenuButton(DEFAULT_LAYOUT_NAME, self)
+        self._layout_btn.layoutSelected.connect(self.select_layout)
+        self._layout_btn.saveLayoutRequested.connect(self._prompt_save_layout)
+        self._layout_btn.deleteLayoutRequested.connect(self._delete_layout)
+        self.refresh_layout_menu()
+
         self._panel_bar = PanelButtonBar(PANELS, self)
         self._place_panel_bar()
 
@@ -248,15 +288,18 @@ class AcquirePage(TabPage):
                 partial(self._toggle_panel, info.key)
             )
         self._panel_bar.panelVisibilityChanged.connect(self._set_panel_visible)
-        self._panel_bar.resetLayoutRequested.connect(self.reset_layout)
 
-        # Default-open panels (MDA) build now, before any width pinning.
-        for info in PANELS:
-            if info.default_open:
-                self._panel_bar.button_for(info.key).setChecked(True)
-
+        # Default-open panels build now, before any width pinning. MDA goes
+        # first and is bound immediately: opening any *other* panel creates
+        # the right column, which pins the column widths -- and that reads
+        # ``self._mda_dock``.
+        self._panel_bar.button_for(PanelKey.MDA).setChecked(True)
         self._mda = cast("MemoryMDAWidget", self.panel_widget(PanelKey.MDA))
         self._mda_dock = cast("CDockWidget", self.panel_dock(PanelKey.MDA))
+        for info in PANELS:
+            if info.default_open and info.key != PanelKey.MDA:
+                self._panel_bar.button_for(info.key).setChecked(True)
+
         self._snap_btn.snapRequested.connect(self._mda.apply_active_channel_for_capture)
         self._snap_btn.snapRequested.connect(self._viewers.ensure_preview)
         self._live_btn.liveStartedRequested.connect(
@@ -326,10 +369,16 @@ class AcquirePage(TabPage):
 
         Moving it into ``MainWindow`` as a draggable ``QToolBar`` is the same
         shape: the bar itself needs no changes, only a different host.
+
+        The layout drop-down shares the row, separated from the panel
+        buttons: switching/saving the whole arrangement is a different
+        concern from toggling one panel.
         """
         self.toolbar.add_stretch()
         self.toolbar.add_widget(toolbar_separator())
         self.toolbar.add_widget(self._panel_bar)
+        self.toolbar.add_widget(toolbar_separator())
+        self.toolbar.add_widget(self._layout_btn)
         # Right-clicking anywhere on the host row opens the same customize
         # menu as the bar's own ⋯ button -- the Qt convention for toolbars.
         self.toolbar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -411,6 +460,15 @@ class AcquirePage(TabPage):
         dock.toggleView(checked)
         if checked:
             dock.setAsCurrentTab()
+            # Closing the last dock in the right column makes ADS destroy it;
+            # re-showing one builds a *new* column, which starts at the same
+            # transient sliver width (47--60 px) a freshly created one does.
+            # ``_add_side_dock``'s pin only covers first creation -- this path
+            # never goes through it, since the dock already exists -- so the
+            # column would otherwise stay unusably narrow with no way back
+            # except dragging it. Widening only kicks in below the usability
+            # floor, so a column the user deliberately sized is left alone.
+            self._widen_right_column_soon()
             if panel.info.refresh is not None:
                 QTimer.singleShot(0, partial(self._refresh_panel, key))
 
@@ -477,12 +535,130 @@ class AcquirePage(TabPage):
 
     # ------------------------------------------------------------------ layout
 
-    def save_layout(self) -> tuple[bytes | None, set[str]]:
-        """Return ``(dock_manager_state, open_panel_keys)`` for persistence."""
+    def current_layout(self) -> AcquireLayout:
+        """Capture the current arrangement (docks, open panels, hidden buttons)."""
         open_keys = self.open_panels()
         if not open_keys:
-            return None, set()
-        return self._dock_manager.saveState().data(), open_keys
+            return AcquireLayout(hidden_panels=frozenset(self.hidden_panels()))
+        return AcquireLayout(
+            dock_state=self._dock_manager.saveState().data(),
+            panels=frozenset(open_keys),
+            hidden_panels=frozenset(self.hidden_panels()),
+        )
+
+    def apply_layout(self, layout: AcquireLayout) -> bool:
+        """Apply a saved *layout*, falling back to the default if it can't be.
+
+        The single entry point for "make the page look like this", used both
+        at startup and when the user picks a layout from the toolbar menu.
+        Buttons are applied before the docks for the reason given in
+        :meth:`apply_hidden_panels`: hiding a button closes its panel, which
+        would undo part of the arrangement being restored.
+
+        Returns True if *layout* was restored, False if the page fell back to
+        the built-in arrangement.
+        """
+        self.apply_hidden_panels(layout.hidden_panels)
+        if self.restore_layout(layout.dock_state, layout.panels):
+            if self.isVisible():
+                # Startup goes through the showEvent/resize settle path with
+                # the window not yet shown; a *live* switch has real geometry
+                # already, but ADS applies the restored splitter tree in its
+                # own deferred pass -- so re-arm the same debounced settle
+                # rather than locking widths against a half-applied tree.
+                self._mda_width_locked_at_real_size = False
+                self._schedule_width_settle()
+            return True
+        self.reset_layout()
+        return False
+
+    # ------------------------------------------------- named layouts
+
+    @property
+    def layout_name(self) -> str:
+        """Name of the layout currently selected in the toolbar menu."""
+        return self._layout_name
+
+    def select_layout(self, name: str) -> None:
+        """Switch to the layout called *name*, live.
+
+        An unknown or vanished name resolves to the built-in arrangement
+        rather than doing nothing, so a layout deleted outside the app can't
+        leave the menu pointing at something unreachable.
+        """
+        layout = resolve_layout(name)
+        if layout is None or layout.is_empty():
+            self.reset_layout()
+            # reset_layout() reports the built-in arrangement, which is what
+            # the page now shows even if *name* was a (broken) saved layout.
+            return
+        self._set_layout_name(name)
+        self.apply_layout(layout)
+
+    def refresh_layout_menu(self) -> None:
+        """Re-read the available layouts into the toolbar drop-down."""
+        names = available_layouts()
+        if self._layout_name not in names:
+            self._layout_name = DEFAULT_LAYOUT_NAME
+        self._layout_btn.set_layouts(names, self._layout_name)
+
+    def _set_layout_name(self, name: str) -> None:
+        self._layout_name = name
+        self.refresh_layout_menu()
+        self.layoutNameChanged.emit(name)
+
+    def _prompt_save_layout(self) -> None:
+        """Ask for a name, then write the current arrangement under it."""
+        suggestion = (
+            self._layout_name if self._layout_name not in RESERVED_LAYOUT_NAMES else ""
+        )
+        name, ok = QInputDialog.getText(
+            self, "Save Layout", "Layout name:", text=suggestion
+        )
+        if not ok:
+            return
+        name = name.strip()
+        if not is_valid_layout_name(name):
+            QMessageBox.warning(
+                self,
+                "Save Layout",
+                f"{name!r} is not a usable layout name."
+                if name
+                else "Please enter a layout name.",
+            )
+            return
+        if name in list_layouts() and not self._confirm_overwrite(name):
+            return
+        save_layout(name, self.current_layout())
+        self._set_layout_name(name)
+
+    def _confirm_overwrite(self, name: str) -> bool:
+        choice = QMessageBox.question(
+            self,
+            "Save Layout",
+            f"A layout named {name!r} already exists.\n\nReplace it?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return choice == QMessageBox.StandardButton.Yes
+
+    def _delete_layout(self, name: str) -> None:
+        choice = QMessageBox.question(
+            self,
+            "Delete Layout",
+            f"Delete the layout {name!r}?\n\nThis cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if choice != QMessageBox.StandardButton.Yes:
+            return
+        delete_layout(name)
+        # Deleting the layout doesn't rearrange anything -- the page keeps
+        # showing it -- but it's no longer a name that can be selected.
+        if self._layout_name == name:
+            self._set_layout_name(DEFAULT_LAYOUT_NAME)
+        else:
+            self.refresh_layout_menu()
 
     def restore_layout(self, state: bytes | None, keys: Iterable[str]) -> bool:
         """Recreate the given panels and restore a previously saved dock layout.
@@ -514,6 +690,7 @@ class AcquirePage(TabPage):
                     panel.button.setChecked(not panel.dock.isClosed())
         self._rediscover_areas()
         self._layout_restored = True
+        self._layout_epoch += 1
         # Deliberately *not* re-locking widths here: restore_layout runs
         # before the window has ever been shown (``_app`` defers it to a
         # singleShot that itself calls ``show()``), so every dock area is
@@ -524,11 +701,16 @@ class AcquirePage(TabPage):
     def reset_layout(self) -> None:
         """Restore the out-of-the-box Acquire arrangement.
 
+        This *is* the "Default" layout -- there is no stored record of it, so
+        selecting Default from the layout menu comes straight here.
+
         Un-hides every toolbar button, un-pins anything the user sent to an
-        auto-hide side bar, closes every panel except the default-open ones,
-        puts the MDA column back on the left, and re-applies the default
-        column widths. Panel *widgets* are kept alive, exactly as a normal
-        close does -- this resets the arrangement, not the session.
+        auto-hide side bar, closes every panel except the default-open ones
+        (MDA on the left, Groups and Presets on the right -- see
+        ``_panels.PANELS``), puts the MDA column back on the left, and
+        re-applies the default column widths. Panel *widgets* are kept alive,
+        exactly as a normal close does -- this resets the arrangement, not the
+        session.
 
         Only the layout is affected: window geometry, theme and zoom are
         deliberately left alone, since losing those to a "reset layout"
@@ -557,7 +739,9 @@ class AcquirePage(TabPage):
         # A reset supersedes whatever was restored, so the canonical widths
         # apply again (see showEvent's one-shot pin).
         self._layout_restored = False
+        self._layout_epoch += 1
         self._relock_widths(pin=True)
+        self._set_layout_name(DEFAULT_LAYOUT_NAME)
         self.layoutReset.emit()
 
     def _mda_is_home(self) -> bool:
@@ -575,7 +759,7 @@ class AcquirePage(TabPage):
         central = self._dock_manager.centralWidget()
         if central is not None and (area := central.dockAreaWidget()) is not None:
             self._central_dock_area = area
-            self._viewers.set_central_dock_area(area)
+            area.setAllowedAreas(DockWidgetArea.OuterDockAreas)
 
         # Drop the stale cache and re-derive from the rebuilt tree, so the
         # next panel opened tabs into the restored right column instead of
@@ -591,6 +775,19 @@ class AcquirePage(TabPage):
         Called once at startup (before the MDA column's width lock -- see
         ``_install_width_lock`` -- takes over) and whenever the right column
         is first created.
+
+        A width the MDA column is already locked to -- the user's own drag,
+        or a restored/named layout that saved a non-default width -- is kept
+        rather than overwritten with the canonical ``_MDA_DOCK_WIDTH``.
+        Regression test for the splitter silently caching the canonical width
+        anyway: opening the *first* right-side panel after loading a layout
+        with a narrower MDA visibly clamped the column at its custom width
+        (the lock held), but the very next hover-triggered unlock -- any
+        mouse movement over the MDA/viewer boundary -- snapped it straight to
+        the canonical width, and moving the mouse away then *locked that in*
+        as the new, permanently wrong, width. Only a genuinely unset MDA
+        (fresh construction, or just after ``reset_layout`` releases every
+        lock) falls through to the canonical default.
         """
         mda_area = self._mda_dock.dockAreaWidget()
         if mda_area is None:
@@ -606,7 +803,11 @@ class AcquirePage(TabPage):
             return
         total = self._dock_manager.width()
         new = [0] * len(sizes)
-        new[0] = _MDA_DOCK_WIDTH
+        locked_width = mda_area.width()
+        is_locked = (
+            mda_area.minimumWidth() == mda_area.maximumWidth() and locked_width > 0
+        )
+        new[0] = locked_width if is_locked else _MDA_DOCK_WIDTH
         middle = range(1, len(sizes))
         if len(sizes) > 2:
             new[-1] = min(total // 4, _RIGHT_DOCK_MAX_WIDTH)
@@ -616,18 +817,47 @@ class AcquirePage(TabPage):
             new[idx] = remaining // len(middle)
         self._dock_manager.setSplitterSizes(mda_area, new)
 
-    def _repair_narrow_restored_right_column(self) -> bool:
-        """Expand a corrupted, unusably narrow restored tools column.
+    def _widen_right_column_soon(self, attempts: int = 5) -> None:
+        """Widen an unusably narrow right column once QtADS has laid it out.
 
-        Normal restored widths are user choices and remain untouched.  Older
-        sessions may, however, contain the transient 47--60 px width that was
-        previously saved when a lazy dock was frozen before QtADS laid it out.
-        Repair only widths below a conservative usability floor, taking space
-        from the largest non-MDA sibling in the outer horizontal splitter.
+        Both callers act on a column that does not exist yet at the moment
+        they run -- reopening a dock into a column ADS destroyed when it was
+        emptied, or restoring one -- so this has to wait for ADS's own
+        deferred layout pass. Bounded retries rather than a single shot
+        because that pass may take more than one event-loop turn on a slower
+        machine, and no retries at all would silently leave the sliver.
+        """
 
-        Returns whether the restored dock tree was ready and the repair took.
-        A False result makes the startup settle timer retry after QtADS's next
-        deferred restore/layout pass.
+        def _attempt() -> None:
+            # The page (or its docks) may be gone by the next turn.
+            with suppress(RuntimeError):
+                if not self._widen_unusable_right_column() and attempts > 1:
+                    self._widen_right_column_soon(attempts - 1)
+
+        QTimer.singleShot(0, _attempt)
+
+    def _widen_unusable_right_column(self) -> bool:
+        """Expand an unusably narrow tools column to a workable width.
+
+        Widths at or above the usability floor are user choices and remain
+        untouched. Below it, the column is one of QtADS's transient 47--60 px
+        slivers -- what a freshly created (or re-shown, or restored) column
+        starts at before anything sizes it, and what older sessions persisted
+        when a lazy dock was frozen before QtADS laid it out. Widen those,
+        taking space from the largest non-MDA sibling in the outer horizontal
+        splitter.
+
+        Returns whether the caller can stop retrying -- *not* whether the
+        column reached the width it aimed for. Only a dock tree QtADS has not
+        finished rebuilding reports False, so the startup settle timer runs
+        again after its next deferred pass. Every other outcome is final,
+        including "the donor column had less to spare than we asked for":
+        retrying recomputes identical numbers forever, which would leave the
+        settle timer firing for the life of the page and -- because
+        ``_settle_and_lock_widths`` bails before setting it -- the MDA width
+        lock never marked as installed. A CI runner (or any small display)
+        that clamps the window below the requested size lands in exactly that
+        case, so it has to be a normal outcome rather than a retry.
         """
         area = self._resolve_right_dock_area()
         if area is None:
@@ -641,8 +871,10 @@ class AcquirePage(TabPage):
             return False
         idx = splitter.indexOf(column)
         sizes = list(splitter.sizes())
-        target = min(self._dock_manager.width() // 4, _RIGHT_DOCK_MAX_WIDTH)
-        if idx < 0 or len(sizes) < 2 or target < _RIGHT_DOCK_MIN_USABLE_WIDTH:
+        total = self._dock_manager.width()
+        # A manager still at its pre-layout width gives nothing to size
+        # against -- that is genuinely "not ready", so retry.
+        if idx < 0 or len(sizes) < 2 or total <= 0:
             return False
 
         excluded = {idx}
@@ -652,15 +884,22 @@ class AcquirePage(TabPage):
                 excluded.add(splitter.indexOf(mda_column))
         donors = [i for i in range(len(sizes)) if i not in excluded]
         if not donors:
-            return False
+            return True
+
+        # Aim for the canonical width but settle for whatever the donor can
+        # actually spare, so a too-small window still gets the widest usable
+        # column available instead of staying at the corrupt one. Asking for
+        # more than the donor's own minimum allows is harmless either way --
+        # the splitter clamps the request.
+        target = min(total // 4, _RIGHT_DOCK_MAX_WIDTH)
         donor = max(donors, key=sizes.__getitem__)
-        delta = target - sizes[idx]
-        if sizes[donor] < delta:
-            return False
-        sizes[idx] = target
+        delta = min(target - sizes[idx], sizes[donor])
+        if delta <= 0:
+            return True
+        sizes[idx] += delta
         sizes[donor] -= delta
         splitter.setSizes(sizes)
-        return column.width() >= _RIGHT_DOCK_MIN_USABLE_WIDTH
+        return True
 
     def _lock_default_areas(self) -> bool:
         """(Re)install the width lock on the MDA area, if available.
@@ -722,15 +961,10 @@ class AcquirePage(TabPage):
     def _install_width_lock(self, area: CDockAreaWidget) -> bool:
         """Freeze *area*'s column width except while it's actively being dragged.
 
-        ADS recomputes splitter proportions for the *whole* manager whenever
-        any dock area's visibility changes anywhere in it -- not just areas
-        adjacent to the one that changed -- so a central viewer opening or
-        closing can silently resize the MDA or right (Groups & Presets /
-        Properties / Console) columns even though the user never touched
-        them. Reactively re-applying a width after the fact (via a dock's
-        ``closed`` signal, even retried across several deferred event-loop
-        turns) is a race against ADS's own relayout passes, which can be
-        arbitrarily delayed -- proved unreliable in practice. A hard
+        Viewer changes cannot reach this splitter because viewers now live in
+        their own nested manager. The outer manager can still recompute its
+        proportions when an MDA/tool area is opened, closed, moved, restored,
+        or pinned, however. A hard
         ``minimumWidth == maximumWidth`` constraint is the only thing a
         splitter must respect in *every* layout pass it computes, regardless
         of what triggers that pass or when, so this locks the column there
@@ -944,8 +1178,27 @@ class AcquirePage(TabPage):
         # loop.  Re-pin once that deferred insertion is complete; otherwise
         # the request above is discarded and the new tools column stays at
         # its transient minimum width (typically 47--60 px).
-        QTimer.singleShot(0, self._pin_dock_widths)
+        pin = partial(self._pin_dock_widths_for_epoch, self._layout_epoch)
+        QTimer.singleShot(0, pin)
         return dock
+
+    def _pin_dock_widths_for_epoch(self, epoch: int) -> None:
+        """Run the deferred pin only if the layout hasn't changed under it.
+
+        A default-open side panel queues this from ``__init__``, so it can
+        still be pending when ``restore_layout`` runs on the very next line
+        (that's the launch sequence: construct, restore, show). Firing it
+        then would overwrite the restored splitter sizes with the canonical
+        defaults -- the user's dragged column widths, silently reset on every
+        launch. Comparing epochs skips exactly that case while leaving a pin
+        queued by a panel opened *after* a restore free to do its job.
+        """
+        # A default-open panel queues this from ``__init__``, so a page that
+        # is built and torn down inside a single event-loop turn (common in
+        # tests) reaches here with its docks already destroyed.
+        with suppress(RuntimeError):
+            if epoch == self._layout_epoch:
+                self._pin_dock_widths()
 
     # ------------------------------------------------------------------ theming
 
@@ -962,9 +1215,7 @@ class AcquirePage(TabPage):
         ``qproperty-icon`` rules in that sheet -- is left intact.
         """
         t = theme()
-        self._dock_manager.setStyleSheet(
-            self._base_dock_style
-            + f"""
+        override = f"""
             ads--CDockWidgetTab QLabel {{
                 color: {qcolor(t.text_secondary).name()};
             }}
@@ -981,7 +1232,8 @@ class AcquirePage(TabPage):
                 background-color: {qcolor(t.bg_deepest).name()};
             }}
             """
-        )
+        self._dock_manager.setStyleSheet(self._base_dock_style + override)
+        self._viewer_dock_manager.setStyleSheet(self._viewer_base_dock_style + override)
 
     def _connect_dock_area_tab_switch(self, area: CDockAreaWidget) -> None:
         """Refresh dock icons whenever *area*'s current tab changes.
@@ -1033,7 +1285,7 @@ class AcquirePage(TabPage):
         # whose wrappers immediately reject access to deleted C++ objects.
         with suppress(RuntimeError):
             red = qcolor(theme().status_red)
-            for btn in self._dock_manager.findChildren(QAbstractButton):
+            for btn in self.findChildren(QAbstractButton):
                 name = btn.objectName()
                 if name == _ADS_TAB_CLOSE_BUTTON:
                     set_icon_tint(btn, red)
@@ -1056,13 +1308,13 @@ class AcquirePage(TabPage):
         makes it re-inherit the now-current app font. Same fix, same reason, as
         ``_GroupEditorTab.changeEvent`` in ``_configurations.py``.
         """
-        dm = self._dock_manager
-        for w in (dm, *dm.findChildren(QWidget)):
-            # QAbstractSlider is excluded for the same reason as in
-            # _configurations.py: its groove/handle metrics are derived from
-            # the font, and resetting it mid-StyleChange fights the style.
-            if not isinstance(w, QAbstractSlider):
-                w.setFont(QFont())
+        for dm in (self._dock_manager, self._viewer_dock_manager):
+            for w in (dm, *dm.findChildren(QWidget)):
+                # QAbstractSlider is excluded for the same reason as in
+                # _configurations.py: its groove/handle metrics are derived from
+                # the font, and resetting it mid-StyleChange fights the style.
+                if not isinstance(w, QAbstractSlider):
+                    w.setFont(QFont())
 
     def changeEvent(self, a0: QEvent | None) -> None:
         """Re-apply dock theming and un-freeze dock fonts after a theme/zoom change."""
@@ -1072,6 +1324,26 @@ class AcquirePage(TabPage):
                 self._apply_dock_style()
                 self._refresh_dock_icons()
                 self._refresh_dock_fonts()
+
+    def shutdown(self) -> None:
+        """Stop resources owned by lazily created acquisition panels."""
+        for timer_name in (
+            "_width_settle_timer",
+            "_width_handle_hover_timer",
+            "_dock_icon_poll_timer",
+        ):
+            if timer := getattr(self, timer_name, None):
+                timer.stop()
+        if roi_sync := getattr(self, "_roi_sync", None):
+            roi_sync.stop()
+        for panel in self._panels.values():
+            if panel.widget is not None:
+                with suppress(RuntimeError):
+                    panel.widget.close()
+
+    def closeEvent(self, a0: QCloseEvent | None) -> None:
+        self.shutdown()
+        super().closeEvent(a0)
 
     def showEvent(self, a0: QShowEvent | None) -> None:
         # Devices added on the Hardware tab load into the core but don't fire
@@ -1155,7 +1427,7 @@ class AcquirePage(TabPage):
         """
         ok = self._relock_widths(pin=not self._layout_restored)
         if ok and self._layout_restored:
-            ok = self._repair_narrow_restored_right_column()
+            ok = self._widen_unusable_right_column()
         if not ok:
             self._width_settle_timer.start()
             return

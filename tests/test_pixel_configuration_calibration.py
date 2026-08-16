@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import replace
 from typing import TYPE_CHECKING
 from unittest.mock import patch
@@ -145,18 +146,52 @@ def test_calibration_running_locks_configuration_writes_and_other_tab(
     qtbot.addWidget(page)
     page._tabs.setCurrentWidget(page._pixel_config)
 
-    page._pixel_config.calibrationRunningChanged.emit(True)
+    page._pixel_config._calibration_panel.calibrationRunningChanged.emit(True)
 
     assert not page._save_core_btn.isEnabled()
     assert not page._save_file_btn.isEnabled()
     assert not page._tabs.isTabEnabled(page._tabs.indexOf(page._group_tab))
+    assert not page._pixel_config._px_table.isEnabled()
+    assert not page._pixel_config._value_table.isEnabled()
+    assert not page._pixel_config._affine_table.isEnabled()
 
-    page._pixel_config.calibrationRunningChanged.emit(False)
+    page._pixel_config._calibration_panel.calibrationRunningChanged.emit(False)
     assert page._save_core_btn.isEnabled()
     assert page._save_file_btn.isEnabled()
     assert page._tabs.isTabEnabled(page._tabs.indexOf(page._group_tab))
+    assert page._pixel_config._px_table.isEnabled()
+    assert page._pixel_config._value_table.isEnabled()
+    assert page._pixel_config._affine_table.isEnabled()
 
 
+def test_property_value_edit_updates_calibration_target(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    widget = page._pixel_config
+    panel = widget._calibration_panel
+    settings = widget._value_table.settings()
+    assert settings
+    setting = settings[0]
+    edited_value = f"{setting.value}-edited"
+
+    model = widget._value_table.view.model()
+    assert model is not None
+    assert model.setData(model.index(0, 1), edited_value)
+
+    assert panel._target is not None
+    assert (
+        str(setting.device_label),
+        str(setting.property_name),
+        edited_value,
+    ) in panel._target.settings
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="requires the resizable virtual display provided by Linux CI",
+)
 def test_calibration_panel_has_form_viewer_and_information_layout(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
@@ -167,7 +202,7 @@ def test_calibration_panel_has_form_viewer_and_information_layout(
 
     assert not hasattr(panel, "_channels")
     assert widget._content_splitter.widget(0) is widget._px_table.parentWidget()
-    assert widget._content_splitter.widget(1) is widget._props_selector
+    assert widget._content_splitter.widget(1) is widget._value_table
     assert widget._content_splitter.widget(2) is panel
     stretches = []
     for i in range(3):
@@ -176,8 +211,8 @@ def test_calibration_panel_has_form_viewer_and_information_layout(
         stretches.append(w.sizePolicy().horizontalStretch())
     assert stretches == [1, 1, 2]
     page._tabs.setCurrentWidget(widget)
-    # At this common desktop width, the Property Selector's upstream 500 px
-    # minimum-size hint must not override the requested equal left quarters.
+    # At this common desktop width, size hints must not override the requested
+    # equal left quarters.
     page.resize(1920, 900)
     page.show()
     qtbot.waitExposed(page)

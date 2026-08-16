@@ -30,14 +30,20 @@ def test_modern_window_save_restore_state(
     """geometry/theme/zoom/dock-layout round-trip through Settings, across windows."""
     win1 = MainWindow(mmcore=mmcore)
     qtbot.addWidget(win1)
-    win1._acquire.panel_button(PanelKey.PRESETS).click()
+    # MDA + Groups and Presets are the defaults, so open a third panel to get
+    # an arrangement that differs from the built-in one.
+    win1._acquire.panel_button(PanelKey.EXCEPTION_LOG).click()
     win1._toggle_theme()  # dark -> light
     zoom_in()
     win1._save_state()
 
     prefs = settings.modern_window
     assert prefs.geometry
-    assert prefs.acquire_panels == {PanelKey.MDA, PanelKey.PRESETS}
+    assert prefs.acquire_panels == {
+        PanelKey.MDA,
+        PanelKey.PRESETS,
+        PanelKey.EXCEPTION_LOG,
+    }
     assert prefs.theme == "light"
     assert prefs.zoom == zoom_factor()
     win1.close()
@@ -51,7 +57,7 @@ def test_modern_window_save_restore_state(
 
     win2.restore_state(show=True)
     assert win2.isVisible()
-    assert PanelKey.PRESETS in win2._acquire.open_panels()
+    assert PanelKey.EXCEPTION_LOG in win2._acquire.open_panels()
     win2.close()
 
 
@@ -59,6 +65,9 @@ def test_restore_state_on_fresh_settings_opens_only_defaults(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
     """A first launch (no saved state) must open only the default panels.
+
+    The built-in "Default" layout is MDA on the left and Groups and Presets
+    on the right -- and nothing else.
 
     Regression test for the launch path force-opening every registered panel:
     ``restore_state`` -> ``apply_hidden_panels(set())`` used to treat "show
@@ -72,9 +81,10 @@ def test_restore_state_on_fresh_settings_opens_only_defaults(
     win.restore_state(show=True)
 
     acquire = win._acquire
-    assert acquire.open_panels() == {PanelKey.MDA}
+    assert acquire.open_panels() == {PanelKey.MDA, PanelKey.PRESETS}
     assert sorted(acquire._dock_manager.dockWidgetsMap()) == [
         "acquire_mda",
+        "acquire_presets",
         "acquire_viewers",
     ]
     assert acquire.hidden_panels() == set()
@@ -169,7 +179,8 @@ def test_reset_layout_clears_only_the_persisted_layout_keys(
     win._save_state()
 
     prefs = settings.modern_window
-    assert prefs.acquire_dock_state and prefs.acquire_panels == {PanelKey.MDA}
+    assert prefs.acquire_dock_state
+    assert prefs.acquire_panels == {PanelKey.MDA, PanelKey.PRESETS}
     assert prefs.acquire_hidden_panels == {PanelKey.CONSOLE}
     geometry, theme, zoom = prefs.geometry, prefs.theme, prefs.zoom
 

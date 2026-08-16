@@ -13,6 +13,7 @@ from pymmcore_gui._app import MMQApplication
 from pymmcore_gui._notification_manager import NotificationManager
 from pymmcore_gui._qt.QtWidgets import QApplication, QDialog
 from pymmcore_gui.actions import CoreAction, WidgetAction
+from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 from pymmcore_gui.widgets._toolbars import ShuttersToolbar
 
 if TYPE_CHECKING:
@@ -35,26 +36,39 @@ def gui(qtbot: QtBot, qapp: QApplication) -> Iterator[MicroManagerGUI]:
 def test_main_window_widget_actions(
     gui: MicroManagerGUI, w_action: WidgetAction
 ) -> None:
-    gui = MicroManagerGUI()
     action = gui.get_action(w_action)
     with patch.object(QDialog, "exec", lambda x: x.show()):
         wdg = gui.get_widget(w_action)
         assert w_action in gui._qactions
     if isinstance(wdg, QDialog):
-        ...
+        # QDialogs are never added to _action_widgets, so MainWindow.closeEvent
+        # never closes them; the test must close it explicitly so it (and any
+        # threaded resources it owns) doesn't outlive the fixture.
+        wdg.close()
     else:
         assert w_action in gui._action_widgets
         assert action.isChecked()
         gui.get_dock_widget(w_action).toggleView(False)
         assert not action.isChecked()
+        # Left open: MainWindow.closeEvent (run once, via the `gui` fixture's
+        # qtbot teardown) closes dock-owned widgets like this one already.
 
 
 @pytest.mark.parametrize("c_action", list(CoreAction))
 def test_main_window_core_actions(gui: MicroManagerGUI, c_action: CoreAction) -> None:
-    gui = MicroManagerGUI()
     with patch.object(QDialog, "exec", lambda x: x.show()):
         _ = gui.get_action(c_action)
     assert c_action in gui._qactions
+
+
+def test_main_window_close_stops_stage_explorer(gui: MicroManagerGUI) -> None:
+    explorer = gui.get_widget(WidgetAction.STAGE_EXPLORER)
+    assert isinstance(explorer, ThemedStageExplorer)
+    assert explorer._stage_poller.isRunning()
+
+    gui.close()
+
+    assert not explorer._stage_poller.isRunning()
 
 
 # this warning only occurs on PySide6 for some reason

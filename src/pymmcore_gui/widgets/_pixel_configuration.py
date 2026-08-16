@@ -3,10 +3,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 from pymmcore_widgets import PixelConfigurationWidget as _UpstreamPixelConfiguration
+from pymmcore_widgets._icons import StandardIcon
 from superqt.utils import signals_blocked
 
+from pymmcore_gui._modern_gui._theme import qcolor, theme
 from pymmcore_gui._pixel_calibration import PixelCalibrationResult
-from pymmcore_gui._qt.QtCore import QTimer, Signal
+from pymmcore_gui._qt.QtCore import QEvent, QTimer, Signal
 from pymmcore_gui._qt.QtWidgets import QSizePolicy
 from pymmcore_gui.widgets._pixel_calibration_panel import (
     CalibrationTarget,
@@ -57,11 +59,8 @@ class PixelConfigurationWidget(_UpstreamPixelConfiguration):
         # calibration the wider right half of the page.
         splitter.insertWidget(2, self._calibration_panel)
         self._content_splitter = splitter
-        # The upstream property selector's device toolbar reports a 500 px
-        # minimum-size hint.  Let the splitter shrink both left panes below
-        # their hints when needed, otherwise that hint overrides equal weights
-        # on ordinary 1920 px windows and makes Properties visibly wider than
-        # the Resolution ID pane.
+        # Let the splitter shrink both editor panes below their size hints so
+        # those hints cannot override the intended 1:1:2 proportions.
         for pane in (splitter.widget(0), splitter.widget(1)):
             assert pane is not None
             policy = pane.sizePolicy()
@@ -84,19 +83,44 @@ class PixelConfigurationWidget(_UpstreamPixelConfiguration):
         )
         self._px_table._table.itemChanged.connect(self._sync_calibration_target)
         self._px_table.valueChanged.connect(self._sync_calibration_target)
-        self._props_selector.valueChanged.connect(self._sync_calibration_target)
+        # Property values now live in the selected resolution preset itself.
+        # Keep the calibration target current after value edits and after the
+        # shared property set is changed from either toolbar action.
+        self._value_table.valueEdited.connect(self._sync_calibration_target)
+        self._value_table.act_edit_props.triggered.connect(
+            self._sync_calibration_target
+        )
+        self._value_table.act_remove_props.triggered.connect(
+            self._sync_calibration_target
+        )
         self._mmc.events.systemConfigurationLoaded.connect(
             self._sync_calibration_target
         )
+        self._precision_timer = QTimer(self)
+        self._precision_timer.setSingleShot(True)
+        self._precision_timer.timeout.connect(self._set_numeric_precision)
         model = self._px_table.table().model()
         if model is not None:
             model.rowsInserted.connect(self._schedule_precision_update)
 
         self._set_numeric_precision()
+        self._apply_themed_action_icons()
         self._sync_calibration_target()
 
+    def _apply_themed_action_icons(self) -> None:
+        """Apply semantic theme colors to the pixel-configuration actions."""
+        green = qcolor(theme().status_green).name()
+        red = qcolor(theme().status_red).name()
+        self._px_table.act_remove_row.setIcon(StandardIcon.DELETE.icon(red))
+        self._px_table.act_clear.setIcon(StandardIcon.DELETE_ALL.icon(red))
+        self._value_table.act_edit_props.setIcon(StandardIcon.PROPERTY_ADD.icon(green))
+        self._value_table.act_remove_props.setIcon(StandardIcon.DELETE.icon(red))
+
     def _schedule_precision_update(self, *_: object) -> None:
-        QTimer.singleShot(0, self._set_numeric_precision)
+        # A child-owned timer is cancelled when this widget is destroyed.  A
+        # static singleShot can otherwise retain this Python wrapper past C++
+        # teardown and call into deleted table widgets under PySide6.
+        self._precision_timer.start(0)
 
     def _set_numeric_precision(self) -> None:
         for row in range(self._px_table.table().rowCount()):
@@ -132,15 +156,12 @@ class PixelConfigurationWidget(_UpstreamPixelConfiguration):
     def _binding_is_saved(self, resolution_id: str) -> bool:
         """Whether ``resolution_id`` is a real, already-saved core pixel-size config.
 
-        Deliberately does *not* also require the property selector's current
-        device/property list to match what's saved to core: that list only
-        matters when it's actually used (to apply this resolution's optical
-        state before a Snap/Test-frame/Start-calibration run), where a
-        mismatch already surfaces as its own clear error. Gating calibration
-        itself on it too just blocked runs whenever the property selector's
-        UI state was unsaved or empty -- e.g. a resolution with no
-        identifying property at all, such as a manually-swapped objective
-        with no state device tracking it.
+        Deliberately does *not* also require the editor's current property set
+        to match what's saved to core: those values only matter when they are
+        actually applied before a Snap/Test-frame/Start-calibration run, where
+        a mismatch already surfaces as its own clear error. Gating calibration
+        itself on it too would block unsaved or property-free resolutions, such
+        as a manually swapped objective with no state device tracking it.
         """
         try:
             return resolution_id in self._mmc.getAvailablePixelSizeConfigs()
@@ -206,9 +227,7 @@ class PixelConfigurationWidget(_UpstreamPixelConfiguration):
 
     def _on_calibration_running_changed(self, running: bool) -> None:
         self._px_table.setEnabled(not running)
-        self._props_selector.setEnabled(
-            not running and self._selected_preset() is not None
-        )
+        self._value_table.setEnabled(not running)
         self._affine_table.setEnabled(not running)
         self._apply_btn.setEnabled(not running and not self.isClean())
         self.calibrationRunningChanged.emit(running)
@@ -220,6 +239,15 @@ class PixelConfigurationWidget(_UpstreamPixelConfiguration):
     def closeEvent(self, a0: QCloseEvent | None) -> None:
         self.shutdownCalibration()
         super().closeEvent(a0)
+
+    def changeEvent(self, a0: QEvent | None) -> None:
+        super().changeEvent(a0)
+        if (
+            a0 is not None
+            and a0.type() == QEvent.Type.StyleChange
+            and hasattr(self, "_value_table")
+        ):
+            self._apply_themed_action_icons()
 
 
 __all__ = ["PixelConfigurationWidget"]

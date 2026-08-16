@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from pymmcore_plus import CMMCorePlus
 from pymmcore_widgets import ConfigGroupsEditor
+from pymmcore_widgets._icons import StandardIcon
 from pymmcore_widgets._util import block_core
 from superqt.iconify import QIconifyIcon
 
@@ -63,6 +64,7 @@ class _GroupEditorTab(QWidget):
             if (w := getattr(self.editor, attr, None)) is not None:
                 w.hide()
         unstyle_widgets(self.editor)
+        self._apply_themed_action_icons()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -86,7 +88,24 @@ class _GroupEditorTab(QWidget):
             for w in (self.editor, *self.editor.findChildren(QWidget)):
                 if not isinstance(w, QAbstractSlider):
                     w.setFont(QFont())
+            self._apply_themed_action_icons()
         super().changeEvent(a0)
+
+    def _apply_themed_action_icons(self) -> None:
+        """Color constructive/destructive Group Editor actions semantically."""
+        green = qcolor(theme().status_green).name()
+        red = qcolor(theme().status_red).name()
+        glyphs = {
+            "Add Group": (StandardIcon.FOLDER_ADD, green),
+            "Add Preset": (StandardIcon.DOCUMENT_ADD, green),
+            "Edit Properties": (StandardIcon.PROPERTY_ADD, green),
+            "Duplicate": (StandardIcon.COPY, green),
+            "Remove": (StandardIcon.DELETE, red),
+        }
+        for action in self.editor._tb.actions():
+            if themed := glyphs.get(action.text()):
+                glyph, color = themed
+                action.setIcon(glyph.icon(color))
 
     def save(self) -> None:
         """Replace the core's config groups with the editor's contents."""
@@ -170,6 +189,11 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
     widget; embedded in a tab there is nothing to close, so Apply just applies.
     """
 
+    # Redeclare the inherited signal alongside this subclass's own signal.
+    # PySide6 otherwise appends the inherited Python signal after inherited
+    # slots in _EmbeddedPixelConfig's dynamic QMetaObject, making emit() a
+    # no-op (and producing a "Signals and slots ... not ordered" warning).
+    calibrationRunningChanged = Signal(bool)
     applied = Signal()
 
     def __init__(
@@ -330,6 +354,11 @@ class ConfigurationsPage(TabPage):
                 self._pixel_config.setClean()
             self._pixel_dirty = False
         self._update_dirty_label()
+
+    def discard_changes(self) -> None:
+        """Replace unsaved group and pixel edits with the live core state."""
+        self._refresh(reload_configs=True)
+        self.mark_saved()
 
     def commit_current_to_core(self) -> None:
         """Write the selected editor's contents into the live core."""

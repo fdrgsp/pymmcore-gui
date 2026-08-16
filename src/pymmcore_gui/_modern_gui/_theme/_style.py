@@ -266,7 +266,7 @@ class MicroscopeStyle(QProxyStyle):
         QLineEdit      — rounded frame, accent focus border + glow
         QToolTip       — dark inverted, rounded corners, shadow
         QFrame         — 1px subtle lines, replaces etched/sunken
-        QToolBar       — borderless, flush background, no drag handle
+        QToolBar       — borderless, themed separators, no drag handle
         QSplitter      — thin hairline handle, hover grip dots
 
     Button variant styling via dynamic property:
@@ -435,6 +435,9 @@ class MicroscopeStyle(QProxyStyle):
             case PE.PE_PanelToolBar:
                 painter.fillRect(option.rect, pal.color(QPalette.ColorRole.Window))
 
+            case PE.PE_IndicatorToolBarSeparator:
+                self._draw_toolbar_separator(option, painter)
+
             case PE.PE_IndicatorDockWidgetResizeHandle:
                 self._draw_splitter_handle(option, painter, widget)
 
@@ -475,7 +478,7 @@ class MicroscopeStyle(QProxyStyle):
         painter: QPainter | None,
         widget: QWidget | None = None,
     ) -> None:
-        if option is None or painter is None:
+        if option is None or painter is None or not painter.isActive():
             return
         CE = QStyle.ControlElement
 
@@ -524,7 +527,7 @@ class MicroscopeStyle(QProxyStyle):
         painter: QPainter | None,
         widget: QWidget | None = None,
     ) -> None:
-        if option is None or painter is None:
+        if option is None or painter is None or not painter.isActive():
             return
         CC = QStyle.ComplexControl
 
@@ -1182,6 +1185,23 @@ class MicroscopeStyle(QProxyStyle):
             p.setPen(QPen(glow_color, 2.5))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRoundedRect(glow_r, RADIUS + 1.5, RADIUS + 1.5)
+
+    # ═══════════════════════════════════════════════════════════
+    # QToolBar separators
+    # ═══════════════════════════════════════════════════════════
+
+    def _draw_toolbar_separator(self, opt: QStyleOption, p: QPainter) -> None:
+        """Draw action separators with a visible theme-derived hairline."""
+        r = opt.rect
+        inset = max(2, round(6 * self._zoom))
+        p.setPen(QPen(opt.palette.color(QPalette.ColorRole.Mid), 1))
+
+        if opt.state & QStyle.StateFlag.State_Horizontal:
+            x = r.left() + r.width() // 2
+            p.drawLine(x, r.top() + inset, x, r.bottom() - inset)
+        else:
+            y = r.top() + r.height() // 2
+            p.drawLine(r.left() + inset, y, r.right() - inset, y)
 
     # ═══════════════════════════════════════════════════════════
     # QFrame (generic separators and box frames)

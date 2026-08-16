@@ -33,6 +33,17 @@ jobs:
   test:
     name: ${{ matrix.os }} py${{ matrix.python-version }}${{ matrix.qt }}
     runs-on: ${{ matrix.os }}
+    # windows-latest py3.13PySide6 hits a reproducible-but-harmless crash
+    # (exit 0xC0000409 / __fastfail) *after* pytest's own clean "N passed"
+    # summary. A procdump-captured minidump showed only one thread left
+    # alive, with every application/Qt/PySide6/Python-interpreter module
+    # already unloaded -- just python.exe's launcher stub, ntdll, kernel32,
+    # and the CRT remained. That's the OS loader's own final process
+    # teardown, well past anything this project's code (or even CPython's
+    # normal shutdown path) still controls. Known and understood; not
+    # chased further. (continue-on-error was tried here and dropped again:
+    # it doesn't change how the check reports on the PR, and nothing in
+    # this repo enforces required status checks anyway.)
     env:
       UV_FROZEN: 1
       UV_NO_SYNC: 1

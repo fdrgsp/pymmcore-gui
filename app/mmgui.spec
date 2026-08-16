@@ -39,7 +39,13 @@ RESOURCES = PACKAGE / "resources"
 ICON = RESOURCES / ("icon.ico" if sys.platform.startswith("win") else "icon.icns")
 
 ONEFILE = "--onefile" in sys.argv
-SPLASH = os.name == "nt"
+# Disabled: PyInstaller's native Windows splash screen (a separate Tcl/Tk
+# bootloader thread) is the prime suspect for the STATUS_ACCESS_VIOLATION
+# that Bundle windows-latest has hit on every run for months, with zero
+# diagnostics from either PYTHONFAULTHANDLER or WER minidumps -- consistent
+# with a crash in a native thread outside the main Python interpreter,
+# started before app code (and any Windows-only) runs at all.
+SPLASH = False
 
 NAME = "pymmgui"
 DEBUG = False

@@ -17,7 +17,7 @@ def test_main_app(monkeypatch: MonkeyPatch) -> None:
         _app.MMQApplication, "exec", lambda _: QApplication.processEvents()
     ):
         assert not QApplication.instance()
-        monkeypatch.setattr(sys, "argv", ["mmgui"])
+        monkeypatch.setattr(sys, "argv", ["mmgui", "run", "--demo-config"])
         with pytest.raises(SystemExit):
             __main__.main()
 
