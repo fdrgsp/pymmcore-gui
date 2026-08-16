@@ -33,7 +33,7 @@ def test_settings(tmp_path: Path) -> None:
         mock_reset.assert_called_once()
 
 
-def test_default_command_forwards_config_to_standard_gui(tmp_path: Path) -> None:
+def test_default_command_forwards_config_to_modern_gui(tmp_path: Path) -> None:
     config = tmp_path / "startup.cfg"
     config.touch()
     argv = ["mmgui", "-c", str(config)]
@@ -46,24 +46,24 @@ def test_default_command_forwards_config_to_standard_gui(tmp_path: Path) -> None
 
     assert result.exit_code == 0
     assert mock_create.call_args.kwargs["mm_config"] == config.resolve()
-    # by default the standard (dock-based) MicroManagerGUI is used
-    assert mock_create.call_args.kwargs["window_cls"] is None
-
-
-def test_modern_flag_uses_modern_gui() -> None:
-    with patch("pymmcore_gui.create_mmgui") as mock_create:
-        result = runner.invoke(app, ["run", "--modern"])
-
-    assert result.exit_code == 0
+    # by default the modern GUI is used
     assert (
         mock_create.call_args.kwargs["window_cls"]
         == "pymmcore_gui._modern_gui.MainWindow"
     )
 
 
+def test_old_flag_uses_standard_gui() -> None:
+    with patch("pymmcore_gui.create_mmgui") as mock_create:
+        result = runner.invoke(app, ["run", "--old"])
+
+    assert result.exit_code == 0
+    assert mock_create.call_args.kwargs["window_cls"] is None
+
+
 def test_layout_flag_is_forwarded(tmp_path: Path) -> None:
     with patch("pymmcore_gui.create_mmgui") as mock_create:
-        result = runner.invoke(app, ["run", "--modern", "-l", "My rig"])
+        result = runner.invoke(app, ["run", "-l", "My rig"])
 
     assert result.exit_code == 0
     assert mock_create.call_args.kwargs["layout"] == "My rig"
@@ -72,7 +72,7 @@ def test_layout_flag_is_forwarded(tmp_path: Path) -> None:
 def test_unknown_layout_warns_but_still_launches() -> None:
     """A stale `-l` should open the app on the default layout, not refuse to start."""
     with patch("pymmcore_gui.create_mmgui") as mock_create:
-        result = runner.invoke(app, ["run", "--modern", "-l", "nope"])
+        result = runner.invoke(app, ["run", "-l", "nope"])
 
     assert result.exit_code == 0
     assert "No layout named 'nope'" in result.stdout
