@@ -49,6 +49,7 @@ __all__ = [
     "Palette",
     "ScaledThemeView",
     "Theme",
+    "dock_chrome_stylesheet",
     "make_dark_palette",
     "mono_font",
     "qcolor",
@@ -243,6 +244,42 @@ def reset_zoom() -> None:
 def qcolor(c: Color) -> QColor:
     """Convenience: convert a theme Color to QColor."""
     return color_to_qcolor(c)
+
+
+def dock_chrome_stylesheet() -> str:
+    """CSS to append to any QtAds ``CDockManager``'s stylesheet for this theme.
+
+    ADS ships its own built-in sheet written almost entirely against
+    ``palette(...)`` roles, which tracks this app's light/dark themes for
+    free. The exception is inactive dock-tab labels: ``palette(dark)``, a
+    *shadow* role, renders near-black on a near-black dark-theme tab and is
+    effectively invisible -- this re-points both tab states at the theme's
+    own text colors instead, plus the "blank" placeholder an empty dock area
+    shows. Meant to be *appended* to a manager's existing stylesheet (its own
+    built-in one, captured before this is first applied), never to replace
+    it -- every other rule, including the title-bar `qproperty-icon`s, must
+    stay intact. Shared by every ``CDockManager`` in the app (see
+    ``AcquirePage._apply_dock_style`` and ``StagesPanel``) so nested managers
+    match the outer one instead of falling back to ADS's unthemed default.
+    """
+    t = theme()
+    return f"""
+        ads--CDockWidgetTab QLabel {{
+            color: {qcolor(t.text_secondary).name()};
+        }}
+        ads--CDockWidgetTab[activeTab="true"] QLabel {{
+            color: {qcolor(t.text_primary).name()};
+        }}
+        ads--CAutoHideTab {{
+            color: {qcolor(t.text_secondary).name()};
+        }}
+        ads--CAutoHideTab[activeTab="true"] {{
+            color: {qcolor(t.text_primary).name()};
+        }}
+        QWidget#blank {{
+            background-color: {qcolor(t.bg_deepest).name()};
+        }}
+        """
 
 
 def make_dark_palette() -> QPalette:

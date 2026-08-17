@@ -59,7 +59,7 @@ from ._acquire_viewers import AcquireViewersManager
 from ._camera_roi_sync import CameraRoiSyncController
 from ._panels import PANELS, PanelInfo, PanelKey
 from ._tab_page import TabPage
-from ._theme import qcolor, theme
+from ._theme import dock_chrome_stylesheet, qcolor, theme
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -688,6 +688,7 @@ class AcquirePage(TabPage):
             if panel.dock is not None:
                 with QSignalBlocker(panel.button):
                     panel.button.setChecked(not panel.dock.isClosed())
+                self._collapse_if_auto_hide(panel.dock)
         self._rediscover_areas()
         self._layout_restored = True
         self._layout_epoch += 1
@@ -697,6 +698,22 @@ class AcquirePage(TabPage):
         # still 0px wide. ``showEvent`` installs the locks once there is a
         # real geometry to lock to.
         return True
+
+    def _collapse_if_auto_hide(self, dock: CDockWidget) -> None:
+        """Force a restored auto-hide dock's flyout closed.
+
+        ``restoreState`` faithfully replays whatever was true the moment the
+        layout was saved -- including a side-bar-pinned panel's flyout being
+        expanded on screen at that instant. That's surprising on reload: a
+        panel pinned to a side bar reads as "tucked away", and it should stay
+        tucked away until the user clicks its tab again, regardless of
+        whether it happened to be open when the layout was saved.
+        """
+        with suppress(RuntimeError):
+            if dock.isAutoHide():
+                container = dock.autoHideDockContainer()
+                if container is not None:
+                    container.collapseView(True)
 
     def reset_layout(self) -> None:
         """Restore the out-of-the-box Acquire arrangement.
@@ -1214,24 +1231,7 @@ class AcquirePage(TabPage):
         rest of ADS's chrome -- including the title-bar icons, which come from
         ``qproperty-icon`` rules in that sheet -- is left intact.
         """
-        t = theme()
-        override = f"""
-            ads--CDockWidgetTab QLabel {{
-                color: {qcolor(t.text_secondary).name()};
-            }}
-            ads--CDockWidgetTab[activeTab="true"] QLabel {{
-                color: {qcolor(t.text_primary).name()};
-            }}
-            ads--CAutoHideTab {{
-                color: {qcolor(t.text_secondary).name()};
-            }}
-            ads--CAutoHideTab[activeTab="true"] {{
-                color: {qcolor(t.text_primary).name()};
-            }}
-            QWidget#blank {{
-                background-color: {qcolor(t.bg_deepest).name()};
-            }}
-            """
+        override = dock_chrome_stylesheet()
         self._dock_manager.setStyleSheet(self._base_dock_style + override)
         self._viewer_dock_manager.setStyleSheet(self._viewer_base_dock_style + override)
 

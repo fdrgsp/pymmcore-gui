@@ -13,6 +13,7 @@ import pytest
 import useq
 from pymmcore_plus import PropertyType
 from pymmcore_widgets import MDAWidget as UpstreamMDAWidget
+from pymmcore_widgets import StageWidget
 from pymmcore_widgets.mda._core_channels import PROPERTY_SEPARATOR
 from pymmcore_widgets.useq_widgets._positions import MDAButton, _MDAPopup
 
@@ -29,6 +30,7 @@ from pymmcore_gui._modern_gui._acquire import (
     AcquirePage,
 )
 from pymmcore_gui._modern_gui._acquire_presets import AcquisitionPresetSelector
+from pymmcore_gui._modern_gui._acquire_stages import StagesPanel
 from pymmcore_gui._modern_gui._configurations import ConfigurationsPage
 from pymmcore_gui._modern_gui._hardware import HardwareSetupPage
 from pymmcore_gui._modern_gui._installation import (
@@ -49,7 +51,12 @@ from pymmcore_gui._modern_gui._theme import (
 )
 from pymmcore_gui._modern_gui._theme._dark import DARK_THEME
 from pymmcore_gui._modern_gui._theme._light import LIGHT_THEME
-from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget, DockWidgetArea
+from pymmcore_gui._qt.QtAds import (
+    CDockManager,
+    CDockWidget,
+    DockWidgetArea,
+    SideBarLocation,
+)
 from pymmcore_gui._qt.QtCore import QPoint, QRect, QSize, Qt
 from pymmcore_gui._qt.QtGui import QAction, QCursor, QImage, QPainter, QPalette
 from pymmcore_gui._qt.QtWidgets import (
@@ -770,9 +777,9 @@ def test_acquire_inactive_dock_tab_labels_are_visible(
     viewer_ss = page._viewer_dock_manager.styleSheet()
     inactive = qcolor(theme().text_secondary).name()
     active = qcolor(theme().text_primary).name()
-    assert f"ads--CDockWidgetTab QLabel {{\n                color: {inactive};" in ss
+    assert f"ads--CDockWidgetTab QLabel {{\n            color: {inactive};" in ss
     assert (
-        f'ads--CDockWidgetTab[activeTab="true"] QLabel {{\n                '
+        f'ads--CDockWidgetTab[activeTab="true"] QLabel {{\n            '
         f"color: {active};" in ss
     )
     # base ADS chrome (e.g. the qproperty-icon rules for title-bar buttons)
@@ -1046,6 +1053,83 @@ def test_acquire_stage_explorer_is_a_lazy_toolbar_dock(
 
     page.close()
     assert not explorer._stage_poller.isRunning()
+
+
+def test_acquire_stages_panel_starts_empty(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    """The Stages panel opens with no stage docks; Add lists every device."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    assert page.panel_widget(PanelKey.STAGES) is None
+    page.panel_button(PanelKey.STAGES).click()
+    panel = page.panel_widget(PanelKey.STAGES)
+    assert isinstance(panel, StagesPanel)
+    assert panel._docks == {}
+    assert not panel._empty_hint.isHidden()
+
+    # test_config.cfg: one XY stage ("XY") and two Z stages ("Z", "Z1").
+    menu = panel._build_add_menu()
+    assert [a.text() for a in menu.actions()] == ["XY", "Z", "Z1"]
+
+
+def test_acquire_stages_panel_add_and_remove_devices(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Adding stages opens independent docks; closing one frees it for re-adding."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.panel_button(PanelKey.STAGES).click()
+    panel = page.panel_widget(PanelKey.STAGES)
+    assert isinstance(panel, StagesPanel)
+
+    menu = panel._build_add_menu()
+    next(a for a in menu.actions() if a.text() == "XY").trigger()
+    assert panel._empty_hint.isHidden()
+    xy_dock = panel._docks["XY"]
+    xy_widget = xy_dock.widget()
+    assert isinstance(xy_widget, StageWidget)
+    assert xy_widget._device == "XY"
+    assert not xy_dock.isClosed()
+
+    # "XY" no longer offered; both Z stages still are.
+    menu2 = panel._build_add_menu()
+    assert [a.text() for a in menu2.actions()] == ["Z", "Z1"]
+
+    # Adding a second, different device leaves the first untouched -- both
+    # coexist, tabbed in the panel's own nested dock area.
+    next(a for a in menu2.actions() if a.text() == "Z1").trigger()
+    z1_dock = panel._docks["Z1"]
+    assert isinstance(z1_dock.widget(), StageWidget)
+    assert not xy_dock.isClosed()
+    assert not z1_dock.isClosed()
+    assert z1_dock.dockAreaWidget() is xy_dock.dockAreaWidget()  # tabbed together
+
+    # Closing one (its own tab's X) removes it and frees the name to re-add.
+    xy_dock.closeDockWidget()
+    assert "XY" not in panel._docks
+    menu3 = panel._build_add_menu()
+    assert [a.text() for a in menu3.actions()] == ["XY", "Z"]
+    assert panel._empty_hint.isHidden()  # Z1 is still open, hint not needed
+
+
+def test_acquire_stages_panel_add_menu_disabled_when_nothing_left(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Once every loaded stage is open, the Add menu says so instead of being empty."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.panel_button(PanelKey.STAGES).click()
+    panel = page.panel_widget(PanelKey.STAGES)
+    assert isinstance(panel, StagesPanel)
+
+    for device in ("XY", "Z", "Z1"):
+        panel._add_stage(device)
+
+    menu = panel._build_add_menu()
+    actions = menu.actions()
+    assert len(actions) == 1
+    assert actions[0].text() == "No stages available"
+    assert not actions[0].isEnabled()
 
 
 def test_stage_explorer_sends_positions_to_mda(
@@ -3741,6 +3825,47 @@ def test_acquire_layout_round_trip(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     # Console was never opened on page_a, so restoring must not force every
     # registered panel open -- laziness survives a restore.
     assert page_b.panel_widget(PanelKey.CONSOLE) is None
+
+
+def test_acquire_restore_collapses_an_expanded_auto_hide_panel(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A side-bar-pinned panel that was expanded when saved reopens collapsed.
+
+    ``CDockManager.restoreState`` faithfully replays every detail of the
+    saved arrangement, including an auto-hide flyout being expanded on
+    screen at the instant the layout was saved. A pinned panel reads as
+    "tucked away" -- reopening the app (or switching layouts) shouldn't pop
+    it back open on its own.
+    """
+    page_a = AcquirePage(mmcore)
+    page_a.resize(1400, 900)
+    qtbot.addWidget(page_a)
+    page_a.show()
+    page_a.panel_button(PanelKey.EXCEPTION_LOG).click()
+    dock = page_a.panel_dock(PanelKey.EXCEPTION_LOG)
+    assert dock is not None
+    dock.setAutoHide(True, SideBarLocation.SideBarTop)
+    container = dock.autoHideDockContainer()
+    assert container is not None
+    container.collapseView(False)  # expand the flyout, as if the user opened it
+    assert container.isVisible()
+
+    saved = page_a.current_layout()
+    assert saved.dock_state is not None
+
+    page_b = AcquirePage(mmcore)
+    page_b.resize(1400, 900)
+    qtbot.addWidget(page_b)
+    page_b.show()
+    assert page_b.restore_layout(saved.dock_state, saved.panels)
+
+    dock_b = page_b.panel_dock(PanelKey.EXCEPTION_LOG)
+    assert dock_b is not None
+    assert dock_b.isAutoHide()  # still pinned to the sidebar
+    container_b = dock_b.autoHideDockContainer()
+    assert container_b is not None
+    assert not container_b.isVisible()  # ...but collapsed, not popped open
 
 
 def test_acquire_restored_right_dock_is_resizable(

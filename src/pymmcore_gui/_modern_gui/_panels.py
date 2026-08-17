@@ -40,6 +40,7 @@ class PanelKey:
     STAGE_EXPLORER: Final = "stage_explorer"
     PRESETS: Final = "presets"
     PROPERTIES: Final = "properties"
+    STAGES: Final = "stages"
     CONSOLE: Final = "console"
     EXCEPTION_LOG: Final = "exception_log"
 
@@ -69,6 +70,25 @@ def _create_stage_explorer(parent: QWidget, core: CMMCorePlus) -> QWidget:
     from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 
     return ThemedStageExplorer(parent=parent, mmcore=core)
+
+
+def create_stage_widget(parent: QWidget, core: CMMCorePlus, device: str) -> QWidget:
+    """Build the panel content for one XY or Z stage device.
+
+    Shared by every stage a user adds through the Stages panel's "Add Stage"
+    picker (see ``_acquire_stages.StagesPanel``), so they all look alike.
+    """
+    from pymmcore_widgets import StageWidget
+
+    widget = StageWidget(device=device, parent=parent, mmcore=core)
+    widget.setMinimumSize(widget.minimumSizeHint())
+    return widget
+
+
+def _create_stages(parent: QWidget, core: CMMCorePlus) -> QWidget:
+    from ._acquire_stages import StagesPanel
+
+    return StagesPanel(parent=parent, mmcore=core)
 
 
 def _create_console(_parent: QWidget, core: CMMCorePlus) -> QWidget:
@@ -152,6 +172,13 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
         create=_ignoring_core(create_property_browser),
         unstyle=True,
         refresh=_refresh_property_browser,
+    ),
+    PanelInfo(
+        key=PanelKey.STAGES,
+        title="Stages",
+        icon="mdi:arrow-all",
+        tooltip="Stages — add and arrange XY/Z stage controls",
+        create=_create_stages,
     ),
     PanelInfo(
         key=PanelKey.STAGE_EXPLORER,
