@@ -47,6 +47,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 
+from ._acquire_stages import StagesPanel
 from ._acquire_toolbar import (
     LayoutMenuButton,
     LiveButton,
@@ -544,7 +545,15 @@ class AcquirePage(TabPage):
             dock_state=self._dock_manager.saveState().data(),
             panels=frozenset(open_keys),
             hidden_panels=frozenset(self.hidden_panels()),
+            stage_devices=self._current_stage_devices(),
         )
+
+    def _current_stage_devices(self) -> frozenset[str]:
+        """Devices open in the Stages panel, or empty if it isn't open."""
+        widget = self._panels[PanelKey.STAGES].widget
+        if isinstance(widget, StagesPanel):
+            return widget.open_devices()
+        return frozenset()
 
     def apply_layout(self, layout: AcquireLayout) -> bool:
         """Apply a saved *layout*, falling back to the default if it can't be.
@@ -559,7 +568,7 @@ class AcquirePage(TabPage):
         the built-in arrangement.
         """
         self.apply_hidden_panels(layout.hidden_panels)
-        if self.restore_layout(layout.dock_state, layout.panels):
+        if self.restore_layout(layout.dock_state, layout.panels, layout.stage_devices):
             if self.isVisible():
                 # Startup goes through the showEvent/resize settle path with
                 # the window not yet shown; a *live* switch has real geometry
@@ -660,8 +669,17 @@ class AcquirePage(TabPage):
         else:
             self.refresh_layout_menu()
 
-    def restore_layout(self, state: bytes | None, keys: Iterable[str]) -> bool:
+    def restore_layout(
+        self,
+        state: bytes | None,
+        keys: Iterable[str],
+        stage_devices: Iterable[str] = (),
+    ) -> bool:
         """Recreate the given panels and restore a previously saved dock layout.
+
+        *stage_devices* are re-opened in the Stages panel if it's among
+        *keys* -- silently skipping any that the currently loaded
+        configuration doesn't have (see ``StagesPanel.add_stages``).
 
         Returns True if the layout was restored, False if there was nothing
         to restore or ADS rejected the saved state -- either way, the page
@@ -689,6 +707,10 @@ class AcquirePage(TabPage):
                 with QSignalBlocker(panel.button):
                     panel.button.setChecked(not panel.dock.isClosed())
                 self._collapse_if_auto_hide(panel.dock)
+        if PanelKey.STAGES in wanted:
+            stages_widget = self._panels[PanelKey.STAGES].widget
+            if isinstance(stages_widget, StagesPanel):
+                stages_widget.add_stages(stage_devices)
         self._rediscover_areas()
         self._layout_restored = True
         self._layout_epoch += 1

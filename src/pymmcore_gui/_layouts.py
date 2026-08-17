@@ -52,9 +52,9 @@ _UNSAFE_CHARS = re.compile(r"[^\w.\- ]+")
 class AcquireLayout:
     """A saved arrangement of the Acquire page's dock widgets.
 
-    The three fields are exactly what ``AcquirePage`` needs to reproduce an
-    arrangement, and the same triple the modern window has always persisted
-    for the (single, anonymous) restore-on-launch layout.
+    The first three fields are exactly what ``AcquirePage`` needs to
+    reproduce an arrangement, and the same triple the modern window has
+    always persisted for the (single, anonymous) restore-on-launch layout.
     """
 
     dock_state: bytes | None = None
@@ -63,6 +63,13 @@ class AcquireLayout:
     """``PanelKey`` values that were open."""
     hidden_panels: frozenset[str] = field(default_factory=frozenset)
     """``PanelKey`` values whose toolbar buttons were hidden."""
+    stage_devices: frozenset[str] = field(default_factory=frozenset)
+    """Device names open in the Stages panel.
+
+    Stored separately from ``dock_state``: the Stages panel's open devices
+    live in its own nested dock manager, which the outer manager's
+    ``saveState()`` doesn't capture -- see ``_modern_gui._acquire_stages``.
+    """
 
     def is_empty(self) -> bool:
         """True if there is nothing here to restore."""
@@ -77,6 +84,7 @@ class AcquireLayout:
         data["dock_state"] = b64encode(state).decode() if state else None
         data["panels"] = sorted(self.panels)
         data["hidden_panels"] = sorted(self.hidden_panels)
+        data["stage_devices"] = sorted(self.stage_devices)
         return data
 
     @classmethod
@@ -87,6 +95,7 @@ class AcquireLayout:
             dock_state=b64decode(state) if state else None,
             panels=_str_set(data.get("panels")),
             hidden_panels=_str_set(data.get("hidden_panels")),
+            stage_devices=_str_set(data.get("stage_devices")),
         )
 
 
@@ -189,6 +198,7 @@ def session_layout() -> AcquireLayout:
         dock_state=prefs.acquire_dock_state,
         panels=frozenset(prefs.acquire_panels),
         hidden_panels=frozenset(prefs.acquire_hidden_panels),
+        stage_devices=frozenset(prefs.acquire_stage_devices),
     )
 
 
@@ -198,6 +208,7 @@ def store_session_layout(layout: AcquireLayout) -> None:
     prefs.acquire_dock_state = layout.dock_state
     prefs.acquire_panels = set(layout.panels)
     prefs.acquire_hidden_panels = set(layout.hidden_panels)
+    prefs.acquire_stage_devices = set(layout.stage_devices)
 
 
 def available_layouts() -> list[str]:

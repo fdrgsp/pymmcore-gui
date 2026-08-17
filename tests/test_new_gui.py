@@ -1096,13 +1096,14 @@ def test_acquire_stages_panel_add_and_remove_devices(
     assert [a.text() for a in menu2.actions()] == ["Z", "Z1"]
 
     # Adding a second, different device leaves the first untouched -- both
-    # coexist, tabbed in the panel's own nested dock area.
+    # coexist, split into their own side-by-side column in the panel's own
+    # nested dock area (not tabbed together).
     next(a for a in menu2.actions() if a.text() == "Z1").trigger()
     z1_dock = panel._docks["Z1"]
     assert isinstance(z1_dock.widget(), StageWidget)
     assert not xy_dock.isClosed()
     assert not z1_dock.isClosed()
-    assert z1_dock.dockAreaWidget() is xy_dock.dockAreaWidget()  # tabbed together
+    assert z1_dock.dockAreaWidget() is not xy_dock.dockAreaWidget()
 
     # Closing one (its own tab's X) removes it and frees the name to re-add.
     xy_dock.closeDockWidget()
@@ -3825,6 +3826,58 @@ def test_acquire_layout_round_trip(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     # Console was never opened on page_a, so restoring must not force every
     # registered panel open -- laziness survives a restore.
     assert page_b.panel_widget(PanelKey.CONSOLE) is None
+
+
+def test_acquire_layout_round_trip_restores_open_stage_devices(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """The Stages panel's open devices are part of the saved layout.
+
+    They live in the panel's own nested dock manager, which
+    ``CDockManager.saveState()`` on the outer manager can't see -- so they
+    need their own round trip through ``AcquireLayout.stage_devices``.
+    """
+    page_a = AcquirePage(mmcore)
+    qtbot.addWidget(page_a)
+    page_a.panel_button(PanelKey.STAGES).click()
+    panel_a = page_a.panel_widget(PanelKey.STAGES)
+    assert isinstance(panel_a, StagesPanel)
+    panel_a._add_stage("XY")
+    panel_a._add_stage("Z1")
+
+    saved = page_a.current_layout()
+    assert saved.stage_devices == {"XY", "Z1"}
+
+    page_b = AcquirePage(mmcore)
+    qtbot.addWidget(page_b)
+    assert page_b.restore_layout(saved.dock_state, saved.panels, saved.stage_devices)
+
+    panel_b = page_b.panel_widget(PanelKey.STAGES)
+    assert isinstance(panel_b, StagesPanel)
+    assert panel_b.open_devices() == {"XY", "Z1"}
+
+
+def test_acquire_layout_restore_skips_stage_devices_missing_from_config(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A saved stage device the current config doesn't have is skipped, not an error.
+
+    E.g. restoring the same named layout after switching to a configuration
+    with fewer stages than the one it was saved under.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.panel_button(PanelKey.STAGES).click()
+
+    saved = page.current_layout()
+    assert saved.dock_state is not None
+    assert page.restore_layout(
+        saved.dock_state, saved.panels, {"XY", "NotALoadedStage"}
+    )
+
+    panel = page.panel_widget(PanelKey.STAGES)
+    assert isinstance(panel, StagesPanel)
+    assert panel.open_devices() == {"XY"}
 
 
 def test_acquire_restore_collapses_an_expanded_auto_hide_panel(

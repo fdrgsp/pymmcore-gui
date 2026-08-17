@@ -10,7 +10,6 @@ grid.
 
 from __future__ import annotations
 
-from contextlib import suppress
 from functools import partial
 from typing import TYPE_CHECKING
 
@@ -34,7 +33,7 @@ from ._panels import create_stage_widget
 from ._theme import dock_chrome_stylesheet, qcolor, theme
 
 if TYPE_CHECKING:
-    from pymmcore_gui._qt.QtAds import CDockAreaWidget
+    from collections.abc import Iterable
 
 # Both stage flavors share one panel -- a device name is unique across the
 # whole loaded device list regardless of type, so a flat dict keyed by name
@@ -82,12 +81,34 @@ class StagesPanel(QWidget):
 
     # ── add / remove ─────────────────────────────────────────────
 
-    def _available_devices(self) -> list[str]:
-        """Loaded XY/Z stage devices that don't already have an open dock."""
+    def _loaded_devices(self) -> list[str]:
+        """Every loaded XY/Z stage device, open or not."""
         devices: list[str] = []
         for device_type in _STAGE_DEVICE_TYPES:
             devices.extend(self._core.getLoadedDevicesOfType(device_type))
-        return [d for d in devices if d not in self._docks]
+        return devices
+
+    def _available_devices(self) -> list[str]:
+        """Loaded XY/Z stage devices that don't already have an open dock."""
+        return [d for d in self._loaded_devices() if d not in self._docks]
+
+    def open_devices(self) -> frozenset[str]:
+        """Every device currently shown as its own dock -- see :meth:`add_stages`."""
+        return frozenset(self._docks)
+
+    def add_stages(self, devices: Iterable[str]) -> None:
+        """Open each of *devices* that is currently loaded; silently skip the rest.
+
+        Used to restore a saved layout's open stages (see
+        ``AcquirePage.restore_layout``) without erroring when the
+        now-loaded configuration doesn't have one of them -- e.g. switching
+        to a config with fewer stages than the one the layout was saved
+        under.
+        """
+        loaded = set(self._loaded_devices())
+        for device in devices:
+            if device in loaded:
+                self._add_stage(device)
 
     def _build_add_menu(self) -> QMenu:
         """The "+ Add Stage" menu.
@@ -128,23 +149,16 @@ class StagesPanel(QWidget):
         # menu, and there's no other way to reveal a merely-hidden one.
         dock.setFeature(CDockWidget.DockWidgetFeature.DockWidgetDeleteOnClose, True)
         dock.setWidget(widget, CDockWidget.eInsertMode.ForceNoScrollArea)
-        if (target := self._target_area()) is None:
-            self._dock_manager.addDockWidget(DockWidgetArea.CenterDockWidgetArea, dock)
-        else:
-            self._dock_manager.addDockWidgetTabToArea(dock, target)
+        # No target area: each new stage splits off a fresh column to the
+        # right of whatever's already there, rather than tabbing into it --
+        # the user can still drag any of them into a tab group or a
+        # different row/column afterwards, same as any other ADS dock.
+        self._dock_manager.addDockWidget(DockWidgetArea.RightDockWidgetArea, dock)
         dock.closed.connect(partial(self._on_dock_closed, device))
 
         self._docks[device] = dock
         dock.setAsCurrentTab()
         self._empty_hint.setVisible(False)
-
-    def _target_area(self) -> CDockAreaWidget | None:
-        """An existing stage's area, so a new one tabs in rather than splitting."""
-        for dock in self._docks.values():
-            with suppress(RuntimeError):
-                if (area := dock.dockAreaWidget()) is not None:
-                    return area
-        return None
 
     def _on_dock_closed(self, device: str) -> None:
         self._docks.pop(device, None)

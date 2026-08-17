@@ -194,6 +194,13 @@ class ModernWindowSettingsV1(BaseMMSettings):
     The hidden set is stored (rather than the visible one) so a panel added to
     the registry in a later release shows up for existing users by default.
     """
+    acquire_stage_devices: WidgetNames = Field(default_factory=set)
+    """Device names open in the Stages panel (see ``_modern_gui._acquire_stages``).
+
+    Not part of ``acquire_dock_state``: each open stage lives in the Stages
+    panel's own nested dock manager, which ``CDockManager.saveState()`` on
+    the outer manager knows nothing about.
+    """
     theme: Literal["dark", "light"] = "dark"
     """Active color theme."""
     zoom: float | None = None
