@@ -127,20 +127,13 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
     PanelInfo(
         key=PanelKey.MDA,
         title="MDA",
-        icon="f7:cube",
+        icon="proicons:cube",
         tooltip="MDA — show or hide the multi-dimensional acquisition panel",
         create=_create_mda,
         area=DockWidgetArea.LeftDockWidgetArea,
         default_open=True,
         refresh=_refresh_mda,
         always_visible=True,
-    ),
-    PanelInfo(
-        key=PanelKey.STAGE_EXPLORER,
-        title="Stage Explorer",
-        icon="mdi:map-search",
-        tooltip="Stage Explorer — show or hide the stage exploration panel",
-        create=_create_stage_explorer,
     ),
     PanelInfo(
         key=PanelKey.PRESETS,
@@ -159,6 +152,13 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
         create=_ignoring_core(create_property_browser),
         unstyle=True,
         refresh=_refresh_property_browser,
+    ),
+    PanelInfo(
+        key=PanelKey.STAGE_EXPLORER,
+        title="Stage Explorer",
+        icon="material-symbols:map-search-outline-rounded",
+        tooltip="Stage Explorer — show or hide the stage exploration panel",
+        create=_create_stage_explorer,
     ),
     PanelInfo(
         key=PanelKey.CONSOLE,
