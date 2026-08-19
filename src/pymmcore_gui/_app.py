@@ -242,30 +242,10 @@ def create_mmgui(
     if mm_config is not False:
         # if a string was passed, load that config
         if mm_config:
-            # if mm_config is a string, load that config
-            win.mmcore.loadSystemConfiguration(mm_config)
-            _notify_startup_configuration_loaded(win)
+            _load_startup_config(win, mm_config)
         # otherwise, fall back to auto-loading / cli-based
         elif config := _decide_configuration(mm_config, win):
-            try:
-                win.mmcore.loadSystemConfiguration(config)
-                _notify_startup_configuration_loaded(win)
-            except Exception as e:
-                warnings.warn(
-                    f"Failed to load system configuration: {e}",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-                # The user explicitly asked (via LoadConfigDialog, or a stored
-                # auto-load preference) for this file to be loaded, so a
-                # warning alone -- invisible in a windowed/frozen build with
-                # no console -- would leave them staring at an app that just
-                # silently didn't do what they asked. Show it.
-                QMessageBox.critical(
-                    None,
-                    "Failed to load configuration",
-                    f"Could not load the configuration file:\n\n{config}\n\n{e}",
-                )
+            _load_startup_config(win, config)
 
     if install_sys_excepthook:
         _install_excepthook()
@@ -278,6 +258,56 @@ def create_mmgui(
     if exec_app:
         app.exec()
     return win
+
+
+def _load_startup_config(win: WindowProtocol, config: Path | str) -> None:
+    """Load `config` into `win`'s core, reporting failure rather than raising.
+
+    Nothing may propagate out of here. This runs *before* `app.exec()`, and a
+    window with `restore_state` only becomes visible once the event loop
+    starts, so an escaping exception kills the process with the main window
+    built but never shown -- in a windowed/frozen build (no console, no
+    traceback) the app simply appears to do nothing after the startup dialog.
+
+    Every caller reaches this because someone explicitly asked for this file
+    (the startup dialog, `-c`, or a stored auto-load preference), so a warning
+    alone -- equally invisible when frozen -- would leave them staring at an
+    app that silently didn't do what they asked. Show it instead.
+    """
+    try:
+        win.mmcore.loadSystemConfiguration(config)
+    except Exception as e:
+        warnings.warn(
+            f"Failed to load system configuration: {e}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        QMessageBox.critical(
+            None, "Failed to load configuration", _config_error_text(config, e)
+        )
+    else:
+        _notify_startup_configuration_loaded(win)
+
+
+def _config_error_text(config: Path | str, exc: Exception) -> str:
+    """Explain a failed config load, naming the likely cause on a fresh install.
+
+    Configs -- the demo one included -- are resolved against the Micro-Manager
+    installation `pymmcore-plus` finds, and the bundled app ships no device
+    adapters. So on a first launch the real problem is usually "no
+    Micro-Manager", which `Path does not exist: MMConfig_demo.cfg` does not
+    convey. Say so, and point at the pages that fix it.
+    """
+    from pymmcore_plus import find_micromanager
+
+    text = f"Could not load the configuration file:\n\n{config}\n\n{exc}"
+    if not find_micromanager(return_first=True):
+        text += (
+            "\n\nNo Micro-Manager installation was found. Device adapters are "
+            "not bundled with this app: install them from the Installation "
+            "tab (or with `mmcore install`), then load a configuration."
+        )
+    return text
 
 
 def _notify_startup_configuration_loaded(win: WindowProtocol) -> None:

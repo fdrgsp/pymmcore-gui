@@ -87,6 +87,11 @@ def app_process() -> Iterator[subprocess.Popen]:
 CMD_CTRL = "ctrl" if os.name == "nt" else "command"
 
 
-@pytest.mark.usefixtures("app_process")
-def test_app() -> None:
+def test_app(app_process: subprocess.Popen) -> None:
     time.sleep(1)
+    # The "READY" line the fixture waits for is printed before the window class
+    # is even chosen, and Windows teardown below accepts exit code 1 (that's
+    # what `proc.kill()` yields) -- so without this, a bundle that dies on
+    # startup passes. That is exactly how a frozen build shipped that showed
+    # the startup dialog and then silently exited.
+    assert app_process.poll() is None, "app exited on its own shortly after startup"
