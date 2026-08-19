@@ -64,13 +64,22 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
 }
 
 # --- 3. clone or update the repo -----------------------------------------
+# Always ends with InstallDir being a pristine checkout of $Branch: any
+# local edits, stray files, or a half-finished/non-git directory from a
+# previous run are wiped rather than fought with. Re-running this script
+# is the supported way to reset a broken or hand-modified install.
 
 if (Test-Path "$InstallDir\.git") {
-    Write-Step "Updating existing install at $InstallDir..."
+    Write-Step "Resetting existing install at $InstallDir to a clean copy of '$Branch'..."
     git -C $InstallDir fetch origin $Branch
     git -C $InstallDir checkout $Branch
     git -C $InstallDir reset --hard "origin/$Branch"
+    git -C $InstallDir clean -fdx
 } else {
+    if (Test-Path $InstallDir) {
+        Write-Step "Removing non-git contents of $InstallDir..."
+        Remove-Item -Recurse -Force $InstallDir
+    }
     Write-Step "Cloning pymmcore-gui to $InstallDir..."
     git clone --branch $Branch $RepoUrl $InstallDir
 }
