@@ -45,6 +45,19 @@ class PanelKey:
     EXCEPTION_LOG: Final = "exception_log"
 
 
+class StageKind:
+    """Which stage-control widget flavor is docked under ``PanelKey.STAGES``.
+
+    Both are kept intentionally -- see the comment on the ``STAGES`` entry in
+    :data:`PANELS` for how ``AcquirePage`` lets the user pick between them.
+    """
+
+    XYZ: Final = "xyz"
+    """XYZStageWidget -- follows the core's *default* XY stage and focus device."""
+    PER_DEVICE: Final = "per_device"
+    """StagesPanel -- add-on-demand, one StageWidget per chosen device."""
+
+
 def _ignoring_core(fn: Callable[[QWidget], QWidget]) -> PanelFactory:
     """Adapt a ``widget_actions`` factory, which resolves the core itself."""
 
@@ -89,6 +102,35 @@ def _create_stages(parent: QWidget, core: CMMCorePlus) -> QWidget:
     from ._acquire_stages import StagesPanel
 
     return StagesPanel(parent=parent, mmcore=core)
+
+
+def _create_stage_xyz(parent: QWidget, core: CMMCorePlus) -> QWidget:
+    """Build a single widget controlling the core's *default* XY/Z stage.
+
+    Unlike ``StageWidget`` (one instance per device, added on demand through
+    the Stages panel), ``XYZStageWidget`` targets no fixed device -- it
+    always follows whichever devices are currently the core's default XY
+    stage and focus device.
+    """
+    from pymmcore_widgets import XYZStageWidget
+
+    widget = XYZStageWidget(parent=parent, mmcore=core)
+    widget.setMinimumSize(widget.minimumSizeHint())
+    return widget
+
+
+STAGE_KIND_FACTORIES: Final[Mapping[str, tuple[PanelFactory, bool]]] = {
+    # kind: (factory, needs unstyle_widgets())
+    #
+    # XYZStageWidget's move/halt buttons are plain QPushButtons with no
+    # "variant" set, so without unstyling they render in Qt's default style
+    # -- unlike StagesPanel, which already runs the same button classes
+    # through unstyle_widgets() itself, per added device (_acquire_stages.py)
+    # -- and the hover highlight the app's QSS gives "subtle" buttons is easy
+    # to miss under that default.
+    StageKind.XYZ: (_create_stage_xyz, True),
+    StageKind.PER_DEVICE: (_create_stages, False),
+}
 
 
 def _create_console(_parent: QWidget, core: CMMCorePlus) -> QWidget:
@@ -177,8 +219,17 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
         key=PanelKey.STAGES,
         title="Stages",
         icon="mdi:arrow-all",
-        tooltip="Stages — add and arrange XY/Z stage controls",
-        create=_create_stages,
+        tooltip=(
+            "Stages — control the default XY/Z stage "
+            "(right-click for per-device controls)"
+        ),
+        # AcquirePage overrides construction for this one key (see
+        # AcquirePage._stage_widget_for / STAGE_KIND_FACTORIES): the user
+        # picks between StagesPanel (per-device, add on demand) and
+        # XYZStageWidget (follows the core's default XY/Z devices) from the
+        # Stages button's right-click menu. This default is only the
+        # fallback/documentation of the initial kind (see StageKind).
+        create=_create_stage_xyz,
     ),
     PanelInfo(
         key=PanelKey.STAGE_EXPLORER,

@@ -13,7 +13,7 @@ import pytest
 import useq
 from pymmcore_plus import PropertyType
 from pymmcore_widgets import MDAWidget as UpstreamMDAWidget
-from pymmcore_widgets import StageWidget
+from pymmcore_widgets import StageWidget, XYZStageWidget
 from pymmcore_widgets.mda._core_channels import PROPERTY_SEPARATOR
 from pymmcore_widgets.useq_widgets._positions import MDAButton, _MDAPopup
 
@@ -38,7 +38,7 @@ from pymmcore_gui._modern_gui._installation import (
     InstallReleaseDialog,
 )
 from pymmcore_gui._modern_gui._main_win import MainWindow
-from pymmcore_gui._modern_gui._panels import PANELS, PanelKey
+from pymmcore_gui._modern_gui._panels import PANELS, PanelKey, StageKind
 from pymmcore_gui._modern_gui._startup import StartupDialog
 from pymmcore_gui._modern_gui._theme import (
     UI_FONT_SIZE_PT,
@@ -1061,6 +1061,8 @@ def test_acquire_stages_panel_starts_empty(mmcore: CMMCorePlus, qtbot: QtBot) ->
     qtbot.addWidget(page)
 
     assert page.panel_widget(PanelKey.STAGES) is None
+    # per-device flavor: the button defaults to XYZStageWidget (see StageKind)
+    page._set_stage_kind(StageKind.PER_DEVICE)
     page.panel_button(PanelKey.STAGES).click()
     panel = page.panel_widget(PanelKey.STAGES)
     assert isinstance(panel, StagesPanel)
@@ -1078,6 +1080,7 @@ def test_acquire_stages_panel_add_and_remove_devices(
     """Adding stages opens independent docks; closing one frees it for re-adding."""
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
+    page._set_stage_kind(StageKind.PER_DEVICE)
     page.panel_button(PanelKey.STAGES).click()
     panel = page.panel_widget(PanelKey.STAGES)
     assert isinstance(panel, StagesPanel)
@@ -1119,6 +1122,7 @@ def test_acquire_stages_panel_add_menu_disabled_when_nothing_left(
     """Once every loaded stage is open, the Add menu says so instead of being empty."""
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
+    page._set_stage_kind(StageKind.PER_DEVICE)
     page.panel_button(PanelKey.STAGES).click()
     panel = page.panel_widget(PanelKey.STAGES)
     assert isinstance(panel, StagesPanel)
@@ -1131,6 +1135,109 @@ def test_acquire_stages_panel_add_menu_disabled_when_nothing_left(
     assert len(actions) == 1
     assert actions[0].text() == "No stages available"
     assert not actions[0].isEnabled()
+
+
+def test_stages_button_defaults_to_xyz_stage_widget(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A plain (left-)click on Stages opens XYZStageWidget, not the per-device panel."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    assert page._stage_kind == StageKind.XYZ
+
+    page.panel_button(PanelKey.STAGES).click()
+    widget = page.panel_widget(PanelKey.STAGES)
+    assert isinstance(widget, XYZStageWidget)
+
+    # its move/halt buttons are unstyled like every other themed button --
+    # unlike StagesPanel, which does this itself per added device
+    buttons = widget.findChildren(QAbstractButton)
+    assert buttons
+    assert all(btn.property("variant") == "subtle" for btn in buttons)
+
+
+def test_stages_kind_converts_in_place_without_losing_the_dock(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Switching flavors swaps the docked content but keeps the same CDockWidget.
+
+    So a conversion doesn't disturb wherever the user has the panel arranged
+    (position, pin state, tab) -- only its content widget changes.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.panel_button(PanelKey.STAGES).click()
+    dock = page.panel_dock(PanelKey.STAGES)
+    assert isinstance(page.panel_widget(PanelKey.STAGES), XYZStageWidget)
+
+    page._set_stage_kind(StageKind.PER_DEVICE)
+    assert page.panel_dock(PanelKey.STAGES) is dock
+    assert isinstance(page.panel_widget(PanelKey.STAGES), StagesPanel)
+
+    page._set_stage_kind(StageKind.XYZ)
+    assert page.panel_dock(PanelKey.STAGES) is dock
+    assert isinstance(page.panel_widget(PanelKey.STAGES), XYZStageWidget)
+
+    # selecting the kind already active is a no-op, not a rebuild
+    widget = page.panel_widget(PanelKey.STAGES)
+    page._set_stage_kind(StageKind.XYZ)
+    assert page.panel_widget(PanelKey.STAGES) is widget
+
+
+def test_stages_kind_change_before_first_open_is_deferred(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Picking a kind before the panel has ever been opened just sets the default."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    assert page.panel_dock(PanelKey.STAGES) is None
+
+    page._set_stage_kind(StageKind.PER_DEVICE)
+    assert page.panel_dock(PanelKey.STAGES) is None  # nothing built yet
+
+    page.panel_button(PanelKey.STAGES).click()
+    assert isinstance(page.panel_widget(PanelKey.STAGES), StagesPanel)
+
+
+def test_xyz_stage_widget_snap_checkbox_ensures_preview(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Checking XYZStageWidget's own Snap checkbox must create the lazy Preview.
+
+    Regression test: ``_on_stage_widget_added`` was only ever wired for the
+    per-device StagesPanel's ``stageWidgetAdded`` signal, which XYZStageWidget
+    doesn't emit -- checking its Snap and moving the stage (without having
+    snapped/gone live first) snapped into a Preview that didn't exist yet, so
+    nothing was shown.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.panel_button(PanelKey.STAGES).click()
+    widget = page.panel_widget(PanelKey.STAGES)
+    assert isinstance(widget, XYZStageWidget)
+
+    with patch.object(page._viewers, "ensure_preview") as ensure_preview:
+        widget.snap_checkbox.setChecked(True)
+    ensure_preview.assert_called_once()
+
+
+def test_per_device_stage_widget_snap_checkbox_still_ensures_preview(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """The pre-existing per-device StageWidget wiring survives the XYZ addition."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page._set_stage_kind(StageKind.PER_DEVICE)
+    page.panel_button(PanelKey.STAGES).click()
+    panel = page.panel_widget(PanelKey.STAGES)
+    assert isinstance(panel, StagesPanel)
+    panel._add_stage("XY")
+    stage_widget = panel._docks["XY"].widget()
+    assert isinstance(stage_widget, StageWidget)
+
+    with patch.object(page._viewers, "ensure_preview") as ensure_preview:
+        stage_widget.snap_checkbox.setChecked(True)
+    ensure_preview.assert_called_once()
 
 
 def test_stage_explorer_sends_positions_to_mda(
@@ -3839,6 +3946,7 @@ def test_acquire_layout_round_trip_restores_open_stage_devices(
     """
     page_a = AcquirePage(mmcore)
     qtbot.addWidget(page_a)
+    page_a._set_stage_kind(StageKind.PER_DEVICE)
     page_a.panel_button(PanelKey.STAGES).click()
     panel_a = page_a.panel_widget(PanelKey.STAGES)
     assert isinstance(panel_a, StagesPanel)
@@ -3850,7 +3958,11 @@ def test_acquire_layout_round_trip_restores_open_stage_devices(
 
     page_b = AcquirePage(mmcore)
     qtbot.addWidget(page_b)
-    assert page_b.restore_layout(saved.dock_state, saved.panels, saved.stage_devices)
+    assert page_b._stage_kind == StageKind.XYZ  # a fresh page still defaults to xyz
+    assert page_b.restore_layout(
+        saved.dock_state, saved.panels, saved.stage_devices, saved.stage_kind
+    )
+    assert page_b._stage_kind == StageKind.PER_DEVICE
 
     panel_b = page_b.panel_widget(PanelKey.STAGES)
     assert isinstance(panel_b, StagesPanel)
@@ -3867,12 +3979,13 @@ def test_acquire_layout_restore_skips_stage_devices_missing_from_config(
     """
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
+    page._set_stage_kind(StageKind.PER_DEVICE)
     page.panel_button(PanelKey.STAGES).click()
 
     saved = page.current_layout()
     assert saved.dock_state is not None
     assert page.restore_layout(
-        saved.dock_state, saved.panels, {"XY", "NotALoadedStage"}
+        saved.dock_state, saved.panels, {"XY", "NotALoadedStage"}, saved.stage_kind
     )
 
     panel = page.panel_widget(PanelKey.STAGES)
