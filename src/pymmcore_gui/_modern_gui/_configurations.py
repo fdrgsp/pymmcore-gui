@@ -6,7 +6,7 @@ them as sub-tabs and keeps them in step with the core.
 
 from __future__ import annotations
 
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from typing import TYPE_CHECKING
 
 from pymmcore_plus import CMMCorePlus
@@ -37,7 +37,40 @@ from ._theme import qcolor, theme
 SAVING_MSG = "Saving configuration to core…"
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from pymmcore_gui._qt.QtGui import QShowEvent
+
+
+def _group_matches_core(core: CMMCorePlus, group: object) -> bool:
+    """Whether `group` (an editor ConfigGroup) is already what the core holds.
+
+    Compared as ordered (preset, settings) tuples, since MMCore preserves the
+    order in which both were defined. Anything the comparison cannot express
+    the same way in both — an in-progress preset with no settings, which MMCore
+    cannot represent at all, or a value it normalizes on the way in — simply
+    reports "different" and gets rewritten, which is the status quo.
+    """
+    name = getattr(group, "name", None)
+    if not name or name not in core.getAvailableConfigGroups():
+        return False
+    try:
+        in_core = [
+            (preset, tuple((d, p, v) for d, p, v in core.getConfigData(name, preset)))
+            for preset in core.getAvailableConfigs(name)
+        ]
+        in_editor = [
+            (
+                preset.name,
+                tuple(
+                    (s.device.label, s.property_name, s.value) for s in preset.settings
+                ),
+            )
+            for preset in group.presets.values()  # type: ignore[attr-defined]
+        ]
+    except Exception:
+        return False
+    return in_core == in_editor
 
 
 class _GroupEditorTab(QWidget):
@@ -130,6 +163,14 @@ class _GroupEditorTab(QWidget):
                             self._core.deleteConfigGroup(name)
                     # redefine each group (delete first to clear stale presets)
                     for group in groups:
+                        if _group_matches_core(self._core, group):
+                            # Already exactly what the core holds. Skipping is
+                            # not just faster: deleteConfigGroup() below is
+                            # destructive (it drops the channel-group
+                            # designation, and anything the editor could not
+                            # represent), so a save that changed one preset has
+                            # no business tearing down every other group.
+                            continue
                         if group.name in self._core.getAvailableConfigGroups():
                             self._core.deleteConfigGroup(group.name)
                         self._core.defineConfigGroup(group.name)
@@ -226,7 +267,28 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
         self._suppress_close = True
         try:
             with busy(self._overlay, SAVING_MSG):
-                super()._on_apply()
+                # Suppress core events for the whole bulk rewrite, exactly as
+                # _GroupEditorTab.save() does — upstream's _on_apply deletes
+                # and redefines every preset, and pymmcore-plus emits
+                # pixelSizeChanged from deletePixelSizeConfig(),
+                # definePixelSizeConfig() AND setPixelSizeUm(): three events
+                # per preset. Every listener (Stage Explorer's AffineState,
+                # the camera ROI widget, the MDA grid/position plans) answers
+                # each one by calling getPixelSizeUm()/getPixelSizeAffine(),
+                # which MMCore resolves by reading the objective's *live*
+                # property values. On a serial device (an ASI Tiger, say)
+                # every one of those reads is a round trip over the COM port,
+                # so the cost is presets x listeners round trips — long enough
+                # for the OS to mark the window unresponsive. And each answer
+                # is computed from a half-rewritten config anyway, so none of
+                # them is worth having.
+                with block_core(self._mmc.events):
+                    super()._on_apply()
+                # Those listeners are now stale. Give them the single event
+                # that matters, with the final configuration in place — still
+                # under the overlay, since this read can be slow too.
+                if self.isClean():
+                    self._mmc.events.pixelSizeChanged.emit(self._mmc.getPixelSizeUm())
         finally:
             self._suppress_close = False
 
@@ -309,6 +371,8 @@ class ConfigurationsPage(TabPage):
         # "Apply" button's job), so `mark_saved`/`mark_current_saved` do that.
         self._group_dirty = False
         self._pixel_dirty = False
+        # guards against a second commit starting while one is in flight
+        self._commit_in_progress = False
         self._group_editor.undoStack().cleanChanged.connect(
             self._on_group_clean_changed
         )
@@ -361,17 +425,47 @@ class ConfigurationsPage(TabPage):
         self._refresh(reload_configs=True)
         self.mark_saved()
 
+    @contextmanager
+    def _committing(self) -> Iterator[None]:
+        """Hold the save actions shut for the duration of a commit.
+
+        A commit blocks the GUI thread, so on real hardware the user has
+        seconds in which to click "Save" again. Disabling the buttons both
+        says so and makes Qt drop clicks aimed at them, while `_committing`
+        stops any *other* route (the leave-the-page prompt, closeEvent)
+        starting a second rewrite of a core the first is still halfway
+        through. Prior enabled state is restored rather than assumed, since
+        pixel calibration disables these buttons for its own reasons.
+        """
+        buttons = (self._save_core_btn, self._save_file_btn)
+        was_enabled = [btn.isEnabled() for btn in buttons]
+        for btn in buttons:
+            btn.setEnabled(False)
+        self._commit_in_progress = True
+        try:
+            yield
+        finally:
+            self._commit_in_progress = False
+            for btn, enabled in zip(buttons, was_enabled, strict=False):
+                btn.setEnabled(enabled)
+
     def commit_current_to_core(self) -> None:
         """Write the selected editor's contents into the live core."""
-        if self._tabs.currentWidget() is self._group_tab:
-            self._group_tab.save()
-        elif self._tabs.currentWidget() is self._pixel_config:
-            self._pixel_config.apply()
+        if self._commit_in_progress:
+            return
+        with self._committing():
+            if self._tabs.currentWidget() is self._group_tab:
+                self._group_tab.save()
+            elif self._tabs.currentWidget() is self._pixel_config:
+                self._pixel_config.apply()
 
     def commit_to_core(self) -> None:
         """Write the group and pixel editors' contents into the core."""
-        self._group_tab.save()
-        self._pixel_config.apply()
+        if self._commit_in_progress:
+            return
+        with self._committing():
+            self._group_tab.save()
+            self._pixel_config.apply()
 
     def _on_pixel_calibration_running(self, running: bool) -> None:
         """Prevent configuration rewrites or tab changes during stage motion."""

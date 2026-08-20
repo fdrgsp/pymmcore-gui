@@ -4535,6 +4535,112 @@ def test_pixel_config_commit_refreshes_open_stage_explorer(
     refresh.assert_called_once_with()
 
 
+def test_commit_to_core_does_not_re_enter(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    """A commit started while one is in flight must be dropped, not nested.
+
+    ``BusyOverlay.start()`` flushes the event loop before the core work begins;
+    a second "Save to core" arriving there would otherwise start a nested
+    rewrite of a core the first pass is still halfway through.
+    """
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    page._tabs.setCurrentWidget(page._group_tab)
+
+    depth = 0
+    max_depth = 0
+    attempts = 0
+
+    def reentrant_save() -> None:
+        nonlocal depth, max_depth, attempts
+        depth += 1
+        max_depth = max(max_depth, depth)
+        if not attempts:
+            # only re-enter once, so that losing the guard fails this
+            # assertion rather than recursing until the test times out
+            attempts += 1
+            page.commit_current_to_core()  # what a queued second click does
+        depth -= 1
+
+    with patch.object(page._group_tab, "save", side_effect=reentrant_save):
+        page.commit_current_to_core()
+
+    assert max_depth == 1
+
+
+def test_save_buttons_are_disabled_during_a_commit(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    page._tabs.setCurrentWidget(page._group_tab)
+    assert page._save_core_btn.isEnabled()
+
+    seen: list[bool] = []
+    with patch.object(
+        page._group_tab,
+        "save",
+        side_effect=lambda: seen.append(page._save_core_btn.isEnabled()),
+    ):
+        page.commit_current_to_core()
+
+    assert seen == [False]
+    # ...and restored afterwards
+    assert page._save_core_btn.isEnabled()
+    assert page._save_file_btn.isEnabled()
+
+
+def test_unchanged_groups_are_not_rewritten(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    """Saving must only touch groups whose contents actually differ.
+
+    deleteConfigGroup() is destructive — it drops the channel-group designation
+    among other things — so a save that changed one preset has no business
+    tearing down every other group.
+    """
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    assert len(mmcore.getAvailableConfigGroups()) > 1
+
+    # nothing edited: the editor already mirrors the core
+    deleted: list[str] = []
+    real_delete = mmcore.deleteConfigGroup
+
+    def recording_delete(name: str) -> None:
+        # wraps rather than replaces: a no-op would leave the core in a state
+        # the rewrite then errors on, and save()'s error path is a modal box
+        deleted.append(name)
+        real_delete(name)
+
+    with patch.object(mmcore, "deleteConfigGroup", side_effect=recording_delete):
+        page._group_tab.save()
+    assert deleted == []
+    # the groups are all still there, untouched
+    assert len(mmcore.getAvailableConfigGroups()) > 1
+
+
+def test_embedded_pixel_apply_coalesces_pixel_size_events(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """The bulk rewrite must not emit pixelSizeChanged once per preset.
+
+    pymmcore-plus emits it from deletePixelSizeConfig(), definePixelSizeConfig()
+    and setPixelSizeUm() alike, and every listener answers by calling
+    getPixelSizeUm(), which MMCore resolves by reading the objective's live
+    property values -- a serial round trip per read on real hardware.
+    """
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    assert len(mmcore.getAvailablePixelSizeConfigs()) > 1
+
+    events: list[float] = []
+    mmcore.events.pixelSizeChanged.connect(events.append)
+    page._tabs.setCurrentWidget(page._pixel_config)
+    page.commit_current_to_core()
+
+    # one coalesced event with the final configuration in place, not a storm of
+    # intermediate ones computed from a half-rewritten config
+    assert events == [mmcore.getPixelSizeUm()]
+
+
 def test_successful_embedded_pixel_apply_emits_geometry_refresh_signal(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
@@ -4616,7 +4722,7 @@ def test_saving_over_a_cfg_offers_to_keep_its_light_sources(
     with patch.object(
         QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
     ) as question:
-        assert page._save_to(str(cfg))
+        assert page.save_to(str(cfg))
 
     assert question.called
     assert question.call_args.args[2] == (
@@ -4644,7 +4750,7 @@ def test_keeping_light_sources_lists_every_affected_channel(
     with patch.object(
         QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
     ) as question:
-        assert page._save_to(str(cfg))
+        assert page.save_to(str(cfg))
 
     assert question.call_args.args[2] == (
         "Do you want to keep the light source info for the Cy5, FITC channels?"
@@ -4667,7 +4773,7 @@ def test_declining_to_keep_light_sources_drops_them(
     with patch.object(
         QMessageBox, "question", return_value=QMessageBox.StandardButton.No
     ):
-        assert page._save_to(str(cfg))
+        assert page.save_to(str(cfg))
 
     assert "#@LightSource" not in cfg.read_text()
 
@@ -4682,7 +4788,7 @@ def test_light_sources_for_removed_channels_are_dropped_without_asking(
     page = _hardware_page_over(mmcore, qtbot, cfg)
 
     with patch.object(QMessageBox, "question") as question:
-        assert page._save_to(str(cfg))
+        assert page.save_to(str(cfg))
 
     assert not question.called
     assert "#@LightSource" not in cfg.read_text()
@@ -4698,7 +4804,7 @@ def test_saving_to_a_new_file_never_asks_about_light_sources(
 
     dest = tmp_path / "somewhere_else.cfg"
     with patch.object(QMessageBox, "question") as question:
-        assert page._save_to(str(dest))
+        assert page.save_to(str(dest))
 
     assert not question.called
     assert "#@LightSource" not in dest.read_text()
@@ -4824,46 +4930,74 @@ def test_saving_selected_tab_keeps_other_tab_dirty(
     assert not page.is_dirty()
 
 
-def test_save_to_file_commits_to_core_before_writing() -> None:
-    calls: list[str] = []
+def _recording_hardware(calls: list[str], path: str = "cfg") -> SimpleNamespace:
+    """A stand-in HardwareSetupPage that logs the order of its save steps."""
 
-    def save_file() -> bool:
+    def prompt() -> str:
+        calls.append("ask")
+        return path
+
+    def save_to(_path: str) -> bool:
         calls.append("file")
         return True
 
+    return SimpleNamespace(
+        prompt_save_path=Mock(side_effect=prompt), save_to=Mock(side_effect=save_to)
+    )
+
+
+def test_save_to_file_asks_where_before_committing_to_core() -> None:
+    calls: list[str] = []
     configurations = SimpleNamespace(
         commit_to_core=Mock(side_effect=lambda: calls.append("core")),
         mark_saved=Mock(side_effect=lambda: calls.append("clean")),
     )
-    hardware = SimpleNamespace(save_config=Mock(side_effect=save_file))
     window = SimpleNamespace(
         _configurations=configurations,
-        _hardware=hardware,
+        _hardware=_recording_hardware(calls),
     )
 
     assert MainWindow._save_all(window)  # type: ignore[arg-type]
-    assert calls == ["core", "file", "clean"]
+    # the dialog comes first (committing blocks the GUI thread for seconds on
+    # real hardware), and the core is still written before the file
+    assert calls == ["ask", "core", "file", "clean"]
 
 
-def test_toolbar_save_commits_selected_tab_before_writing() -> None:
+def test_toolbar_save_asks_where_before_committing_selected_tab() -> None:
     calls: list[str] = []
-
-    def save_file() -> bool:
-        calls.append("file")
-        return True
-
     configurations = SimpleNamespace(
         commit_current_to_core=Mock(side_effect=lambda: calls.append("selected")),
         mark_current_saved=Mock(side_effect=lambda: calls.append("clean-selected")),
     )
-    hardware = SimpleNamespace(save_config=Mock(side_effect=save_file))
     window = SimpleNamespace(
         _configurations=configurations,
-        _hardware=hardware,
+        _hardware=_recording_hardware(calls),
     )
 
     assert MainWindow._save_current_configuration(window)  # type: ignore[arg-type]
-    assert calls == ["selected", "file", "clean-selected"]
+    assert calls == ["ask", "selected", "file", "clean-selected"]
+
+
+@pytest.mark.parametrize(
+    "method, commit",
+    [
+        (MainWindow._save_all, "commit_to_core"),
+        (MainWindow._save_current_configuration, "commit_current_to_core"),
+    ],
+)
+def test_cancelling_the_save_dialog_leaves_the_core_untouched(
+    method: object, commit: str
+) -> None:
+    """Dismissing the dialog must not have already rewritten the live core."""
+    configurations = SimpleNamespace(
+        **{commit: Mock(), "mark_saved": Mock(), "mark_current_saved": Mock()}
+    )
+    hardware = SimpleNamespace(prompt_save_path=Mock(return_value=""), save_to=Mock())
+    window = SimpleNamespace(_configurations=configurations, _hardware=hardware)
+
+    assert not method(window)  # type: ignore[operator]
+    getattr(configurations, commit).assert_not_called()
+    hardware.save_to.assert_not_called()
 
 
 def test_acquire_width_settle_waits_out_a_late_resize(
