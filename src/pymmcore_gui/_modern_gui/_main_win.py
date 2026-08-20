@@ -703,16 +703,23 @@ class MainWindow(QMainWindow):
 
         Returns True if a file was written, False if cancelled or on error.
         """
+        # Where to save is asked first: the commit below blocks the GUI thread,
+        # and on real hardware there is no reason to spend that time before
+        # learning the user meant to cancel.
+        if not (path := self._hardware.prompt_save_path()):
+            return False
         self._configurations.commit_to_core()
-        if self._hardware.save_config():
+        if self._hardware.save_to(path):
             self._configurations.mark_saved()
             return True
         return False
 
     def _save_current_configuration(self) -> bool:
         """Commit the selected configuration editor, then write the full .cfg."""
+        if not (path := self._hardware.prompt_save_path()):
+            return False
         self._configurations.commit_current_to_core()
-        if self._hardware.save_config():
+        if self._hardware.save_to(path):
             self._configurations.mark_current_saved()
             return True
         return False
