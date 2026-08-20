@@ -355,6 +355,25 @@ class AcquirePage(TabPage):
         if auto_snap.isChecked() and auto_snap.isVisible():
             self._viewers.ensure_preview()
 
+    def _on_stage_widget_added(self, widget: QWidget) -> None:
+        """Ensure the lazy Preview exists before a stage's own Snap can fire.
+
+        ``StageWidget.snap_checkbox`` triggers a snap-on-move entirely inside
+        pymmcore-widgets, with no ``ensure_preview``-style hook of its own --
+        so without this, checking it and moving the stage (without ever
+        having snapped/gone live first) snaps into a Preview that doesn't
+        exist yet, and nothing is shown. Creating the Preview as soon as the
+        checkbox is turned on -- like ``_ensure_preview_for_roi_auto_snap``
+        does for the ROI auto-snap checkbox -- guarantees a listener is
+        already attached by the time the stage actually finishes moving.
+        """
+        snap_checkbox = getattr(widget, "snap_checkbox", None)
+        if snap_checkbox is None:
+            return  # pragma: no cover
+        snap_checkbox.toggled.connect(
+            lambda checked: self._viewers.ensure_preview() if checked else None
+        )
+
     # ------------------------------------------------------------------ panels
 
     def _place_panel_bar(self) -> None:
@@ -494,6 +513,9 @@ class AcquirePage(TabPage):
         if panel.info.key == PanelKey.STAGE_EXPLORER:
             explorer = cast("ThemedStageExplorer", widget)
             explorer.sendToMDARequested.connect(self._on_stage_explorer_send_to_mda)
+        if panel.info.key == PanelKey.STAGES:
+            stages_panel = cast("StagesPanel", widget)
+            stages_panel.stageWidgetAdded.connect(self._on_stage_widget_added)
         # Connects viewToggled (not toggleViewAction().toggled): pinning a
         # dock to an auto-hide side bar transiently unchecks and re-checks
         # that action without ever emitting viewToggled, so binding the

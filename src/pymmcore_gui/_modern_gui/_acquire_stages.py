@@ -18,7 +18,7 @@ from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import set_source_icon, unstyle_widgets
 from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget, DockWidgetArea
-from pymmcore_gui._qt.QtCore import QEvent, QSize
+from pymmcore_gui._qt.QtCore import QEvent, QSize, Signal
 from pymmcore_gui._qt.QtGui import QAction
 from pymmcore_gui._qt.QtWidgets import (
     QHBoxLayout,
@@ -43,6 +43,13 @@ _STAGE_DEVICE_TYPES = (DeviceType.XYStage, DeviceType.Stage)
 
 class StagesPanel(QWidget):
     """Add-on-demand stage controls, freely arranged in their own dock area."""
+
+    # Emitted each time a new per-device StageWidget is created, so a parent
+    # (AcquirePage) can wire up cross-panel behavior -- e.g. ensuring the
+    # lazy snap Preview exists before that stage's own "Snap" checkbox can
+    # trigger a snap-on-move -- without this panel needing to know about the
+    # viewer manager itself.
+    stageWidgetAdded = Signal(QWidget)
 
     def __init__(
         self, *, parent: QWidget | None = None, mmcore: CMMCorePlus | None = None
@@ -159,6 +166,7 @@ class StagesPanel(QWidget):
         self._docks[device] = dock
         dock.setAsCurrentTab()
         self._empty_hint.setVisible(False)
+        self.stageWidgetAdded.emit(widget)
 
     def _on_dock_closed(self, device: str) -> None:
         self._docks.pop(device, None)
