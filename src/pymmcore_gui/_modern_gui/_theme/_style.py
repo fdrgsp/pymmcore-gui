@@ -555,14 +555,22 @@ class MicroscopeStyle(QProxyStyle):
             return super().subControlRect(cc, opt, sc, widget)
         if cc == QStyle.ComplexControl.CC_SpinBox:
             r = opt.rect
-            arrow_w = 20
+            no_buttons = (
+                isinstance(opt, QStyleOptionSpinBox)
+                and opt.buttonSymbols == QAbstractSpinBox.ButtonSymbols.NoButtons
+            )
+            arrow_w = 0 if no_buttons else 20
             if sc == QStyle.SubControl.SC_SpinBoxEditField:
                 # Text field takes everything except the arrow column
                 return QRect(r.left() + 2, r.top(), r.width() - arrow_w - 2, r.height())
             if sc == QStyle.SubControl.SC_SpinBoxUp:
+                if no_buttons:
+                    return QRect()
                 # Top half of the arrow column
                 return QRect(r.right() - arrow_w, r.top(), arrow_w, r.height() // 2)
             if sc == QStyle.SubControl.SC_SpinBoxDown:
+                if no_buttons:
+                    return QRect()
                 # Bottom half of the arrow column
                 return QRect(
                     r.right() - arrow_w,
@@ -963,6 +971,9 @@ class MicroscopeStyle(QProxyStyle):
             )
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRoundedRect(glow, RADIUS + 1.5, RADIUS + 1.5)
+
+        if opt.buttonSymbols == QAbstractSpinBox.ButtonSymbols.NoButtons:
+            return
 
         # ── Arrow area ──
         arrow_w = 20
