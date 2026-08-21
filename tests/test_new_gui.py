@@ -87,6 +87,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
 
     from pymmcore_plus import CMMCorePlus
+    from pymmcore_plus.model import Device
     from pymmcore_widgets.mda._collapsible_mda import CollapsibleCoreMDATabs
     from pymmcore_widgets.mda._core_grid import CoreConnectedGridPlanWidget
     from pymmcore_widgets.useq_widgets._data_table import DataTable
@@ -4890,6 +4891,79 @@ def test_hardware_load_uses_native_config_semantics(
     assert mmcore.getShutterDevice() == "Shutter"
     assert mmcore.getFocusDevice() == "Z"
     assert page.model.config_file == str(config)
+
+
+def _select_available_adapter(page: HardwareSetupPage, adapter_name: str) -> None:
+    """Select the row for `adapter_name` in the Available Devices table.
+
+    DemoCamera declares a Hub device (``DHub``), so every other device in
+    that library is a "hub child" and hidden by default -- reveal them first.
+    """
+    page._available._hub_children.setChecked(True)
+    table = page._available._table
+    for row in range(table.rowCount()):
+        item = table.item(row, 0)
+        dev = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if dev is not None and dev.adapter_name == adapter_name:
+            table.selectRow(row)
+            return
+    raise AssertionError(f"{adapter_name!r} not found in Available Devices")
+
+
+def _begin_add_dcam(page: HardwareSetupPage) -> Device:
+    """Select DCam (pre-init: MaximumExposureMs) and start adding it.
+
+    Returns the resulting pending ``Device`` -- loaded into the core but not
+    yet initialized, waiting on its setup form.
+    """
+    _select_available_adapter(page, "DCam")
+    assert page._selected_available is not None
+    page._begin_add(page._suggest_label(page._selected_available))
+    assert page._pending is not None
+    assert page._setup._title.text() == page._pending.name
+    return page._pending
+
+
+def test_selecting_a_different_available_device_abandons_a_pending_add(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Clicking a different device while one is mid-add must switch, not freeze.
+
+    Regression test: DCam's setup form stayed on screen after clicking
+    DStateDevice in the Available Devices list -- the click visibly selected
+    a different row but nothing about the pane said so, and DCam stayed
+    loaded in the core under a label the user never got to finish
+    configuring.
+    """
+    page = HardwareSetupPage(mmcore)
+    qtbot.addWidget(page)
+    pending = _begin_add_dcam(page)
+
+    _select_available_adapter(page, "DStateDevice")
+
+    # the old pending device must be gone, not left dangling in the core
+    assert pending.name not in mmcore.getLoadedDevices()
+    assert page._pending is None
+    # ...and the pane now reflects the newly clicked device, not DCam
+    assert page._setup._title.text() == "DStateDevice"
+    assert page._selected_available is not None
+    assert page._selected_available.adapter_name == "DStateDevice"
+
+
+def test_selecting_an_installed_device_abandons_a_pending_add(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Same fix, the other list: clicking an already-installed device."""
+    page = HardwareSetupPage(mmcore)
+    qtbot.addWidget(page)
+    pending = _begin_add_dcam(page)
+
+    installed = page._model.devices[0]
+    page._installed._table.selectRow(0)
+
+    assert pending.name not in mmcore.getLoadedDevices()
+    assert page._pending is None
+    assert page._setup._title.text() == installed.name
 
 
 def _hardware_page_over(

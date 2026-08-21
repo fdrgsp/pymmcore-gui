@@ -371,7 +371,23 @@ class HardwareSetupPage(TabPage):
     def _on_available_selected(self, dev: AvailableDevice | None) -> None:
         self._selected_available = dev
         if self._pending is not None:
-            return  # keep the pending setup form on screen
+            if dev is None:
+                # A bare deselect (e.g. from our own clear_selection() calls
+                # below) isn't the user picking something else.
+                return
+            # The user clicked a different device while one was still
+            # mid-add. Nothing has been committed to the model yet -- only
+            # loaded into the core, uninitialized -- so there's nothing to
+            # lose: treat this exactly like hitting Cancel first, then
+            # picking the new device. Without this, the pane kept showing
+            # the old device's setup form while a different row highlighted,
+            # which read as "my click did nothing."
+            #
+            # _cancel_add() unloads the pending device and redisplays
+            # self._selected_available -- which is `dev`, just set above --
+            # so it already shows what the code below would.
+            self._cancel_add()
+            return
         if dev is None:
             self._setup.show_empty()
         else:
@@ -382,8 +398,12 @@ class HardwareSetupPage(TabPage):
             self._setup.show_available(dev, self._suggest_label(dev))
 
     def _on_installed_selected(self, dev: Device | None) -> None:
-        if self._pending is not None or dev is None:
+        if dev is None:
             return
+        if self._pending is not None:
+            # See _on_available_selected: switching to a different device
+            # abandons an in-progress add rather than ignoring the click.
+            self._cancel_add()
         self._available.clear_selection()
         self._setup.show_installed(dev, self._port_device_for(dev))
 
