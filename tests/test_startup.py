@@ -68,6 +68,19 @@ def test_dialog_offers_every_layout_and_the_demo_config(qtbot: QtBot) -> None:
     assert _combo_items(dialog._config_combo)[0] == "Demo configuration"
 
 
+def test_dialog_offers_a_no_configuration_option(qtbot: QtBot) -> None:
+    """A blank hardware config is a real, selectable choice, not just Demo/Browse."""
+    dialog = StartupDialog()
+    qtbot.addWidget(dialog)
+
+    items = _combo_items(dialog._config_combo)
+    assert "No configuration" in items
+    no_config_index = items.index("No configuration")
+
+    dialog._config_combo.setCurrentIndex(no_config_index)
+    assert dialog.value().config is None
+
+
 def test_dialog_drops_config_paths_that_no_longer_exist(
     qtbot: QtBot, settings: Settings, tmp_path: Path
 ) -> None:
@@ -244,6 +257,40 @@ def test_an_explicit_config_skips_the_dialog_entirely(
     qtbot.addWidget(window)
     qtbot.waitUntil(window.isVisible)
     assert window._acquire.layout_name == DEFAULT_LAYOUT_NAME
+    window.close()
+
+
+def test_choosing_no_configuration_skips_loading_one(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Selecting "No configuration" and starting must not load anything.
+
+    Regression test: the dialog previously had no way to express "start
+    empty" at all -- ``StartupChoice.config`` already documented ``None`` as
+    "neither", but nothing in the combo box could ever produce it.
+    """
+
+    def choose_none(dialog: StartupDialog) -> int:
+        index = dialog._config_combo.findText("No configuration")
+        assert index >= 0, "the option itself must exist, not just resolve to None"
+        dialog._config_combo.setCurrentIndex(index)
+        return QDialog.DialogCode.Accepted
+
+    with (
+        patch.object(StartupDialog, "exec", choose_none),
+        patch("pymmcore_gui._app._load_startup_config") as load,
+    ):
+        window = create_mmgui(
+            mm_config=None,
+            mmcore=mmcore,
+            install_sys_excepthook=False,
+            install_sentry=False,
+            exec_app=False,
+            window_cls=cast("type[WindowProtocol]", MainWindow),
+        )
+    load.assert_not_called()
+    assert isinstance(window, MainWindow)
+    qtbot.addWidget(window)
     window.close()
 
 

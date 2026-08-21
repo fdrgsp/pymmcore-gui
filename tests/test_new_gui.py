@@ -414,6 +414,45 @@ def test_an_uninstall_that_fails_says_so(qtbot: QtBot, tmp_path: Path) -> None:
     assert "Operation not permitted" in warning.call_args[0][2]
 
 
+def test_uninstall_emits_about_to_uninstall_before_deleting(
+    qtbot: QtBot, tmp_path: Path
+) -> None:
+    """The signal (if connected) must fire before shutil.rmtree, with the paths chosen.
+
+    Regression test: nothing released a still-loaded device adapter DLL before
+    an uninstall attempted to delete it, so a Windows session uninstalling
+    whichever install was actively driving the connected hardware failed with
+    a file-lock error. See MainWindow._prepare_uninstall.
+    """
+    page = InstallationPage()
+    qtbot.addWidget(page)
+    install = _fake_install_dir(tmp_path, "Micro-Manager-75.20240101")
+
+    order: list[str] = []
+    seen: list[set[str]] = []
+
+    def prepare(paths: set[str]) -> None:
+        order.append("prepared")
+        seen.append(paths)
+
+    page.aboutToUninstall.connect(prepare)
+
+    with _fake_installs([install]):
+        widget = page.ensure_loaded()
+        assert widget is not None
+        widget.table.selectRow(0)
+        with (
+            patch("shutil.rmtree", side_effect=lambda p: order.append("deleted")),
+            patch.object(
+                QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
+            ),
+        ):
+            page._buttons["Uninstall"].click()
+
+    assert order == ["prepared", "deleted"]
+    assert seen == [{str(install)}]
+
+
 def test_window_opens_on_hardware_setup(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     window = MainWindow(mmcore=mmcore)
     qtbot.addWidget(window)
@@ -470,6 +509,47 @@ def test_declining_an_install_switch_keeps_the_session(
 
     assert list(mmcore.getLoadedDevices()) == loaded
     assert list(mmcore.getDeviceAdapterSearchPaths()) == paths
+
+
+def test_uninstalling_the_active_install_unloads_devices_first(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    """Uninstalling the install actively driving the core releases it first.
+
+    Regression test: Windows keeps a loaded ``mmgr_dal_*.dll`` locked against
+    deletion until the process that loaded it lets go, so uninstalling the
+    active install failed with ``PermissionError: [WinError 5] Access is
+    denied`` even after the user confirmed the delete.
+    """
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+    assert [d for d in mmcore.getLoadedDevices() if d != "Core"]
+
+    active = _fake_install_dir(tmp_path, "Micro-Manager-active")
+    mmcore.setDeviceAdapterSearchPaths([str(active)])
+
+    window._installation.aboutToUninstall.emit({str(active)})
+
+    assert [d for d in mmcore.getLoadedDevices() if d != "Core"] == []
+
+
+def test_uninstalling_an_unrelated_install_leaves_devices_loaded(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    """Deleting an install that isn't in use must not disturb a live session."""
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+    loaded_before = list(mmcore.getLoadedDevices())
+    assert [d for d in loaded_before if d != "Core"]
+
+    active = _fake_install_dir(tmp_path, "Micro-Manager-active")
+    unrelated = tmp_path / "Micro-Manager-old"
+    unrelated.mkdir()
+    mmcore.setDeviceAdapterSearchPaths([str(active)])
+
+    window._installation.aboutToUninstall.emit({str(unrelated)})
+
+    assert list(mmcore.getLoadedDevices()) == loaded_before
 
 
 def test_install_switch_prompt_uses_button_variants(

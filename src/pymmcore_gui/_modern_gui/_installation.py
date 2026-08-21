@@ -192,6 +192,21 @@ class InstallationPage(TabPage):
     the core at.
     """
 
+    aboutToUninstall = Signal(set)
+    """Emitted with the selected paths right before ``_uninstall`` deletes them.
+
+    MainWindow (which owns the core) connects this to release any device
+    adapter DLL one of these paths is about to delete out from under a still-
+    loaded device -- see the note on ``_uninstall``. A signal rather than a
+    plain callable attribute so the connection's lifetime is Qt's to manage
+    (tied to both endpoints' C++ objects) instead of a bound method sitting in
+    a Python attribute, which -- since ``MainWindow`` back-references this
+    page as one of its own attributes -- would otherwise close a reference
+    cycle over ``self`` that only the GC's (non-deterministic) cycle collector
+    breaks, not the deterministic ``deleteLater``/``close`` teardown every
+    other cross-page wire-up here relies on.
+    """
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.left.hide()
@@ -387,6 +402,12 @@ class InstallationPage(TabPage):
         running process on Windows) then looks exactly like one that was -- and
         which re-lists from a discovery cache still holding what it just
         deleted, so the row reappears as if nothing happened.
+
+        ``aboutToUninstall`` fires after the user confirms but before any
+        deletion, so a device adapter DLL the running core still has loaded
+        from one of these paths gets released first -- otherwise Windows
+        keeps it locked and every path sharing that install fails with
+        ``PermissionError: [WinError 5] Access is denied``.
         """
         if (widget := self.ensure_loaded()) is None:
             return
@@ -419,6 +440,7 @@ class InstallationPage(TabPage):
 
         failures: dict[str, str] = {}
         with busy(self._overlay, f"Removing {len(paths)} installation{plural}…"):
+            self.aboutToUninstall.emit(paths)
             for path in sorted(paths):
                 try:
                     shutil.rmtree(path)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from datetime import datetime
 from functools import partial
 from pathlib import Path
@@ -359,6 +360,7 @@ class MainWindow(QMainWindow):
         # ── central stack: one page per tab ───────────────────────
         self._stack = QStackedWidget()
         self._installation = InstallationPage()
+        self._installation.aboutToUninstall.connect(self._prepare_uninstall)
         self._hardware = HardwareSetupPage(self._mmc)
         self._configurations = ConfigurationsPage(self._mmc)
         self._acquire = AcquirePage(self._mmc)
@@ -532,6 +534,29 @@ class MainWindow(QMainWindow):
         index = self._stack.indexOf(self._hardware if found else self._installation)
         self._mode_tabs._select(index)
         self._stack.setCurrentIndex(index)
+
+    def _prepare_uninstall(self, paths: set[str]) -> None:
+        """Release a device adapter DLL before its install directory is deleted.
+
+        Windows keeps a still-loaded ``mmgr_dal_*.dll`` locked against deletion
+        until the process that loaded it lets go -- so uninstalling whichever
+        install is actively driving the connected hardware failed with
+        ``PermissionError: [WinError 5] Access is denied`` on that DLL, even
+        though the user had already confirmed the delete. Only unloads when
+        one of *paths* is actually the core's current adapter search path
+        (comparing resolved paths, since Windows paths are case-insensitive);
+        an unrelated, unused old install never touches the live session.
+        Best-effort, matching ``HardwareSetupPage._start_over``'s own
+        unconditional ``unloadAllDevices()`` before a search-path change.
+        """
+        core_device = Keyword.CoreDevice.value
+        if not [d for d in self._mmc.getLoadedDevices() if d != core_device]:
+            return
+        current = {Path(p).resolve() for p in self._mmc.getDeviceAdapterSearchPaths()}
+        if not any(Path(p).resolve() in current for p in paths):
+            return
+        with suppress(Exception):
+            self._mmc.unloadAllDevices()
 
     def _on_active_install_changed(self, path: str) -> None:
         """Follow a switch of the active Micro-Manager install, or defer it.
