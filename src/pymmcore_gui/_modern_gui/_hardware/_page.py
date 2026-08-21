@@ -265,22 +265,34 @@ class HardwareSetupPage(TabPage):
         """Whether the hardware configuration has unsaved edits."""
         return self._dirty
 
-    def save_config(self) -> bool:
-        """Save the configuration, always asking where.
+    def prompt_save_path(self) -> str:
+        """Ask where to save, returning "" if the dialog was dismissed.
 
         Defaults to the file the config came from, so overwriting it is a
-        deliberate confirmation rather than a silent write. Returns True if the
-        file was written, False if cancelled or on error.
+        deliberate confirmation rather than a silent write.
+
+        Split out from `save_config` so callers that must first commit other
+        editors to the core (which blocks the GUI thread, for seconds on real
+        hardware) can ask this question *before* that work, instead of leaving
+        the click looking like it did nothing until the dialog finally appears.
         """
         start = self._model.config_file or "MMConfig.cfg"
         path, _ = QFileDialog.getSaveFileName(
             self, "Save hardware configuration", start, CFG_FILTER
         )
-        if not path:
-            return False
-        return self._save_to(path)
+        return path
 
-    def _save_to(self, path: str) -> bool:
+    def save_config(self) -> bool:
+        """Save the configuration, always asking where.
+
+        Returns True if the file was written, False if cancelled or on error.
+        """
+        if not (path := self.prompt_save_path()):
+            return False
+        return self.save_to(path)
+
+    def save_to(self, path: str) -> bool:
+        """Write the full configuration to `path`, asking nothing about where."""
         # Decided before the write, because model.save() regenerates the .cfg from
         # scratch and drops the per-channel light source comments it may hold.
         light_sources = self._light_sources_to_preserve(Path(path))
@@ -359,7 +371,23 @@ class HardwareSetupPage(TabPage):
     def _on_available_selected(self, dev: AvailableDevice | None) -> None:
         self._selected_available = dev
         if self._pending is not None:
-            return  # keep the pending setup form on screen
+            if dev is None:
+                # A bare deselect (e.g. from our own clear_selection() calls
+                # below) isn't the user picking something else.
+                return
+            # The user clicked a different device while one was still
+            # mid-add. Nothing has been committed to the model yet -- only
+            # loaded into the core, uninitialized -- so there's nothing to
+            # lose: treat this exactly like hitting Cancel first, then
+            # picking the new device. Without this, the pane kept showing
+            # the old device's setup form while a different row highlighted,
+            # which read as "my click did nothing."
+            #
+            # _cancel_add() unloads the pending device and redisplays
+            # self._selected_available -- which is `dev`, just set above --
+            # so it already shows what the code below would.
+            self._cancel_add()
+            return
         if dev is None:
             self._setup.show_empty()
         else:
@@ -370,8 +398,12 @@ class HardwareSetupPage(TabPage):
             self._setup.show_available(dev, self._suggest_label(dev))
 
     def _on_installed_selected(self, dev: Device | None) -> None:
-        if self._pending is not None or dev is None:
+        if dev is None:
             return
+        if self._pending is not None:
+            # See _on_available_selected: switching to a different device
+            # abandons an in-progress add rather than ignoring the click.
+            self._cancel_add()
         self._available.clear_selection()
         self._setup.show_installed(dev, self._port_device_for(dev))
 

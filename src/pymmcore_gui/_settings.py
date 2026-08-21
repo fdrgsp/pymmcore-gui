@@ -201,6 +201,11 @@ class ModernWindowSettingsV1(BaseMMSettings):
     panel's own nested dock manager, which ``CDockManager.saveState()`` on
     the outer manager knows nothing about.
     """
+    acquire_stage_kind: str = "xyz"
+    """Which Stages-panel widget flavor was active.
+
+    See ``_modern_gui._panels.StageKind`` and ``AcquireLayout.stage_kind``.
+    """
     theme: Literal["dark", "light"] = "dark"
     """Active color theme."""
     zoom: float | None = None

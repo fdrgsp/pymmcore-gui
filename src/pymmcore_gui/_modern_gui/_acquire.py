@@ -35,12 +35,13 @@ from pymmcore_gui._qt.QtCore import (
     QTimer,
     Signal,
 )
-from pymmcore_gui._qt.QtGui import QCursor, QFont
+from pymmcore_gui._qt.QtGui import QAction, QActionGroup, QCursor, QFont
 from pymmcore_gui._qt.QtWidgets import (
     QWIDGETSIZE_MAX,
     QAbstractButton,
     QAbstractSlider,
     QInputDialog,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSplitter,
@@ -58,7 +59,13 @@ from ._acquire_toolbar import (
 )
 from ._acquire_viewers import AcquireViewersManager
 from ._camera_roi_sync import CameraRoiSyncController
-from ._panels import PANELS, PanelInfo, PanelKey
+from ._panels import (
+    PANELS,
+    STAGE_KIND_FACTORIES,
+    PanelInfo,
+    PanelKey,
+    StageKind,
+)
 from ._tab_page import TabPage
 from ._theme import dock_chrome_stylesheet, qcolor, theme
 
@@ -277,8 +284,19 @@ class AcquirePage(TabPage):
         self._layout_btn.deleteLayoutRequested.connect(self._delete_layout)
         self.refresh_layout_menu()
 
+        # Which STAGE_KIND_FACTORIES entry PanelKey.STAGES currently docks --
+        # see the comment on that PanelInfo entry in _panels.py.
+        self._stage_kind: str = StageKind.XYZ
+        # Built widgets, keyed by kind -- kept alive (not deleted) once built,
+        # so switching away from a kind and back reuses the same instance
+        # instead of losing e.g. every device the user added to StagesPanel.
+        self._stage_widgets: dict[str, QWidget] = {}
+
         self._panel_bar = PanelButtonBar(PANELS, self)
         self._place_panel_bar()
+        stages_btn = self._panel_bar.button_for(PanelKey.STAGES)
+        stages_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        stages_btn.customContextMenuRequested.connect(self._popup_stage_kind_menu)
 
         self._panels: dict[str, _Panel] = {
             info.key: _Panel(info=info, button=self._panel_bar.button_for(info.key))
@@ -354,6 +372,101 @@ class AcquirePage(TabPage):
         auto_snap = mda.camera_roi.snap_checkbox
         if auto_snap.isChecked() and auto_snap.isVisible():
             self._viewers.ensure_preview()
+
+    def _on_stage_widget_added(self, widget: QWidget) -> None:
+        """Ensure the lazy Preview exists before a stage's own Snap can fire.
+
+        Both ``StageWidget`` and ``XYZStageWidget`` have a ``snap_checkbox``
+        that triggers a snap-on-move entirely inside pymmcore-widgets, with no
+        ``ensure_preview``-style hook of its own -- so without this, checking
+        it and moving the stage (without ever having snapped/gone live first)
+        snaps into a Preview that doesn't exist yet, and nothing is shown.
+        Creating the Preview as soon as the checkbox is turned on -- like
+        ``_ensure_preview_for_roi_auto_snap`` does for the ROI auto-snap
+        checkbox -- guarantees a listener is already attached by the time the
+        stage actually finishes moving. A harmless no-op for any widget with
+        no ``snap_checkbox`` of its own (e.g. ``StagesPanel``, whose per-device
+        ``StageWidget``s each get wired individually via ``stageWidgetAdded``).
+        """
+        snap_checkbox = getattr(widget, "snap_checkbox", None)
+        if snap_checkbox is None:
+            return  # pragma: no cover
+        snap_checkbox.toggled.connect(
+            lambda checked: self._viewers.ensure_preview() if checked else None
+        )
+
+    # ------------------------------------------------------------- stage kind
+    #
+    # See the comment on the STAGES entry in _panels.py: PanelKey.STAGES has
+    # no single fixed factory -- the user picks between StagesPanel and
+    # XYZStageWidget from the Stages button's right-click menu, and this
+    # section picks between STAGE_KIND_FACTORIES and swaps the docked content
+    # in place accordingly.
+
+    def _stage_widget_for(self, kind: str) -> QWidget:
+        """Return the widget for *kind*, building/unstyling/wiring it once.
+
+        Cached in ``self._stage_widgets`` rather than rebuilt on every switch:
+        StagesPanel holds whatever per-device docks the user added, and a
+        fresh instance every time a conversion happened to land back on
+        "per_device" would silently discard them.
+        """
+        if (widget := self._stage_widgets.get(kind)) is not None:
+            return widget
+        factory, needs_unstyle = STAGE_KIND_FACTORIES[kind]
+        widget = factory(self, self._core)
+        if needs_unstyle:
+            unstyle_widgets(widget)
+        # XYZStageWidget has its own snap_checkbox directly, so this wires it
+        # like any other stage widget (see _on_stage_widget_added); it's a
+        # harmless no-op for StagesPanel, which has none of its own -- its
+        # per-device StageWidgets get theirs wired as they're added, below.
+        self._on_stage_widget_added(widget)
+        if isinstance(widget, StagesPanel):
+            widget.stageWidgetAdded.connect(self._on_stage_widget_added)
+        self._stage_widgets[kind] = widget
+        return widget
+
+    def _popup_stage_kind_menu(self, pos: QPoint) -> None:
+        """Right-click on the Stages button: pick which widget flavor is docked."""
+        button = self.panel_button(PanelKey.STAGES)
+        menu = QMenu(button)
+        group = QActionGroup(menu)
+        group.setExclusive(True)
+        labels = {
+            StageKind.XYZ: "XYZ Stage (core XY/Z devices)",
+            StageKind.PER_DEVICE: "Per-Device Stages (add on demand)",
+        }
+        for kind, label in labels.items():
+            action = QAction(label, menu)
+            action.setCheckable(True)
+            action.setChecked(kind == self._stage_kind)
+            action.triggered.connect(partial(self._set_stage_kind, kind))
+            group.addAction(action)
+            menu.addAction(action)
+        menu.exec(button.mapToGlobal(pos))
+
+    def _set_stage_kind(self, kind: str) -> None:
+        """Switch which widget flavor is docked under the Stages button.
+
+        Detaches (not deletes) the widget being switched away from -- it's
+        cached in ``self._stage_widgets`` via ``_stage_widget_for`` and
+        reused if the user switches back, so e.g. devices added to
+        StagesPanel survive a round trip through the other flavor. Swaps
+        only the dock's content; its position, pin state, and tab are
+        untouched. A no-op while the panel has never been opened this
+        session: the next open builds straight from the new kind.
+        """
+        if kind == self._stage_kind:
+            return
+        self._stage_kind = kind
+        panel = self._panels[PanelKey.STAGES]
+        if panel.dock is None:
+            return
+        panel.dock.takeWidget()
+        widget = self._stage_widget_for(kind)
+        panel.widget = widget
+        panel.dock.setWidget(widget, CDockWidget.eInsertMode.ForceNoScrollArea)
 
     # ------------------------------------------------------------------ panels
 
@@ -482,9 +595,12 @@ class AcquirePage(TabPage):
         # docking a QDialog has always worked here. Pre-emptively calling
         # setWindowFlags() would be redundant *and* harmful: Qt documents
         # that it hides the widget, requiring an explicit show() afterward.
-        widget = panel.info.create(self, self._core)
-        if panel.info.unstyle:
-            unstyle_widgets(widget)
+        if panel.info.key == PanelKey.STAGES:
+            widget = self._stage_widget_for(self._stage_kind)
+        else:
+            widget = panel.info.create(self, self._core)
+            if panel.info.unstyle:
+                unstyle_widgets(widget)
         panel.widget = widget
         name, title = panel.info.dock_name, panel.info.title
         if panel.info.area == DockWidgetArea.LeftDockWidgetArea:
@@ -540,12 +656,16 @@ class AcquirePage(TabPage):
         """Capture the current arrangement (docks, open panels, hidden buttons)."""
         open_keys = self.open_panels()
         if not open_keys:
-            return AcquireLayout(hidden_panels=frozenset(self.hidden_panels()))
+            return AcquireLayout(
+                hidden_panels=frozenset(self.hidden_panels()),
+                stage_kind=self._stage_kind,
+            )
         return AcquireLayout(
             dock_state=self._dock_manager.saveState().data(),
             panels=frozenset(open_keys),
             hidden_panels=frozenset(self.hidden_panels()),
             stage_devices=self._current_stage_devices(),
+            stage_kind=self._stage_kind,
         )
 
     def _current_stage_devices(self) -> frozenset[str]:
@@ -568,7 +688,9 @@ class AcquirePage(TabPage):
         the built-in arrangement.
         """
         self.apply_hidden_panels(layout.hidden_panels)
-        if self.restore_layout(layout.dock_state, layout.panels, layout.stage_devices):
+        if self.restore_layout(
+            layout.dock_state, layout.panels, layout.stage_devices, layout.stage_kind
+        ):
             if self.isVisible():
                 # Startup goes through the showEvent/resize settle path with
                 # the window not yet shown; a *live* switch has real geometry
@@ -674,12 +796,17 @@ class AcquirePage(TabPage):
         state: bytes | None,
         keys: Iterable[str],
         stage_devices: Iterable[str] = (),
+        stage_kind: str = StageKind.XYZ,
     ) -> bool:
         """Recreate the given panels and restore a previously saved dock layout.
 
         *stage_devices* are re-opened in the Stages panel if it's among
         *keys* -- silently skipping any that the currently loaded
         configuration doesn't have (see ``StagesPanel.add_stages``).
+
+        *stage_kind* (see ``StageKind``) is applied regardless of
+        whether Stages is among *keys*, so the choice survives to whenever the
+        user next opens it, not just when it happened to already be open.
 
         Returns True if the layout was restored, False if there was nothing
         to restore or ADS rejected the saved state -- either way, the page
@@ -694,6 +821,7 @@ class AcquirePage(TabPage):
         wanted = {k for k in requested if k in self._panels}
         if not state or not wanted:
             return False
+        self._set_stage_kind(stage_kind)
         for key in wanted:
             panel = self._panels[key]
             if panel.dock is None:

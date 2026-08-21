@@ -13,7 +13,7 @@ import pytest
 import useq
 from pymmcore_plus import PropertyType
 from pymmcore_widgets import MDAWidget as UpstreamMDAWidget
-from pymmcore_widgets import StageWidget
+from pymmcore_widgets import StageWidget, XYZStageWidget
 from pymmcore_widgets.mda._core_channels import PROPERTY_SEPARATOR
 from pymmcore_widgets.useq_widgets._positions import MDAButton, _MDAPopup
 
@@ -38,7 +38,7 @@ from pymmcore_gui._modern_gui._installation import (
     InstallReleaseDialog,
 )
 from pymmcore_gui._modern_gui._main_win import MainWindow
-from pymmcore_gui._modern_gui._panels import PANELS, PanelKey
+from pymmcore_gui._modern_gui._panels import PANELS, PanelKey, StageKind
 from pymmcore_gui._modern_gui._startup import StartupDialog
 from pymmcore_gui._modern_gui._theme import (
     UI_FONT_SIZE_PT,
@@ -87,6 +87,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
 
     from pymmcore_plus import CMMCorePlus
+    from pymmcore_plus.model import Device
     from pymmcore_widgets.mda._collapsible_mda import CollapsibleCoreMDATabs
     from pymmcore_widgets.mda._core_grid import CoreConnectedGridPlanWidget
     from pymmcore_widgets.useq_widgets._data_table import DataTable
@@ -414,6 +415,45 @@ def test_an_uninstall_that_fails_says_so(qtbot: QtBot, tmp_path: Path) -> None:
     assert "Operation not permitted" in warning.call_args[0][2]
 
 
+def test_uninstall_emits_about_to_uninstall_before_deleting(
+    qtbot: QtBot, tmp_path: Path
+) -> None:
+    """The signal (if connected) must fire before shutil.rmtree, with the paths chosen.
+
+    Regression test: nothing released a still-loaded device adapter DLL before
+    an uninstall attempted to delete it, so a Windows session uninstalling
+    whichever install was actively driving the connected hardware failed with
+    a file-lock error. See MainWindow._prepare_uninstall.
+    """
+    page = InstallationPage()
+    qtbot.addWidget(page)
+    install = _fake_install_dir(tmp_path, "Micro-Manager-75.20240101")
+
+    order: list[str] = []
+    seen: list[set[str]] = []
+
+    def prepare(paths: set[str]) -> None:
+        order.append("prepared")
+        seen.append(paths)
+
+    page.aboutToUninstall.connect(prepare)
+
+    with _fake_installs([install]):
+        widget = page.ensure_loaded()
+        assert widget is not None
+        widget.table.selectRow(0)
+        with (
+            patch("shutil.rmtree", side_effect=lambda p: order.append("deleted")),
+            patch.object(
+                QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
+            ),
+        ):
+            page._buttons["Uninstall"].click()
+
+    assert order == ["prepared", "deleted"]
+    assert seen == [{str(install)}]
+
+
 def test_window_opens_on_hardware_setup(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     window = MainWindow(mmcore=mmcore)
     qtbot.addWidget(window)
@@ -470,6 +510,47 @@ def test_declining_an_install_switch_keeps_the_session(
 
     assert list(mmcore.getLoadedDevices()) == loaded
     assert list(mmcore.getDeviceAdapterSearchPaths()) == paths
+
+
+def test_uninstalling_the_active_install_unloads_devices_first(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    """Uninstalling the install actively driving the core releases it first.
+
+    Regression test: Windows keeps a loaded ``mmgr_dal_*.dll`` locked against
+    deletion until the process that loaded it lets go, so uninstalling the
+    active install failed with ``PermissionError: [WinError 5] Access is
+    denied`` even after the user confirmed the delete.
+    """
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+    assert [d for d in mmcore.getLoadedDevices() if d != "Core"]
+
+    active = _fake_install_dir(tmp_path, "Micro-Manager-active")
+    mmcore.setDeviceAdapterSearchPaths([str(active)])
+
+    window._installation.aboutToUninstall.emit({str(active)})
+
+    assert [d for d in mmcore.getLoadedDevices() if d != "Core"] == []
+
+
+def test_uninstalling_an_unrelated_install_leaves_devices_loaded(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    """Deleting an install that isn't in use must not disturb a live session."""
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+    loaded_before = list(mmcore.getLoadedDevices())
+    assert [d for d in loaded_before if d != "Core"]
+
+    active = _fake_install_dir(tmp_path, "Micro-Manager-active")
+    unrelated = tmp_path / "Micro-Manager-old"
+    unrelated.mkdir()
+    mmcore.setDeviceAdapterSearchPaths([str(active)])
+
+    window._installation.aboutToUninstall.emit({str(unrelated)})
+
+    assert list(mmcore.getLoadedDevices()) == loaded_before
 
 
 def test_install_switch_prompt_uses_button_variants(
@@ -1061,6 +1142,8 @@ def test_acquire_stages_panel_starts_empty(mmcore: CMMCorePlus, qtbot: QtBot) ->
     qtbot.addWidget(page)
 
     assert page.panel_widget(PanelKey.STAGES) is None
+    # per-device flavor: the button defaults to XYZStageWidget (see StageKind)
+    page._set_stage_kind(StageKind.PER_DEVICE)
     page.panel_button(PanelKey.STAGES).click()
     panel = page.panel_widget(PanelKey.STAGES)
     assert isinstance(panel, StagesPanel)
@@ -1078,6 +1161,7 @@ def test_acquire_stages_panel_add_and_remove_devices(
     """Adding stages opens independent docks; closing one frees it for re-adding."""
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
+    page._set_stage_kind(StageKind.PER_DEVICE)
     page.panel_button(PanelKey.STAGES).click()
     panel = page.panel_widget(PanelKey.STAGES)
     assert isinstance(panel, StagesPanel)
@@ -1119,6 +1203,7 @@ def test_acquire_stages_panel_add_menu_disabled_when_nothing_left(
     """Once every loaded stage is open, the Add menu says so instead of being empty."""
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
+    page._set_stage_kind(StageKind.PER_DEVICE)
     page.panel_button(PanelKey.STAGES).click()
     panel = page.panel_widget(PanelKey.STAGES)
     assert isinstance(panel, StagesPanel)
@@ -1131,6 +1216,109 @@ def test_acquire_stages_panel_add_menu_disabled_when_nothing_left(
     assert len(actions) == 1
     assert actions[0].text() == "No stages available"
     assert not actions[0].isEnabled()
+
+
+def test_stages_button_defaults_to_xyz_stage_widget(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A plain (left-)click on Stages opens XYZStageWidget, not the per-device panel."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    assert page._stage_kind == StageKind.XYZ
+
+    page.panel_button(PanelKey.STAGES).click()
+    widget = page.panel_widget(PanelKey.STAGES)
+    assert isinstance(widget, XYZStageWidget)
+
+    # its move/halt buttons are unstyled like every other themed button --
+    # unlike StagesPanel, which does this itself per added device
+    buttons = widget.findChildren(QAbstractButton)
+    assert buttons
+    assert all(btn.property("variant") == "subtle" for btn in buttons)
+
+
+def test_stages_kind_converts_in_place_without_losing_the_dock(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Switching flavors swaps the docked content but keeps the same CDockWidget.
+
+    So a conversion doesn't disturb wherever the user has the panel arranged
+    (position, pin state, tab) -- only its content widget changes.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.panel_button(PanelKey.STAGES).click()
+    dock = page.panel_dock(PanelKey.STAGES)
+    assert isinstance(page.panel_widget(PanelKey.STAGES), XYZStageWidget)
+
+    page._set_stage_kind(StageKind.PER_DEVICE)
+    assert page.panel_dock(PanelKey.STAGES) is dock
+    assert isinstance(page.panel_widget(PanelKey.STAGES), StagesPanel)
+
+    page._set_stage_kind(StageKind.XYZ)
+    assert page.panel_dock(PanelKey.STAGES) is dock
+    assert isinstance(page.panel_widget(PanelKey.STAGES), XYZStageWidget)
+
+    # selecting the kind already active is a no-op, not a rebuild
+    widget = page.panel_widget(PanelKey.STAGES)
+    page._set_stage_kind(StageKind.XYZ)
+    assert page.panel_widget(PanelKey.STAGES) is widget
+
+
+def test_stages_kind_change_before_first_open_is_deferred(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Picking a kind before the panel has ever been opened just sets the default."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    assert page.panel_dock(PanelKey.STAGES) is None
+
+    page._set_stage_kind(StageKind.PER_DEVICE)
+    assert page.panel_dock(PanelKey.STAGES) is None  # nothing built yet
+
+    page.panel_button(PanelKey.STAGES).click()
+    assert isinstance(page.panel_widget(PanelKey.STAGES), StagesPanel)
+
+
+def test_xyz_stage_widget_snap_checkbox_ensures_preview(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Checking XYZStageWidget's own Snap checkbox must create the lazy Preview.
+
+    Regression test: ``_on_stage_widget_added`` was only ever wired for the
+    per-device StagesPanel's ``stageWidgetAdded`` signal, which XYZStageWidget
+    doesn't emit -- checking its Snap and moving the stage (without having
+    snapped/gone live first) snapped into a Preview that didn't exist yet, so
+    nothing was shown.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.panel_button(PanelKey.STAGES).click()
+    widget = page.panel_widget(PanelKey.STAGES)
+    assert isinstance(widget, XYZStageWidget)
+
+    with patch.object(page._viewers, "ensure_preview") as ensure_preview:
+        widget.snap_checkbox.setChecked(True)
+    ensure_preview.assert_called_once()
+
+
+def test_per_device_stage_widget_snap_checkbox_still_ensures_preview(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """The pre-existing per-device StageWidget wiring survives the XYZ addition."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page._set_stage_kind(StageKind.PER_DEVICE)
+    page.panel_button(PanelKey.STAGES).click()
+    panel = page.panel_widget(PanelKey.STAGES)
+    assert isinstance(panel, StagesPanel)
+    panel._add_stage("XY")
+    stage_widget = panel._docks["XY"].widget()
+    assert isinstance(stage_widget, StageWidget)
+
+    with patch.object(page._viewers, "ensure_preview") as ensure_preview:
+        stage_widget.snap_checkbox.setChecked(True)
+    ensure_preview.assert_called_once()
 
 
 def test_stage_explorer_sends_positions_to_mda(
@@ -3839,6 +4027,7 @@ def test_acquire_layout_round_trip_restores_open_stage_devices(
     """
     page_a = AcquirePage(mmcore)
     qtbot.addWidget(page_a)
+    page_a._set_stage_kind(StageKind.PER_DEVICE)
     page_a.panel_button(PanelKey.STAGES).click()
     panel_a = page_a.panel_widget(PanelKey.STAGES)
     assert isinstance(panel_a, StagesPanel)
@@ -3850,7 +4039,11 @@ def test_acquire_layout_round_trip_restores_open_stage_devices(
 
     page_b = AcquirePage(mmcore)
     qtbot.addWidget(page_b)
-    assert page_b.restore_layout(saved.dock_state, saved.panels, saved.stage_devices)
+    assert page_b._stage_kind == StageKind.XYZ  # a fresh page still defaults to xyz
+    assert page_b.restore_layout(
+        saved.dock_state, saved.panels, saved.stage_devices, saved.stage_kind
+    )
+    assert page_b._stage_kind == StageKind.PER_DEVICE
 
     panel_b = page_b.panel_widget(PanelKey.STAGES)
     assert isinstance(panel_b, StagesPanel)
@@ -3867,12 +4060,13 @@ def test_acquire_layout_restore_skips_stage_devices_missing_from_config(
     """
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
+    page._set_stage_kind(StageKind.PER_DEVICE)
     page.panel_button(PanelKey.STAGES).click()
 
     saved = page.current_layout()
     assert saved.dock_state is not None
     assert page.restore_layout(
-        saved.dock_state, saved.panels, {"XY", "NotALoadedStage"}
+        saved.dock_state, saved.panels, {"XY", "NotALoadedStage"}, saved.stage_kind
     )
 
     panel = page.panel_widget(PanelKey.STAGES)
@@ -4535,6 +4729,112 @@ def test_pixel_config_commit_refreshes_open_stage_explorer(
     refresh.assert_called_once_with()
 
 
+def test_commit_to_core_does_not_re_enter(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    """A commit started while one is in flight must be dropped, not nested.
+
+    ``BusyOverlay.start()`` flushes the event loop before the core work begins;
+    a second "Save to core" arriving there would otherwise start a nested
+    rewrite of a core the first pass is still halfway through.
+    """
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    page._tabs.setCurrentWidget(page._group_tab)
+
+    depth = 0
+    max_depth = 0
+    attempts = 0
+
+    def reentrant_save() -> None:
+        nonlocal depth, max_depth, attempts
+        depth += 1
+        max_depth = max(max_depth, depth)
+        if not attempts:
+            # only re-enter once, so that losing the guard fails this
+            # assertion rather than recursing until the test times out
+            attempts += 1
+            page.commit_current_to_core()  # what a queued second click does
+        depth -= 1
+
+    with patch.object(page._group_tab, "save", side_effect=reentrant_save):
+        page.commit_current_to_core()
+
+    assert max_depth == 1
+
+
+def test_save_buttons_are_disabled_during_a_commit(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    page._tabs.setCurrentWidget(page._group_tab)
+    assert page._save_core_btn.isEnabled()
+
+    seen: list[bool] = []
+    with patch.object(
+        page._group_tab,
+        "save",
+        side_effect=lambda: seen.append(page._save_core_btn.isEnabled()),
+    ):
+        page.commit_current_to_core()
+
+    assert seen == [False]
+    # ...and restored afterwards
+    assert page._save_core_btn.isEnabled()
+    assert page._save_file_btn.isEnabled()
+
+
+def test_unchanged_groups_are_not_rewritten(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    """Saving must only touch groups whose contents actually differ.
+
+    deleteConfigGroup() is destructive — it drops the channel-group designation
+    among other things — so a save that changed one preset has no business
+    tearing down every other group.
+    """
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    assert len(mmcore.getAvailableConfigGroups()) > 1
+
+    # nothing edited: the editor already mirrors the core
+    deleted: list[str] = []
+    real_delete = mmcore.deleteConfigGroup
+
+    def recording_delete(name: str) -> None:
+        # wraps rather than replaces: a no-op would leave the core in a state
+        # the rewrite then errors on, and save()'s error path is a modal box
+        deleted.append(name)
+        real_delete(name)
+
+    with patch.object(mmcore, "deleteConfigGroup", side_effect=recording_delete):
+        page._group_tab.save()
+    assert deleted == []
+    # the groups are all still there, untouched
+    assert len(mmcore.getAvailableConfigGroups()) > 1
+
+
+def test_embedded_pixel_apply_coalesces_pixel_size_events(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """The bulk rewrite must not emit pixelSizeChanged once per preset.
+
+    pymmcore-plus emits it from deletePixelSizeConfig(), definePixelSizeConfig()
+    and setPixelSizeUm() alike, and every listener answers by calling
+    getPixelSizeUm(), which MMCore resolves by reading the objective's live
+    property values -- a serial round trip per read on real hardware.
+    """
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    assert len(mmcore.getAvailablePixelSizeConfigs()) > 1
+
+    events: list[float] = []
+    mmcore.events.pixelSizeChanged.connect(events.append)
+    page._tabs.setCurrentWidget(page._pixel_config)
+    page.commit_current_to_core()
+
+    # one coalesced event with the final configuration in place, not a storm of
+    # intermediate ones computed from a half-rewritten config
+    assert events == [mmcore.getPixelSizeUm()]
+
+
 def test_successful_embedded_pixel_apply_emits_geometry_refresh_signal(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
@@ -4593,6 +4893,79 @@ def test_hardware_load_uses_native_config_semantics(
     assert page.model.config_file == str(config)
 
 
+def _select_available_adapter(page: HardwareSetupPage, adapter_name: str) -> None:
+    """Select the row for `adapter_name` in the Available Devices table.
+
+    DemoCamera declares a Hub device (``DHub``), so every other device in
+    that library is a "hub child" and hidden by default -- reveal them first.
+    """
+    page._available._hub_children.setChecked(True)
+    table = page._available._table
+    for row in range(table.rowCount()):
+        item = table.item(row, 0)
+        dev = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if dev is not None and dev.adapter_name == adapter_name:
+            table.selectRow(row)
+            return
+    raise AssertionError(f"{adapter_name!r} not found in Available Devices")
+
+
+def _begin_add_dcam(page: HardwareSetupPage) -> Device:
+    """Select DCam (pre-init: MaximumExposureMs) and start adding it.
+
+    Returns the resulting pending ``Device`` -- loaded into the core but not
+    yet initialized, waiting on its setup form.
+    """
+    _select_available_adapter(page, "DCam")
+    assert page._selected_available is not None
+    page._begin_add(page._suggest_label(page._selected_available))
+    assert page._pending is not None
+    assert page._setup._title.text() == page._pending.name
+    return page._pending
+
+
+def test_selecting_a_different_available_device_abandons_a_pending_add(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Clicking a different device while one is mid-add must switch, not freeze.
+
+    Regression test: DCam's setup form stayed on screen after clicking
+    DStateDevice in the Available Devices list -- the click visibly selected
+    a different row but nothing about the pane said so, and DCam stayed
+    loaded in the core under a label the user never got to finish
+    configuring.
+    """
+    page = HardwareSetupPage(mmcore)
+    qtbot.addWidget(page)
+    pending = _begin_add_dcam(page)
+
+    _select_available_adapter(page, "DStateDevice")
+
+    # the old pending device must be gone, not left dangling in the core
+    assert pending.name not in mmcore.getLoadedDevices()
+    assert page._pending is None
+    # ...and the pane now reflects the newly clicked device, not DCam
+    assert page._setup._title.text() == "DStateDevice"
+    assert page._selected_available is not None
+    assert page._selected_available.adapter_name == "DStateDevice"
+
+
+def test_selecting_an_installed_device_abandons_a_pending_add(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Same fix, the other list: clicking an already-installed device."""
+    page = HardwareSetupPage(mmcore)
+    qtbot.addWidget(page)
+    pending = _begin_add_dcam(page)
+
+    installed = page._model.devices[0]
+    page._installed._table.selectRow(0)
+
+    assert pending.name not in mmcore.getLoadedDevices()
+    assert page._pending is None
+    assert page._setup._title.text() == installed.name
+
+
 def _hardware_page_over(
     mmcore: CMMCorePlus, qtbot: QtBot, cfg: Path
 ) -> HardwareSetupPage:
@@ -4616,7 +4989,7 @@ def test_saving_over_a_cfg_offers_to_keep_its_light_sources(
     with patch.object(
         QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
     ) as question:
-        assert page._save_to(str(cfg))
+        assert page.save_to(str(cfg))
 
     assert question.called
     assert question.call_args.args[2] == (
@@ -4644,7 +5017,7 @@ def test_keeping_light_sources_lists_every_affected_channel(
     with patch.object(
         QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
     ) as question:
-        assert page._save_to(str(cfg))
+        assert page.save_to(str(cfg))
 
     assert question.call_args.args[2] == (
         "Do you want to keep the light source info for the Cy5, FITC channels?"
@@ -4667,7 +5040,7 @@ def test_declining_to_keep_light_sources_drops_them(
     with patch.object(
         QMessageBox, "question", return_value=QMessageBox.StandardButton.No
     ):
-        assert page._save_to(str(cfg))
+        assert page.save_to(str(cfg))
 
     assert "#@LightSource" not in cfg.read_text()
 
@@ -4682,7 +5055,7 @@ def test_light_sources_for_removed_channels_are_dropped_without_asking(
     page = _hardware_page_over(mmcore, qtbot, cfg)
 
     with patch.object(QMessageBox, "question") as question:
-        assert page._save_to(str(cfg))
+        assert page.save_to(str(cfg))
 
     assert not question.called
     assert "#@LightSource" not in cfg.read_text()
@@ -4698,7 +5071,7 @@ def test_saving_to_a_new_file_never_asks_about_light_sources(
 
     dest = tmp_path / "somewhere_else.cfg"
     with patch.object(QMessageBox, "question") as question:
-        assert page._save_to(str(dest))
+        assert page.save_to(str(dest))
 
     assert not question.called
     assert "#@LightSource" not in dest.read_text()
@@ -4824,46 +5197,74 @@ def test_saving_selected_tab_keeps_other_tab_dirty(
     assert not page.is_dirty()
 
 
-def test_save_to_file_commits_to_core_before_writing() -> None:
-    calls: list[str] = []
+def _recording_hardware(calls: list[str], path: str = "cfg") -> SimpleNamespace:
+    """A stand-in HardwareSetupPage that logs the order of its save steps."""
 
-    def save_file() -> bool:
+    def prompt() -> str:
+        calls.append("ask")
+        return path
+
+    def save_to(_path: str) -> bool:
         calls.append("file")
         return True
 
+    return SimpleNamespace(
+        prompt_save_path=Mock(side_effect=prompt), save_to=Mock(side_effect=save_to)
+    )
+
+
+def test_save_to_file_asks_where_before_committing_to_core() -> None:
+    calls: list[str] = []
     configurations = SimpleNamespace(
         commit_to_core=Mock(side_effect=lambda: calls.append("core")),
         mark_saved=Mock(side_effect=lambda: calls.append("clean")),
     )
-    hardware = SimpleNamespace(save_config=Mock(side_effect=save_file))
     window = SimpleNamespace(
         _configurations=configurations,
-        _hardware=hardware,
+        _hardware=_recording_hardware(calls),
     )
 
     assert MainWindow._save_all(window)  # type: ignore[arg-type]
-    assert calls == ["core", "file", "clean"]
+    # the dialog comes first (committing blocks the GUI thread for seconds on
+    # real hardware), and the core is still written before the file
+    assert calls == ["ask", "core", "file", "clean"]
 
 
-def test_toolbar_save_commits_selected_tab_before_writing() -> None:
+def test_toolbar_save_asks_where_before_committing_selected_tab() -> None:
     calls: list[str] = []
-
-    def save_file() -> bool:
-        calls.append("file")
-        return True
-
     configurations = SimpleNamespace(
         commit_current_to_core=Mock(side_effect=lambda: calls.append("selected")),
         mark_current_saved=Mock(side_effect=lambda: calls.append("clean-selected")),
     )
-    hardware = SimpleNamespace(save_config=Mock(side_effect=save_file))
     window = SimpleNamespace(
         _configurations=configurations,
-        _hardware=hardware,
+        _hardware=_recording_hardware(calls),
     )
 
     assert MainWindow._save_current_configuration(window)  # type: ignore[arg-type]
-    assert calls == ["selected", "file", "clean-selected"]
+    assert calls == ["ask", "selected", "file", "clean-selected"]
+
+
+@pytest.mark.parametrize(
+    "method, commit",
+    [
+        (MainWindow._save_all, "commit_to_core"),
+        (MainWindow._save_current_configuration, "commit_current_to_core"),
+    ],
+)
+def test_cancelling_the_save_dialog_leaves_the_core_untouched(
+    method: object, commit: str
+) -> None:
+    """Dismissing the dialog must not have already rewritten the live core."""
+    configurations = SimpleNamespace(
+        **{commit: Mock(), "mark_saved": Mock(), "mark_current_saved": Mock()}
+    )
+    hardware = SimpleNamespace(prompt_save_path=Mock(return_value=""), save_to=Mock())
+    window = SimpleNamespace(_configurations=configurations, _hardware=hardware)
+
+    assert not method(window)  # type: ignore[operator]
+    getattr(configurations, commit).assert_not_called()
+    hardware.save_to.assert_not_called()
 
 
 def test_acquire_width_settle_waits_out_a_late_resize(

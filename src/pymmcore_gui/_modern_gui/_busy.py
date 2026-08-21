@@ -10,7 +10,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
-from pymmcore_gui._qt.QtCore import Qt
+from pymmcore_gui._qt.QtCore import QEventLoop, Qt
 from pymmcore_gui._qt.QtGui import QPainter, QPaintEvent
 from pymmcore_gui._qt.QtWidgets import QApplication, QWidget
 
@@ -39,7 +39,13 @@ class BusyOverlay(QWidget):
         # force a paint now: the caller is about to block the event loop
         self.repaint()
         if app := QApplication.instance():
-            app.processEvents()
+            # Paint/layout work only -- NOT queued user input. This runs from
+            # inside the very handler that is about to block, so delivering a
+            # click here would re-enter it: a second click on a "Save" button
+            # (which sits in a page toolbar, outside the widget this overlay
+            # covers) would start a nested rewrite of the same core while the
+            # first is still running.
+            app.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
 
     def stop(self) -> None:
         self.hide()

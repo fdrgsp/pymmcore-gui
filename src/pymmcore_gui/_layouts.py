@@ -46,6 +46,11 @@ LAYOUTS_DIR: Final = USER_DATA_DIR / "layouts"
 _SUFFIX: Final = ".json"
 _VERSION: Final = 1
 _UNSAFE_CHARS = re.compile(r"[^\w.\- ]+")
+_DEFAULT_STAGE_KIND: Final = "xyz"
+"""Must match ``_modern_gui._panels.StageKind.XYZ``.
+
+See ``AcquireLayout.stage_kind``.
+"""
 
 
 @dataclass(frozen=True)
@@ -70,6 +75,13 @@ class AcquireLayout:
     live in its own nested dock manager, which the outer manager's
     ``saveState()`` doesn't capture -- see ``_modern_gui._acquire_stages``.
     """
+    stage_kind: str = _DEFAULT_STAGE_KIND
+    """Which widget flavor is docked under the Stages button.
+
+    A ``_modern_gui._panels.StageKind`` value, kept as a plain ``str`` here
+    the same way ``panels``/``hidden_panels`` keep ``PanelKey`` values as
+    plain strings -- this module doesn't otherwise depend on ``_modern_gui``.
+    """
 
     def is_empty(self) -> bool:
         """True if there is nothing here to restore."""
@@ -85,6 +97,7 @@ class AcquireLayout:
         data["panels"] = sorted(self.panels)
         data["hidden_panels"] = sorted(self.hidden_panels)
         data["stage_devices"] = sorted(self.stage_devices)
+        data["stage_kind"] = self.stage_kind
         return data
 
     @classmethod
@@ -96,6 +109,7 @@ class AcquireLayout:
             panels=_str_set(data.get("panels")),
             hidden_panels=_str_set(data.get("hidden_panels")),
             stage_devices=_str_set(data.get("stage_devices")),
+            stage_kind=str(data.get("stage_kind") or _DEFAULT_STAGE_KIND),
         )
 
 
@@ -199,6 +213,7 @@ def session_layout() -> AcquireLayout:
         panels=frozenset(prefs.acquire_panels),
         hidden_panels=frozenset(prefs.acquire_hidden_panels),
         stage_devices=frozenset(prefs.acquire_stage_devices),
+        stage_kind=prefs.acquire_stage_kind,
     )
 
 
@@ -209,6 +224,7 @@ def store_session_layout(layout: AcquireLayout) -> None:
     prefs.acquire_panels = set(layout.panels)
     prefs.acquire_hidden_panels = set(layout.hidden_panels)
     prefs.acquire_stage_devices = set(layout.stage_devices)
+    prefs.acquire_stage_kind = layout.stage_kind
 
 
 def available_layouts() -> list[str]:

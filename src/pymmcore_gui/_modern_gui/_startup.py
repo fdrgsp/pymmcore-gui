@@ -38,6 +38,7 @@ DEMO_CONFIG: Final = "MMConfig_demo.cfg"
 """Resolved by pymmcore-plus against the Micro-Manager install it finds."""
 
 _DEMO_LABEL: Final = "Demo configuration"
+_EMPTY_LABEL: Final = "No configuration"
 _BROWSE_LABEL: Final = "Browse…"
 _BROWSE_ROLE: Final = "__browse__"
 _LOGO: Final = Path(__file__).parent.parent / "resources" / "logo_trans.png"
@@ -174,6 +175,11 @@ class StartupDialog(QDialog):
     def _fill_config_combo(self, recent: Sequence[Path]) -> None:
         combo = self._config_combo
         combo.addItem(_DEMO_LABEL, DEMO_CONFIG)
+        # None round-trips through QComboBox.currentData() as None, matching
+        # StartupChoice.config's "neither" case -- Start then skips loading
+        # any configuration at all (see create_mmgui), landing on an empty
+        # session for building one from scratch on the Hardware Setup page.
+        combo.addItem(_EMPTY_LABEL, None)
         for path in recent:
             combo.addItem(path.name, str(path))
             combo.setItemData(combo.count() - 1, str(path), Qt.ItemDataRole.ToolTipRole)
@@ -181,7 +187,7 @@ class StartupDialog(QDialog):
         combo.addItem(_BROWSE_LABEL, _BROWSE_ROLE)
         # The most recent config is the likely answer; demo is the fallback
         # for a first launch, when it's the only real entry anyway.
-        combo.setCurrentIndex(1 if recent else 0)
+        combo.setCurrentIndex(2 if recent else 0)
 
     def _on_config_activated(self, index: int) -> None:
         combo = self._config_combo
