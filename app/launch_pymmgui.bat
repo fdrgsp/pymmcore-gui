@@ -5,7 +5,7 @@ cd /d "%~dp0.."
 echo Updating to the latest "cite" version...
 git checkout cite
 git pull
-uv sync -U
+uv sync -U --reinstall-package pymmcore-gui
 
 set attempts=0
 

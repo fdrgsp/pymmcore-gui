@@ -90,7 +90,7 @@ if (Test-Path "$InstallDir\.git") {
 # console scripts like `mmgui`) until the next `uv run` happens to notice.
 
 Write-Step "Syncing the Python environment..."
-uv sync --project $InstallDir -U
+uv sync --project $InstallDir -U --reinstall-package pymmcore-gui
 
 # --- 5. desktop shortcut ---------------------------------------------------
 
