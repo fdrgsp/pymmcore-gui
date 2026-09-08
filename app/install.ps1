@@ -84,7 +84,15 @@ if (Test-Path "$InstallDir\.git") {
     git clone --branch $Branch $RepoUrl $InstallDir
 }
 
-# --- 4. desktop shortcut ---------------------------------------------------
+# --- 4. sync environment --------------------------------------------------
+# Keeps .venv in step with whatever code was just checked out above --
+# without this, a reset/clone can leave the environment stale (e.g. missing
+# console scripts like `mmgui`) until the next `uv run` happens to notice.
+
+Write-Step "Syncing the Python environment..."
+uv sync --project $InstallDir -U
+
+# --- 5. desktop shortcut ---------------------------------------------------
 
 Write-Step "Creating Desktop shortcut..."
 
