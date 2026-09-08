@@ -9,21 +9,23 @@
 # What it does:
 #   1. Installs `uv` (the Python package/venv manager) if it isn't already
 #      on PATH, via astral's official installer.
-#   2. Clones this repo (or updates it, if already installed) to
-#      %LOCALAPPDATA%\pymmcore-gui.
+#   2. Deletes %LOCALAPPDATA%\pymmcore-gui-app if it exists, then clones a
+#      fresh copy of this repo's `cite` branch there and `uv sync`s it.
 #   3. Creates a "pymmcore-gui" shortcut on the Desktop, with the app's
 #      logo, that runs the GUI from source via `uv run` -- no PyInstaller
 #      build involved, so nothing here is flagged/broken by endpoint
 #      security software the way the packaged .exe is.
 #
-# Safe to re-run: it just pulls the latest changes and rewrites the
-# shortcut.
+# Safe to re-run: every run starts from a fully deleted install directory,
+# so there's never any local/stale state to fight with -- just delete and
+# reinstall. The launcher itself does not self-update; re-run this script
+# whenever you want the latest version.
 
 $ErrorActionPreference = "Stop"
 
 $RepoUrl = "https://github.com/fdrgsp/pymmcore-gui.git"
 $Branch = "cite"
-$InstallDir = "$env:LOCALAPPDATA\pymmcore-gui"
+$InstallDir = "$env:LOCALAPPDATA\pymmcore-gui-app"
 $ShortcutPath = "$env:USERPROFILE\Desktop\pymmcore-gui.lnk"
 
 function Write-Step($msg) {
@@ -63,34 +65,24 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     }
 }
 
-# --- 3. clone or update the repo -----------------------------------------
-# Always ends with InstallDir being a pristine checkout of $Branch: any
-# local edits, stray files, or a half-finished/non-git directory from a
-# previous run are wiped rather than fought with. Re-running this script
-# is the supported way to reset a broken or hand-modified install.
+# --- 3. clone a fresh copy of the repo ------------------------------------
+# Always starts by deleting InstallDir outright rather than resetting it in
+# place: no local edits, stray files, or stale venv ever survive from a
+# previous run, so there's nothing for this script to ever get stuck on.
 
-if (Test-Path "$InstallDir\.git") {
-    Write-Step "Resetting existing install at $InstallDir to a clean copy of '$Branch'..."
-    git -C $InstallDir fetch origin $Branch
-    git -C $InstallDir checkout $Branch
-    git -C $InstallDir reset --hard "origin/$Branch"
-    git -C $InstallDir clean -fdx
-} else {
-    if (Test-Path $InstallDir) {
-        Write-Step "Removing non-git contents of $InstallDir..."
-        Remove-Item -Recurse -Force $InstallDir
-    }
-    Write-Step "Cloning pymmcore-gui to $InstallDir..."
-    git clone --branch $Branch $RepoUrl $InstallDir
+if (Test-Path $InstallDir) {
+    Write-Step "Removing existing install at $InstallDir..."
+    Remove-Item -Recurse -Force $InstallDir
 }
 
+Write-Step "Cloning pymmcore-gui ('$Branch') to $InstallDir..."
+git clone --branch $Branch $RepoUrl $InstallDir
+git -C $InstallDir checkout $Branch
+
 # --- 4. sync environment --------------------------------------------------
-# Keeps .venv in step with whatever code was just checked out above --
-# without this, a reset/clone can leave the environment stale (e.g. missing
-# console scripts like `mmgui`) until the next `uv run` happens to notice.
 
 Write-Step "Syncing the Python environment..."
-uv sync --project $InstallDir -U --reinstall-package pymmcore-gui
+uv sync --project $InstallDir -U
 
 # --- 5. desktop shortcut ---------------------------------------------------
 
