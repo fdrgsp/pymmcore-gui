@@ -3,8 +3,9 @@ title pymmcore-gui
 cd /d "%~dp0.."
 
 echo Updating to the latest "cite" version...
+git fetch origin cite
 git checkout cite
-git pull
+git reset --hard origin/cite
 uv sync -U --reinstall-package pymmcore-gui
 
 set attempts=0
