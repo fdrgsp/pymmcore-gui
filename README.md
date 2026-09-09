@@ -2,6 +2,18 @@
 
 *Name pending – this is a working title for the project*
 
+---
+
+🚧 WIP 🚧
+
+<img width="2672" height="1522" alt="Screenshot 2026-09-09 at 1 45 58 PM" src="https://github.com/user-attachments/assets/cac344c9-d50f-4cec-9f7f-cd9fe842f01c" />
+<img width="2672" height="1522" alt="Screenshot 2026-09-09 at 1 46 01 PM" src="https://github.com/user-attachments/assets/fe458bea-40c3-472a-8a2f-4b2532d6755f" />
+<img width="2672" height="1522" alt="Screenshot 2026-09-09 at 1 46 05 PM" src="https://github.com/user-attachments/assets/4d2561b7-b373-4ada-a609-3cee3e6cb417" />
+<img width="2672" height="1522" alt="Screenshot 2026-09-09 at 1 46 09 PM" src="https://github.com/user-attachments/assets/9badb691-6266-4c70-8226-71b9d9555589" />
+<img width="2672" height="1522" alt="Screenshot 2026-09-09 at 1 46 13 PM" src="https://github.com/user-attachments/assets/a3f315b6-5c3f-4eae-b165-9d1615f021a6" />
+
+---
+
 **pymmcore-gui** is a Graphical User Interface application for controlling
 microscopes via the Micro-Manager core – completely in Python. It unifies the
 capabilities of several libraries in the pymmcore-plus ecosystem under one
