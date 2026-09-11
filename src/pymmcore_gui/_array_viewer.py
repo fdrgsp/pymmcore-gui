@@ -18,6 +18,7 @@ from ome_writers import AcquisitionSettings, Dimension
 from pymmcore_plus import CMMCorePlus
 from pymmcore_plus.metadata import summary_metadata
 from superqt import QIconifyIcon
+from superqt.sliders._labeled import SliderLabel
 
 from pymmcore_gui._mda_export import AcquisitionRecord, export_acquisition
 from pymmcore_gui._qt.QtCore import QEvent, QObject, QSize, Qt
@@ -504,11 +505,11 @@ def unstyle_widgets(widget: Any) -> None:
     leaf types misses these. Walking every descendant and clearing
     unconditionally catches both cases.
 
-    The one deliberate exception is `QAbstractSlider` (covers `QSlider` and
-    superqt's `QLabeledSlider`/`QLabeledRangeSlider` family): ndv's
-    contrast-limits slider sets a stylesheet that defines its actual
-    groove/handle rendering and handle-label color, which is functional, not
-    cosmetic, and would look broken if cleared.
+    The deliberate exceptions are `QAbstractSlider` (covers `QSlider` and
+    superqt's `QLabeledSlider`/`QLabeledRangeSlider` family) and its
+    `SliderLabel` children: ndv's contrast-limits slider styles define the
+    actual groove/handle rendering and keep the editable handle labels
+    transparent. These are functional, not cosmetic, and look broken if cleared.
 
     Buttons additionally get the "subtle" variant (a persistently visible
     box, rather than only on hover -- most are small icon-only buttons with
@@ -520,7 +521,7 @@ def unstyle_widgets(widget: Any) -> None:
     ConfigGroupsEditor sets one on itself.
     """
     for w in (widget, *widget.findChildren(QWidget)):
-        if isinstance(w, QAbstractSlider):
+        if isinstance(w, (QAbstractSlider, SliderLabel)):
             continue
         if w.styleSheet():
             w.setStyleSheet("")

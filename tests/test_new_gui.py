@@ -75,6 +75,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QSplitter,
     QStyle,
     QStyleOption,
+    QStyleOptionSlider,
     QToolBar,
     QToolButton,
     QWidget,
@@ -4672,7 +4673,30 @@ def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert tool_buttons
     assert all(not button.autoRaise() for button in tool_buttons)
     assert all(button.property("variant") == "subtle" for button in tool_buttons)
-    assert explorer._contrast_slider._slider.styleSheet() == ""
+    # Keep this control pixel-consistent with ndv's Qt LUT slider.
+    from ndv.views._qt._array_view import SLIDER_STYLE
+
+    assert explorer._contrast_slider._slider.styleSheet() == (
+        SLIDER_STYLE + "SliderLabel { font-size: 10px; color: white;}"
+    )
+    assert explorer._contrast_slider._min_spin.value() == 0
+    assert (
+        explorer._contrast_slider._min_spin.sizeHint().width()
+        == explorer._contrast_slider._max_spin.sizeHint().width()
+    )
+    explorer._contrast_slider._min_spin.setValue(100)
+    assert explorer._contrast_slider._slider.minimum() == 100
+    # Older pymmcore-widgets releases do not set the style themselves. The
+    # application fallback must still produce the same control.
+    explorer._contrast_slider._slider.setStyleSheet("")
+    explorer._normalize_style()
+    assert explorer._contrast_slider._slider.styleSheet() == (
+        SLIDER_STYLE + "SliderLabel { font-size: 10px; color: white;}"
+    )
+    assert all(
+        label.styleSheet() == "background:transparent; border: 0;"
+        for label in explorer._contrast_slider._slider._handle_labels
+    )
     assert not toolbar.stop_scan_action.icon().isNull()
 
     expected = qcolor(theme().text_primary)
@@ -4688,6 +4712,28 @@ def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
             abs(actual - wanted) < 2
             for actual, wanted in zip(rgb, expected_rgb, strict=True)
         )
+
+
+def test_slider_style_only_paints_requested_subcontrols(qapp: QApplication) -> None:
+    """A range-slider groove pass must not paint a phantom handle at zero."""
+    from pymmcore_gui._modern_gui._theme import MicroscopeStyle
+
+    style = MicroscopeStyle()
+    option = QStyleOptionSlider()
+    option.rect = QRect(0, 0, 100, 20)
+    option.orientation = Qt.Orientation.Horizontal
+    option.subControls = QStyle.SubControl.SC_SliderGroove
+    painter = Mock()
+
+    style._draw_slider(option, painter, None)
+
+    painter.drawEllipse.assert_not_called()
+
+    painter.reset_mock()
+    option.subControls = QStyle.SubControl.SC_SliderHandle
+    style._draw_slider(option, painter, None)
+
+    assert painter.drawEllipse.call_count == 2
 
 
 def test_stage_explorer_refreshes_all_pixel_dependent_geometry(

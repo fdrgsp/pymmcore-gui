@@ -845,6 +845,8 @@ class MicroscopeStyle(QProxyStyle):
     ) -> None:
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         pal = opt.palette
+        draw_groove = bool(opt.subControls & QStyle.SubControl.SC_SliderGroove)
+        draw_handle = bool(opt.subControls & QStyle.SubControl.SC_SliderHandle)
 
         # Groove rect
         groove_rect = self.subControlRect(
@@ -874,28 +876,36 @@ class MicroscopeStyle(QProxyStyle):
             gx = groove_rect.center().x() - SLIDER_GROOVE_H // 2
             gr = QRectF(gx, groove_rect.top(), SLIDER_GROOVE_H, groove_rect.height())
 
-        # Background groove
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QBrush(groove_bg))
-        p.drawRoundedRect(gr, SLIDER_GROOVE_H / 2, SLIDER_GROOVE_H / 2)
+        if draw_groove:
+            # Background groove
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(groove_bg))
+            p.drawRoundedRect(gr, SLIDER_GROOVE_H / 2, SLIDER_GROOVE_H / 2)
 
-        # Filled portion
-        if horiz:
-            filled = QRectF(
-                gr.left(), gr.top(), handle_rect.center().x() - gr.left(), gr.height()
-            )
-        else:
-            filled = QRectF(
-                gr.left(),
-                handle_rect.center().y(),
-                gr.width(),
-                gr.bottom() - handle_rect.center().y(),
-            )
+        if draw_groove and draw_handle:
+            # Filled portion of a regular single-value slider. Range sliders
+            # request the groove and their handles in separate paint passes.
+            if horiz:
+                filled = QRectF(
+                    gr.left(),
+                    gr.top(),
+                    handle_rect.center().x() - gr.left(),
+                    gr.height(),
+                )
+            else:
+                filled = QRectF(
+                    gr.left(),
+                    handle_rect.center().y(),
+                    gr.width(),
+                    gr.bottom() - handle_rect.center().y(),
+                )
 
-        p.setBrush(QBrush(accent))
-        p.drawRoundedRect(filled, SLIDER_GROOVE_H / 2, SLIDER_GROOVE_H / 2)
+            p.setBrush(QBrush(accent))
+            p.drawRoundedRect(filled, SLIDER_GROOVE_H / 2, SLIDER_GROOVE_H / 2)
 
         # ── Handle ──
+        if not draw_handle:
+            return
         hx = handle_rect.center().x()
         # Force vertical center on the groove, not the handle_rect
         hy = gr.center().y()

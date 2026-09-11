@@ -15,8 +15,13 @@ from pymmcore_gui._array_viewer import (
     unstyle_widgets,
 )
 from pymmcore_gui._modern_gui._theme import qcolor, theme
-from pymmcore_gui._qt.QtCore import QEvent, QSize, Signal
-from pymmcore_gui._qt.QtWidgets import QMessageBox, QToolButton
+from pymmcore_gui._qt.QtCore import QEvent, QSize, Qt, QTimer, Signal
+from pymmcore_gui._qt.QtWidgets import (
+    QHBoxLayout,
+    QMessageBox,
+    QSpinBox,
+    QToolButton,
+)
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
@@ -101,14 +106,19 @@ class ThemedStageExplorer(StageExplorer):
 
     def _normalize_style(self) -> None:
         """Remove upstream one-off styling and use the application's QStyle."""
-        # Unlike ndv's functional contrast-limit stylesheet, StageExplorer's
-        # slider stylesheet hardcodes its own colors, handle, label font and
-        # geometry. The application style supplies all of those consistently.
+        self._ensure_contrast_minimum_control()
         slider = getattr(getattr(self, "_contrast_slider", None), "_slider", None)
-        if slider is not None:
-            slider.setStyleSheet("")
+        if slider is not None and not slider.styleSheet():
+            # Compatibility for pymmcore-widgets releases from before the
+            # Stage Explorer adopted ndv's functional contrast-slider style.
+            from ndv.views._qt._array_view import SLIDER_STYLE
+
+            slider.setStyleSheet(
+                SLIDER_STYLE + "SliderLabel { font-size: 10px; color: white;}"
+            )
 
         unstyle_widgets(self)
+        QTimer.singleShot(0, self._reposition_contrast_labels)
 
         toolbar = self.toolBar()
         toolbar.setMovable(False)
@@ -132,6 +142,47 @@ class ThemedStageExplorer(StageExplorer):
                 ensure_visible_icon(button)
 
         self._apply_themed_icons()
+
+    def _reposition_contrast_labels(self) -> None:
+        slider = getattr(getattr(self, "_contrast_slider", None), "_slider", None)
+        reposition = getattr(slider, "_reposition_labels", None)
+        if slider is not None and callable(reposition):
+            if layout := slider.layout():
+                layout.activate()
+            reposition()
+
+    def _ensure_contrast_minimum_control(self) -> None:
+        """Add the domain-minimum editor for older pymmcore-widgets releases."""
+        contrast = getattr(self, "_contrast_slider", None)
+        if contrast is None or hasattr(contrast, "_min_spin"):
+            return
+        slider = getattr(contrast, "_slider", None)
+        max_spin = getattr(contrast, "_max_spin", None)
+        layout = contrast.layout()
+        if slider is None or max_spin is None or not isinstance(layout, QHBoxLayout):
+            return
+
+        min_spin = QSpinBox(contrast)
+        min_spin.setRange(0, max_spin.value() - 1)
+        min_spin.setValue(0)
+        min_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        min_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        min_spin.setKeyboardTracking(False)
+        min_spin.setMinimumWidth(min_spin.fontMetrics().horizontalAdvance("888888"))
+        min_spin.setMinimumWidth(max_spin.sizeHint().width())
+
+        def update_minimum(value: int) -> None:
+            max_spin.setMinimum(value + 1)
+            slider.setRange(value, max_spin.value())
+
+        def update_maximum(value: int) -> None:
+            min_spin.setMaximum(value - 1)
+            slider.setRange(min_spin.value(), value)
+
+        min_spin.valueChanged.connect(update_minimum)
+        max_spin.valueChanged.connect(update_maximum)
+        layout.insertWidget(layout.indexOf(slider), min_spin, 0)
+        contrast._min_spin = min_spin
 
     def _apply_themed_icons(self) -> None:
         foreground = qcolor(theme().text_primary).name()
