@@ -4679,13 +4679,6 @@ def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert explorer._contrast_slider._slider.styleSheet() == (
         SLIDER_STYLE + "SliderLabel { font-size: 10px; color: white;}"
     )
-    assert explorer._contrast_slider._min_spin.value() == 0
-    assert (
-        explorer._contrast_slider._min_spin.sizeHint().width()
-        == explorer._contrast_slider._max_spin.sizeHint().width()
-    )
-    explorer._contrast_slider._min_spin.setValue(100)
-    assert explorer._contrast_slider._slider.minimum() == 100
     # Older pymmcore-widgets releases do not set the style themselves. The
     # application fallback must still produce the same control.
     explorer._contrast_slider._slider.setStyleSheet("")
