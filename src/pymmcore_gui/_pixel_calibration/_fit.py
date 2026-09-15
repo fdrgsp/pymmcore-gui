@@ -29,9 +29,11 @@ def _solve(
 
 
 def _huber_weights(residual_norms: NDArray[np.float64]) -> NDArray[np.float64]:
-    median = float(np.median(residual_norms))
-    mad = float(np.median(np.abs(residual_norms - median)))
-    scale = max(1.4826 * mad, np.finfo(float).eps)
+    # Residual vectors are centred on zero, but their norms are non-negative.
+    # Taking a MAD *around the median norm* therefore underestimates the noise
+    # scale and can classify an otherwise coherent fit as mostly outliers.  The
+    # median absolute residual is the appropriate robust zero-centred scale.
+    scale = max(1.4826 * float(np.median(residual_norms)), np.finfo(float).eps)
     cutoff = 1.345 * scale
     weights = np.ones_like(residual_norms)
     outside = residual_norms > cutoff
@@ -90,7 +92,7 @@ def fit_affine(
     if confidence_weights is None:
         base_weights = np.ones(len(shifts), dtype=np.float64)
     else:
-        base_weights = np.asarray(confidence_weights, dtype=np.float64)
+        base_weights = np.array(confidence_weights, dtype=np.float64, copy=True)
         if base_weights.shape != (len(shifts),):
             raise ValueError("confidence_weights must have shape (N,)")
         if not np.all(np.isfinite(base_weights)) or np.any(base_weights <= 0):
@@ -120,7 +122,11 @@ def fit_affine(
 
         inlier_mask = weights >= 0.25 * base_weights
         outlier_count = int(np.count_nonzero(~inlier_mask))
-        if 0 < outlier_count <= 2 and np.count_nonzero(inlier_mask) >= minimum_points:
+        if np.count_nonzero(inlier_mask) < minimum_points:
+            raise ValueError(
+                f"fewer than {minimum_points} affine observations are inliers"
+            )
+        if 0 < outlier_count <= 2:
             matrix = _solve(
                 shifts[inlier_mask], deltas[inlier_mask], base_weights[inlier_mask]
             )

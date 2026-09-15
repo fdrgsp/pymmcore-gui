@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from threading import Event
 from typing import TYPE_CHECKING
 
@@ -19,6 +20,7 @@ from pymmcore_gui._pixel_calibration import (
     register_translation,
     run_pixel_calibration,
 )
+from pymmcore_gui._pixel_calibration._registration import TranslationRegistrar
 from pymmcore_gui._pixel_calibration._routine import _validate_holdouts
 
 if TYPE_CHECKING:
@@ -28,7 +30,8 @@ if TYPE_CHECKING:
 def test_default_motion_settings_match_the_gui() -> None:
     options = CalibrationOptions()
     assert options.safe_radius_um == 100
-    assert options.settle_time_s == 0
+    assert options.settle_time_s == 0.1
+    assert options.max_registration_attempts == 3
 
 
 def test_holdout_rms_miss_is_warning_until_a_prediction_exceeds_hard_limit() -> None:
@@ -124,6 +127,24 @@ def test_register_translation_handles_gain_offset_and_rgb() -> None:
     assert result.shift_xy == pytest.approx((-6.6, -5.25), abs=0.1)
 
 
+def test_reference_alignment_handles_rgb_images() -> None:
+    from pymmcore_gui._pixel_calibration._routine import _validate_references
+
+    reference = _texture((192, 224))
+    shifted = _shift_image(reference, (0.4, -0.35))
+    rgb_reference = np.stack((reference, reference * 0.8, reference * 1.2), axis=-1)
+    rgb_shifted = np.stack((shifted, shifted * 0.8, shifted * 1.2), axis=-1)
+
+    combined = _validate_references(
+        rgb_reference, rgb_shifted, CalibrationOptions(settle_time_s=0)
+    )
+
+    assert combined.shape == reference.shape
+    assert register_translation(reference, combined).shift_xy == pytest.approx(
+        (0, 0), abs=0.1
+    )
+
+
 @pytest.mark.parametrize(
     "reference,moving,message",
     [
@@ -193,6 +214,30 @@ def test_fit_affine_with_exactly_two_points_does_not_crash() -> None:
     assert np.all(result.inlier_mask)
     assert np.isfinite(result.max_residual_px)
     assert np.isfinite(result.rms_residual_px)
+
+
+def test_fit_affine_does_not_reject_coherent_nonzero_noise() -> None:
+    matrix = np.asarray([[0.4, 0.02], [-0.01, -0.39]])
+    shifts = np.asarray(
+        [
+            [-70, 0],
+            [70, 0],
+            [0, -65],
+            [0, 65],
+            [-55, -45],
+            [55, 45],
+            [-55, 45],
+            [55, -45],
+        ],
+        dtype=float,
+    )
+    angles = np.linspace(0, 2 * np.pi, len(shifts), endpoint=False)
+    coherent_noise = 0.1 * np.column_stack((np.cos(angles), np.sin(angles)))
+
+    result = fit_affine(shifts, shifts @ matrix.T + coherent_noise, minimum_points=6)
+
+    assert np.all(result.inlier_mask)
+    assert result.matrix == pytest.approx(matrix, abs=5e-4)
 
 
 def test_fit_affine_rejects_collinear_design() -> None:
@@ -389,11 +434,47 @@ def test_run_pixel_calibration_measures_affine_without_persisting() -> None:
     assert core.stored_affine == old_affine
 
 
-def test_run_pixel_calibration_restores_stage_after_failure() -> None:
-    core = _SyntheticCore()
-    core.fail_snap_at = 4
+@pytest.mark.parametrize("bad_frame_at", [1, 2, 4, 21, 60])
+def test_run_pixel_calibration_retries_a_transient_bad_frame(bad_frame_at: int) -> None:
+    class TransientFrameCore(_SyntheticCore):
+        def getImage(self) -> np.ndarray:
+            if self.snap_count == bad_frame_at:
+                return np.zeros_like(self.base_image)
+            return super().getImage()
 
-    with pytest.raises(RuntimeError, match="synthetic camera failure"):
+    core = TransientFrameCore()
+
+    result = run_pixel_calibration(core, _fast_options(), resolution_id="Resolution")
+
+    assert result.fit.matrix == pytest.approx(core.true_matrix, abs=2e-3)
+    assert result.stage_returned
+    assert core.position == pytest.approx(core.origin)
+
+
+@pytest.mark.parametrize("fail_snap_at", [1, 2, 4, 21, 60])
+def test_run_pixel_calibration_retries_a_transient_camera_error(
+    fail_snap_at: int,
+) -> None:
+    core = _SyntheticCore()
+    core.fail_snap_at = fail_snap_at
+
+    result = run_pixel_calibration(core, _fast_options(), resolution_id="Resolution")
+
+    assert result.fit.matrix == pytest.approx(core.true_matrix, abs=2e-3)
+    assert result.stage_returned
+    assert core.position == pytest.approx(core.origin)
+
+
+def test_run_pixel_calibration_restores_stage_after_persistent_failure() -> None:
+    class FailingCore(_SyntheticCore):
+        def snapImage(self) -> None:
+            self.snap_count += 1
+            if self.snap_count >= 4:
+                raise RuntimeError("synthetic camera failure")
+
+    core = FailingCore()
+
+    with pytest.raises(PixelCalibrationError, match="synthetic camera failure"):
         run_pixel_calibration(core, _fast_options(), resolution_id="Resolution")
 
     assert core.position == pytest.approx(core.origin)
@@ -461,6 +542,7 @@ def test_run_pixel_calibration_honors_preexisting_cancellation() -> None:
         )
 
     assert core.position == pytest.approx(core.origin)
+    assert core.moves == []
 
 
 def test_commit_pixel_calibration_writes_validated_result() -> None:
@@ -495,3 +577,193 @@ def test_commit_pixel_calibration_rolls_back_partial_write() -> None:
 
     assert core.stored_size == old_size
     assert core.stored_affine == old_affine
+
+
+class _NoisyFieldCore(_SyntheticCore):
+    """Capture a noisy ROI from a larger field, without wrapping the camera edges."""
+
+    def __init__(self, seed: int, blur: float) -> None:
+        super().__init__()
+        self.rng = np.random.default_rng(seed)
+        self.field = _texture((384, 448))
+        frequencies = (
+            np.fft.fftfreq(self.field.shape[0])[:, None] ** 2
+            + np.fft.fftfreq(self.field.shape[1])[None, :] ** 2
+        )
+        self.field = np.fft.ifftn(
+            np.fft.fftn(self.field) * np.exp(-2 * np.pi**2 * blur**2 * frequencies)
+        ).real
+        self.field /= self.field.std()
+
+    def getImage(self) -> np.ndarray:
+        shift_xy = np.linalg.solve(self.true_matrix, self.position - self.origin)
+        image = _shift_image(self.field, (-shift_xy[1], -shift_xy[0]))[96:288, 112:336]
+        return image + self.rng.normal(scale=0.15, size=image.shape)
+
+
+@pytest.mark.parametrize("blur", [2.0, 4.0, 6.0])
+def test_noisy_blurred_calibration_is_repeatable(blur: float) -> None:
+    sizes = []
+    for seed in range(5):
+        core = _NoisyFieldCore(seed, blur)
+        # A wrong saved calibration must not change probing or the measurement.
+        core.stored_size = (0.0, 0.04, 0.4, 4.0, 40.0)[seed]
+        result = run_pixel_calibration(core, _fast_options())
+        assert result.fit.matrix == pytest.approx(core.true_matrix, abs=0.002)
+        assert result.fit.rms_residual_px < 0.15
+        assert core.position == pytest.approx(core.origin)
+        assert all(
+            obs.registration.method == "unnormalized" for obs in result.observations
+        )
+        sizes.append(result.fit.pixel_size_um)
+    assert np.ptp(sizes) / 0.4 < 0.003
+
+
+@pytest.mark.parametrize("shape", [(192, 224), (256, 256)])
+def test_registration_tracks_patch_with_inexact_prediction(
+    shape: tuple[int, int],
+) -> None:
+    field = _texture((shape[0] * 2, shape[1] * 2))
+    rows = slice(shape[0] // 2, 3 * shape[0] // 2)
+    cols = slice(shape[1] // 2, 3 * shape[1] // 2)
+    reference = field[rows, cols]
+    moving = _shift_image(field, (-24.35, 31.2))[rows, cols]
+    registrar = TranslationRegistrar(reference, normalization="unnormalized")
+
+    result = registrar.register(moving, expected_shift_xy=(-28, 26))
+
+    # The final shift must come from the images, including the actual clipped
+    # integer ROI offset; an inaccurate prediction must not bias the result.
+    assert result.shift_xy == pytest.approx((-31.2, 24.35), abs=0.1)
+    assert result.normalized_error < 0.15
+
+
+def test_registration_rejects_contrast_inversion_and_unrelated_images() -> None:
+    from pymmcore_gui._pixel_calibration._routine import _registration_is_usable
+
+    reference = _texture()
+    for moving in (-reference, np.random.default_rng(5).normal(size=reference.shape)):
+        result = register_translation(reference, moving, normalization="unnormalized")
+        assert result.normalized_error > 0.9
+        assert not _registration_is_usable(result, CalibrationOptions())
+
+
+def test_periodic_sample_is_rejected_before_moving() -> None:
+    core = _SyntheticCore()
+    yy, xx = np.indices(core.base_image.shape)
+    core.base_image = np.cos(2 * np.pi * xx / 12) + np.cos(2 * np.pi * yy / 12)
+    with pytest.raises(PixelCalibrationError, match="Reference images"):
+        run_pixel_calibration(core, _fast_options())
+    assert all(np.allclose(move, core.origin) for move in core.moves)
+
+
+def test_failed_origin_registration_cannot_contaminate_following_observations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pymmcore_gui._pixel_calibration import _routine
+
+    core = _SyntheticCore()
+    fingerprint = _routine.capture_fingerprint(core, core.getImage())
+    good = RegistrationResult((10, 0), 20, 2, 1, 0, capture_time_s=1)
+    bad = RegistrationResult((25, 25), 20, 2, 1, float("inf"), capture_time_s=2)
+    measurements = iter((good, bad))
+    monkeypatch.setattr(
+        _routine, "_repeatable_registration", lambda *a, **k: next(measurements)
+    )
+    registrar = TranslationRegistrar(core.getImage())
+    with pytest.raises(PixelCalibrationError, match="return to the reference"):
+        _routine._acquire_observation(
+            core,
+            registrar,
+            core.origin,
+            core.origin + np.asarray((4, 0)),
+            core.origin,
+            good,
+            fingerprint,
+            _fast_options(),
+            None,
+            expected_shift_xy=(10, 0),
+        )
+    assert core.position == pytest.approx(core.origin)
+
+
+def test_drift_correction_uses_capture_times_after_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pymmcore_gui._pixel_calibration import _routine
+
+    core = _SyntheticCore()
+    fingerprint = _routine.capture_fingerprint(core, core.getImage())
+    # Drift advances 0.5 px/s. The target was captured at t=2, the return at
+    # t=10 (e.g. after retries). A midpoint correction would be wrong by 1.5 px.
+    before = RegistrationResult((0, 0), 20, 2, 1, 0, capture_time_s=0)
+    target = RegistrationResult((11, 0), 20, 2, 1, 0, capture_time_s=2)
+    after = RegistrationResult((5, 0), 20, 2, 1, 0, capture_time_s=10)
+    measurements = iter((target, after))
+    monkeypatch.setattr(
+        _routine, "_repeatable_registration", lambda *a, **k: next(measurements)
+    )
+    observation, _, _ = _routine._acquire_observation(
+        core,
+        TranslationRegistrar(core.getImage()),
+        core.origin,
+        core.origin + np.asarray((4, 0)),
+        core.origin,
+        before,
+        fingerprint,
+        _fast_options(),
+        None,
+        expected_shift_xy=(10, 0),
+    )
+    assert observation.corrected_shift_xy == pytest.approx((10, 0))
+
+
+def test_fit_does_not_modify_caller_confidence_weights() -> None:
+    points = np.asarray([(1, 0), (0, 1), (-1, 0), (0, -1)], dtype=float)
+    weights = np.asarray([1, 2, 3, 4], dtype=float)
+    fit_affine(points, points * 0.4, confidence_weights=weights)
+    assert weights.tolist() == [1, 2, 3, 4]
+
+
+def test_fit_requires_minimum_inliers_after_outlier_rejection() -> None:
+    shifts = np.asarray(
+        [(60, 0), (-60, 0), (0, 60), (0, -60), (50, 50), (-50, -50)], dtype=float
+    )
+    deltas = 0.4 * shifts
+    deltas[0] += (8, -6)
+    with pytest.raises(ValueError, match="fewer than 6"):
+        fit_affine(shifts, deltas, minimum_points=6)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+@pytest.mark.parametrize(
+    "option",
+    ["safe_radius_um", "settle_time_s", "max_fit_rms_px", "stage_return_tolerance_um"],
+)
+def test_nonfinite_options_are_rejected(option: str, value: float) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        replace(CalibrationOptions(), **{option: value})  # type: ignore[arg-type]
+
+
+def test_calibration_rejects_midrun_camera_format_change() -> None:
+    class ChangedFormatCore(_SyntheticCore):
+        def getImage(self) -> np.ndarray:
+            image = super().getImage()
+            return image.astype(np.float32) if self.snap_count >= 3 else image
+
+    core = ChangedFormatCore()
+    with pytest.raises(PixelCalibrationError, match="format changed"):
+        run_pixel_calibration(core, _fast_options())
+    assert core.position == pytest.approx(core.origin)
+
+
+def test_acquisition_preflight_does_not_command_the_stage() -> None:
+    class AcquiringCore(_SyntheticCore):
+        def isSequenceRunning(self, label: str) -> bool:
+            return True
+
+    core = AcquiringCore()
+    with pytest.raises(PixelCalibrationError, match="acquisition is running"):
+        run_pixel_calibration(core, _fast_options())
+    assert core.moves == []
+    assert core.snap_count == 0

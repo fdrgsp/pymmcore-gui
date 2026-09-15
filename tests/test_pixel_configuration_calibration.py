@@ -255,7 +255,7 @@ def test_calibration_panel_has_form_viewer_and_information_layout(
     assert panel._result_text.frameShape() is QFrame.Shape.NoFrame
     assert panel._result_text.wordWrap()
     assert panel._info_splitter.widget(1) is panel._diagnostics
-    assert panel._settle_time.value() == 0
+    assert panel._settle_time.value() == 0.1
     assert panel._camera_combo.currentText() == mmcore.getCameraDevice()
     assert panel._xy_stage_combo.currentText() == mmcore.getXYStageDevice()
     assert panel._xy_stage_combo.toolTip()

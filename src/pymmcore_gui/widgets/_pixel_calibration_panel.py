@@ -546,7 +546,7 @@ class PixelCalibrationPanel(QWidget):
         self._settle_time = QDoubleSpinBox()
         self._settle_time.setRange(0, 30)
         self._settle_time.setDecimals(3)
-        self._settle_time.setValue(0)
+        self._settle_time.setValue(0.1)
         self._settle_time.setSuffix(" s")
         settle_time_tip = (
             "Time to wait after every XY-stage move before acquiring an image. "

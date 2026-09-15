@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import math
+from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
@@ -15,18 +16,21 @@ class CalibrationOptions:
     """Numerical and motion limits for an automatic calibration run."""
 
     safe_radius_um: float = 100.0
-    settle_time_s: float = 0.0
+    settle_time_s: float = 0.1
     crop_fraction: float = 0.75
     upsample_factor: int = 20
     min_psr: float = 8.0
     min_peak_ratio: float = 1.05
     min_overlap: float = 0.60
+    max_registration_error: float = 0.75
     target_shift_fraction: float = 0.16
     min_shift_fraction: float = 0.04
     max_shift_fraction: float = 0.30
     min_shift_px: float = 8.0
     max_probe_steps: int = 16
     initial_probe_um: float = 0.5
+    max_registration_attempts: int = 3
+    registration_consistency_px: float = 0.75
     stage_return_tolerance_um: float = 0.5
     max_fit_rms_px: float = 0.5
     max_fit_fraction: float = 0.01
@@ -34,6 +38,12 @@ class CalibrationOptions:
     max_point_residual_fraction: float = 0.03
 
     def __post_init__(self) -> None:
+        for option in fields(self):
+            if not math.isfinite(getattr(self, option.name)):
+                raise ValueError(f"{option.name} must be finite")
+        for name in ("upsample_factor", "max_probe_steps", "max_registration_attempts"):
+            if not isinstance(getattr(self, name), int):
+                raise ValueError(f"{name} must be an integer")
         if self.safe_radius_um <= 0:
             raise ValueError("safe_radius_um must be positive")
         if self.settle_time_s < 0:
@@ -42,8 +52,14 @@ class CalibrationOptions:
             raise ValueError("crop_fraction must be between 0.25 and 1")
         if self.upsample_factor < 1:
             raise ValueError("upsample_factor must be at least 1")
+        if self.min_psr <= 0:
+            raise ValueError("min_psr must be positive")
+        if self.min_peak_ratio <= 1:
+            raise ValueError("min_peak_ratio must be greater than 1")
         if not 0 < self.min_overlap <= 1:
             raise ValueError("min_overlap must be in (0, 1]")
+        if not 0 < self.max_registration_error < 1:
+            raise ValueError("max_registration_error must be in (0, 1)")
         if not 0 < self.min_shift_fraction < self.target_shift_fraction:
             raise ValueError(
                 "min_shift_fraction must be positive and smaller than "
@@ -59,8 +75,20 @@ class CalibrationOptions:
             raise ValueError("max_probe_steps must be at least 1")
         if self.initial_probe_um <= 0:
             raise ValueError("initial_probe_um must be positive")
+        if self.max_registration_attempts < 2:
+            raise ValueError("max_registration_attempts must be at least 2")
+        if self.registration_consistency_px <= 0:
+            raise ValueError("registration_consistency_px must be positive")
         if self.stage_return_tolerance_um < 0:
             raise ValueError("stage_return_tolerance_um cannot be negative")
+        for name in (
+            "max_fit_rms_px",
+            "max_fit_fraction",
+            "max_point_residual_px",
+            "max_point_residual_fraction",
+        ):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be positive")
 
 
 @dataclass(frozen=True)
@@ -74,6 +102,7 @@ class RegistrationResult:
     overlap: float
     normalized_error: float
     method: Literal["phase", "unnormalized"] = "phase"
+    capture_time_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -194,7 +223,7 @@ class PixelCalibrationResult:
     observations: tuple[CalibrationObservation, ...]
     validation_observations: tuple[CalibrationObservation, ...]
     stage_returned: bool
-    algorithm_version: str = "1"
+    algorithm_version: str = "2"
     warnings: tuple[CalibrationWarning, ...] = field(default_factory=tuple)
 
 

@@ -20,13 +20,18 @@ from ._models import (
     RegistrationResult,
     StageRestoreError,
 )
-from ._registration import register_translation
+from ._registration import (
+    TranslationRegistrar,
+    _as_float_image,
+    _fourier_shift,
+    register_translation,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from threading import Event
 
-    from numpy.typing import NDArray
+    from numpy.typing import ArrayLike, NDArray
 
 ProgressCallback = Callable[[str, float], None]
 ObservationKind = Literal["fit", "validation"]
@@ -251,6 +256,27 @@ def _snap(core: CalibrationCore, *, camera: str | None = None) -> NDArray[np.gen
     return np.asarray(core.getImage()).copy()
 
 
+def _initial_snap(
+    core: CalibrationCore,
+    camera: str,
+    options: CalibrationOptions,
+    cancel_event: Event | None,
+) -> NDArray[np.generic]:
+    """Acquire the first frame, retrying transient camera failures."""
+    last_error: Exception | None = None
+    for _ in range(options.max_registration_attempts):
+        _check_cancel(cancel_event)
+        try:
+            return _snap(core, camera=camera)
+        except PixelCalibrationError:
+            raise
+        except Exception as exc:
+            last_error = exc
+    raise PixelCalibrationError(
+        f"Camera failed after repeated snap attempts: {last_error}"
+    ) from last_error
+
+
 def _position(core: CalibrationCore, stage: str) -> NDArray[np.float64]:
     position = np.asarray(core.getXYPosition(stage), dtype=np.float64)
     if position.shape != (2,) or not np.all(np.isfinite(position)):
@@ -298,6 +324,7 @@ def _registration(
         moving,
         upsample_factor=options.upsample_factor,
         crop_fraction=options.crop_fraction,
+        normalization="unnormalized",
     )
 
 
@@ -308,7 +335,8 @@ def _registration_is_usable(
         result.psr >= options.min_psr
         and result.peak_ratio >= options.min_peak_ratio
         and result.overlap >= options.min_overlap
-        and np.isfinite(result.normalized_error)
+        and 0 <= result.normalized_error <= options.max_registration_error
+        and bool(np.all(np.isfinite(result.shift_xy)))
     )
 
 
@@ -323,24 +351,156 @@ def _validate_references(
         )
     if np.issubdtype(first.dtype, np.integer):
         limits = np.iinfo(first.dtype.name)
-        saturated = np.mean((first == limits.min) | (first == limits.max))
+        saturated = max(
+            np.mean((image == limits.min) | (image == limits.max))
+            for image in (first, second)
+        )
         if saturated > 0.10:
             raise PixelCalibrationError("Reference image is more than 10% saturated")
     repeat = _registration(first, second, options)
-    if np.linalg.norm(repeat.shift_xy) > 2 or repeat.normalized_error > 0.75:
+    if (
+        not _registration_is_usable(repeat, options)
+        or np.linalg.norm(repeat.shift_xy) > 2
+    ):
         raise PixelCalibrationError(
             "Reference images are not stable enough to calibrate"
         )
+    first_float = _as_float_image(first)
+    aligned_second = _fourier_shift(
+        _as_float_image(second),
+        np.asarray(repeat.shift_xy[::-1], dtype=np.float64),
+    )
     return np.asarray(
-        (np.asarray(first, dtype=np.float64) + np.asarray(second, dtype=np.float64))
-        / 2,
+        (np.asarray(first_float, dtype=np.float64) + aligned_second) / 2,
         dtype=np.float64,
     )
 
 
+def _stable_reference(
+    core: CalibrationCore,
+    first: NDArray[np.generic],
+    fingerprint: HardwareFingerprint,
+    options: CalibrationOptions,
+    cancel_event: Event | None,
+) -> NDArray[np.float64]:
+    """Acquire a stable reference pair, tolerating one transient bad frame."""
+    frames = [first]
+    last_error: PixelCalibrationError | None = None
+    for _ in range(options.max_registration_attempts):
+        _check_cancel(cancel_event)
+        try:
+            new_frame = _snap(core, camera=fingerprint.camera)
+        except PixelCalibrationError:
+            raise
+        except Exception as exc:
+            last_error = PixelCalibrationError(f"Camera snap failed: {exc}")
+            continue
+        if new_frame.shape != first.shape or new_frame.dtype != first.dtype:
+            raise PixelCalibrationError(
+                "Camera image format changed between reference snaps"
+            )
+        for candidate in frames:
+            try:
+                return _validate_references(candidate, new_frame, options)
+            except (PixelCalibrationError, ValueError) as exc:
+                last_error = PixelCalibrationError(str(exc))
+        frames.append(new_frame)
+    raise last_error or PixelCalibrationError(
+        "Reference images are not stable enough to calibrate"
+    )
+
+
+def _combine_registrations(
+    registrations: list[RegistrationResult], options: CalibrationOptions
+) -> RegistrationResult | None:
+    """Return the closest repeatable pair, or ``None`` without consensus."""
+    best: tuple[float, int, int] | None = None
+    for first in range(len(registrations)):
+        for second in range(first + 1, len(registrations)):
+            distance = float(
+                np.linalg.norm(
+                    np.asarray(registrations[first].shift_xy)
+                    - np.asarray(registrations[second].shift_xy)
+                )
+            )
+            candidate = (distance, first, second)
+            if best is None or candidate < best:
+                best = candidate
+    if best is None or best[0] > options.registration_consistency_px:
+        return None
+    selected = (registrations[best[1]], registrations[best[2]])
+    shift = np.mean([result.shift_xy for result in selected], axis=0)
+    times = [
+        result.capture_time_s
+        for result in selected
+        if result.capture_time_s is not None
+    ]
+    return RegistrationResult(
+        shift_xy=(float(shift[0]), float(shift[1])),
+        psr=min(result.psr for result in selected),
+        peak_ratio=min(result.peak_ratio for result in selected),
+        overlap=min(result.overlap for result in selected),
+        normalized_error=max(result.normalized_error for result in selected),
+        method=selected[0].method,
+        capture_time_s=float(np.mean(times)) if len(times) == 2 else None,
+    )
+
+
+def _repeatable_registration(
+    core: CalibrationCore,
+    registrar: TranslationRegistrar,
+    fingerprint: HardwareFingerprint,
+    options: CalibrationOptions,
+    cancel_event: Event | None,
+    *,
+    expected_shift_xy: ArrayLike = (0.0, 0.0),
+) -> RegistrationResult:
+    """Measure a shift twice, using a third frame only when needed."""
+    usable: list[RegistrationResult] = []
+    fallback: RegistrationResult | None = None
+    last_error: Exception | None = None
+    for _ in range(options.max_registration_attempts):
+        _check_cancel(cancel_event)
+        try:
+            before_snap = time.monotonic()
+            frame = _snap(core, camera=fingerprint.camera)
+            capture_time = (before_snap + time.monotonic()) / 2
+            if (
+                frame.shape[:2] != fingerprint.image_shape
+                or str(frame.dtype) != fingerprint.dtype
+            ):
+                raise PixelCalibrationError(
+                    "Camera image format changed during calibration"
+                )
+            result = registrar.register(
+                frame,
+                expected_shift_xy=expected_shift_xy,
+            )
+            result = replace(result, capture_time_s=capture_time)
+        except PixelCalibrationError:
+            raise
+        except Exception as exc:
+            last_error = exc
+            continue
+        if fallback is None or result.normalized_error < fallback.normalized_error:
+            fallback = result
+        if _registration_is_usable(result, options):
+            usable.append(result)
+            if (combined := _combine_registrations(usable, options)) is not None:
+                return combined
+    if fallback is None or last_error is not None:
+        raise PixelCalibrationError(
+            "Could not acquire and register images after repeated attempts"
+            + (f": {last_error}" if last_error is not None else "")
+        ) from last_error
+    # Preserve diagnostics while ensuring the caller rejects a non-repeatable
+    # displacement just as it rejects any other low-confidence registration.
+    return replace(fallback, normalized_error=float("inf"))
+
+
 def _probe_axis(
     core: CalibrationCore,
-    reference: NDArray[np.generic],
+    registrar: TranslationRegistrar,
     origin: NDArray[np.float64],
     fingerprint: HardwareFingerprint,
     axis: int,
@@ -350,13 +510,7 @@ def _probe_axis(
     image_limit = np.asarray(fingerprint.image_shape[::-1], dtype=np.float64)
     minimum = max(options.min_shift_px, options.min_shift_fraction * min(image_limit))
     distance = options.initial_probe_um
-    try:
-        existing_size = float(core.getPixelSizeUm())
-    except Exception:
-        existing_size = 0.0
-    if existing_size > 0 and np.isfinite(existing_size):
-        hinted = existing_size * min(image_limit) * options.min_shift_fraction
-        distance = max(distance, min(hinted, options.safe_radius_um / 8))
+    expected_shift = np.zeros(2, dtype=np.float64)
 
     for _ in range(options.max_probe_steps):
         _check_cancel(cancel_event)
@@ -371,8 +525,14 @@ def _probe_axis(
             fingerprint=fingerprint,
             options=options,
         )
-        image = _snap(core, camera=fingerprint.camera)
-        registration = _registration(reference, image, options)
+        registration = _repeatable_registration(
+            core,
+            registrar,
+            fingerprint,
+            options,
+            cancel_event,
+            expected_shift_xy=expected_shift,
+        )
         _move(
             core,
             origin,
@@ -400,6 +560,11 @@ def _probe_axis(
             raise PixelCalibrationError(
                 "Adaptive probe moved the image outside its safe overlap"
             )
+        if not _registration_is_usable(registration, options):
+            raise PixelCalibrationError(
+                f"Could not reliably register the stage axis {'XY'[axis]} probe"
+            )
+        expected_shift = 2 * shift
         distance *= 2
     axis_name = "XY"[axis]
     raise PixelCalibrationError(
@@ -410,15 +575,17 @@ def _probe_axis(
 
 def _acquire_observation(
     core: CalibrationCore,
-    reference: NDArray[np.generic],
+    registrar: TranslationRegistrar,
     origin: NDArray[np.float64],
     target: NDArray[np.float64],
     origin_before_position: NDArray[np.float64],
-    origin_before_shift: NDArray[np.float64],
+    origin_before_registration: RegistrationResult,
     fingerprint: HardwareFingerprint,
     options: CalibrationOptions,
     cancel_event: Event | None,
-) -> tuple[CalibrationObservation, NDArray[np.float64], NDArray[np.float64]]:
+    *,
+    expected_shift_xy: ArrayLike,
+) -> tuple[CalibrationObservation, NDArray[np.float64], RegistrationResult]:
     _check_cancel(cancel_event)
     actual = _move(
         core,
@@ -427,8 +594,13 @@ def _acquire_observation(
         fingerprint=fingerprint,
         options=options,
     )
-    target_registration = _registration(
-        reference, _snap(core, camera=fingerprint.camera), options
+    target_registration = _repeatable_registration(
+        core,
+        registrar,
+        fingerprint,
+        options,
+        cancel_event,
+        expected_shift_xy=expected_shift_xy,
     )
     actual_origin = _move(
         core,
@@ -437,17 +609,41 @@ def _acquire_observation(
         fingerprint=fingerprint,
         options=options,
     )
-    origin_registration = _registration(
-        reference, _snap(core, camera=fingerprint.camera), options
+    origin_registration = _repeatable_registration(
+        core,
+        registrar,
+        fingerprint,
+        options,
+        cancel_event,
+        expected_shift_xy=origin_before_registration.shift_xy,
     )
+    if not _registration_is_usable(origin_registration, options):
+        raise PixelCalibrationError(
+            "Could not reliably register the return to the reference position"
+        )
     origin_after_shift = np.asarray(origin_registration.shift_xy)
-    drift = 0.5 * (origin_before_shift + origin_after_shift)
+    before_time = origin_before_registration.capture_time_s
+    after_time = origin_registration.capture_time_s
+    target_time = target_registration.capture_time_s
+    fraction = 0.5
+    if (
+        before_time is not None
+        and after_time is not None
+        and target_time is not None
+        and after_time > before_time
+    ):
+        fraction = float(
+            np.clip((target_time - before_time) / (after_time - before_time), 0, 1)
+        )
+    # Retries and different exposure/processing times make the target capture
+    # asymmetric between origin captures. Interpolate drift at its actual time.
+    drift = (1 - fraction) * np.asarray(
+        origin_before_registration.shift_xy
+    ) + fraction * origin_after_shift
     corrected = np.asarray(target_registration.shift_xy) - drift
-    local_origin = 0.5 * (origin_before_position + actual_origin)
+    local_origin = (1 - fraction) * origin_before_position + fraction * actual_origin
     delta = actual - local_origin
-    usable = _registration_is_usable(
-        target_registration, options
-    ) and _registration_is_usable(origin_registration, options)
+    usable = _registration_is_usable(target_registration, options)
     observation = CalibrationObservation(
         stage_position_um=(float(actual[0]), float(actual[1])),
         stage_delta_um=(float(delta[0]), float(delta[1])),
@@ -456,7 +652,7 @@ def _acquire_observation(
         accepted=usable,
         rejection_reason="" if usable else "registration confidence below threshold",
     )
-    return observation, actual_origin, origin_after_shift
+    return observation, actual_origin, origin_registration
 
 
 def _measurement_targets(
@@ -610,7 +806,7 @@ def _run_calibration(
         raise PixelCalibrationError("Cannot calibrate while an acquisition is running")
     _check_cancel(cancel_event)
     _notify(progress, "reference", 0.0)
-    first = _snap(core, camera=camera)
+    first = _initial_snap(core, camera, options, cancel_event)
     fingerprint = capture_fingerprint(
         core,
         first,
@@ -622,13 +818,18 @@ def _run_calibration(
     if fingerprint.channel_count != 1:
         raise PixelCalibrationError("Automatic calibration requires one camera channel")
     origin = _position(core, fingerprint.xy_stage)
-    second = _snap(core, camera=fingerprint.camera)
-    reference = _validate_references(first, second, options)
+    reference = _stable_reference(core, first, fingerprint, options, cancel_event)
+    registrar = TranslationRegistrar(
+        reference,
+        upsample_factor=options.upsample_factor,
+        crop_fraction=options.crop_fraction,
+        normalization="unnormalized",
+    )
 
     _notify(progress, "probe-x", 0.05)
     probe_x = _probe_axis(
         core,
-        reference,
+        registrar,
         origin,
         fingerprint,
         0,
@@ -638,7 +839,7 @@ def _run_calibration(
     _notify(progress, "probe-y", 0.10)
     probe_y = _probe_axis(
         core,
-        reference,
+        registrar,
         origin,
         fingerprint,
         1,
@@ -658,27 +859,29 @@ def _run_calibration(
         ) from exc
 
     origin_position = _position(core, fingerprint.xy_stage)
-    origin_shift = np.asarray(
-        _registration(
-            reference,
-            _snap(core, camera=fingerprint.camera),
-            options,
-        ).shift_xy
+    origin_registration = _repeatable_registration(
+        core, registrar, fingerprint, options, cancel_event
     )
+    if not _registration_is_usable(origin_registration, options):
+        raise PixelCalibrationError(
+            "Could not reliably register the reference position"
+        )
     observations: list[CalibrationObservation] = []
     targets = _measurement_targets(coarse, fingerprint, options, validation=False)
     for index, offset in enumerate(targets):
         _notify(progress, "measure", 0.15 + 0.55 * index / len(targets))
-        observation, origin_position, origin_shift = _acquire_observation(
+        observation, origin_position, origin_registration = _acquire_observation(
             core,
-            reference,
+            registrar,
             origin,
             origin + offset,
             origin_position,
-            origin_shift,
+            origin_registration,
             fingerprint,
             options,
             cancel_event,
+            expected_shift_xy=np.linalg.solve(coarse, offset)
+            + origin_registration.shift_xy,
         )
         observations.append(observation)
         _notify_observation(observation_callback, observation, "fit")
@@ -712,16 +915,18 @@ def _run_calibration(
     )
     for index, offset in enumerate(validation_targets):
         _notify(progress, "validate", 0.72 + 0.20 * index / len(validation_targets))
-        observation, origin_position, origin_shift = _acquire_observation(
+        observation, origin_position, origin_registration = _acquire_observation(
             core,
-            reference,
+            registrar,
             origin,
             origin + offset,
             origin_position,
-            origin_shift,
+            origin_registration,
             fingerprint,
             options,
             cancel_event,
+            expected_shift_xy=np.linalg.solve(fit.matrix, offset)
+            + origin_registration.shift_xy,
         )
         validation.append(observation)
         _notify_observation(observation_callback, observation, "validation")
@@ -787,6 +992,14 @@ def run_pixel_calibration(
     """Run calibration, optionally reporting observations and the fitted affine."""
     selected_options = options or CalibrationOptions()
     stage = str(xy_stage or core.getXYStageDevice())
+    _check_cancel(cancel_event)
+    camera = str(core.getCameraDevice())
+    if not camera:
+        raise PixelCalibrationError("No camera device is selected")
+    if not stage:
+        raise PixelCalibrationError("No XY stage device is selected")
+    if _is_acquiring(core, camera):
+        raise PixelCalibrationError("Cannot calibrate while an acquisition is running")
     origin: NDArray[np.float64] | None = None
     result: PixelCalibrationResult | None = None
     failure: BaseException | None = None
