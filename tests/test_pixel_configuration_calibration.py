@@ -356,6 +356,71 @@ def test_diagnostic_spots_are_added_during_acquisition(
     assert panel._diagnostics._prediction_accuracy()[-3:] == [False, True, True]
 
 
+def test_failed_calibration_shows_estimate_without_applying_it(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    widget = page._pixel_config
+    panel = widget._calibration_panel
+    selected = widget._selected_preset()
+    assert selected is not None
+    _, preset = selected
+    original_size = preset.pixel_size_um
+    result = _result_for_selected_resolution(page)
+    validation = []
+    for observation in result.validation_observations:
+        delta = np.asarray(observation.stage_delta_um)
+        delta += result.fit.matrix @ np.asarray((3.0, 4.0))
+        validation.append(
+            replace(observation, stage_delta_um=(float(delta[0]), float(delta[1])))
+        )
+    diagnostics = replace(result, validation_observations=tuple(validation))
+
+    with qtbot.assertNotEmitted(panel.resultReady):
+        panel._on_failure("Holdout prediction residuals exceed the limit", diagnostics)
+
+    summary = panel._result_text.toolTip()
+    assert "Estimated pixel size (unvalidated): 0.41234567 µm/px" in summary
+    assert "Fit residuals: RMS 0.0000 px, worst 0.0000 px" in summary
+    assert (
+        "Independent validation (3/3 usable): RMS 5.0000 px, worst 5.0000 px" in summary
+    )
+    assert "Holdout prediction residuals exceed the limit" in summary
+    assert "Estimate not applied" in summary
+    assert "not pixel-size uncertainty" in summary
+    assert preset.pixel_size_um == original_size
+    assert panel._diagnostics._result is diagnostics
+
+    panel._on_failure("Camera snap failed", None)
+    assert panel._result_text.toolTip() == "Camera snap failed"
+    assert panel._diagnostics._result is None
+
+
+@pytest.mark.parametrize("has_validation", [False, True])
+def test_failed_calibration_does_not_score_unusable_validation(
+    mmcore: CMMCorePlus, qtbot: QtBot, has_validation: bool
+) -> None:
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    panel = page._pixel_config._calibration_panel
+    result = _result_for_selected_resolution(page)
+    validation = (
+        tuple(replace(obs, accepted=False) for obs in result.validation_observations)
+        if has_validation
+        else ()
+    )
+    diagnostics = replace(result, validation_observations=validation)
+
+    panel._on_failure("Calibration quality check failed", diagnostics)
+
+    summary = panel._result_text.toolTip()
+    assert "Estimated pixel size (unvalidated)" in summary
+    expected = "no usable measurements" if has_validation else "not completed"
+    assert f"Independent validation: {expected}" in summary
+    assert "Independent validation (" not in summary
+
+
 def test_calibration_outcome_is_preserved_per_resolution(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
@@ -368,6 +433,7 @@ def test_calibration_outcome_is_preserved_per_resolution(
 
     panel._progress.setValue(850)
     panel._on_failure("Synthetic holdout failure", diagnostics)
+    summary = panel._result_text.toolTip()
     other_target = type(first_target)("Other resolution", (), True)
     panel.setTarget(other_target)
 
@@ -377,7 +443,9 @@ def test_calibration_outcome_is_preserved_per_resolution(
     panel.setTarget(first_target)
 
     assert panel._progress.value() == 850
-    assert panel._result_text.toolTip() == "Synthetic holdout failure"
+    assert panel._result_text.toolTip() == summary
+    assert "Synthetic holdout failure" in summary
+    assert "Estimated pixel size (unvalidated)" in summary
     assert panel._diagnostics._result is diagnostics
 
 

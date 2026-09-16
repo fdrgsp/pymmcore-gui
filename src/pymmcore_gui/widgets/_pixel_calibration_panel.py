@@ -119,10 +119,12 @@ class _CalibrationDisplayState:
 
 
 def _validation_residuals_px(result: PixelCalibrationResult) -> np.ndarray:
-    """Return independent-validation prediction errors in image pixels."""
+    """Return prediction errors for usable validation measurements in pixels."""
     inverse = np.linalg.inv(result.fit.matrix)
     residuals = []
     for observation in result.validation_observations:
+        if not observation.accepted:
+            continue
         shift = np.asarray(observation.corrected_shift_xy)
         delta = np.asarray(observation.stage_delta_um)
         residuals.append(
@@ -1435,7 +1437,40 @@ class PixelCalibrationPanel(QWidget):
         attempt left there.
         """
         self._phase_label.setText("Calibration failed; hardware restoration attempted")
-        self._set_result_message(message or "Unknown error", icon="error")
+        message = message or "Unknown error"
+        if isinstance(diagnostics, PixelCalibrationResult):
+            fit = diagnostics.fit
+            lines = [
+                f"Estimated pixel size (unvalidated): {fit.pixel_size_um:.8f} µm/px",
+                f"Calibration failed: {message}",
+                f"Fit residuals: RMS {fit.rms_residual_px:.4f} px, "
+                f"worst {fit.max_residual_px:.4f} px",
+            ]
+            residuals = _validation_residuals_px(diagnostics)
+            count = len(diagnostics.validation_observations)
+            if residuals.size:
+                lines.append(
+                    f"Independent validation ({residuals.size}/{count} usable): "
+                    f"RMS {float(np.sqrt(np.mean(residuals**2))):.4f} px, "
+                    f"worst {float(np.max(residuals)):.4f} px"
+                )
+            else:
+                lines.append(
+                    "Independent validation: "
+                    + ("no usable measurements" if count else "not completed")
+                )
+            lines.extend(
+                [
+                    "",
+                    "Estimate not applied. Residuals describe position mismatch, "
+                    "not pixel-size uncertainty.",
+                ]
+            )
+            self._set_result_message(
+                "\n".join(lines), preserve_newlines=True, icon="error"
+            )
+        else:
+            self._set_result_message(message, icon="error")
         if diagnostics is not _DIAGNOSTICS_UNCHANGED:
             self._diagnostics.setResult(
                 diagnostics if isinstance(diagnostics, PixelCalibrationResult) else None
