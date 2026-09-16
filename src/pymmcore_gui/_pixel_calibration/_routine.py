@@ -1,30 +1,51 @@
+"""Automatic pixel-size calibration, ported from Micro-Manager's Java calibrator.
+
+The measurement is a port of ``AutomaticCalibrationThread.java`` plus the
+helpers it calls -- ``ImageUtils.crossCorrelate``,
+``MathFunctions.generateAffineTransformFromPointPairs``,
+``AffineUtils.affineToMeasurements`` and ``AffineUtils.deducePixelSize`` --
+under ``mmstudio/src/main/java/org/micromanager/internal/`` in the
+Micro-Manager repository (BSD licensed; Arthur Edelstein and Nico Stuurman).
+
+It reproduces the Java routine's strategy and its acceptance criteria: two
+axis probes, a three-point first estimate, four corner measurements, and a
+single 5 px RMS scatter tolerance. There is deliberately no repeat-capture
+agreement, no drift correction, no per-image confidence metric and no
+independent holdout stage; a result that passes the scatter check is returned
+for the caller to accept or discard, the way the Java dialog asks.
+
+The numerics use NumPy rather than ImageJ and BoofCV. An FFT cross-correlation
+replaces ImageJ's FHT ``conjugateMultiply`` (the same operation), and a
+separable Catmull-Rom resize replaces ``ImageProcessor.resize`` with
+``BICUBIC``, using ImageJ's centre-aligned source mapping so that a zero
+displacement maps to exactly zero.
+
+Because the Java routine fits absolute stage positions with a translation
+term and then discards that translation, the 2 x 2 linear part it keeps has
+the meaning ``AffineFitResult.matrix`` carries here: ``stage_delta_um =
+matrix @ image_shift_xy``, where the image shift is the negative of the
+apparent motion of sample features.
+"""
+
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
-from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from dataclasses import dataclass, fields, replace
+from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 
-from ._fit import fit_affine, normalize_for_mmcore
+from ._fit import _diagnostic_warnings, normalize_for_mmcore
 from ._models import (
     AffineFitResult,
     CalibrationCancelled,
     CalibrationObservation,
-    CalibrationOptions,
-    CalibrationWarning,
     HardwareFingerprint,
     PixelCalibrationError,
     PixelCalibrationResult,
-    RegistrationResult,
     StageRestoreError,
-)
-from ._registration import (
-    TranslationRegistrar,
-    _as_float_image,
-    _fourier_shift,
-    register_translation,
 )
 
 if TYPE_CHECKING:
@@ -34,8 +55,7 @@ if TYPE_CHECKING:
     from numpy.typing import ArrayLike, NDArray
 
 ProgressCallback = Callable[[str, float], None]
-ObservationKind = Literal["fit", "validation"]
-ObservationCallback = Callable[[CalibrationObservation, ObservationKind], None]
+ObservationCallback = Callable[[CalibrationObservation, str], None]
 FitCallback = Callable[[AffineFitResult], None]
 
 
@@ -92,7 +112,7 @@ def _notify(progress: ProgressCallback | None, phase: str, fraction: float) -> N
 def _notify_observation(
     callback: ObservationCallback | None,
     observation: CalibrationObservation,
-    kind: ObservationKind,
+    kind: str,
 ) -> None:
     if callback is None:
         return
@@ -256,15 +276,396 @@ def _snap(core: CalibrationCore, *, camera: str | None = None) -> NDArray[np.gen
     return np.asarray(core.getImage()).copy()
 
 
-def _initial_snap(
-    core: CalibrationCore,
-    camera: str,
-    options: CalibrationOptions,
-    cancel_event: Event | None,
+def _position(core: CalibrationCore, stage: str) -> NDArray[np.float64]:
+    position = np.asarray(core.getXYPosition(stage), dtype=np.float64)
+    if position.shape != (2,) or not np.all(np.isfinite(position)):
+        raise PixelCalibrationError("XY stage returned an invalid position")
+    return position
+
+
+def _as_float_image(image: ArrayLike) -> NDArray[np.float32]:
+    """Convert a monochrome or RGB(A) image to a finite 2D float image."""
+    array = np.asarray(image)
+    if array.ndim == 3 and array.shape[-1] in (3, 4):
+        # ITU-R BT.709 luminance. Alpha is deliberately ignored.
+        array = np.tensordot(
+            array[..., :3], np.asarray((0.2126, 0.7152, 0.0722)), axes=([-1], [0])
+        )
+    if array.ndim != 2:
+        raise ValueError("calibration images must be 2D grayscale or RGB(A)")
+    if min(array.shape) < 16:
+        raise ValueError("calibration images must be at least 16 pixels per axis")
+    result = np.asarray(array, dtype=np.float32)
+    if not np.all(np.isfinite(result)):
+        raise ValueError("calibration images must contain only finite values")
+    return result
+
+
+ALGORITHM_VERSION = "v1"
+
+
+@dataclass(frozen=True)
+class CalibrationOptions:
+    """Motion and numerical settings for the ported Java routine.
+
+    The defaults are the Java ones: a 0.1 um first probe step, 100 ms settle,
+    a 64 px correlation box upsampled tenfold, a 5 px RMS acceptance limit,
+    and the Pixel Calibrator dialog's smallest safe travel radius (1000 um).
+
+    ``safe_radius_um`` means what it does in ``CalibrationOptions``: no target
+    may sit further than this from the starting position. Java instead rejects
+    any single move longer than half its configured radius, measured from the
+    current position, which bounds step size but not total excursion. The
+    default here is Java's smallest dialog choice, which is ten times the other
+    routine's 100 um default because the corner geometry travels much further.
+    """
+
+    safe_radius_um: float = 1000.0
+    settle_time_s: float = 0.1
+    initial_step_um: float = 0.1
+    max_search_steps: int = 25
+    box_size: int = 64
+    upsample_factor: int = 10
+    max_rms_px: float = 5.0
+    stage_return_tolerance_um: float = 0.5
+
+    def __post_init__(self) -> None:
+        for option in fields(self):
+            value = getattr(self, option.name)
+            if not math.isfinite(value):
+                raise ValueError(f"{option.name} must be finite")
+        for name in ("max_search_steps", "box_size", "upsample_factor"):
+            if not isinstance(getattr(self, name), int):
+                raise ValueError(f"{name} must be an integer")
+        if self.safe_radius_um <= 0:
+            raise ValueError("safe_radius_um must be positive")
+        if self.settle_time_s < 0:
+            raise ValueError("settle_time_s cannot be negative")
+        if self.initial_step_um <= 0:
+            raise ValueError("initial_step_um must be positive")
+        if self.max_search_steps < 1:
+            raise ValueError("max_search_steps must be at least 1")
+        if self.box_size < 4 or self.box_size % 2:
+            raise ValueError("box_size must be an even number of at least 4")
+        if self.upsample_factor < 1:
+            raise ValueError("upsample_factor must be at least 1")
+        if self.max_rms_px <= 0:
+            raise ValueError("max_rms_px must be positive")
+        if self.stage_return_tolerance_um < 0:
+            raise ValueError("stage_return_tolerance_um cannot be negative")
+
+
+def _smallest_power_of_two_at_most(value: int) -> int:
+    """Return the largest power of two at most ``value``."""
+    if value < 1:
+        raise PixelCalibrationError(
+            "The camera image is too small to calibrate: each axis must be at "
+            "least 64 pixels."
+        )
+    return 1 << math.floor(math.log2(value))
+
+
+def _sub_image(
+    image: NDArray[np.floating], x: int, y: int, width: int, height: int
+) -> NDArray[np.float64]:
+    """Zero-padded crop, matching Java's ``getSubImage``.
+
+    Java builds a ``FloatProcessor(w, h)`` and inserts the source shifted by
+    ``(-x, -y)``, so a requested region reaching past the image edge is padded
+    with zeros rather than being clipped back inside the frame. The other
+    routine clips the crop position instead; this difference matters for the
+    corner measurements, which deliberately sit close to the frame edge.
+    """
+    source = np.asarray(image, dtype=np.float64)
+    out = np.zeros((height, width), dtype=np.float64)
+    source_h, source_w = source.shape
+    x0, y0 = max(x, 0), max(y, 0)
+    x1, y1 = min(x + width, source_w), min(y + height, source_h)
+    if x1 > x0 and y1 > y0:
+        out[y0 - y : y1 - y, x0 - x : x1 - x] = source[y0:y1, x0:x1]
+    return out
+
+
+def _subtract_minimum(patch: NDArray[np.floating]) -> NDArray[np.float64]:
+    """Java's ``subtractMinimum``: remove the patch's own offset."""
+    result = np.asarray(patch, dtype=np.float64)
+    return result - float(result.min())
+
+
+def cross_correlate(
+    reference: NDArray[np.floating], moving: NDArray[np.floating]
+) -> NDArray[np.float64]:
+    """Unnormalized Fourier cross-correlation with the zero lag at the centre.
+
+    Equivalent to ImageJ's ``FHT.conjugateMultiply`` followed by an inverse
+    transform and ``swapQuadrants``, which is what ``ImageUtils.crossCorrelate``
+    does.
+    """
+    first = np.asarray(reference, dtype=np.float64)
+    second = np.asarray(moving, dtype=np.float64)
+    if first.shape != second.shape:
+        raise PixelCalibrationError(
+            "Cross-correlation needs two images of identical shape"
+        )
+    spectrum = np.fft.fft2(first) * np.conj(np.fft.fft2(second))
+    return np.asarray(np.fft.fftshift(np.fft.ifft2(spectrum).real), dtype=np.float64)
+
+
+def _cubic(distance: NDArray[np.float64]) -> NDArray[np.float64]:
+    """ImageJ's ``ImageProcessor.cubic`` kernel with ``a = 0.5``."""
+    a = 0.5
+    x = np.abs(distance)
+    out = np.zeros_like(x)
+    near = x < 1
+    out[near] = x[near] ** 2 * (x[near] * (2 - a) + (a - 3)) + 1
+    far = (x >= 1) & (x < 2)
+    out[far] = -a * x[far] ** 3 + 5 * a * x[far] ** 2 - 8 * a * x[far] + 4 * a
+    return out
+
+
+def _resample_matrix(source_size: int, factor: int) -> NDArray[np.float64]:
+    """Build the 1-D Catmull-Rom resampling matrix ImageJ's resize implies.
+
+    ImageJ maps a destination index to the source as
+    ``(i - dst_size / 2) / scale + source_size / 2``, which for
+    ``dst_size == source_size * factor`` and ``scale == factor`` reduces to
+    ``i / factor``. That centre alignment is what makes the caller's
+    ``peak - dst_size / 2`` arithmetic land on zero for a zero displacement.
+    """
+    destination_size = source_size * factor
+    destination = np.arange(destination_size)
+    coordinate = destination / factor
+    base = np.floor(coordinate).astype(np.int64)
+    fraction = coordinate - base
+    offsets = np.asarray([-1, 0, 1, 2])
+    weights = _cubic(fraction[:, None] - offsets[None, :])
+    # ImageJ clamps sampling at the patch edges; duplicated clamped indices
+    # accumulate so each destination row still sums to one.
+    indices = np.clip(base[:, None] + offsets[None, :], 0, source_size - 1)
+    matrix = np.zeros((destination_size, source_size), dtype=np.float64)
+    rows = np.repeat(destination, offsets.size).astype(np.intp)
+    columns = indices.ravel().astype(np.intp)
+    np.add.at(matrix, (rows, columns), weights.ravel())
+    return matrix
+
+
+def _upsample(patch: NDArray[np.floating], factor: int) -> NDArray[np.float64]:
+    """Bicubic enlargement of a correlation patch, as Java does before argmax."""
+    values = np.asarray(patch, dtype=np.float64)
+    if factor == 1:
+        return values
+    rows = _resample_matrix(values.shape[0], factor)
+    columns = _resample_matrix(values.shape[1], factor)
+    return np.asarray(rows @ values @ columns.T, dtype=np.float64)
+
+
+def measure_displacement(
+    reference_patch: NDArray[np.floating],
+    found_patch: NDArray[np.floating],
+    *,
+    box_size: int = 64,
+    upsample_factor: int = 10,
+) -> tuple[float, float]:
+    """Java's static ``measureDisplacement``: correlate, enlarge, take the peak.
+
+    Returns the geometric ``(x, y)`` displacement in original pixels, quantized
+    to ``1 / upsample_factor``. The sign convention is Java's: the value is the
+    negative of the apparent motion of sample features, which is what the
+    fitted matrix maps to stage micrometres.
+    """
+    correlation = cross_correlate(reference_patch, found_patch)
+    height, width = correlation.shape
+    # Java always crops a fixed 64 px box, which is safe there because its
+    # patch is a power of two of at least 64 for any camera 256 px or larger
+    # (512 px on a 2048 px camera). For a smaller patch that box would extend
+    # past the correlation and be zero-padded, and because a min-subtracted
+    # correlation sits on a large positive pedestal, the bicubic kernel's
+    # negative lobes overshoot at the padding edge and can beat the real peak.
+    # Clamping keeps Java's behaviour for every realistic image and removes
+    # that artefact for small ones.
+    box = min(box_size, height, width)
+    half = box // 2
+    center = _sub_image(correlation, width // 2 - half, height // 2 - half, box, box)
+    scaled = _upsample(center, upsample_factor)
+    row, column = np.unravel_index(int(np.argmax(scaled)), scaled.shape)
+    x = (float(column) - scaled.shape[1] / 2) / upsample_factor
+    y = (float(row) - scaled.shape[0] / 2) / upsample_factor
+    return x, y
+
+
+def fit_affine_with_translation(
+    image_points: NDArray[np.floating], stage_points: NDArray[np.floating]
+) -> NDArray[np.float64]:
+    """Least-squares 2 x 3 fit of ``stage = matrix @ [px, py, 1]``.
+
+    This is ``MathFunctions.generateAffineTransformFromPointPairs`` without its
+    tolerance check; Java solves the same system by QR decomposition.
+    """
+    pixels = np.asarray(image_points, dtype=np.float64)
+    stage = np.asarray(stage_points, dtype=np.float64)
+    if pixels.shape != stage.shape or pixels.ndim != 2 or pixels.shape[1] != 2:
+        raise PixelCalibrationError("Point pairs must be two matching N x 2 arrays")
+    if len(pixels) < 3:
+        raise PixelCalibrationError("At least three point pairs are required")
+    design = np.column_stack([pixels, np.ones(len(pixels))])
+    solution, _residuals, rank, _singular = np.linalg.lstsq(design, stage, rcond=None)
+    if rank < 3:
+        raise PixelCalibrationError(
+            "Calibration point pairs are degenerate; the stage moves did not "
+            "produce independent image displacements"
+        )
+    matrix = np.asarray(solution.T, dtype=np.float64)
+    if not np.all(np.isfinite(matrix)):
+        raise PixelCalibrationError("Affine fit produced non-finite coefficients")
+    determinant = float(np.linalg.det(matrix[:, :2]))
+    if not math.isfinite(determinant) or abs(determinant) <= np.finfo(float).eps:
+        raise PixelCalibrationError("Singular matrix encountered")
+    return matrix
+
+
+def _scatter_rms_px(
+    matrix: NDArray[np.float64],
+    image_points: NDArray[np.float64],
+    stage_points: NDArray[np.float64],
+) -> tuple[float, NDArray[np.float64]]:
+    """Java's source-domain RMS: inverse-map the stage points back to pixels."""
+    linear = matrix[:, :2]
+    translation = matrix[:, 2]
+    inverse = np.linalg.inv(linear)
+    predicted = (stage_points - translation) @ inverse.T
+    residuals = predicted - image_points
+    norms = np.linalg.norm(residuals, axis=1)
+    return float(np.sqrt(np.mean(np.square(norms)))), residuals
+
+
+def affine_to_measurements(
+    matrix: NDArray[np.floating],
+) -> tuple[float, float, float, float]:
+    """Port of ``AffineUtils.affineToMeasurements``.
+
+    Returns ``(x_scale, y_scale, rotation_deg, shear)`` -- the same four numbers
+    the Java Pixel Calibrator shows in its "Calibration succeeded!" dialog.
+    """
+    linear = np.asarray(matrix, dtype=np.float64)[:2, :2]
+    m00, _m01 = float(linear[0, 0]), float(linear[0, 1])
+    m10, _m11 = float(linear[1, 0]), float(linear[1, 1])
+    if m00 == 0 and m10 == 0:
+        return 0.0, 0.0, 0.0, 0.0
+    angle = math.atan(m10 / m00) if m00 != 0 else math.copysign(math.pi / 2, m10)
+    # Java's quadrant fixups, kept verbatim so reflections report as it does.
+    if m10 > 0 and m00 >= 0:
+        angle = abs(angle)
+    elif m10 > 0 and m00 < 0:
+        angle = abs(angle - 2 * (math.pi / 2 + angle))
+    elif m10 <= 0 and m00 >= 0:
+        pass
+    else:
+        angle += 2 * (math.pi / 2 - angle)
+        angle *= -1
+    cos, sin = math.cos(angle), math.sin(angle)
+    # Inverse of Java's getRotateInstance(angle), pre-multiplied as
+    # at = R(angle)^-1 . transform
+    unrotated = np.asarray([[cos, sin], [-sin, cos]], dtype=np.float64) @ linear
+    n00, n01 = float(unrotated[0, 0]), float(unrotated[0, 1])
+    n10, n11 = float(unrotated[1, 0]), float(unrotated[1, 1])
+    x_scale = math.hypot(n00, n10) * (1.0 if n00 > 0 else -1.0)
+    y_scale = math.hypot(n01, n11) * (1.0 if n11 > 0 else -1.0)
+    if x_scale == 0 or y_scale == 0:
+        return x_scale, y_scale, math.degrees(angle), 0.0
+    unscaled = np.diag([1.0 / x_scale, 1.0 / y_scale]) @ unrotated
+    return x_scale, y_scale, math.degrees(angle), float(unscaled[0, 1])
+
+
+def deduce_pixel_size(matrix: NDArray[np.floating]) -> float:
+    """Port of ``AffineUtils.deducePixelSize``, including its 4-digit rounding."""
+    linear = np.asarray(matrix, dtype=np.float64)[:2, :2]
+    return round(float(np.sqrt(abs(np.linalg.det(linear)))), 4)
+
+
+def _describe_fit(
+    matrix: NDArray[np.float64],
+    image_shifts: NDArray[np.float64],
+    residuals_px: NDArray[np.float64],
+) -> AffineFitResult:
+    """Package the least-squares 2 x 2 and its diagnostics for the GUI.
+
+    ``residuals_px`` must be the residuals the acceptance check computed, so
+    that what the GUI reports and plots is what the run was judged on. Deriving
+    them here from origin-relative stage deltas instead would substitute the
+    origin for the fitted translation, which shifts every residual by a
+    constant and, on a noisy run, roughly doubles the apparent worst value
+    while inventing a per-corner spread that is not there.
+
+    Every corner contributes equally: the Java fit applies no weighting and
+    removes no outliers.
+    """
+    determinant = float(np.linalg.det(matrix))
+    residuals_px = np.asarray(residuals_px, dtype=np.float64)
+    residuals_um = residuals_px @ matrix.T
+    residual_norms_px = np.linalg.norm(residuals_px, axis=1)
+    pixel_size_x = float(np.linalg.norm(matrix[:, 0]))
+    pixel_size_y = float(np.linalg.norm(matrix[:, 1]))
+    singular = np.linalg.svd(matrix, compute_uv=False)
+    anisotropy = abs(pixel_size_x - pixel_size_y) / (
+        0.5 * (pixel_size_x + pixel_size_y)
+    )
+    cosine = float(np.dot(matrix[:, 0], matrix[:, 1]) / (pixel_size_x * pixel_size_y))
+    axis_angle = float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
+    nonorthogonality = abs(90.0 - axis_angle)
+    matrix_condition = float(np.linalg.cond(matrix))
+    return AffineFitResult(
+        matrix=matrix,
+        residuals_um=residuals_um,
+        residuals_px=residuals_px,
+        pixel_size_um=float(np.sqrt(abs(determinant))),
+        pixel_size_x_um=pixel_size_x,
+        pixel_size_y_um=pixel_size_y,
+        singular_values=(float(singular[0]), float(singular[1])),
+        design_condition=float(np.linalg.cond(image_shifts)),
+        matrix_condition=matrix_condition,
+        anisotropy=float(anisotropy),
+        nonorthogonality_deg=float(nonorthogonality),
+        rotation_deg=float(np.degrees(np.arctan2(matrix[1, 0], matrix[0, 0]))),
+        determinant=determinant,
+        rms_residual_px=float(np.sqrt(np.mean(np.square(residual_norms_px)))),
+        max_residual_px=float(np.max(residual_norms_px)),
+        warnings=_diagnostic_warnings(
+            float(anisotropy), float(nonorthogonality), matrix_condition
+        ),
+    )
+
+
+def _observation(
+    image_shift: NDArray[np.float64],
+    stage_position: NDArray[np.float64],
+    origin: NDArray[np.float64],
+    label: str = "",
+    residual_px: NDArray[np.float64] | None = None,
+) -> CalibrationObservation:
+    """Wrap one measurement for the diagnostics graph."""
+    delta = stage_position - origin
+    residual = (
+        None if residual_px is None else (float(residual_px[0]), float(residual_px[1]))
+    )
+    return CalibrationObservation(
+        stage_position_um=(float(stage_position[0]), float(stage_position[1])),
+        stage_delta_um=(float(delta[0]), float(delta[1])),
+        image_shift_xy=(float(image_shift[0]), float(image_shift[1])),
+        residual_px=residual,
+        label=label,
+    )
+
+
+def _first_snap(
+    core: CalibrationCore, camera: str, cancel_event: Event | None
 ) -> NDArray[np.generic]:
-    """Acquire the first frame, retrying transient camera failures."""
+    """Acquire the base frame, retrying a transient camera error twice.
+
+    Java takes a single base image; the bounded retry here only covers a
+    camera that throws, which would otherwise abort before any measurement.
+    """
     last_error: Exception | None = None
-    for _ in range(options.max_registration_attempts):
+    for _attempt in range(3):
         _check_cancel(cancel_event)
         try:
             return _snap(core, camera=camera)
@@ -277,513 +678,128 @@ def _initial_snap(
     ) from last_error
 
 
-def _position(core: CalibrationCore, stage: str) -> NDArray[np.float64]:
-    position = np.asarray(core.getXYPosition(stage), dtype=np.float64)
-    if position.shape != (2,) or not np.all(np.isfinite(position)):
-        raise PixelCalibrationError("XY stage returned an invalid position")
-    return position
+class _Tracker:
+    """Holds the reference patch and the geometry Java keeps in fields."""
 
-
-def _move(
-    core: CalibrationCore,
-    target: NDArray[np.float64],
-    *,
-    origin: NDArray[np.float64],
-    fingerprint: HardwareFingerprint,
-    options: CalibrationOptions,
-) -> NDArray[np.float64]:
-    if _is_acquiring(core, fingerprint.camera):
-        raise PixelCalibrationError("An acquisition started during calibration")
-    if not fingerprint_matches(core, fingerprint):
-        raise PixelCalibrationError("The camera or optical configuration changed")
-    distance = float(np.linalg.norm(target - origin))
-    if distance > options.safe_radius_um:
-        raise PixelCalibrationError(
-            f"Requested stage move ({distance:.3g} µm) exceeds the safe radius"
+    def __init__(
+        self,
+        core: CalibrationCore,
+        base_image: ArrayLike,
+        fingerprint: HardwareFingerprint,
+        options: CalibrationOptions,
+        cancel_event: Event | None,
+        origin: NDArray[np.float64],
+    ) -> None:
+        self._core = core
+        self._fingerprint = fingerprint
+        self._options = options
+        self._cancel_event = cancel_event
+        self._origin = np.asarray(origin, dtype=np.float64)
+        frame = _as_float_image(base_image)
+        self.height, self.width = frame.shape
+        side = min(
+            _smallest_power_of_two_at_most(self.width // 4),
+            _smallest_power_of_two_at_most(self.height // 4),
         )
-    core.setXYPosition(fingerprint.xy_stage, float(target[0]), float(target[1]))
-    core.waitForDevice(fingerprint.xy_stage)
-    if options.settle_time_s:
-        time.sleep(options.settle_time_s)
-    actual = _position(core, fingerprint.xy_stage)
-    actual_distance = float(np.linalg.norm(actual - origin))
-    if actual_distance > options.safe_radius_um:
-        raise PixelCalibrationError(
-            f"Stage readback ({actual_distance:.3g} µm) exceeds the safe radius"
-        )
-    return actual
-
-
-def _registration(
-    reference: NDArray[np.generic],
-    moving: NDArray[np.generic],
-    options: CalibrationOptions,
-) -> RegistrationResult:
-    return register_translation(
-        reference,
-        moving,
-        upsample_factor=options.upsample_factor,
-        crop_fraction=options.crop_fraction,
-        normalization="unnormalized",
-    )
-
-
-def _registration_is_usable(
-    result: RegistrationResult, options: CalibrationOptions
-) -> bool:
-    return (
-        result.psr >= options.min_psr
-        and result.peak_ratio >= options.min_peak_ratio
-        and result.overlap >= options.min_overlap
-        and 0 <= result.normalized_error <= options.max_registration_error
-        and bool(np.all(np.isfinite(result.shift_xy)))
-    )
-
-
-def _validate_references(
-    first: NDArray[np.generic],
-    second: NDArray[np.generic],
-    options: CalibrationOptions,
-) -> NDArray[np.float64]:
-    if first.shape != second.shape or first.dtype != second.dtype:
-        raise PixelCalibrationError(
-            "Camera image format changed between reference snaps"
-        )
-    if np.issubdtype(first.dtype, np.integer):
-        limits = np.iinfo(first.dtype.name)
-        saturated = max(
-            np.mean((image == limits.min) | (image == limits.max))
-            for image in (first, second)
-        )
-        if saturated > 0.10:
-            raise PixelCalibrationError("Reference image is more than 10% saturated")
-    repeat = _registration(first, second, options)
-    if (
-        not _registration_is_usable(repeat, options)
-        or np.linalg.norm(repeat.shift_xy) > 2
-    ):
-        raise PixelCalibrationError(
-            "Reference images are not stable enough to calibrate"
-        )
-    first_float = _as_float_image(first)
-    aligned_second = _fourier_shift(
-        _as_float_image(second),
-        np.asarray(repeat.shift_xy[::-1], dtype=np.float64),
-    )
-    return np.asarray(
-        (np.asarray(first_float, dtype=np.float64) + aligned_second) / 2,
-        dtype=np.float64,
-    )
-
-
-def _stable_reference(
-    core: CalibrationCore,
-    first: NDArray[np.generic],
-    fingerprint: HardwareFingerprint,
-    options: CalibrationOptions,
-    cancel_event: Event | None,
-) -> NDArray[np.float64]:
-    """Acquire a stable reference pair, tolerating one transient bad frame."""
-    frames = [first]
-    last_error: PixelCalibrationError | None = None
-    for _ in range(options.max_registration_attempts):
-        _check_cancel(cancel_event)
-        try:
-            new_frame = _snap(core, camera=fingerprint.camera)
-        except PixelCalibrationError:
-            raise
-        except Exception as exc:
-            last_error = PixelCalibrationError(f"Camera snap failed: {exc}")
-            continue
-        if new_frame.shape != first.shape or new_frame.dtype != first.dtype:
+        if side < 16:
             raise PixelCalibrationError(
-                "Camera image format changed between reference snaps"
+                "The camera image is too small to track a calibration patch: "
+                "the tracked region would be under 16 pixels across."
             )
-        for candidate in frames:
-            try:
-                return _validate_references(candidate, new_frame, options)
-            except (PixelCalibrationError, ValueError) as exc:
-                last_error = PixelCalibrationError(str(exc))
-        frames.append(new_frame)
-    raise last_error or PixelCalibrationError(
-        "Reference images are not stable enough to calibrate"
-    )
-
-
-def _combine_registrations(
-    registrations: list[RegistrationResult], options: CalibrationOptions
-) -> RegistrationResult | None:
-    """Return the closest repeatable pair, or ``None`` without consensus."""
-    best: tuple[float, int, int] | None = None
-    for first in range(len(registrations)):
-        for second in range(first + 1, len(registrations)):
-            distance = float(
-                np.linalg.norm(
-                    np.asarray(registrations[first].shift_xy)
-                    - np.asarray(registrations[second].shift_xy)
-                )
-            )
-            candidate = (distance, first, second)
-            if best is None or candidate < best:
-                best = candidate
-    if best is None or best[0] > options.registration_consistency_px:
-        return None
-    selected = (registrations[best[1]], registrations[best[2]])
-    shift = np.mean([result.shift_xy for result in selected], axis=0)
-    times = [
-        result.capture_time_s
-        for result in selected
-        if result.capture_time_s is not None
-    ]
-    return RegistrationResult(
-        shift_xy=(float(shift[0]), float(shift[1])),
-        psr=min(result.psr for result in selected),
-        peak_ratio=min(result.peak_ratio for result in selected),
-        overlap=min(result.overlap for result in selected),
-        normalized_error=max(result.normalized_error for result in selected),
-        method=selected[0].method,
-        capture_time_s=float(np.mean(times)) if len(times) == 2 else None,
-    )
-
-
-def _repeatable_registration(
-    core: CalibrationCore,
-    registrar: TranslationRegistrar,
-    fingerprint: HardwareFingerprint,
-    options: CalibrationOptions,
-    cancel_event: Event | None,
-    *,
-    expected_shift_xy: ArrayLike = (0.0, 0.0),
-) -> RegistrationResult:
-    """Measure a shift twice, using a third frame only when needed."""
-    usable: list[RegistrationResult] = []
-    fallback: RegistrationResult | None = None
-    last_error: Exception | None = None
-    for _ in range(options.max_registration_attempts):
-        _check_cancel(cancel_event)
-        try:
-            before_snap = time.monotonic()
-            frame = _snap(core, camera=fingerprint.camera)
-            capture_time = (before_snap + time.monotonic()) / 2
-            if (
-                frame.shape[:2] != fingerprint.image_shape
-                or str(frame.dtype) != fingerprint.dtype
-            ):
-                raise PixelCalibrationError(
-                    "Camera image format changed during calibration"
-                )
-            result = registrar.register(
+        self.side = side
+        self.reference = _subtract_minimum(
+            _sub_image(
                 frame,
-                expected_shift_xy=expected_shift_xy,
+                -side // 2 + self.width // 2,
+                -side // 2 + self.height // 2,
+                side,
+                side,
             )
-            result = replace(result, capture_time_s=capture_time)
-        except PixelCalibrationError:
-            raise
-        except Exception as exc:
-            last_error = exc
-            continue
-        if fallback is None or result.normalized_error < fallback.normalized_error:
-            fallback = result
-        if _registration_is_usable(result, options):
-            usable.append(result)
-            if (combined := _combine_registrations(usable, options)) is not None:
-                return combined
-    if fallback is None or last_error is not None:
-        raise PixelCalibrationError(
-            "Could not acquire and register images after repeated attempts"
-            + (f": {last_error}" if last_error is not None else "")
-        ) from last_error
-    # Preserve diagnostics while ensuring the caller rejects a non-repeatable
-    # displacement just as it rejects any other low-confidence registration.
-    return replace(fallback, normalized_error=float("inf"))
-
-
-def _probe_axis(
-    core: CalibrationCore,
-    registrar: TranslationRegistrar,
-    origin: NDArray[np.float64],
-    fingerprint: HardwareFingerprint,
-    axis: int,
-    options: CalibrationOptions,
-    cancel_event: Event | None,
-) -> CalibrationObservation:
-    image_limit = np.asarray(fingerprint.image_shape[::-1], dtype=np.float64)
-    minimum = max(options.min_shift_px, options.min_shift_fraction * min(image_limit))
-    distance = options.initial_probe_um
-    expected_shift = np.zeros(2, dtype=np.float64)
-
-    for _ in range(options.max_probe_steps):
-        _check_cancel(cancel_event)
-        if distance > options.safe_radius_um:
-            break
-        offset = np.zeros(2, dtype=np.float64)
-        offset[axis] = distance
-        actual = _move(
-            core,
-            origin + offset,
-            origin=origin,
-            fingerprint=fingerprint,
-            options=options,
         )
-        registration = _repeatable_registration(
-            core,
-            registrar,
-            fingerprint,
-            options,
-            cancel_event,
-            expected_shift_xy=expected_shift,
-        )
-        _move(
-            core,
-            origin,
-            origin=origin,
-            fingerprint=fingerprint,
-            options=options,
-        )
-        shift = np.asarray(registration.shift_xy)
-        fraction = float(np.max(np.abs(shift) / image_limit))
-        if (
-            np.linalg.norm(shift) >= minimum
-            and fraction <= options.max_shift_fraction
-            and _registration_is_usable(registration, options)
-        ):
-            return CalibrationObservation(
-                stage_position_um=(float(actual[0]), float(actual[1])),
-                stage_delta_um=(
-                    float(actual[0] - origin[0]),
-                    float(actual[1] - origin[1]),
-                ),
-                registration=registration,
-                corrected_shift_xy=registration.shift_xy,
-            )
-        if fraction > options.max_shift_fraction:
+
+    def snap_at(self, target: NDArray[np.float64]) -> NDArray[np.float32]:
+        """Java's ``snapImageAt``: safety check, move, settle, snap."""
+        _check_cancel(self._cancel_event)
+        if _is_acquiring(self._core, self._fingerprint.camera):
+            raise PixelCalibrationError("An acquisition started during calibration")
+        # Java instead rejects a single move longer than half the configured
+        # radius, measured from the current position, which never bounds how
+        # far the stage gets from where it started. Bounding the excursion from
+        # the origin is what actually protects the objective and specimen, and
+        # it is what the GUI's "Safe radius" control promises.
+        excursion = float(np.linalg.norm(target - self._origin))
+        if excursion > self._options.safe_radius_um:
             raise PixelCalibrationError(
-                "Adaptive probe moved the image outside its safe overlap"
+                f"XY stage safety limit reached: the next calibration target is "
+                f"{excursion:.3g} µm from the starting position, beyond the "
+                f"{self._options.safe_radius_um:.3g} µm safe radius. Increase the "
+                f"safe radius to calibrate at this magnification."
             )
-        if not _registration_is_usable(registration, options):
-            raise PixelCalibrationError(
-                f"Could not reliably register the stage axis {'XY'[axis]} probe"
+        self._core.setXYPosition(
+            self._fingerprint.xy_stage, float(target[0]), float(target[1])
+        )
+        self._core.waitForDevice(self._fingerprint.xy_stage)
+        if self._options.settle_time_s:
+            time.sleep(self._options.settle_time_s)
+        return _as_float_image(_snap(self._core, camera=self._fingerprint.camera))
+
+    def measure(
+        self, target: NDArray[np.float64], expected_shift: NDArray[np.float64]
+    ) -> NDArray[np.float64]:
+        """Java's instance ``measureDisplacement``: track the patch, correlate."""
+        frame = self.snap_at(target)
+        if frame.shape != (self.height, self.width):
+            raise PixelCalibrationError("The camera image size changed mid-calibration")
+        found = _subtract_minimum(
+            _sub_image(
+                frame,
+                int((self.width - self.side) // 2 - float(expected_shift[0])),
+                int((self.height - self.side) // 2 - float(expected_shift[1])),
+                self.side,
+                self.side,
             )
-        expected_shift = 2 * shift
-        distance *= 2
-    axis_name = "XY"[axis]
-    raise PixelCalibrationError(
-        f"Could not measure image motion from stage axis {axis_name} within the "
-        "safe radius"
-    )
-
-
-def _acquire_observation(
-    core: CalibrationCore,
-    registrar: TranslationRegistrar,
-    origin: NDArray[np.float64],
-    target: NDArray[np.float64],
-    origin_before_position: NDArray[np.float64],
-    origin_before_registration: RegistrationResult,
-    fingerprint: HardwareFingerprint,
-    options: CalibrationOptions,
-    cancel_event: Event | None,
-    *,
-    expected_shift_xy: ArrayLike,
-) -> tuple[CalibrationObservation, NDArray[np.float64], RegistrationResult]:
-    _check_cancel(cancel_event)
-    actual = _move(
-        core,
-        target,
-        origin=origin,
-        fingerprint=fingerprint,
-        options=options,
-    )
-    target_registration = _repeatable_registration(
-        core,
-        registrar,
-        fingerprint,
-        options,
-        cancel_event,
-        expected_shift_xy=expected_shift_xy,
-    )
-    actual_origin = _move(
-        core,
-        origin,
-        origin=origin,
-        fingerprint=fingerprint,
-        options=options,
-    )
-    origin_registration = _repeatable_registration(
-        core,
-        registrar,
-        fingerprint,
-        options,
-        cancel_event,
-        expected_shift_xy=origin_before_registration.shift_xy,
-    )
-    if not _registration_is_usable(origin_registration, options):
-        raise PixelCalibrationError(
-            "Could not reliably register the return to the reference position"
         )
-    origin_after_shift = np.asarray(origin_registration.shift_xy)
-    before_time = origin_before_registration.capture_time_s
-    after_time = origin_registration.capture_time_s
-    target_time = target_registration.capture_time_s
-    fraction = 0.5
-    if (
-        before_time is not None
-        and after_time is not None
-        and target_time is not None
-        and after_time > before_time
-    ):
-        fraction = float(
-            np.clip((target_time - before_time) / (after_time - before_time), 0, 1)
+        change = measure_displacement(
+            self.reference,
+            found,
+            box_size=self._options.box_size,
+            upsample_factor=self._options.upsample_factor,
         )
-    # Retries and different exposure/processing times make the target capture
-    # asymmetric between origin captures. Interpolate drift at its actual time.
-    drift = (1 - fraction) * np.asarray(
-        origin_before_registration.shift_xy
-    ) + fraction * origin_after_shift
-    corrected = np.asarray(target_registration.shift_xy) - drift
-    local_origin = (1 - fraction) * origin_before_position + fraction * actual_origin
-    delta = actual - local_origin
-    usable = _registration_is_usable(target_registration, options)
-    observation = CalibrationObservation(
-        stage_position_um=(float(actual[0]), float(actual[1])),
-        stage_delta_um=(float(delta[0]), float(delta[1])),
-        registration=target_registration,
-        corrected_shift_xy=(float(corrected[0]), float(corrected[1])),
-        accepted=usable,
-        rejection_reason="" if usable else "registration confidence below threshold",
-    )
-    return observation, actual_origin, origin_registration
-
-
-def _measurement_targets(
-    matrix: NDArray[np.float64],
-    fingerprint: HardwareFingerprint,
-    options: CalibrationOptions,
-    *,
-    validation: bool,
-) -> list[NDArray[np.float64]]:
-    width = fingerprint.image_shape[1] * options.crop_fraction
-    height = fingerprint.image_shape[0] * options.crop_fraction
-    if validation:
-        fraction = options.target_shift_fraction * 0.65
-        pixel_targets = [
-            (0.87 * width * fraction, 0.50 * height * fraction),
-            (-0.87 * width * fraction, 0.50 * height * fraction),
-            (0.0, -height * fraction),
-        ]
-    else:
-        x = width * options.target_shift_fraction
-        y = height * options.target_shift_fraction
-        pixel_targets = [(x, 0), (-x, 0), (0, y), (0, -y)]
-        pixel_targets += [(x, y), (-x, -y), (-x, y), (x, -y)]
-    offsets = [matrix @ np.asarray(point) for point in pixel_targets]
-    maximum = max(float(np.linalg.norm(offset)) for offset in offsets)
-    if maximum > options.safe_radius_um:
-        scale = 0.9 * options.safe_radius_um / maximum
-        offsets = [offset * scale for offset in offsets]
-    return offsets
-
-
-def _confidence_weights(
-    observations: list[CalibrationObservation],
-) -> NDArray[np.float64]:
-    psr = np.asarray([obs.registration.psr for obs in observations])
-    return np.clip(psr / max(float(np.median(psr)), np.finfo(float).eps), 0.25, 2.0)
-
-
-def _diagnostics_snapshot(
-    fit: AffineFitResult,
-    fingerprint: HardwareFingerprint,
-    observations: Sequence[CalibrationObservation],
-    validation: Sequence[CalibrationObservation],
-) -> PixelCalibrationResult:
-    """Package a failed run's fit-so-far for the diagnostics graph only.
-
-    Attached to a validation failure's exception (see the ``except`` blocks
-    around ``_validate_fit``/``_validate_holdouts`` in ``_run_calibration``)
-    so the panel can still plot measured-vs-predicted arrows for a run that
-    didn't pass -- otherwise a failed calibration has nothing to show even
-    though the fit and observations that failed validation still exist.
-    Never returned as an actual result: it is not applied to core, not
-    persisted, and its "stage_returned" is unknown at this point.
-    """
-    raw_matrix, raw_size, _ = normalize_for_mmcore(
-        fit.matrix, binning=fingerprint.binning, magnification=fingerprint.magnification
-    )
-    return PixelCalibrationResult(
-        fit=fit,
-        raw_matrix=raw_matrix,
-        raw_pixel_size_um=raw_size,
-        fingerprint=fingerprint,
-        observations=tuple(observations),
-        validation_observations=tuple(validation),
-        stage_returned=False,
-    )
-
-
-def _validate_fit(
-    fit: Any, observations: list[CalibrationObservation], options: CalibrationOptions
-) -> None:
-    median_shift = float(
-        np.median([np.linalg.norm(obs.corrected_shift_xy) for obs in observations])
-    )
-    rms_limit = max(options.max_fit_rms_px, options.max_fit_fraction * median_shift)
-    max_limit = max(
-        options.max_point_residual_px,
-        options.max_point_residual_fraction * median_shift,
-    )
-    if fit.rms_residual_px > rms_limit or fit.max_residual_px > max_limit:
-        raise PixelCalibrationError(
-            "Affine fit residuals exceed the calibration quality threshold: "
-            f"RMS {fit.rms_residual_px:.3f} px (limit {rms_limit:.3f}), "
-            f"worst {fit.max_residual_px:.3f} px (limit {max_limit:.3f})"
-        )
-    if fit.anisotropy > 0.10:
-        raise PixelCalibrationError("Affine fit has more than 10% pixel anisotropy")
-    if fit.nonorthogonality_deg > 5:
-        raise PixelCalibrationError(
-            "Affine fit camera axes are more than 5° from orthogonal"
+        return np.asarray(
+            [expected_shift[0] + change[0], expected_shift[1] + change[1]],
+            dtype=np.float64,
         )
 
-
-def _validate_holdouts(
-    matrix: NDArray[np.float64],
-    observations: list[CalibrationObservation],
-    options: CalibrationOptions,
-) -> CalibrationWarning | None:
-    if len(observations) < 3 or not all(obs.accepted for obs in observations):
-        raise PixelCalibrationError("One or more holdout registrations failed")
-    inverse = np.linalg.inv(matrix)
-    residuals: list[float] = []
-    shifts: list[float] = []
-    for observation in observations:
-        shift = np.asarray(observation.corrected_shift_xy)
-        delta = np.asarray(observation.stage_delta_um)
-        residuals.append(float(np.linalg.norm(inverse @ (delta - matrix @ shift))))
-        shifts.append(float(np.linalg.norm(shift)))
-    median_shift = float(np.median(shifts))
-    rms_limit = max(options.max_fit_rms_px, options.max_fit_fraction * median_shift)
-    max_limit = max(
-        options.max_point_residual_px,
-        options.max_point_residual_fraction * median_shift,
-    )
-    rms = float(np.sqrt(np.mean(np.square(residuals))))
-    worst = max(residuals)
-    if worst > max_limit:
-        raise PixelCalibrationError(
-            "Holdout prediction residuals exceed the quality threshold: "
-            f"RMS {rms:.3f} px (limit {rms_limit:.3f}), "
-            f"worst {worst:.3f} px (limit {max_limit:.3f})"
-        )
-    if rms > rms_limit:
-        return CalibrationWarning(
-            "holdout_rms_above_preferred",
-            "Independent validation RMS "
-            f"{rms:.3f} px exceeds the preferred {rms_limit:.3f} px; "
-            f"the worst prediction ({worst:.3f} px) remains within the hard "
-            f"{max_limit:.3f} px limit.",
-        )
-    return None
+    def run_search(
+        self,
+        origin: NDArray[np.float64],
+        step_x: float,
+        step_y: float,
+        progress: ProgressCallback | None,
+        progress_span: tuple[float, float],
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Java's ``runSearch``: double the move until the patch nears the edge."""
+        dx, dy = step_x, step_y
+        shift = np.zeros(2, dtype=np.float64)
+        start, end = progress_span
+        for step in range(self._options.max_search_steps):
+            if (
+                (2.0 * shift[0] + self.side / 2.0) >= self.width / 2.0
+                or (2.0 * shift[1] + self.side / 2.0) >= self.height / 2.0
+                or (2.0 * shift[0] - self.side / 2.0) < -(self.width / 2.0)
+                or (2.0 * shift[1] - self.side / 2.0) < -(self.height / 2.0)
+            ):
+                break
+            dx *= 2
+            dy *= 2
+            shift = shift * 2
+            shift = self.measure(origin + np.asarray([dx, dy]), shift)
+            _notify(
+                progress,
+                "probe",
+                start + (end - start) * (step + 1) / self._options.max_search_steps,
+            )
+        return shift, _position(self._core, self._fingerprint.xy_stage)
 
 
 def _run_calibration(
@@ -798,18 +814,19 @@ def _run_calibration(
     fit_callback: FitCallback | None,
     config_settings: Sequence[tuple[str, str, str]] | None,
     require_resolution_match: bool,
-) -> tuple[PixelCalibrationResult, NDArray[np.float64], HardwareFingerprint]:
+) -> tuple[PixelCalibrationResult, NDArray[np.float64]]:
     camera = str(core.getCameraDevice())
     if not camera:
         raise PixelCalibrationError("No camera device is selected")
     if _is_acquiring(core, camera):
         raise PixelCalibrationError("Cannot calibrate while an acquisition is running")
     _check_cancel(cancel_event)
+
     _notify(progress, "reference", 0.0)
-    first = _initial_snap(core, camera, options, cancel_event)
+    first_frame = _first_snap(core, camera, cancel_event)
     fingerprint = capture_fingerprint(
         core,
-        first,
+        first_frame,
         resolution_id=resolution_id,
         xy_stage=xy_stage,
         config_settings=config_settings,
@@ -817,163 +834,110 @@ def _run_calibration(
     )
     if fingerprint.channel_count != 1:
         raise PixelCalibrationError("Automatic calibration requires one camera channel")
+
     origin = _position(core, fingerprint.xy_stage)
-    reference = _stable_reference(core, first, fingerprint, options, cancel_event)
-    registrar = TranslationRegistrar(
-        reference,
-        upsample_factor=options.upsample_factor,
-        crop_fraction=options.crop_fraction,
-        normalization="unnormalized",
+    tracker = _Tracker(
+        core, first_frame, fingerprint, options, cancel_event, origin=origin
     )
+
+    # --- first approximation: origin plus one probe per stage axis ----------
+    image_points: list[NDArray[np.float64]] = [np.zeros(2, dtype=np.float64)]
+    stage_points: list[NDArray[np.float64]] = [origin.copy()]
 
     _notify(progress, "probe-x", 0.05)
-    probe_x = _probe_axis(
-        core,
-        registrar,
-        origin,
-        fingerprint,
-        0,
-        options,
-        cancel_event,
+    shift, position = tracker.run_search(
+        origin, options.initial_step_um, 0.0, progress, (0.05, 0.35)
     )
-    _notify(progress, "probe-y", 0.10)
-    probe_y = _probe_axis(
-        core,
-        registrar,
-        origin,
-        fingerprint,
-        1,
-        options,
-        cancel_event,
+    image_points.append(shift)
+    stage_points.append(position)
+    _notify_observation(
+        observation_callback, _observation(shift, position, origin), "probe"
     )
-    try:
-        coarse = fit_affine(
-            np.asarray([probe_x.corrected_shift_xy, probe_y.corrected_shift_xy]),
-            np.asarray([probe_x.stage_delta_um, probe_y.stage_delta_um]),
-            minimum_points=2,
-        ).matrix
-    except ValueError as exc:
-        raise PixelCalibrationError(
-            f"Could not build an initial estimate from the X/Y probe "
-            f"measurements: {exc}"
-        ) from exc
 
-    origin_position = _position(core, fingerprint.xy_stage)
-    origin_registration = _repeatable_registration(
-        core, registrar, fingerprint, options, cancel_event
+    _notify(progress, "probe-y", 0.35)
+    shift, position = tracker.run_search(
+        origin, 0.0, options.initial_step_um, progress, (0.35, 0.65)
     )
-    if not _registration_is_usable(origin_registration, options):
+    image_points.append(shift)
+    stage_points.append(position)
+    _notify_observation(
+        observation_callback, _observation(shift, position, origin), "probe"
+    )
+
+    first_approx = fit_affine_with_translation(
+        np.asarray(image_points), np.asarray(stage_points)
+    )
+
+    # --- second approximation: four corners, well inside the frame ---------
+    ax = tracker.width // 2 - tracker.side
+    ay = tracker.height // 2 - tracker.side
+    if ax <= 0 or ay <= 0:
         raise PixelCalibrationError(
-            "Could not reliably register the reference position"
+            "The camera image is too small to place the corner measurements "
+            "outside the tracked region."
         )
-    observations: list[CalibrationObservation] = []
-    targets = _measurement_targets(coarse, fingerprint, options, validation=False)
-    for index, offset in enumerate(targets):
-        _notify(progress, "measure", 0.15 + 0.55 * index / len(targets))
-        observation, origin_position, origin_registration = _acquire_observation(
-            core,
-            registrar,
-            origin,
-            origin + offset,
-            origin_position,
-            origin_registration,
-            fingerprint,
-            options,
-            cancel_event,
-            expected_shift_xy=np.linalg.solve(coarse, offset)
-            + origin_registration.shift_xy,
+    corners = [(-ax, -ay), (-ax, ay), (ax, ay), (ax, -ay)]
+
+    corner_shifts: list[NDArray[np.float64]] = []
+    corner_positions: list[NDArray[np.float64]] = []
+    for index, corner in enumerate(corners):
+        _notify(progress, "measure", 0.65 + 0.3 * index / len(corners))
+        expected = np.asarray(corner, dtype=np.float64)
+        predicted_stage = first_approx @ np.asarray([expected[0], expected[1], 1.0])
+        measured = tracker.measure(predicted_stage, expected)
+        actual = _position(core, fingerprint.xy_stage)
+        corner_shifts.append(measured)
+        corner_positions.append(actual)
+        _notify_observation(
+            observation_callback,
+            _observation(measured, actual, origin, str(index + 1)),
+            "corner",
         )
-        observations.append(observation)
-        _notify_observation(observation_callback, observation, "fit")
-    accepted = [obs for obs in observations if obs.accepted]
-    if len(accepted) < 6:
-        raise PixelCalibrationError(
-            "Fewer than six calibration observations were usable"
-        )
-    try:
-        fit = fit_affine(
-            np.asarray([obs.corrected_shift_xy for obs in accepted]),
-            np.asarray([obs.stage_delta_um for obs in accepted]),
-            confidence_weights=_confidence_weights(accepted),
-            minimum_points=6,
-        )
-    except ValueError as exc:
-        raise PixelCalibrationError(f"Affine fit failed: {exc}") from exc
-    # From this point onward the UI can compare every acquired position with
-    # the fitted prediction. Validation observations will arrive one-by-one
-    # after this callback and can therefore be classified immediately.
+
+    corner_image = np.asarray(corner_shifts)
+    corner_stage = np.asarray(corner_positions)
+    second_approx = fit_affine_with_translation(corner_image, corner_stage)
+    rms_px, residuals_px = _scatter_rms_px(second_approx, corner_image, corner_stage)
+
+    # Java zeroes the translation before handing the transform on; what is left
+    # maps image displacement to stage displacement.
+    matrix = np.asarray(second_approx[:, :2], dtype=np.float64)
+    fit = _describe_fit(matrix, corner_image, residuals_px)
     _notify_fit(fit_callback, fit)
-    try:
-        _validate_fit(fit, accepted, options)
-    except PixelCalibrationError as exc:
-        exc.diagnostics = _diagnostics_snapshot(fit, fingerprint, observations, ())
-        raise
 
-    validation: list[CalibrationObservation] = []
-    validation_targets = _measurement_targets(
-        fit.matrix, fingerprint, options, validation=True
+    _notify(progress, "finalize", 0.95)
+    raw_matrix, raw_size, _flat = normalize_for_mmcore(
+        matrix, binning=fingerprint.binning, magnification=fingerprint.magnification
     )
-    for index, offset in enumerate(validation_targets):
-        _notify(progress, "validate", 0.72 + 0.20 * index / len(validation_targets))
-        observation, origin_position, origin_registration = _acquire_observation(
-            core,
-            registrar,
-            origin,
-            origin + offset,
-            origin_position,
-            origin_registration,
-            fingerprint,
-            options,
-            cancel_event,
-            expected_shift_xy=np.linalg.solve(fit.matrix, offset)
-            + origin_registration.shift_xy,
+    observations = tuple(
+        _observation(shift, position, origin, str(index + 1), residual)
+        for index, (shift, position, residual) in enumerate(
+            zip(corner_shifts, corner_positions, residuals_px, strict=True)
         )
-        validation.append(observation)
-        _notify_observation(observation_callback, observation, "validation")
-    try:
-        validation_warning = _validate_holdouts(fit.matrix, validation, options)
-    except PixelCalibrationError as exc:
-        exc.diagnostics = _diagnostics_snapshot(
-            fit, fingerprint, observations, validation
-        )
-        raise
-
-    if not fingerprint_matches(core, fingerprint):
-        raise PixelCalibrationError(
-            "The optical configuration changed during calibration"
-        )
-    raw_matrix, raw_size, _ = normalize_for_mmcore(
-        fit.matrix,
-        binning=fingerprint.binning,
-        magnification=fingerprint.magnification,
     )
-    warnings: list[CalibrationWarning] = list(fit.warnings)
-    if validation_warning is not None:
-        warnings.append(validation_warning)
-    try:
-        existing = float(core.getPixelSizeUm())
-    except Exception:
-        existing = 0.0
-    if existing > 0 and abs(fit.pixel_size_um - existing) / existing > 0.05:
-        warnings.append(
-            CalibrationWarning(
-                "existing_scale_difference",
-                "Measured pixel size differs from the current calibration by more "
-                "than 5%.",
-            )
-        )
     result = PixelCalibrationResult(
         fit=fit,
         raw_matrix=raw_matrix,
         raw_pixel_size_um=raw_size,
         fingerprint=fingerprint,
-        observations=tuple(observations),
-        validation_observations=tuple(validation),
+        observations=observations,
         stage_returned=False,
-        warnings=tuple(warnings),
+        algorithm_version=ALGORITHM_VERSION,
+        warnings=fit.warnings,
+        max_rms_px=options.max_rms_px,
     )
-    _notify(progress, "restore", 0.95)
-    return result, origin, fingerprint
+
+    # The scatter check runs last so a rejected run still carries its fit: the
+    # pixel size it measured is worth showing even though it is not worth
+    # applying, and the corner residuals are what explain the rejection.
+    if rms_px > options.max_rms_px:
+        raise PixelCalibrationError(
+            f"Point mapping scatter exceeds tolerance: RMS {rms_px:.3f} px "
+            f"(limit {options.max_rms_px:.3f} px). Improve contrast and focus, "
+            f"and make sure the specimen cannot move on the stage.",
+            diagnostics=result,
+        )
+    return result, origin
 
 
 def run_pixel_calibration(
@@ -989,8 +953,21 @@ def run_pixel_calibration(
     config_settings: Sequence[tuple[str, str, str]] | None = None,
     require_resolution_match: bool = True,
 ) -> PixelCalibrationResult:
-    """Run calibration, optionally reporting observations and the fitted affine."""
-    selected_options = options or CalibrationOptions()
+    """Measure the image-to-stage affine using the ported Java routine.
+
+    Unlike ``run_pixel_calibration``, a result that passes the 5 px RMS scatter
+    tolerance is returned without further validation: there is no holdout
+    stage, no anisotropy or orthogonality limit, and no pixel-size comparison
+    against the stored calibration. The caller decides whether to keep it, the
+    way the Java dialog asks the user.
+
+    The stage is always commanded back to its starting position afterwards. A
+    return that lands outside ``stage_return_tolerance_um`` is reported as
+    ``stage_returned=False`` rather than raising, because the Java routine does
+    not verify the return and an open-loop stage can easily miss by more than
+    the tolerance without the measurement being wrong.
+    """
+    selected = options or CalibrationOptions()
     stage = str(xy_stage or core.getXYStageDevice())
     _check_cancel(cancel_event)
     camera = str(core.getCameraDevice())
@@ -1000,15 +977,15 @@ def run_pixel_calibration(
         raise PixelCalibrationError("No XY stage device is selected")
     if _is_acquiring(core, camera):
         raise PixelCalibrationError("Cannot calibrate while an acquisition is running")
+
     origin: NDArray[np.float64] | None = None
     result: PixelCalibrationResult | None = None
     failure: BaseException | None = None
     try:
-        if stage:
-            origin = _position(core, stage)
-        result, measured_origin, _ = _run_calibration(
+        origin = _position(core, stage)
+        result, origin = _run_calibration(
             core,
-            selected_options,
+            selected,
             resolution_id=resolution_id,
             xy_stage=stage,
             cancel_event=cancel_event,
@@ -1018,25 +995,21 @@ def run_pixel_calibration(
             config_settings=config_settings,
             require_resolution_match=require_resolution_match,
         )
-        origin = measured_origin
     except BaseException as error:
         failure = error
 
+    returned = False
     restore_error: BaseException | None = None
-    if stage and origin is not None:
+    if origin is not None:
         try:
             core.setXYPosition(stage, float(origin[0]), float(origin[1]))
             core.waitForDevice(stage)
-            if selected_options.settle_time_s:
-                time.sleep(selected_options.settle_time_s)
-            returned = _position(core, stage)
-            if (
-                np.linalg.norm(returned - origin)
-                > selected_options.stage_return_tolerance_um
-            ):
-                raise PixelCalibrationError(
-                    "XY stage did not return within the configured tolerance"
-                )
+            if selected.settle_time_s:
+                time.sleep(selected.settle_time_s)
+            actual = _position(core, stage)
+            returned = bool(
+                np.linalg.norm(actual - origin) <= selected.stage_return_tolerance_um
+            )
         except BaseException as error:
             restore_error = error
 
@@ -1047,4 +1020,4 @@ def run_pixel_calibration(
     if result is None:
         raise PixelCalibrationError("Calibration produced no result")
     _notify(progress, "complete", 1.0)
-    return replace(result, stage_returned=True)
+    return replace(result, stage_returned=returned)

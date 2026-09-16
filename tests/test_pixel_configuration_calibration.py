@@ -16,10 +16,9 @@ from pymmcore_gui._pixel_calibration import (
     CaptureStateTransaction,
     HardwareFingerprint,
     PixelCalibrationResult,
-    RegistrationResult,
-    fit_affine,
 )
 from pymmcore_gui._pixel_calibration._models import CalibrationObservation
+from pymmcore_gui._pixel_calibration._routine import _describe_fit
 from pymmcore_gui._qt.QtCore import Qt
 from pymmcore_gui._qt.QtWidgets import (
     QDoubleSpinBox,
@@ -48,25 +47,15 @@ def _result_for_selected_resolution(
     )
     shifts = np.asarray(((-60, 0), (60, 0), (0, -55), (0, 55)), dtype=float)
     deltas = shifts @ matrix.T
-    fit = fit_affine(shifts, deltas)
-    registration = RegistrationResult(
-        shift_xy=(0, 0),
-        psr=20,
-        peak_ratio=2,
-        overlap=0.9,
-        normalized_error=0,
-    )
+    fit = _describe_fit(matrix, shifts, np.zeros_like(shifts))
 
     def _observation(shift: np.ndarray, delta: np.ndarray) -> CalibrationObservation:
         return CalibrationObservation(
             stage_position_um=(float(delta[0]), float(delta[1])),
             stage_delta_um=(float(delta[0]), float(delta[1])),
-            registration=registration,
-            corrected_shift_xy=(float(shift[0]), float(shift[1])),
+            image_shift_xy=(float(shift[0]), float(shift[1])),
         )
 
-    validation_shifts = np.asarray(((25, 20), (-25, 20), (0, -30)), dtype=float)
-    validation_deltas = validation_shifts @ matrix.T
     core = page._core
     fingerprint = HardwareFingerprint(
         camera=str(core.getCameraDevice()),
@@ -88,10 +77,6 @@ def _result_for_selected_resolution(
         observations=tuple(
             _observation(shift, delta)
             for shift, delta in zip(shifts, deltas, strict=True)
-        ),
-        validation_observations=tuple(
-            _observation(shift, delta)
-            for shift, delta in zip(validation_shifts, validation_deltas, strict=True)
         ),
         stage_returned=True,
     )
@@ -297,23 +282,23 @@ def test_error_and_success_summary_use_same_information_area(
 
     panel._on_failure("Stage did not settle")
     assert panel._result_text is result_field
-    # Text includes an inline icon (see _render_result_text); the tooltip is
-    # always the clean, un-annotated message.
+    # Text includes an inline icon (see _render_result_text); the stored
+    # plain message is always the clean, un-annotated one.
     assert "Stage did not settle" in result_field.text()
-    assert result_field.toolTip() == "Stage did not settle"
+    assert panel._result_plain_message == "Stage did not settle"
 
     panel._on_result(_result_for_selected_resolution(page))
     assert panel._result_text is result_field
-    assert "Independent validation passed" in result_field.text()
+    assert "Corner scatter" in result_field.text()
     assert panel._info_splitter.widget(0) is panel._result_widget
     assert panel._info_splitter.widget(1) is panel._diagnostics
     panel._diagnostics.resize(500, 240)
     assert not panel._diagnostics.grab().isNull()
-    assert "green predictions" in panel._diagnostics.toolTip()
-    assert "magenta predictions" in panel._diagnostics.toolTip()
+    assert "one corner's residual" in panel._diagnostics.toolTip()
+    assert "(dx, dy)" in panel._diagnostics.toolTip()
 
 
-def test_diagnostic_spots_are_added_during_acquisition(
+def test_corner_residual_diagnostics_are_shown_after_fitting(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
     page = ConfigurationsPage(mmcore)
@@ -327,33 +312,41 @@ def test_diagnostic_spots_are_added_during_acquisition(
     assert panel._diagnostics._observations == [(result.observations[0], "fit")]
     panel._diagnostics.resize(500, 240)
     assert not panel._diagnostics.grab().isNull()
+    assert panel._diagnostics._residual_rows() == []
 
     panel._on_fit(result.fit)
     assert panel._diagnostics._fit is result.fit
-    assert panel._diagnostics._prediction_accuracy() == [True]
-    panel._on_observation(result.validation_observations[0], "validation")
-    assert panel._diagnostics._prediction_accuracy() == [True, True]
+    rows = panel._diagnostics._residual_rows()
+    assert [label for label, _vector in rows] == [
+        "Corner 1",
+        "Corner 2",
+        "Corner 3",
+        "Corner 4",
+    ]
+    assert all(np.linalg.norm(vector) == 0 for _label, vector in rows)
+    panel._on_observation(result.observations[1], "fit")
 
     panel._on_result(result)
-    assert len(panel._diagnostics._observations) == (
-        len(result.observations) + len(result.validation_observations)
-    )
-    assert all(panel._diagnostics._prediction_accuracy())
+    assert len(panel._diagnostics._observations) == len(result.observations)
+    assert len(panel._diagnostics._residual_rows()) == 4
 
-    validation = list(result.validation_observations)
-    prediction_error_um = result.fit.matrix @ np.asarray((2.0, 0.0))
-    original_delta = np.asarray(validation[0].stage_delta_um)
-    validation[0] = replace(
-        validation[0],
-        stage_delta_um=(
-            float(original_delta[0] + prediction_error_um[0]),
-            float(original_delta[1] + prediction_error_um[1]),
-        ),
+    residuals = np.asarray(((6.0, 0.0), (-2.0, 0.0), (-2.0, 0.0), (-2.0, 0.0)))
+    shifts = np.asarray([obs.image_shift_xy for obs in result.observations])
+    observations = tuple(
+        replace(obs, residual_px=(float(residual[0]), float(residual[1])))
+        for obs, residual in zip(result.observations, residuals, strict=True)
     )
-    panel._diagnostics.setResult(
-        replace(result, validation_observations=tuple(validation))
+    diagnostics = replace(
+        result,
+        fit=_describe_fit(result.fit.matrix, shifts, residuals),
+        observations=observations,
     )
-    assert panel._diagnostics._prediction_accuracy()[-3:] == [False, True, True]
+    panel._diagnostics.setResult(diagnostics)
+    norms = [
+        float(np.linalg.norm(vector))
+        for _label, vector in panel._diagnostics._residual_rows()
+    ]
+    assert norms == pytest.approx([6.0, 2.0, 2.0, 2.0])
 
 
 def test_failed_calibration_shows_estimate_without_applying_it(
@@ -368,57 +361,72 @@ def test_failed_calibration_shows_estimate_without_applying_it(
     _, preset = selected
     original_size = preset.pixel_size_um
     result = _result_for_selected_resolution(page)
-    validation = []
-    for observation in result.validation_observations:
-        delta = np.asarray(observation.stage_delta_um)
-        delta += result.fit.matrix @ np.asarray((3.0, 4.0))
-        validation.append(
-            replace(observation, stage_delta_um=(float(delta[0]), float(delta[1])))
-        )
-    diagnostics = replace(result, validation_observations=tuple(validation))
+
+    # Alternating zero-mean residuals make every corner exactly 5 px from the
+    # fitted affine, so the reported translation-aware scatter is predictable.
+    shifts = np.asarray([obs.image_shift_xy for obs in result.observations])
+    residuals = np.asarray(((3.0, 4.0), (-3.0, -4.0), (3.0, 4.0), (-3.0, -4.0)))
+    deltas = (shifts + residuals) @ result.fit.matrix.T
+    diagnostics = replace(
+        result,
+        fit=_describe_fit(result.fit.matrix, shifts, residuals),
+        observations=tuple(
+            replace(
+                obs,
+                stage_delta_um=(float(delta[0]), float(delta[1])),
+                residual_px=(float(residual[0]), float(residual[1])),
+            )
+            for obs, delta, residual in zip(
+                result.observations, deltas, residuals, strict=True
+            )
+        ),
+    )
 
     with qtbot.assertNotEmitted(panel.resultReady):
-        panel._on_failure("Holdout prediction residuals exceed the limit", diagnostics)
+        panel._on_failure("Point mapping scatter exceeds tolerance", diagnostics)
 
-    summary = panel._result_text.toolTip()
-    assert "Estimated pixel size (unvalidated): 0.41234567 µm/px" in summary
-    assert "Fit residuals: RMS 0.0000 px, worst 0.0000 px" in summary
-    assert (
-        "Independent validation (3/3 usable): RMS 5.0000 px, worst 5.0000 px" in summary
-    )
-    assert "Holdout prediction residuals exceed the limit" in summary
-    assert "Estimate not applied" in summary
-    assert "not pixel-size uncertainty" in summary
+    summary = panel._result_plain_message
+    assert "Estimated pixel size (not accepted): 0.41234567 µm/px" in summary
+    # Binning and the magnification factor are both 1 here, so the stored raw
+    # size equals the measured one and must not be printed twice.
+    assert "stored raw" not in summary
+    assert "Corner scatter: RMS 5.0000 px (worst 5.0000 px)" in summary
+    # The same four numbers the Java dialog reports, plus handedness, are shown
+    # for a rejected run too, so the measurement can still be judged by eye.
+    assert "XScale" in summary
+    assert "Rotation" in summary
+    assert "Shear" in summary
+    assert "Mirrored: yes" in summary
+    assert "Point mapping scatter exceeds tolerance" in summary
+    assert "four corner measurements disagree" in summary
+    assert "pixel size may be unreliable" in summary
     assert preset.pixel_size_um == original_size
     assert panel._diagnostics._result is diagnostics
+    assert not panel._apply_rejected_button.isHidden()
+    assert panel._apply_rejected_button.isEnabled()
+
+    with qtbot.waitSignal(panel.resultReady) as emitted:
+        qtbot.mouseClick(  # type: ignore[no-untyped-call]
+            panel._apply_rejected_button, Qt.MouseButton.LeftButton
+        )
+    assert emitted.args == [diagnostics, str(preset.name)]
+    assert preset.pixel_size_um == pytest.approx(diagnostics.raw_pixel_size_um)
+    assert preset.affine == pytest.approx(
+        (
+            diagnostics.raw_matrix[0, 0],
+            diagnostics.raw_matrix[0, 1],
+            0,
+            diagnostics.raw_matrix[1, 0],
+            diagnostics.raw_matrix[1, 1],
+            0,
+        )
+    )
+    assert "Rejected calibration applied manually" in panel._result_plain_message
+    assert panel._apply_rejected_button.isHidden()
 
     panel._on_failure("Camera snap failed", None)
-    assert panel._result_text.toolTip() == "Camera snap failed"
+    assert panel._result_plain_message == "Camera snap failed"
     assert panel._diagnostics._result is None
-
-
-@pytest.mark.parametrize("has_validation", [False, True])
-def test_failed_calibration_does_not_score_unusable_validation(
-    mmcore: CMMCorePlus, qtbot: QtBot, has_validation: bool
-) -> None:
-    page = ConfigurationsPage(mmcore)
-    qtbot.addWidget(page)
-    panel = page._pixel_config._calibration_panel
-    result = _result_for_selected_resolution(page)
-    validation = (
-        tuple(replace(obs, accepted=False) for obs in result.validation_observations)
-        if has_validation
-        else ()
-    )
-    diagnostics = replace(result, validation_observations=validation)
-
-    panel._on_failure("Calibration quality check failed", diagnostics)
-
-    summary = panel._result_text.toolTip()
-    assert "Estimated pixel size (unvalidated)" in summary
-    expected = "no usable measurements" if has_validation else "not completed"
-    assert f"Independent validation: {expected}" in summary
-    assert "Independent validation (" not in summary
 
 
 def test_calibration_outcome_is_preserved_per_resolution(
@@ -432,21 +440,51 @@ def test_calibration_outcome_is_preserved_per_resolution(
     diagnostics = _result_for_selected_resolution(page)
 
     panel._progress.setValue(850)
-    panel._on_failure("Synthetic holdout failure", diagnostics)
-    summary = panel._result_text.toolTip()
+    panel._on_failure("Synthetic scatter failure", diagnostics)
+    summary = panel._result_plain_message
+    assert not panel._apply_rejected_button.isHidden()
     other_target = type(first_target)("Other resolution", (), True)
     panel.setTarget(other_target)
 
     assert panel._progress.value() == 0
     assert panel._diagnostics._result is None
+    assert panel._apply_rejected_button.isHidden()
 
     panel.setTarget(first_target)
 
     assert panel._progress.value() == 850
-    assert panel._result_text.toolTip() == summary
-    assert "Synthetic holdout failure" in summary
-    assert "Estimated pixel size (unvalidated)" in summary
+    assert panel._result_plain_message == summary
+    assert "Synthetic scatter failure" in summary
+    assert "Estimated pixel size (not accepted)" in summary
     assert panel._diagnostics._result is diagnostics
+    assert not panel._apply_rejected_button.isHidden()
+
+
+def test_rejected_result_cannot_be_applied_after_resolution_settings_change(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    panel = page._pixel_config._calibration_panel
+    target = panel._target
+    assert target is not None
+
+    panel._on_failure(
+        "Synthetic scatter failure", _result_for_selected_resolution(page)
+    )
+    changed_target = type(target)(
+        target.resolution_id,
+        (*target.settings, ("Camera", "Binning", "changed")),
+        target.binding_is_saved,
+    )
+    panel.setTarget(changed_target)
+
+    with qtbot.assertNotEmitted(panel.resultReady):
+        qtbot.mouseClick(  # type: ignore[no-untyped-call]
+            panel._apply_rejected_button, Qt.MouseButton.LeftButton
+        )
+    assert "settings changed" in panel._result_plain_message
+    assert panel._apply_rejected_button.isHidden()
 
 
 def test_no_resolution_selection_disables_entire_calibration_panel(
@@ -686,3 +724,42 @@ def test_capture_transaction_temporarily_selects_and_restores_camera(
     mmcore.setCameraDevice("Camera2")
     assert mmcore.getExposure("Camera2") == pytest.approx(23.0)
     mmcore.setCameraDevice(old_camera)
+
+
+def test_result_text_scrolls_instead_of_clipping(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A structured result must stay reachable when the pane is narrow.
+
+    Without the scroll area the tail of the message (the "not applied" note in
+    particular) is clipped once the pane is narrow enough to wrap it, and the
+    label carries no hover text to fall back on.
+    """
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    panel = page._pixel_config._calibration_panel
+
+    assert panel._result_scroll.widget() is panel._result_text
+    assert panel._result_scroll.widgetResizable()
+    assert panel._result_scroll.frameShape() == QFrame.Shape.NoFrame
+    assert panel._result_scroll.contentsMargins().isNull()
+    # Wrapping must handle width, so a horizontal bar would only fight it.
+    assert (
+        panel._result_scroll.horizontalScrollBarPolicy()
+        == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    )
+    # The scroll area, not a trailing stretch, takes the spare vertical space.
+    result_layout = panel._result_widget.layout()
+    assert result_layout is not None
+    first_item = result_layout.itemAt(0)
+    assert first_item is not None
+    assert first_item.widget() is panel._result_scroll
+
+    panel._on_failure(
+        "Point mapping scatter exceeds tolerance",
+        _result_for_selected_resolution(page),
+    )
+    # At a narrow width the wrapped message wants more height than a short
+    # viewport can give, which is exactly the case the scroll area covers.
+    assert panel._result_text.wordWrap()
+    assert panel._result_text.heightForWidth(220) > 120

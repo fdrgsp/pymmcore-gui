@@ -22,12 +22,12 @@ from pymmcore_gui._pixel_calibration import (
     CalibrationOptions,
     CaptureStateTransaction,
     PixelCalibrationResult,
+    affine_to_measurements,
     run_pixel_calibration,
 )
 from pymmcore_gui._qt.QtCore import (
     QEvent,
     QObject,
-    QPointF,
     QRectF,
     QSize,
     Qt,
@@ -45,6 +45,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QLabel,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSplitter,
     QVBoxLayout,
@@ -53,7 +54,7 @@ from pymmcore_gui._qt.QtWidgets import (
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable
 
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,45 @@ logger = logging.getLogger(__name__)
 # "not applicable, don't touch the graph" (the default, for direct callers
 # reporting something other than a calibration/test-frame attempt).
 _DIAGNOSTICS_UNCHANGED = object()
+
+
+def _pixel_size_line(label: str, fit: AffineFitResult, raw_pixel_size_um: float) -> str:
+    """Format the measured pixel size, naming the stored value only if it differs.
+
+    The stored raw size is ``measured * magnification / binning``: it is what
+    reaches the editor row and the ``.cfg``. At binning 1 with a magnification
+    factor of 1 it equals the measured size exactly, so printing both would
+    just repeat the same number.
+    """
+    line = f"{label}: {fit.pixel_size_um:.8f} µm/px"
+    if abs(raw_pixel_size_um - fit.pixel_size_um) > 5e-9:
+        line += f" (stored raw: {raw_pixel_size_um:.8f})"
+    return line
+
+
+def _measurement_lines(fit: AffineFitResult) -> list[str]:
+    """Format the fitted transform as scale, rotation, shear, and handedness.
+
+    Both scales should be close to the expected µm/px, the rotation is the
+    angle between the camera and stage axes, and the shear should be very
+    small. Shared by the success and failure messages so the two cannot drift
+    apart again.
+    """
+    x_scale, y_scale, rotation_deg, shear = affine_to_measurements(fit.matrix)
+    return [
+        f"XScale {x_scale:.4f}",
+        f"YScale {y_scale:.4f}",
+        f"Rotation {rotation_deg:.2f}°",
+        f"Shear {shear:.4f}",
+        f"Mirrored: {'yes' if fit.determinant < 0 else 'no'}",
+    ]
+
+
+def _scatter_line(fit: AffineFitResult) -> str:
+    return (
+        f"Corner scatter: RMS {fit.rms_residual_px:.4f} px "
+        f"(worst {fit.max_residual_px:.4f} px)"
+    )
 
 
 def _describe_error(exc: BaseException) -> str:
@@ -80,12 +120,12 @@ def _describe_error(exc: BaseException) -> str:
 
 
 PHASE_LABELS = {
-    "reference": "Acquiring stable reference images",
+    "reference": "Acquiring the reference image",
     "probe-x": "Finding a useful X-stage displacement",
     "probe-y": "Finding a useful Y-stage displacement",
-    "measure": "Acquiring compass measurements",
-    "validate": "Acquiring independent holdout measurements",
-    "restore": "Restoring the original stage position",
+    "probe": "Doubling the stage step to find a usable displacement",
+    "measure": "Measuring the four corners",
+    "finalize": "Fitting and converting to storage units",
     "complete": "Calibration complete",
 }
 
@@ -116,37 +156,26 @@ class _CalibrationDisplayState:
     preserve_newlines: bool
     icon: Literal["error", "success"] | None
     diagnostics: _DiagnosticsState
-
-
-def _validation_residuals_px(result: PixelCalibrationResult) -> np.ndarray:
-    """Return prediction errors for usable validation measurements in pixels."""
-    inverse = np.linalg.inv(result.fit.matrix)
-    residuals = []
-    for observation in result.validation_observations:
-        if not observation.accepted:
-            continue
-        shift = np.asarray(observation.corrected_shift_xy)
-        delta = np.asarray(observation.stage_delta_um)
-        residuals.append(
-            float(np.linalg.norm(inverse @ (delta - result.fit.matrix @ shift)))
-        )
-    return np.asarray(residuals, dtype=np.float64)
+    rejected_result: PixelCalibrationResult | None
 
 
 class CalibrationDiagnosticsWidget(QWidget):
-    """Show acquired stage positions and final affine predictions in 2-D."""
+    """Show the pixel residuals used to judge the four-corner affine fit."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._result: PixelCalibrationResult | None = None
         self._fit: AffineFitResult | None = None
         self._observations: list[tuple[CalibrationObservation, str]] = []
-        self.setMinimumHeight(165)
+        self.setMinimumHeight(190)
         self.setToolTip(
-            "Blue spots are measured XY-stage positions and appear during capture. "
-            "After fitting, green predictions are within the preferred error limit; "
-            "magenta predictions are outside it. Prediction rings surround their blue "
-            "measurements."
+            "Each bar is one corner's residual: how far its measured stage "
+            "position falls from where the fitted transform predicts it, in "
+            "camera pixels. Green is within the RMS limit that accepts the fit, "
+            "magenta is beyond it. Values in parentheses are the residual's "
+            "(dx, dy). A single bad measurement is spread across all four "
+            "corners rather than isolated at its source, so the bars show how "
+            "much the corners disagree with the fit, not which one went wrong."
         )
 
     def setResult(self, result: PixelCalibrationResult | None) -> None:
@@ -155,21 +184,18 @@ class CalibrationDiagnosticsWidget(QWidget):
         self._fit = result.fit if result is not None else None
         self._observations = []
         if result is not None:
-            self._observations.extend((obs, "fit") for obs in result.observations)
-            self._observations.extend(
-                (obs, "validation") for obs in result.validation_observations
-            )
+            self._observations.extend((obs, "corner") for obs in result.observations)
         self.update()
 
     def addObservation(self, observation: object, kind: str) -> None:
-        """Add one newly acquired fit or validation observation to the graph."""
+        """Add one newly acquired observation to the graph."""
         if not isinstance(observation, CalibrationObservation):
             return
         self._observations.append((observation, kind))
         self.update()
 
     def setFit(self, fit: object) -> None:
-        """Show predictions as soon as the affine fit becomes available."""
+        """Show corner residuals as soon as the affine fit becomes available."""
         if not isinstance(fit, AffineFitResult):
             return
         self._result = None
@@ -187,138 +213,147 @@ class CalibrationDiagnosticsWidget(QWidget):
         self._observations = list(state.observations)
         self.update()
 
-    @staticmethod
-    def _point(point: Sequence[float], rect: QRectF, extent: float) -> QPointF:
-        return QPointF(
-            rect.center().x() + float(point[0]) * rect.width() * 0.45 / extent,
-            rect.center().y() - float(point[1]) * rect.height() * 0.45 / extent,
-        )
-
-    def _draw_spots(self, painter: QPainter, rect: QRectF) -> None:
-        observations = [obs for obs, _kind in self._observations]
-        self._draw_legend(painter, rect)
-        available = rect.adjusted(8, 48, -8, -8)
-        side = min(available.width(), available.height())
-        plot = QRectF(
-            available.center().x() - side / 2,
-            available.center().y() - side / 2,
-            side,
-            side,
-        )
-        if not observations:
-            painter.drawText(
-                plot,
-                Qt.AlignmentFlag.AlignCenter,
-                "Acquired positions will appear here",
+    def _residual_rows(self) -> list[tuple[str, np.ndarray]]:
+        """Return labelled corner residual vectors for painting."""
+        rows: list[tuple[str, np.ndarray]] = []
+        if self._result is not None:
+            for index, observation in enumerate(self._result.observations):
+                residual = observation.residual_px
+                if residual is None and index < len(self._result.fit.residuals_px):
+                    residual = tuple(self._result.fit.residuals_px[index])
+                if residual is not None:
+                    rows.append(
+                        (
+                            f"Corner {observation.label or index + 1}",
+                            np.asarray(residual, dtype=np.float64),
+                        )
+                    )
+        elif self._fit is not None:
+            rows.extend(
+                (f"Corner {index + 1}", np.asarray(residual))
+                for index, residual in enumerate(self._fit.residuals_px)
             )
+        return rows
+
+    def _draw_residuals(self, painter: QPainter, rect: QRectF) -> None:
+        rows = self._residual_rows()
+        if not rows:
+            acquired = len(self._observations)
+            message = (
+                f"{acquired}/6 measurements acquired\n"
+                "Residuals appear after the four-corner fit"
+                if acquired
+                else "Corner residual diagnostics will appear here"
+            )
+            painter.setPen(self.palette().text().color())
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, message)
             return
 
-        measured = np.asarray([obs.stage_delta_um for obs in observations])
-        predicted = np.empty((0, 2), dtype=np.float64)
-        if self._fit is not None:
-            shifts = np.asarray([obs.corrected_shift_xy for obs in observations])
-            predicted = shifts @ self._fit.matrix.T
-        extent = max(float(np.max(np.abs(measured))), 1e-9)
-        if predicted.size:
-            extent = max(extent, float(np.max(np.abs(predicted))))
-
-        painter.setPen(QPen(QColor("#59636e"), 1))
-        painter.drawLine(
-            QPointF(plot.left(), plot.center().y()),
-            QPointF(plot.right(), plot.center().y()),
+        limit = (
+            self._result.max_rms_px
+            if self._result is not None
+            else CalibrationOptions().max_rms_px
         )
-        painter.drawLine(
-            QPointF(plot.center().x(), plot.top()),
-            QPointF(plot.center().x(), plot.bottom()),
+        norms = [float(np.linalg.norm(vector)) for _label, vector in rows]
+        rms = float(np.sqrt(np.mean(np.square(norms))))
+        title_color = QColor("#3fb950" if rms <= limit else "#d65ad1")
+        painter.setPen(title_color)
+        painter.drawText(
+            rect.adjusted(8, 3, -8, -3),
+            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter,
+            f"Corner fit RMS {rms:.2f} px / {limit:.2f} px limit",
         )
-        painter.setPen(QPen(QColor("#58a6ff"), 1))
-        painter.setBrush(QColor("#58a6ff"))
-        for actual in measured:
-            point = self._point((float(actual[0]), float(actual[1])), plot, extent)
-            painter.drawEllipse(point, 5, 5)
 
-        prediction_is_accurate = self._prediction_accuracy()
-        for expected, is_accurate in zip(
-            predicted, prediction_is_accurate, strict=True
-        ):
-            color = QColor("#3fb950" if is_accurate else "#d65ad1")
-            painter.setPen(QPen(color, 2.5))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            expected_point = self._point(
-                (float(expected[0]), float(expected[1])), plot, extent
-            )
-            painter.drawEllipse(expected_point, 7, 7)
-
-        origin = self._point((0, 0), plot, extent)
-        painter.setPen(QPen(QColor("#aab3bd"), 1))
-        painter.setBrush(QColor("#aab3bd"))
-        painter.drawEllipse(origin, 2, 2)
-
-    @staticmethod
-    def _draw_legend(painter: QPainter, rect: QRectF) -> None:
-        entries = (
-            (QColor("#58a6ff"), "Measured position"),
-            (QColor("#3fb950"), "Accurate prediction"),
-            (QColor("#d65ad1"), "Inaccurate prediction"),
-        )
+        content = rect.adjusted(8, 27, -8, -20)
         metrics = painter.fontMetrics()
-        gap = 22
-        dot = "●"
-        dot_width = metrics.horizontalAdvance(dot)
-        widths = [
-            dot_width + 6 + metrics.horizontalAdvance(label)
-            for _color, label in entries
+        labels = [label for label, _vector in rows]
+        full_values = [
+            f"{norm:.2f} px  ({vector[0]:+.2f}, {vector[1]:+.2f})"
+            for (_label, vector), norm in zip(rows, norms, strict=True)
         ]
-        x = rect.center().x() - (sum(widths) + gap * 2) / 2
-        baseline = rect.top() + metrics.ascent() + 5
-        for (color, label), width in zip(entries, widths, strict=True):
-            painter.setPen(color)
-            painter.drawText(QPointF(x, baseline), dot)
-            painter.setPen(QColor("#aab3bd"))
-            painter.drawText(QPointF(x + dot_width + 6, baseline), label)
-            x += width + gap
+        compact_values = [f"{norm:.2f} px" for norm in norms]
+        label_width = float(max(metrics.horizontalAdvance(label) for label in labels))
+        full_value_width = float(
+            max(metrics.horizontalAdvance(value) for value in full_values)
+        )
+        compact_value_width = float(
+            max(metrics.horizontalAdvance(value) for value in compact_values)
+        )
+        gap = float(metrics.horizontalAdvance("  "))
+        minimum_bar_width = float(metrics.horizontalAdvance("MMMM"))
+        values = full_values
+        value_width = full_value_width
+        if content.width() - label_width - value_width - 2 * gap < minimum_bar_width:
+            values = compact_values
+            value_width = compact_value_width
+        bar_left = content.left() + label_width + gap
+        bar_right = content.right() - value_width - gap
+        max_norm = max(norms, default=0.0)
+        axis_max = max(1.0, limit * 1.2, max_norm * 1.1)
+        limit_x = bar_left + (bar_right - bar_left) * limit / axis_max
 
-    def _prediction_accuracy(self) -> list[bool]:
-        """Classify final predictions using the routine's preferred RMS limit."""
-        if self._fit is None:
-            return []
-        inverse = np.linalg.inv(self._fit.matrix)
-        options = CalibrationOptions()
-        limits: dict[str, float] = {}
-        for kind in ("fit", "validation"):
-            shifts = [
-                np.linalg.norm(observation.corrected_shift_xy)
-                for observation, observation_kind in self._observations
-                if observation_kind == kind
-            ]
-            median_shift = float(np.median(shifts)) if shifts else 0.0
-            limits[kind] = max(
-                options.max_fit_rms_px,
-                options.max_fit_fraction * median_shift,
+        limit_pen = QPen(QColor("#8b949e"), 1, Qt.PenStyle.DashLine)
+        painter.setPen(limit_pen)
+        painter.drawLine(
+            int(limit_x), int(content.top()), int(limit_x), int(content.bottom())
+        )
+
+        row_height = content.height() / len(rows)
+        text_color = self.palette().text().color()
+        bar_height = min(row_height * 0.4, float(metrics.height()) * 0.55)
+        for index, ((label, _vector), norm, value) in enumerate(
+            zip(rows, norms, values, strict=True)
+        ):
+            row = QRectF(
+                content.left(),
+                content.top() + index * row_height,
+                content.width(),
+                row_height,
             )
-        accurate = []
-        for observation, kind in self._observations:
-            shift = np.asarray(observation.corrected_shift_xy)
-            delta = np.asarray(observation.stage_delta_um)
-            residual = float(
-                np.linalg.norm(inverse @ (delta - self._fit.matrix @ shift))
+            painter.setPen(text_color)
+            painter.drawText(
+                QRectF(row.left(), row.top(), label_width, row.height()),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                label,
             )
-            accurate.append(observation.accepted and residual <= limits[kind])
-        return accurate
+            color = QColor("#3fb950" if norm <= limit else "#d65ad1")
+            width = max(1.0, (bar_right - bar_left) * norm / axis_max)
+            bar = QRectF(bar_left, row.center().y() - bar_height / 2, width, bar_height)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            radius = bar_height / 4
+            painter.drawRoundedRect(bar, radius, radius)
+            painter.setPen(text_color)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawText(
+                QRectF(bar_right + gap, row.top(), value_width, row.height()),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                value,
+            )
+
+        painter.setPen(QColor("#8b949e"))
+        limit_label = "RMS limit"
+        limit_label_width = float(metrics.horizontalAdvance(limit_label))
+        limit_label_left = min(
+            max(limit_x - limit_label_width / 2, content.left()),
+            content.right() - limit_label_width,
+        )
+        painter.drawText(
+            QRectF(
+                limit_label_left,
+                content.bottom(),
+                limit_label_width,
+                float(metrics.height()),
+            ),
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+            limit_label,
+        )
 
     def paintEvent(self, a0: QPaintEvent | None) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), self.palette().window())
-        if self._result is None and not self._observations:
-            painter.setPen(self.palette().text().color())
-            painter.drawText(
-                self.rect(),
-                Qt.AlignmentFlag.AlignCenter,
-                "Calibration diagnostics will appear here",
-            )
-            return
-        self._draw_spots(painter, QRectF(self.rect()).adjusted(5, 5, -5, -5))
+        self._draw_residuals(painter, QRectF(self.rect()).adjusted(5, 5, -5, -5))
 
 
 class _FrameCore:
@@ -480,6 +515,7 @@ class PixelCalibrationPanel(QWidget):
         self._light_sources: dict[str, tuple[tuple[str, str], ...]] = {}
         self._channel_group_last = ""
         self._display_states: dict[str, _CalibrationDisplayState] = {}
+        self._pending_rejected_result: PixelCalibrationResult | None = None
 
         self.setMinimumWidth(700)
         self.setEnabled(False)
@@ -652,16 +688,43 @@ class PixelCalibrationPanel(QWidget):
         self._result_text.setWordWrap(True)
         self._result_text.setMargin(4)
         self._result_text.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
         )
         self._result_icon_kind: Literal["error", "success"] | None = None
         self._result_plain_message = ""
         self._result_preserve_newlines = False
-        self._set_result_message("No validated result")
+        self._set_result_message("No calibration result")
+        # A structured result runs to a dozen wrapped lines. Without a scroll
+        # area the bottom of it (the "not applied" note in particular) is
+        # simply clipped once this pane is narrow enough to wrap, with no way
+        # to reach it. Horizontal scrolling stays off so the label keeps
+        # wrapping to the viewport width instead of growing sideways.
+        self._result_scroll = QScrollArea()
+        self._result_scroll.setWidget(self._result_text)
+        self._result_scroll.setWidgetResizable(True)
+        self._result_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._result_scroll.setContentsMargins(0, 0, 0, 0)
+        self._result_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._result_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
         self._result_widget = QWidget()
         result_layout = QVBoxLayout(self._result_widget)
         result_layout.setContentsMargins(0, 0, 0, 0)
-        result_layout.addWidget(self._result_text, 1)
+        result_layout.addWidget(self._result_scroll, 1)
+        self._apply_rejected_button = QPushButton("Apply anyway")
+        self._apply_rejected_button.setProperty("variant", "danger")
+        self._apply_rejected_button.setToolTip(
+            "Apply this rejected pixel size and affine transform to the selected "
+            "resolution. Review the residuals first; the calibration failed its "
+            "consistency check."
+        )
+        self._apply_rejected_button.hide()
+        result_layout.addWidget(
+            self._apply_rejected_button, 0, Qt.AlignmentFlag.AlignLeft
+        )
         self._diagnostics = CalibrationDiagnosticsWidget()
         self._info_splitter = QSplitter(Qt.Orientation.Horizontal)
         self._info_splitter.setChildrenCollapsible(False)
@@ -677,6 +740,7 @@ class PixelCalibrationPanel(QWidget):
         self._live_button.clicked.connect(self.toggleLivePreview)
         self._start_button.clicked.connect(self.startCalibration)
         self._cancel_button.clicked.connect(self.cancelCalibration)
+        self._apply_rejected_button.clicked.connect(self._apply_rejected_result)
         self._camera_combo.currentIndexChanged.connect(self._on_camera_changed)
         self._xy_stage_combo.currentTextChanged.connect(self._update_availability)
         self._channel_group_combo.currentTextChanged.connect(
@@ -780,7 +844,8 @@ class PixelCalibrationPanel(QWidget):
         else:
             self._progress.setValue(0)
             self._diagnostics.setResult(None)
-            self._set_result_message("No validated result")
+            self._set_result_message("No calibration result")
+            self._set_pending_rejected_result(None)
 
     def _display_state(self) -> _CalibrationDisplayState:
         return _CalibrationDisplayState(
@@ -790,6 +855,7 @@ class PixelCalibrationPanel(QWidget):
             preserve_newlines=self._result_preserve_newlines,
             icon=self._result_icon_kind,
             diagnostics=self._diagnostics.state(),
+            rejected_result=self._pending_rejected_result,
         )
 
     def _restore_display_state(self, state: _CalibrationDisplayState) -> None:
@@ -801,6 +867,7 @@ class PixelCalibrationPanel(QWidget):
             icon=state.icon,
         )
         self._diagnostics.restoreState(state.diagnostics)
+        self._set_pending_rejected_result(state.rejected_result)
 
     def refreshHardware(self, *_: object) -> None:
         """Refresh selectable devices, channels, light sources, and availability."""
@@ -1142,6 +1209,7 @@ class PixelCalibrationPanel(QWidget):
             self._live_transaction = transaction
             preview.attach(self._mmc)
             self._set_inputs_enabled(False)
+            self._set_pending_rejected_result(None)
             self.calibrationRunningChanged.emit(True)
             self._set_result_message(
                 "Live preview uses the selected channel, camera, and light "
@@ -1277,6 +1345,7 @@ class PixelCalibrationPanel(QWidget):
         self._ensure_preview()
         self._preview_only = preview_only
         self._progress.setValue(0)
+        self._set_pending_rejected_result(None)
         if not preview_only:
             self._display_states.pop(self._target.resolution_id, None)
             self._diagnostics.setResult(None)
@@ -1366,7 +1435,7 @@ class PixelCalibrationPanel(QWidget):
         self._diagnostics.addObservation(observation, kind)
 
     def _on_fit(self, fit: object) -> None:
-        """Plot predictions once fitted, then update them for each holdout point."""
+        """Show the four translation-aware corner residuals once fitted."""
         self._diagnostics.setFit(fit)
 
     def _on_preview_ready(self) -> None:
@@ -1380,32 +1449,23 @@ class PixelCalibrationPanel(QWidget):
             self._on_failure("Calibration returned an invalid result")
             return
         result = payload
+        self._set_pending_rejected_result(None)
         self._diagnostics.setResult(result)
         fit = result.fit
         warning_text = " · ".join(
             f"Warning: {warning.message}" for warning in result.warnings
         )
-        validation_residuals = _validation_residuals_px(result)
-        if validation_residuals.size:
-            validation_summary = (
-                "Independent validation passed: "
-                f"RMS {float(np.sqrt(np.mean(validation_residuals**2))):.4f} px, "
-                f"worst {float(np.max(validation_residuals)):.4f} px"
-            )
-        else:
-            validation_summary = (
-                f"Fit RMS/worst: {fit.rms_residual_px:.4f}/{fit.max_residual_px:.4f} px"
-            )
         lines = [
             "Calibration successful",
-            f"Pixel size: {fit.pixel_size_um:.8f} µm/px "
-            f"(stored raw: {result.raw_pixel_size_um:.8f})",
-            f"Rotation: {fit.rotation_deg:.3f}° · "
-            f"{'mirrored' if fit.determinant < 0 else 'not mirrored'}",
-            validation_summary,
+            "",
+            _pixel_size_line("Pixel size", fit, result.raw_pixel_size_um),
+            "",
+            _scatter_line(fit),
+            "",
+            *_measurement_lines(fit),
         ]
         if warning_text:
-            lines.append(warning_text)
+            lines.extend(["", warning_text])
         lines.append("")
         lines.append(
             f"Applied automatically to {self._target.resolution_id!r}. Use "
@@ -1415,9 +1475,59 @@ class PixelCalibrationPanel(QWidget):
         self._set_result_message(
             "\n".join(lines), preserve_newlines=True, icon="success"
         )
-        self._phase_label.setText("Validated result applied; configuration is dirty")
+        self._phase_label.setText("Result applied; configuration is dirty")
         self._progress.setValue(1000)
         self.resultReady.emit(result, self._target.resolution_id)
+
+    def _set_pending_rejected_result(
+        self, result: PixelCalibrationResult | None
+    ) -> None:
+        """Show the manual-override action only while a rejected fit is current."""
+        self._pending_rejected_result = result
+        self._apply_rejected_button.setVisible(result is not None)
+        self._apply_rejected_button.setEnabled(
+            result is not None and self._thread is None and self._target is not None
+        )
+
+    def _apply_rejected_result(self) -> None:
+        """Apply a complete but quality-rejected fit after an explicit override."""
+        result = self._pending_rejected_result
+        target = self._target
+        if result is None or target is None:
+            return
+        if target.settings != result.fingerprint.config_settings:
+            self._set_pending_rejected_result(None)
+            self._set_result_message(
+                "Cannot apply the rejected estimate because the selected resolution "
+                "settings changed. Run calibration again.",
+                icon="error",
+            )
+            return
+
+        # The connected pixel-configuration editor applies raw_pixel_size_um and
+        # raw_matrix to this resolution exactly as it does for an accepted run.
+        self.resultReady.emit(result, target.resolution_id)
+        self._set_pending_rejected_result(None)
+        fit = result.fit
+        x_scale, y_scale, rotation_deg, shear = affine_to_measurements(fit.matrix)
+        lines = [
+            "Rejected calibration applied manually",
+            f"Pixel size: {fit.pixel_size_um:.8f} µm/px "
+            f"(stored raw: {result.raw_pixel_size_um:.8f})",
+            f"XScale {x_scale:.4f} · YScale {y_scale:.4f} · "
+            f"Rotation {rotation_deg:.2f}° · Shear {shear:.4f} · "
+            f"{'mirrored' if fit.determinant < 0 else 'not mirrored'}",
+            f"Quality warning: corner RMS {fit.rms_residual_px:.4f} px; "
+            f"acceptance limit {result.max_rms_px:.4f} px",
+            "",
+            f"Applied to {target.resolution_id!r}. Use 'Save to core' to update "
+            "the current core instance, or 'Save to file' to also save it to "
+            "the .cfg file.",
+        ]
+        self._set_result_message("\n".join(lines), preserve_newlines=True, icon="error")
+        self._phase_label.setText(
+            "Rejected result applied manually; configuration is dirty"
+        )
 
     def _on_failure(
         self, message: str, diagnostics: object = _DIAGNOSTICS_UNCHANGED
@@ -1429,46 +1539,38 @@ class PixelCalibrationPanel(QWidget):
 
         ``diagnostics``, supplied only by the worker's ``failed`` signal for
         an actual calibration/test-frame attempt, replaces the diagnostics
-        graph with whatever fit/holdout data that run produced (or clears it
-        to blank if none) -- so a run that fails holdout validation still
-        shows the measured-vs-predicted arrows that explain why. Direct
+        graph with whatever fit that run produced (or clears it to blank if
+        none) -- so a run whose corners scattered past the tolerance still
+        shows the residuals that explain why. Direct
         callers reporting an unrelated failure (e.g. live-preview setup)
         omit it and leave the graph showing whatever the last calibration
         attempt left there.
         """
-        self._phase_label.setText("Calibration failed; hardware restoration attempted")
+        self._set_pending_rejected_result(None)
+        self._phase_label.setText("Calibration failed.")
         message = message or "Unknown error"
         if isinstance(diagnostics, PixelCalibrationResult):
             fit = diagnostics.fit
             lines = [
-                f"Estimated pixel size (unvalidated): {fit.pixel_size_um:.8f} µm/px",
+                _pixel_size_line(
+                    "Estimated pixel size (not accepted)",
+                    fit,
+                    diagnostics.raw_pixel_size_um,
+                ),
+                "",
                 f"Calibration failed: {message}",
-                f"Fit residuals: RMS {fit.rms_residual_px:.4f} px, "
-                f"worst {fit.max_residual_px:.4f} px",
+                "",
+                _scatter_line(fit),
+                "",
+                *_measurement_lines(fit),
+                "",
+                "Not applied: the four corner measurements disagree with the "
+                "fitted transform, so this pixel size may be unreliable.",
             ]
-            residuals = _validation_residuals_px(diagnostics)
-            count = len(diagnostics.validation_observations)
-            if residuals.size:
-                lines.append(
-                    f"Independent validation ({residuals.size}/{count} usable): "
-                    f"RMS {float(np.sqrt(np.mean(residuals**2))):.4f} px, "
-                    f"worst {float(np.max(residuals)):.4f} px"
-                )
-            else:
-                lines.append(
-                    "Independent validation: "
-                    + ("no usable measurements" if count else "not completed")
-                )
-            lines.extend(
-                [
-                    "",
-                    "Estimate not applied. Residuals describe position mismatch, "
-                    "not pixel-size uncertainty.",
-                ]
-            )
             self._set_result_message(
                 "\n".join(lines), preserve_newlines=True, icon="error"
             )
+            self._set_pending_rejected_result(diagnostics)
         else:
             self._set_result_message(message, icon="error")
         if diagnostics is not _DIAGNOSTICS_UNCHANGED:
@@ -1480,6 +1582,7 @@ class PixelCalibrationPanel(QWidget):
         self, message: str, diagnostics: object = _DIAGNOSTICS_UNCHANGED
     ) -> None:
         """Report a user-requested cancellation distinctly from a failure."""
+        self._set_pending_rejected_result(None)
         self._phase_label.setText("Calibration cancelled; hardware restored")
         self._set_result_message(message or "Calibration cancelled")
         if diagnostics is not _DIAGNOSTICS_UNCHANGED:
@@ -1494,13 +1597,14 @@ class PixelCalibrationPanel(QWidget):
         preserve_newlines: bool = False,
         icon: Literal["error", "success"] | None = None,
     ) -> None:
-        r"""Show result text, with the full text available on hover.
+        r"""Show result text in the scrollable information area.
 
         Most messages are a single collapsed line (``\\n`` joined with
         " · ") to stay compact; a structured result (see ``_on_result``)
         instead keeps its line breaks so pixel size / rotation / the
         "applied to" note read as separate lines rather than one run-on
-        sentence.
+        sentence. Either way the text scrolls rather than being clipped, and
+        ``_result_plain_message`` keeps the un-annotated original.
 
         ``icon`` puts a small status glyph in front of the text -- red for
         ``"error"``, green for ``"success"`` -- matching the outcome; other
@@ -1529,7 +1633,6 @@ class PixelCalibrationPanel(QWidget):
         text = (
             message if self._result_preserve_newlines else message.replace("\n", " · ")
         )
-        self._result_text.setToolTip(text)
         lines = [html.escape(line) for line in text.split("\n")]
         kind = self._result_icon_kind
         if kind is not None and lines:
@@ -1550,6 +1653,9 @@ class PixelCalibrationPanel(QWidget):
         self._cancel_button.setEnabled(False)
         self._cancel_button.hide()
         self._set_inputs_enabled(True)
+        self._apply_rejected_button.setEnabled(
+            self._pending_rejected_result is not None and self._target is not None
+        )
         self.calibrationRunningChanged.emit(False)
         self._update_availability()
         # _update_availability normally owns the idle-state message.  Keep the

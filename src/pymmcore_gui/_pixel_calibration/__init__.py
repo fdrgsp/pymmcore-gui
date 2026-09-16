@@ -1,23 +1,28 @@
 """Headless pixel-size and camera/stage calibration primitives."""
 
 from ._capture import CalibrationCaptureSettings, CaptureStateTransaction
-from ._fit import fit_affine, normalize_for_mmcore
+from ._fit import normalize_for_mmcore
 from ._models import (
     AffineFitResult,
     CalibrationCancelled,
     CalibrationCommitError,
     CalibrationObservation,
-    CalibrationOptions,
     CalibrationWarning,
     HardwareFingerprint,
     PixelCalibrationError,
     PixelCalibrationResult,
-    RegistrationResult,
     StageRestoreError,
 )
 from ._persistence import commit_pixel_calibration
-from ._registration import register_translation
-from ._routine import run_pixel_calibration
+from ._routine import (
+    CalibrationOptions,
+    affine_to_measurements,
+    cross_correlate,
+    deduce_pixel_size,
+    fit_affine_with_translation,
+    measure_displacement,
+    run_pixel_calibration,
+)
 
 __all__ = [
     "AffineFitResult",
@@ -31,11 +36,13 @@ __all__ = [
     "HardwareFingerprint",
     "PixelCalibrationError",
     "PixelCalibrationResult",
-    "RegistrationResult",
     "StageRestoreError",
+    "affine_to_measurements",
     "commit_pixel_calibration",
-    "fit_affine",
+    "cross_correlate",
+    "deduce_pixel_size",
+    "fit_affine_with_translation",
+    "measure_displacement",
     "normalize_for_mmcore",
-    "register_translation",
     "run_pixel_calibration",
 ]
