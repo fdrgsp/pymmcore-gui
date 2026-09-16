@@ -1,79 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     import numpy as np
     from numpy.typing import NDArray
-
-
-@dataclass(frozen=True)
-class CalibrationOptions:
-    """Numerical and motion limits for an automatic calibration run."""
-
-    safe_radius_um: float = 100.0
-    settle_time_s: float = 0.0
-    crop_fraction: float = 0.75
-    upsample_factor: int = 20
-    min_psr: float = 8.0
-    min_peak_ratio: float = 1.05
-    min_overlap: float = 0.60
-    target_shift_fraction: float = 0.16
-    min_shift_fraction: float = 0.04
-    max_shift_fraction: float = 0.30
-    min_shift_px: float = 8.0
-    max_probe_steps: int = 16
-    initial_probe_um: float = 0.5
-    stage_return_tolerance_um: float = 0.5
-    max_fit_rms_px: float = 0.5
-    max_fit_fraction: float = 0.01
-    max_point_residual_px: float = 1.5
-    max_point_residual_fraction: float = 0.03
-
-    def __post_init__(self) -> None:
-        if self.safe_radius_um <= 0:
-            raise ValueError("safe_radius_um must be positive")
-        if self.settle_time_s < 0:
-            raise ValueError("settle_time_s cannot be negative")
-        if not 0.25 <= self.crop_fraction <= 1:
-            raise ValueError("crop_fraction must be between 0.25 and 1")
-        if self.upsample_factor < 1:
-            raise ValueError("upsample_factor must be at least 1")
-        if not 0 < self.min_overlap <= 1:
-            raise ValueError("min_overlap must be in (0, 1]")
-        if not 0 < self.min_shift_fraction < self.target_shift_fraction:
-            raise ValueError(
-                "min_shift_fraction must be positive and smaller than "
-                "target_shift_fraction"
-            )
-        if not self.target_shift_fraction < self.max_shift_fraction < 0.5:
-            raise ValueError(
-                "max_shift_fraction must be between target_shift_fraction and 0.5"
-            )
-        if self.min_shift_px <= 0:
-            raise ValueError("min_shift_px must be positive")
-        if self.max_probe_steps < 1:
-            raise ValueError("max_probe_steps must be at least 1")
-        if self.initial_probe_um <= 0:
-            raise ValueError("initial_probe_um must be positive")
-        if self.stage_return_tolerance_um < 0:
-            raise ValueError("stage_return_tolerance_um cannot be negative")
-
-
-@dataclass(frozen=True)
-class RegistrationResult:
-    """Subpixel translation and confidence measurements."""
-
-    # Shift applied to moving image to align it to reference, in geometric x/y order.
-    shift_xy: tuple[float, float]
-    psr: float
-    peak_ratio: float
-    overlap: float
-    normalized_error: float
-    method: Literal["phase", "unnormalized"] = "phase"
 
 
 @dataclass(frozen=True)
@@ -87,12 +19,13 @@ class CalibrationWarning:
 class PixelCalibrationError(RuntimeError):
     """Base error for a failed or invalid pixel calibration.
 
-    ``diagnostics``, when set by the routine, carries whatever fit/holdout
-    data existed at the point of failure -- e.g. a fit that measured fine but
-    failed independent holdout validation still has a matrix and observations
-    worth plotting. Callers (the GUI panel) can use it to show the same
-    measured-vs-predicted graph on a failed run that a successful one gets,
-    instead of leaving the diagnostics blank just because the run didn't pass.
+    ``diagnostics``, when set by the routine, carries the fit that existed at
+    the point of failure -- a matrix whose four corner measurements scattered
+    beyond the acceptance tolerance is still worth plotting and still carries
+    a pixel size worth showing. Callers (the GUI panel) use it to show the
+    same measured-versus-predicted graph on a failed run that a successful one
+    gets, instead of leaving the diagnostics blank just because the run did
+    not pass.
     """
 
     def __init__(
@@ -120,8 +53,8 @@ class StageRestoreError(PixelCalibrationError):
         if calibration_error is not None:
             message += f" (calibration had already failed: {calibration_error})"
         # Carry forward diagnostics from the original failure, if it has any,
-        # so a holdout-validation failure followed by a restore failure still
-        # shows the diagnostics graph instead of losing it to the wrapper.
+        # so a scatter failure followed by a restore failure still shows the
+        # diagnostics graph instead of losing it to the wrapper.
         super().__init__(
             message, diagnostics=getattr(calibration_error, "diagnostics", None)
         )
@@ -149,25 +82,45 @@ class HardwareFingerprint:
 
 @dataclass(frozen=True)
 class CalibrationObservation:
-    """One stage/image displacement pair used by the calibration."""
+    """One stage/image displacement pair used by the calibration.
+
+    ``image_shift_xy`` is in geometric x/y order and is the negative of the
+    apparent motion of sample features, which is the convention the fitted
+    matrix maps to stage micrometres.
+
+    ``residual_px`` is filled in once the final matrix exists, and is the
+    translation-aware residual the acceptance check itself uses: the stage
+    position mapped back through the inverse affine, minus the measured image
+    shift. It stays ``None`` on observations emitted live during acquisition,
+    because no matrix exists yet to measure them against.
+
+    ``label`` is the corner number drawn by the diagnostics graph.
+    """
 
     stage_position_um: tuple[float, float]
     stage_delta_um: tuple[float, float]
-    registration: RegistrationResult
-    corrected_shift_xy: tuple[float, float]
-    accepted: bool = True
-    rejection_reason: str = ""
+    image_shift_xy: tuple[float, float]
+    residual_px: tuple[float, float] | None = None
+    label: str = ""
 
 
 @dataclass(frozen=True)
 class AffineFitResult:
-    """Robust image-pixel to stage-micrometre affine fit."""
+    """Image-pixel to stage-micrometre affine fit and its diagnostics.
+
+    ``residuals_px`` and the RMS and worst values derived from it are the
+    translation-aware residuals the acceptance check uses.
+
+    Four corner measurements feeding a six-parameter affine leave only one
+    residual degree of freedom per output axis. A bad measurement is therefore
+    spread across all four residuals rather than isolated at its source; the
+    per-corner values are real, but do not reliably identify which acquisition
+    went wrong.
+    """
 
     matrix: NDArray[np.float64]
     residuals_um: NDArray[np.float64]
     residuals_px: NDArray[np.float64]
-    weights: NDArray[np.float64]
-    inlier_mask: NDArray[np.bool_]
     pixel_size_um: float
     pixel_size_x_um: float
     pixel_size_y_um: float
@@ -185,28 +138,14 @@ class AffineFitResult:
 
 @dataclass(frozen=True)
 class PixelCalibrationResult:
-    """A validated but not necessarily persisted pixel calibration."""
+    """A measured but not necessarily persisted pixel calibration."""
 
     fit: AffineFitResult
     raw_matrix: NDArray[np.float64]
     raw_pixel_size_um: float
     fingerprint: HardwareFingerprint
     observations: tuple[CalibrationObservation, ...]
-    validation_observations: tuple[CalibrationObservation, ...]
     stage_returned: bool
     algorithm_version: str = "1"
     warnings: tuple[CalibrationWarning, ...] = field(default_factory=tuple)
-
-
-def as_float64_points(
-    values: Sequence[Sequence[float]] | NDArray[np.floating], *, name: str
-) -> NDArray[np.float64]:
-    """Validate and copy an N x 2 point array."""
-    import numpy as np
-
-    result = np.asarray(values, dtype=np.float64)
-    if result.ndim != 2 or result.shape[1] != 2:
-        raise ValueError(f"{name} must have shape (N, 2)")
-    if not np.all(np.isfinite(result)):
-        raise ValueError(f"{name} must contain only finite values")
-    return result
+    max_rms_px: float = 5.0
