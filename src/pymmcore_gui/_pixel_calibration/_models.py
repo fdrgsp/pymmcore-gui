@@ -223,7 +223,7 @@ class PixelCalibrationResult:
     observations: tuple[CalibrationObservation, ...]
     validation_observations: tuple[CalibrationObservation, ...]
     stage_returned: bool
-    algorithm_version: str = "2"
+    algorithm_version: str = "1"
     warnings: tuple[CalibrationWarning, ...] = field(default_factory=tuple)
 
 
