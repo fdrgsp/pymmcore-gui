@@ -3163,17 +3163,17 @@ def test_collapsible_mda_shows_store_creation_progress(
 
     def fake_execute(_output: object) -> None:
         nonlocal startup_observed
-        startup_observed = mda._store_overlay.isVisible()
+        startup_observed = mda._progress_overlay.isVisible()
 
     monkeypatch.setattr(mda, "execute_mda", fake_execute)
     mda.run_mda()
 
     assert startup_observed
-    assert mda._store_overlay.isVisible()
-    assert mda._store_overlay._message == "Creating data store…"
+    assert mda._progress_overlay.isVisible()
+    assert mda._progress_overlay._message == "Creating data store…"
 
     mmcore.mda.events.sequenceStarted.emit(mda.value(), {})
-    qtbot.waitUntil(mda._store_overlay.isHidden)
+    qtbot.waitUntil(mda._progress_overlay.isHidden)
     assert mda._mda_state_timer.isActive()
 
     # The runner closes/finalizes the sink before it emits sequenceFinished.
@@ -3181,13 +3181,13 @@ def test_collapsible_mda_shows_store_creation_progress(
     state_type = type(mmcore.mda.status.phase)
     mmcore.mda._state = state_type.FINISHING
     mda._sync_mda_state()
-    assert mda._store_overlay.isVisible()
-    assert mda._store_overlay._message == "Finalizing data store…"
+    assert mda._progress_overlay.isVisible()
+    assert mda._progress_overlay._message == "Finalizing data store…"
 
     # The timer is also a recovery path when the finish notification is missed.
     mmcore.mda._state = state_type.IDLE
     mda._sync_mda_state()
-    assert mda._store_overlay.isHidden()
+    assert mda._progress_overlay.isHidden()
     assert not mda._mda_state_timer.isActive()
     assert mda.control_btns.run_btn.isVisible()
     assert mda.control_btns.run_btn.isEnabled()
@@ -3195,7 +3195,43 @@ def test_collapsible_mda_shows_store_creation_progress(
     # Memory-backed runs are fast and should not flash a store message.
     mda.save_info.setChecked(False)
     mda.run_mda()
-    assert mda._store_overlay.isHidden()
+    assert mda._progress_overlay.isHidden()
+
+
+def test_collapsible_mda_shows_cancellation_progress(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    tmp_path: Path,
+) -> None:
+    """A user-requested cancellation stays visible through store teardown."""
+    mda = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(mda)
+    mda.show()
+    mda.save_info.setValue(tmp_path / "acquisition.ome.tif")
+
+    state_type = type(mmcore.mda.status.phase)
+    mmcore.mda._state = state_type.ACQUIRING
+    mmcore.mda.events.sequenceStarted.emit(mda.value(), {})
+
+    mda.control_btns.cancel_btn.click()
+    assert mda._cancel_requested
+    assert mda._progress_overlay.isVisible()
+    assert mda._progress_overlay._message == "Cancelling acquisition…"
+
+    # Cancellation still has queued data to flush.  Keep the cancellation
+    # message rather than replacing it with the normal finalization message.
+    mmcore.mda._state = state_type.FINISHING
+    mda._sync_mda_state()
+    assert mda._progress_overlay.isVisible()
+    assert mda._progress_overlay._message == "Cancelling acquisition…"
+
+    mmcore.mda._state = state_type.IDLE
+    mda._sync_mda_state()
+    assert not mda._cancel_requested
+    assert mda._progress_overlay.isHidden()
+    assert not mda._mda_state_timer.isActive()
+    assert mda.control_btns.run_btn.isVisible()
+    assert mda.control_btns.run_btn.isEnabled()
 
 
 def test_collapsible_mda_disables_every_editor_during_acquisition(

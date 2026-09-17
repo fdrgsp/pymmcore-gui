@@ -143,6 +143,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
     def __init__(self, mmcore: CMMCorePlus, parent: QWidget | None = None) -> None:
         self._restoring_sequence = False
         self._applying_channel_config = False
+        self._cancel_requested = False
         # {channel preset: [(device, property, intensity), ...]}, parsed from the
         # loaded cfg's comment block. Held in memory rather than re-read per use, so
         # it stays right after saving to a *different* file than the loaded one.
@@ -150,7 +151,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         super().__init__(parent=parent, mmcore=mmcore)
         self.camera_roi.setRoiInfoVisible(False)
         self._update_time_estimate()
-        self._store_overlay = BusyOverlay(self)
+        self._progress_overlay = BusyOverlay(self)
         self._sequenceStartedInGui.connect(self._on_sequence_started_in_gui)
         self._sequenceFinishedInGui.connect(self._on_sequence_finished_in_gui)
         self._mmc.mda.events.sequenceStarted.connect(self._relay_sequence_started)
@@ -158,6 +159,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         self._mda_state_timer = QTimer(self)
         self._mda_state_timer.setInterval(100)
         self._mda_state_timer.timeout.connect(self._sync_mda_state)
+        self.control_btns.cancel_btn.released.connect(self._on_cancel_requested)
         self._apply_theme_metrics()
         combo = self.save_info._writer_combo
         for idx in range(combo.count()):
@@ -249,10 +251,10 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         self._duration_label.hide()
 
     def resizeEvent(self, a0: QResizeEvent | None) -> None:
-        """Keep the data-store startup overlay fitted to the MDA editor."""
+        """Keep the acquisition progress overlay fitted to the MDA editor."""
         super().resizeEvent(a0)
-        if hasattr(self, "_store_overlay"):
-            self._store_overlay.setGeometry(self.rect())
+        if hasattr(self, "_progress_overlay"):
+            self._progress_overlay.setGeometry(self.rect())
 
     def run_mda(self) -> None:
         """Start an MDA, showing progress while a disk store is initialized."""
@@ -262,14 +264,14 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
 
         show_store_progress = self.save_info.isChecked() and self.isVisible()
         if show_store_progress:
-            self._store_overlay.start("Creating data store…")
+            self._progress_overlay.start("Creating data store…")
         try:
             self.execute_mda(output)
         except Exception:
             # A synchronous launch failure emits neither sequenceStarted nor
             # sequenceFinished, so clear the overlay here.
             if show_store_progress:
-                self._store_overlay.stop()
+                self._progress_overlay.stop()
             raise
 
     def _relay_sequence_started(self, *_: object) -> None:
@@ -281,32 +283,50 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         self._sequenceFinishedInGui.emit()
 
     def _on_sequence_started_in_gui(self) -> None:
-        self._store_overlay.stop()
+        self._cancel_requested = False
+        self._progress_overlay.stop()
         self._mda_state_timer.start()
 
     def _on_sequence_finished_in_gui(self) -> None:
         self._sync_mda_state()
 
+    def _on_cancel_requested(self) -> None:
+        """Show cancellation progress until the runner has completely stopped."""
+        if self._mmc.mda.status.phase.value == "idle":
+            return
+        self._cancel_requested = True
+        if self.isVisible():
+            self._progress_overlay.start("Cancelling acquisition…")
+
     def _sync_mda_state(self) -> None:
         """Show finalization progress and recover controls from missed signals."""
         phase = self._mmc.mda.status.phase.value
+        if self._cancel_requested and phase != "idle":
+            if self.isVisible() and (
+                self._progress_overlay.isHidden()
+                or self._progress_overlay._message != "Cancelling acquisition…"
+            ):
+                self._progress_overlay.start("Cancelling acquisition…")
+            return
+
         if phase == "finishing":
             if (
                 self.save_info.isChecked()
                 and self.isVisible()
                 and (
-                    self._store_overlay.isHidden()
-                    or self._store_overlay._message != "Finalizing data store…"
+                    self._progress_overlay.isHidden()
+                    or self._progress_overlay._message != "Finalizing data store…"
                 )
             ):
-                self._store_overlay.start("Finalizing data store…")
+                self._progress_overlay.start("Finalizing data store…")
             return
 
         if phase != "idle":
             return
 
+        self._cancel_requested = False
         self._mda_state_timer.stop()
-        self._store_overlay.stop()
+        self._progress_overlay.stop()
         # sequenceFinished normally restores these through pymmcore-widgets.
         # Polling the runner provides a fallback if that GUI notification is
         # delayed or missed after cancellation/writer teardown.
@@ -327,6 +347,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
             self._mmc.mda.events.sequenceFinished.disconnect(
                 self._relay_sequence_finished
             )
+            self.control_btns.cancel_btn.released.disconnect(self._on_cancel_requested)
             self._mmc.events.systemConfigurationLoaded.disconnect(
                 self._reload_light_source_declarations
             )
