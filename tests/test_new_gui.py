@@ -3174,6 +3174,23 @@ def test_collapsible_mda_shows_store_creation_progress(
 
     mmcore.mda.events.sequenceStarted.emit(mda.value(), {})
     qtbot.waitUntil(mda._store_overlay.isHidden)
+    assert mda._mda_state_timer.isActive()
+
+    # The runner closes/finalizes the sink before it emits sequenceFinished.
+    # Keep the editor blocked, but explain that the last image is already done.
+    state_type = type(mmcore.mda.status.phase)
+    mmcore.mda._state = state_type.FINISHING
+    mda._sync_mda_state()
+    assert mda._store_overlay.isVisible()
+    assert mda._store_overlay._message == "Finalizing data store…"
+
+    # The timer is also a recovery path when the finish notification is missed.
+    mmcore.mda._state = state_type.IDLE
+    mda._sync_mda_state()
+    assert mda._store_overlay.isHidden()
+    assert not mda._mda_state_timer.isActive()
+    assert mda.control_btns.run_btn.isVisible()
+    assert mda.control_btns.run_btn.isEnabled()
 
     # Memory-backed runs are fast and should not flash a store message.
     mda.save_info.setChecked(False)

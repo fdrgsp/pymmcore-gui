@@ -125,7 +125,8 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
     core bridge, and the memory-sink output fallback.
     """
 
-    _storeCreationFinished = Signal()
+    _sequenceStartedInGui = Signal()
+    _sequenceFinishedInGui = Signal()
 
     def _create_tab_widget(self) -> CollapsibleCoreMDATabs:
         return ActiveChannelCollapsibleCoreMDATabs(None, self._mmc)
@@ -150,9 +151,13 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         self.camera_roi.setRoiInfoVisible(False)
         self._update_time_estimate()
         self._store_overlay = BusyOverlay(self)
-        self._storeCreationFinished.connect(self._store_overlay.stop)
-        self._mmc.mda.events.sequenceStarted.connect(self._on_store_creation_finished)
-        self._mmc.mda.events.sequenceFinished.connect(self._on_store_creation_finished)
+        self._sequenceStartedInGui.connect(self._on_sequence_started_in_gui)
+        self._sequenceFinishedInGui.connect(self._on_sequence_finished_in_gui)
+        self._mmc.mda.events.sequenceStarted.connect(self._relay_sequence_started)
+        self._mmc.mda.events.sequenceFinished.connect(self._relay_sequence_finished)
+        self._mda_state_timer = QTimer(self)
+        self._mda_state_timer.setInterval(100)
+        self._mda_state_timer.timeout.connect(self._sync_mda_state)
         self._apply_theme_metrics()
         combo = self.save_info._writer_combo
         for idx in range(combo.count()):
@@ -267,18 +272,60 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
                 self._store_overlay.stop()
             raise
 
-    def _on_store_creation_finished(self, *_: object) -> None:
-        """Relay worker-thread MDA signals safely back to the Qt GUI thread."""
-        self._storeCreationFinished.emit()
+    def _relay_sequence_started(self, *_: object) -> None:
+        """Relay the worker-thread start event safely to the GUI thread."""
+        self._sequenceStartedInGui.emit()
+
+    def _relay_sequence_finished(self, *_: object) -> None:
+        """Relay the worker-thread finish event safely to the GUI thread."""
+        self._sequenceFinishedInGui.emit()
+
+    def _on_sequence_started_in_gui(self) -> None:
+        self._store_overlay.stop()
+        self._mda_state_timer.start()
+
+    def _on_sequence_finished_in_gui(self) -> None:
+        self._sync_mda_state()
+
+    def _sync_mda_state(self) -> None:
+        """Show finalization progress and recover controls from missed signals."""
+        phase = self._mmc.mda.status.phase.value
+        if phase == "finishing":
+            if (
+                self.save_info.isChecked()
+                and self.isVisible()
+                and (
+                    self._store_overlay.isHidden()
+                    or self._store_overlay._message != "Finalizing data store…"
+                )
+            ):
+                self._store_overlay.start("Finalizing data store…")
+            return
+
+        if phase != "idle":
+            return
+
+        self._mda_state_timer.stop()
+        self._store_overlay.stop()
+        # sequenceFinished normally restores these through pymmcore-widgets.
+        # Polling the runner provides a fallback if that GUI notification is
+        # delayed or missed after cancellation/writer teardown.
+        self._enable_widgets(True)
+        controls = self.control_btns
+        controls.run_btn.show()
+        controls.pause_btn.hide()
+        controls.cancel_btn.hide()
+        controls._on_mda_paused(False)
+        self._apply_themed_icons()
 
     def _disconnect(self) -> None:
         """Disconnect this subclass's MDA callbacks, then the upstream ones."""
         with suppress(Exception):
             self._mmc.mda.events.sequenceStarted.disconnect(
-                self._on_store_creation_finished
+                self._relay_sequence_started
             )
             self._mmc.mda.events.sequenceFinished.disconnect(
-                self._on_store_creation_finished
+                self._relay_sequence_finished
             )
             self._mmc.events.systemConfigurationLoaded.disconnect(
                 self._reload_light_source_declarations
