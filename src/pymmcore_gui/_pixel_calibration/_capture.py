@@ -73,7 +73,7 @@ class CaptureStateTransaction:
         self._settings = settings
         self._resolution_id = resolution_id
         self._expected_resolution_settings = expected_resolution_settings
-        # Snap/Test-frame/Start-calibration must land on the target resolution's
+        # Snap/Start-calibration must land on the target resolution's
         # exact optical state to measure anything meaningful, so they verify it.
         # A plain live preview isn't calibrating a specific resolution -- it's
         # just supposed to show whatever's actually on the microscope right

@@ -1181,7 +1181,7 @@ class PixelCalibrationPanel(QWidget):
     def toggleLivePreview(self) -> None:
         """Start or stop live viewing with the channel, camera, and light source.
 
-        Unlike Snap/Test-frame/Start-calibration, this also skips verifying
+        Unlike Snap/Start-calibration, this also skips verifying
         that the current pixel-size config matches the selected resolution
         (see ``_capture_settings``): Live is for looking at whatever is
         actually on the microscope right now, regardless of which resolution

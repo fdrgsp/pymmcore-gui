@@ -158,7 +158,7 @@ class PixelConfigurationWidget(_UpstreamPixelConfiguration):
 
         Deliberately does *not* also require the editor's current property set
         to match what's saved to core: those values only matter when they are
-        actually applied before a Snap/Test-frame/Start-calibration run, where
+        actually applied before a Snap/Start-calibration run, where
         a mismatch already surfaces as its own clear error. Gating calibration
         itself on it too would block unsaved or property-free resolutions, such
         as a manually swapped objective with no state device tracking it.

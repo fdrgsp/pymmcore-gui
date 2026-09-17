@@ -955,11 +955,11 @@ def run_pixel_calibration(
 ) -> PixelCalibrationResult:
     """Measure the image-to-stage affine using the ported Java routine.
 
-    Unlike ``run_pixel_calibration``, a result that passes the 5 px RMS scatter
-    tolerance is returned without further validation: there is no holdout
-    stage, no anisotropy or orthogonality limit, and no pixel-size comparison
-    against the stored calibration. The caller decides whether to keep it, the
-    way the Java dialog asks the user.
+    A result that passes the 5 px RMS scatter tolerance is returned without
+    further validation: there is no holdout stage, no anisotropy or
+    orthogonality limit, and no pixel-size comparison against the stored
+    calibration. The caller decides whether to keep it, the way the Java
+    dialog asks the user.
 
     The stage is always commanded back to its starting position afterwards. A
     return that lands outside ``stage_return_tolerance_um`` is reported as

@@ -146,6 +146,6 @@ class PixelCalibrationResult:
     fingerprint: HardwareFingerprint
     observations: tuple[CalibrationObservation, ...]
     stage_returned: bool
-    algorithm_version: str = "1"
+    algorithm_version: str = "v1"
     warnings: tuple[CalibrationWarning, ...] = field(default_factory=tuple)
     max_rms_px: float = 5.0
