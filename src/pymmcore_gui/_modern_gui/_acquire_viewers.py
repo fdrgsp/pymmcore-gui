@@ -94,6 +94,9 @@ class AcquireViewersManager(QObject):
         self._active_dock: CDockWidget | None = None
         self._follow_acquisition = True
         self._connected = True
+        # {(p, g): flattened "p"-slider slot}, reset per sequence -- see
+        # _on_frame_ready for why this exists.
+        self._shot_indices: dict[tuple[object, object], int] = {}
 
         self.preview: NDVPreview | None = None
         self._preview_dock: CDockWidget | None = None
@@ -186,6 +189,7 @@ class AcquireViewersManager(QObject):
         """Create a viewer backed by the acquisition's live sink view."""
         self._active_viewer = None
         self._active_dock = None
+        self._shot_indices = {}
         view = self._core.mda.get_view()
         if view is None:
             # Runs without a path, AcquisitionSettings, or "memory" output have
@@ -256,10 +260,27 @@ class AcquireViewersManager(QObject):
 
         current_index = viewer.display_model.current_index
         wrapper = viewer.data_wrapper
-        index = {
-            ("p" if str(axis) == "g" else str(axis)): value
-            for axis, value in event.index.items()
-        }
+        index = {str(axis): value for axis, value in event.index.items()}
+        print()
+        print(index)
+        if "p" in index or "g" in index:
+            # A position's own grid sub-sequence yields both "p" (the real
+            # position) and "g" (the tile within it) on the same event.
+            # Naively renaming "g" -> "p" clobbered the real position value
+            # and collided with another position's index. Route every
+            # position-like event -- plain positions and position/tile pairs
+            # alike -- through one shared counter instead, so every distinct
+            # (position, tile) identity gets its own, strictly increasing
+            # "p"-slider slot, assigned in acquisition order. That keeps a
+            # plain position's slot from numerically colliding with a
+            # flattened tile slot from another position's grid, and the
+            # slider always ends on the true last frame. Revisiting the same
+            # location later (e.g. the next timepoint) reuses its existing
+            # slot rather than minting a new one.
+            shot_key = (index.pop("p", None), index.pop("g", None))
+            index["p"] = self._shot_indices.setdefault(
+                shot_key, len(self._shot_indices)
+            )
 
         def _update() -> None:
             try:
