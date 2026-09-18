@@ -261,8 +261,6 @@ class AcquireViewersManager(QObject):
         current_index = viewer.display_model.current_index
         wrapper = viewer.data_wrapper
         index = {str(axis): value for axis, value in event.index.items()}
-        print()
-        print(index)
         if "p" in index or "g" in index:
             # A position's own grid sub-sequence yields both "p" (the real
             # position) and "g" (the tile within it) on the same event.
