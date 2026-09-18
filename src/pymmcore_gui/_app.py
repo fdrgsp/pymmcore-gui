@@ -5,6 +5,7 @@ import importlib.util
 import os
 import signal
 import sys
+import threading
 import traceback
 import warnings
 from contextlib import suppress
@@ -373,15 +374,18 @@ class LoadConfigDialog(QMessageBox):
 
 
 def _install_excepthook() -> None:
-    """Install a custom excepthook that does not raise sys.exit().
+    """Install custom exception hooks for the main thread and other threads.
 
     This is necessary to prevent the application from closing when an exception
-    is raised.
+    is raised, and to make sure exceptions raised on background threads (e.g.
+    during an MDA run) are logged and surfaced in the GUI instead of only being
+    printed to stderr by Python's default `threading.excepthook`.
     """
     if hasattr(sys, "_original_excepthook_"):
         return
     sys._original_excepthook_ = sys.excepthook  # type: ignore
     sys.excepthook = ndv_excepthook
+    threading.excepthook = _threading_excepthook
 
 
 def rich_print_exception(
@@ -438,8 +442,6 @@ def ndv_excepthook(
         and ("pydevd" in sys.modules)
     ):  # pragma: no cover
         with suppress(Exception):
-            import threading
-
             import pydevd  # pyright: ignore [reportMissingImports]
 
             if (py_db := pydevd.get_global_debugger()) is None:
@@ -465,3 +467,17 @@ def ndv_excepthook(
     if os.getenv("MMGUI_EXIT_ON_EXCEPTION"):
         print("\nMMGUI_EXIT_ON_EXCEPTION is set, exiting.")
         sys.exit(1)
+
+
+def _threading_excepthook(args: threading.ExceptHookArgs) -> None:
+    """Forward uncaught exceptions raised on background threads to `ndv_excepthook`.
+
+    Unlike the main thread, threads route their uncaught exceptions through
+    `threading.excepthook` rather than `sys.excepthook` -- e.g. an MDA sequence
+    run via `CMMCorePlus.run_mda`, which executes on a background `Thread`. Without
+    this, such exceptions are only printed to stderr and never reach the GUI's
+    exception log / notifications.
+    """
+    if args.exc_type is SystemExit or args.exc_value is None:
+        return
+    ndv_excepthook(args.exc_type, args.exc_value, args.exc_traceback)
