@@ -7,6 +7,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from ome_writers import AcquisitionSettings, ScratchFormat
 from pymmcore_widgets import MDAWidgetCollapsible
 from pymmcore_widgets._icons import StandardIcon
 from pymmcore_widgets.mda import (
@@ -47,6 +48,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QPushButton,
     QWidget,
 )
+from pymmcore_gui._settings import Settings
 
 from ._active_channel_table import (
     CURRENT_CHANNEL_COLUMN,
@@ -116,6 +118,23 @@ def _align_bounds_grid(bounds: CoreXYBoundsControl) -> None:
     grid_layout.setContentsMargins(
         left or 0, round((top or 0) + top_shift), right or 0, bottom or 0
     )
+
+
+def _memory_output_settings() -> AcquisitionSettings:
+    """Build the "no saving" scratch output from the user's Data & Memory prefs.
+
+    Used whenever the Saving section is unchecked -- see ``MemoryMDAWidget.
+    prepare_mda``. The resulting `AcquisitionSettings` still gives the run a
+    live, viewable array (via `ome_writers`' scratch backend); nothing is
+    written to disk unless the in-memory limit below is exceeded.
+    """
+    prefs = Settings.instance().scratch
+    fmt = ScratchFormat(
+        max_memory_bytes=round(prefs.max_memory_gb * 1024**3),
+        spill_to_disk=prefs.spill_to_disk,
+        spill_dir=str(prefs.scratch_dir) if prefs.scratch_dir else None,
+    )
+    return AcquisitionSettings(format=fmt)
 
 
 class MemoryMDAWidget(MDAWidgetCollapsible):
@@ -989,7 +1008,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
             self._apply_theme_metrics()
             self._apply_table_toolbar_icon_size()
 
-    def prepare_mda(self) -> bool | str | Path | None:
+    def prepare_mda(self) -> bool | str | Path | AcquisitionSettings | None:
         """Return a disk path or a scratch sink that supports live viewing."""
         output = super().prepare_mda()
-        return "memory" if output is None else output
+        return _memory_output_settings() if output is None else output

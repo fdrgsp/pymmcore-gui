@@ -51,6 +51,7 @@ from ._configurations import ConfigurationsPage
 from ._hardware import HardwareSetupPage
 from ._installation import InstallationPage
 from ._panels import PanelKey
+from ._preferences import PreferencesButton
 from ._startup import StartupChoice, StartupDialog
 from ._theme import (
     qcolor,
@@ -336,7 +337,7 @@ class MainWindow(QMainWindow):
             if hasattr(app, "exceptionRaised"):
                 cast("MMQApplication", app).exceptionRaised.connect(self._on_exception)
 
-        # ── top toolbar: mode tabs + theme toggle ─────────────────
+        # ── top toolbar: mode tabs + preferences + theme toggle ───
         self._toolbar = QToolBar()
         self._toolbar.setMovable(False)
         self._toolbar.setFloatable(False)
@@ -348,6 +349,9 @@ class MainWindow(QMainWindow):
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._toolbar.addWidget(spacer)
+
+        self._preferences_btn = PreferencesButton()
+        self._toolbar.addWidget(self._preferences_btn)
 
         self._theme_btn = QPushButton("☀" if self._is_dark else "🌙")
         self._theme_btn.setFixedSize(32, 32)

@@ -224,6 +224,21 @@ class ModernWindowSettingsV1(BaseMMSettings):
         return bool(self.acquire_dock_state and self.acquire_panels)
 
 
+class ScratchSettingsV1(BaseMMSettings):
+    """Where acquisitions that are not saved to disk keep their data.
+
+    Used for the "memory" output of MDA runs with saving disabled (see
+    ``ome_writers.ScratchFormat``).
+    """
+
+    max_memory_gb: float = Field(default=4.0, gt=0)
+    """Largest run (in GB) held entirely in RAM."""
+    spill_to_disk: bool = True
+    """Above ``max_memory_gb``: spill to ``scratch_dir`` (True) or refuse the run."""
+    scratch_dir: Path | None = None
+    """Parent folder for spilled data. None means the system temp folder."""
+
+
 class SettingsV1(BaseMMSettings):
     """Global settings for the PyMMCore GUI."""
 
@@ -237,6 +252,7 @@ class SettingsV1(BaseMMSettings):
     modern_window: ModernWindowSettingsV1 = Field(
         default_factory=ModernWindowSettingsV1
     )
+    scratch: ScratchSettingsV1 = Field(default_factory=ScratchSettingsV1)
 
     send_error_reports: bool | None = None
     """Whether to send error reports to the developers, None means undecided."""

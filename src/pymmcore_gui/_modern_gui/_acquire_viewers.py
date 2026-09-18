@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
     import ndv
     import numpy as np
     from pymmcore_plus import CMMCorePlus
+    from pymmcore_plus.mda import SinkProtocol
     from pymmcore_plus.metadata import FrameMetaV1, SummaryMetaV1
     from useq import MDAEvent, MDASequence
 
@@ -42,6 +44,9 @@ class _ViewerRecord:
     coords_signal: Any = None
     coords_callback: Callable[[], None] | None = None
     acquisition: AcquisitionRecord | None = None
+    # The exact sink object behind this viewer's data, captured at
+    # sequenceStarted -- see AcquireViewersManager._on_viewer_closed.
+    sink: SinkProtocol | None = None
 
     def disconnect(self) -> None:
         """Disconnect the live stream from a viewer that is being closed."""
@@ -97,6 +102,10 @@ class AcquireViewersManager(QObject):
         # {(p, g): flattened "p"-slider slot}, reset per sequence -- see
         # _on_frame_ready for why this exists.
         self._shot_indices: dict[tuple[object, object], int] = {}
+        # Set when a still-running run's viewer is closed: release_sink()
+        # refuses to drop a sink while it's being written to, so the release
+        # is retried once sequenceFinished confirms the run is done.
+        self._pending_release: SinkProtocol | None = None
 
         self.preview: NDVPreview | None = None
         self._preview_dock: CDockWidget | None = None
@@ -207,7 +216,11 @@ class AcquireViewersManager(QObject):
         # sink is replaced wholesale on the *next* run, so a viewer left open
         # across two acquisitions must hold its own copy to export correctly
         # later. Per-frame metadata is appended live, in _on_frame_ready.
+        # The sink object itself is also kept (record.sink), so this specific
+        # run's data can be released later by identity, even after the
+        # runner's own `get_sink()` has moved on to a newer run.
         sink = self._core.mda.get_sink()
+        record.sink = sink
         if isinstance(sink, OmeWritersSink):
             acquisition = AcquisitionRecord(
                 settings=sink.settings, summary_meta=sink.summary_meta, view=view
@@ -292,7 +305,10 @@ class AcquireViewersManager(QObject):
         QTimer.singleShot(10, _update)
 
     def _on_sequence_finished(self, sequence: MDASequence) -> None:
-        """Stop treating the most recent viewer as an active acquisition."""
+        """Retry releasing a just-finished run's data if its viewer already closed."""
+        if (sink := self._pending_release) is not None:
+            self._pending_release = None
+            self._release_sink(sink)
 
     def _on_viewer_closed(self, dw: CDockWidget) -> None:
         record = self._records.pop(dw, None)
@@ -305,6 +321,27 @@ class AcquireViewersManager(QObject):
         if record is not None:
             with suppress(Exception):
                 record.viewer.close()
+            # Drop the runner's own reference to this run's data (freeing
+            # scratch/memory-backed runs and their spill files), unless it's
+            # still being written to -- release_sink() is a no-op if `sink`
+            # is no longer the runner's current one (a newer run replaced it;
+            # that run's data was already dropped by the runner itself, and
+            # is kept alive only by this now-closed viewer's own references).
+            if (sink := record.sink) is not None:
+                if not self._release_sink(sink) and self._core.mda.is_running():
+                    self._pending_release = sink
+
+    def _release_sink(self, sink: SinkProtocol) -> bool:
+        """Best-effort `release_sink`, followed by a GC pass to reclaim memory now.
+
+        ndv/Qt objects tend to form reference cycles, so without an explicit
+        collect the data can survive until the next cyclic-GC run instead of
+        being freed the moment this viewer closes.
+        """
+        released = self._core.mda.release_sink(sink)
+        if released:
+            QTimer.singleShot(0, gc.collect)
+        return released
 
     def _disconnect(self, obj: QObject | None = None) -> None:
         if not self._connected:
@@ -323,6 +360,7 @@ class AcquireViewersManager(QObject):
         self._records.clear()
         self._active_viewer = None
         self._active_dock = None
+        self._pending_release = None
         if self.preview is not None:
             self.preview.detach()
             self.preview = None

@@ -80,6 +80,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QToolButton,
     QWidget,
 )
+from pymmcore_gui._settings import Settings
 from pymmcore_gui.widgets._active_channel_table import CURRENT_CHANNEL_COLUMN
 from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
 from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
@@ -713,7 +714,13 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert page._mda_dock.widget() is page._mda
     assert not page._mda_dock.isClosed()
     assert page.panel_button(PanelKey.MDA).isChecked()
-    assert page._mda.prepare_mda() == "memory"
+    # No saving configured -> falls back to a scratch (in-memory) output,
+    # built from the user's Data & Memory preferences (see _memory_output_settings).
+    from ome_writers import AcquisitionSettings, ScratchFormat
+
+    output = page._mda.prepare_mda()
+    assert isinstance(output, AcquisitionSettings)
+    assert isinstance(output.format, ScratchFormat)
 
     # Groups and Presets is the one other default-open panel.
     assert page.panel_widget(PanelKey.PRESETS) is not None
@@ -2895,6 +2902,98 @@ def test_memory_mda_hides_estimated_duration(mmcore: CMMCorePlus, qtbot: QtBot) 
     assert mda._time_warning.isHidden()
 
 
+def test_memory_mda_prepare_mda_applies_scratch_prefs(
+    mmcore: CMMCorePlus, qtbot: QtBot, settings: Settings
+) -> None:
+    """Saving unchecked -> the scratch output reflects the Data & Memory prefs.
+
+    ``prepare_mda`` used to always fall back to the bare string ``"memory"``
+    (the format's own defaults); it must instead pick up whatever the user
+    has configured (see ``pymmcore_gui.widgets._mda_widget._memory_output_settings``).
+    """
+    from ome_writers import AcquisitionSettings, ScratchFormat
+
+    settings.scratch.max_memory_gb = 0.5
+    settings.scratch.spill_to_disk = False
+    settings.scratch.scratch_dir = Path("/tmp/some-scratch-dir")
+
+    mda = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(mda)
+    mda.save_info.setChecked(False)
+
+    output = mda.prepare_mda()
+    assert isinstance(output, AcquisitionSettings)
+    fmt = output.format
+    assert isinstance(fmt, ScratchFormat)
+    assert fmt.max_memory_bytes == round(0.5 * 1024**3)
+    assert fmt.spill_to_disk is False
+    assert fmt.spill_dir == str(Path("/tmp/some-scratch-dir"))
+
+
+def test_preferences_dialog_round_trips_scratch_settings(
+    qtbot: QtBot, settings: Settings
+) -> None:
+    """Save persists the form's values; the dialog also starts from whatever
+    is already in Settings, so reopening it shows the last saved values."""
+    from pymmcore_gui._modern_gui._preferences import PreferencesDialog
+
+    dlg = PreferencesDialog()
+    qtbot.addWidget(dlg)
+    dlg._max_memory.setValue(8.0)
+    dlg._spill_to_disk.setChecked(False)
+    assert not dlg._scratch_dir.isEnabled()
+    assert not dlg._browse_btn.isEnabled()
+    dlg._spill_to_disk.setChecked(True)
+    assert dlg._scratch_dir.isEnabled()
+    dlg._scratch_dir.setText("/tmp/my-scratch")
+
+    dlg._save()
+
+    prefs = settings.scratch
+    assert prefs.max_memory_gb == 8.0
+    assert prefs.spill_to_disk is True
+    assert prefs.scratch_dir == Path("/tmp/my-scratch")
+
+    # A freshly opened dialog reflects what was just saved.
+    dlg2 = PreferencesDialog()
+    qtbot.addWidget(dlg2)
+    assert dlg2._max_memory.value() == 8.0
+    assert dlg2._spill_to_disk.isChecked()
+    assert dlg2._scratch_dir.text() == "/tmp/my-scratch"
+
+
+def test_preferences_dialog_cancel_does_not_persist(
+    qtbot: QtBot, settings: Settings
+) -> None:
+    from pymmcore_gui._modern_gui._preferences import PreferencesDialog
+
+    original = settings.scratch.max_memory_gb
+    dlg = PreferencesDialog()
+    qtbot.addWidget(dlg)
+    dlg._max_memory.setValue(original + 10)
+    dlg.reject()
+
+    assert settings.scratch.max_memory_gb == original
+
+
+def test_preferences_button_opens_dialog(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    from pymmcore_gui._modern_gui._preferences import PreferencesDialog
+
+    win = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(win)
+
+    opened: list[PreferencesDialog] = []
+
+    def fake_exec(self: PreferencesDialog) -> int:
+        opened.append(self)
+        return QDialog.DialogCode.Rejected
+
+    with patch.object(PreferencesDialog, "exec", fake_exec):
+        win._preferences_btn.click()
+
+    assert len(opened) == 1
+
+
 def test_collapsible_mda_round_trips_all_original_widgets(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
@@ -3792,6 +3891,133 @@ def test_acquire_viewer_records_frame_metadata_regardless_of_follow_lock(
     manager._follow_acquisition = True
     manager._on_frame_ready(frame, event, meta)
     assert len(record.acquisition.frame_meta) == n_before + 2
+
+
+class _FakeViewer:
+    """Minimal ndv.ArrayViewer stand-in shared by the release_sink tests below."""
+
+    def __init__(self, data: object, /, **kwargs: object) -> None:
+        self.data = data
+        self.display_model = SimpleNamespace(current_index={})
+        self.data_wrapper = SimpleNamespace(
+            dims_changed=SimpleNamespace(emit=lambda: None),
+            data_changed=SimpleNamespace(emit=lambda: None),
+        )
+        self._widget = QWidget()
+
+    def widget(self) -> QWidget:
+        return self._widget
+
+    def close(self) -> None:
+        pass
+
+
+def test_acquire_closing_viewer_releases_its_sink(
+    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Closing a finished run's only viewer must free the runner's sink.
+
+    Otherwise a "memory" (scratch-backed) run's data -- and any files it
+    spilled to disk -- stays alive until the *next* run overwrites
+    `MDARunner._sink`, even though nothing references it anymore.
+    """
+    monkeypatch.setattr(acquire_viewers_module, "MMArrayViewer", _FakeViewer)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    mmcore.mda.run(
+        useq.MDASequence(channels=(useq.Channel(config="DAPI", exposure=10),)),
+        output="memory",
+    )
+    qtbot.wait(20)
+
+    dock = page._viewers._active_dock
+    assert dock is not None
+    sink = page._viewers._records[dock].sink
+    assert sink is not None
+    assert mmcore.mda.get_sink() is sink
+
+    dock.closeDockWidget()
+    qtbot.wait(20)
+
+    assert mmcore.mda.get_sink() is None
+
+
+def test_acquire_closing_old_viewer_keeps_newer_run(
+    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Closing an older run's viewer must never drop a newer run's data.
+
+    The runner only ever remembers the *latest* sink -- by the time a second
+    run finishes, it has already forgotten the first one -- so releasing by
+    identity (record.sink is the runner's current sink) must be a no-op here.
+    """
+    monkeypatch.setattr(acquire_viewers_module, "MMArrayViewer", _FakeViewer)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    mmcore.mda.run(
+        useq.MDASequence(channels=(useq.Channel(config="DAPI", exposure=10),)),
+        output="memory",
+    )
+    qtbot.wait(20)
+    first_dock = page._viewers._active_dock
+    assert first_dock is not None
+    first_sink = page._viewers._records[first_dock].sink
+    assert first_sink is not None
+
+    mmcore.mda.run(
+        useq.MDASequence(channels=(useq.Channel(config="FITC", exposure=10),)),
+        output="memory",
+    )
+    qtbot.wait(20)
+    second_sink = mmcore.mda.get_sink()
+    assert second_sink is not None
+    assert second_sink is not first_sink
+
+    first_dock.closeDockWidget()
+    qtbot.wait(20)
+
+    assert mmcore.mda.get_sink() is second_sink
+
+
+def test_acquire_closing_active_viewer_mid_run_defers_release(
+    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A running acquisition's sink must survive closing its own viewer.
+
+    release_sink() refuses to drop a sink while `is_running()` is True (it's
+    still being written to); the manager should retry once sequenceFinished
+    confirms the run is actually done.
+    """
+    monkeypatch.setattr(acquire_viewers_module, "MMArrayViewer", _FakeViewer)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    sequence = useq.MDASequence(channels=(useq.Channel(config="DAPI", exposure=10),))
+    mmcore.mda.run(sequence, output="memory")
+    qtbot.wait(20)
+
+    manager = page._viewers
+    dock = manager._active_dock
+    assert dock is not None
+    sink = manager._records[dock].sink
+    assert sink is not None
+
+    still_running = {"value": True}
+    monkeypatch.setattr(mmcore.mda, "is_running", lambda: still_running["value"])
+
+    dock.closeDockWidget()
+    qtbot.wait(20)
+
+    assert manager._pending_release is sink
+    assert mmcore.mda.get_sink() is sink  # not released while "running"
+
+    still_running["value"] = False
+    manager._on_sequence_finished(sequence)
+
+    assert manager._pending_release is None
+    assert mmcore.mda.get_sink() is None
 
 
 def _resized_splitter_sizes(
