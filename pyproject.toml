@@ -51,6 +51,7 @@ dependencies = [
     "tifffile>=2024.12.12",
     "tqdm>=4.67.1",
     "sentry-sdk>=2.20.0",
+    "useq-schema>=0.9.2",
 ]
 
 # TO USE pymmcore-nano, you need to add pymmcore-nano to dependencies
@@ -68,6 +69,7 @@ constraint-dependencies = ["chardet<6"]
 ome-writers = { git = "https://github.com/fdrgsp/ome-writers", rev = "cite" }
 pymmcore-widgets = { git = "https://github.com/fdrgsp/pymmcore-widgets", rev = "cite" }
 pymmcore-plus = { git = "https://github.com/fdrgsp/pymmcore-plus", rev = "cite" }
+useq-schema = { git = "https://github.com/fdrgsp/useq-schema", rev = "cite" }
 
 [dependency-groups]
 # should only be used after manually uninstalling PyQt6 and PyQt6Ads
