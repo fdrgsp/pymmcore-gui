@@ -89,8 +89,8 @@ if TYPE_CHECKING:
 
     from pymmcore_plus import CMMCorePlus
     from pymmcore_plus.model import Device
-    from pymmcore_widgets.mda._collapsible_mda import CollapsibleCoreMDATabs
     from pymmcore_widgets.mda._core_grid import CoreConnectedGridPlanWidget
+    from pymmcore_widgets.mda._core_mda import CoreMDATabs
     from pymmcore_widgets.useq_widgets._data_table import DataTable
     from pytestqt.qtbot import QtBot
     from qtpy.QtCore import QModelIndex
@@ -4661,7 +4661,7 @@ def test_mda_grid_bounds_icons_stay_visible_after_action_changes(
 def test_position_subsequence_popup_is_collapsed_and_themed(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    """Per-position editors start compact and use the main app's styling."""
+    """Per-position editors expose only the grid plan, styled to match the app."""
     set_theme(DARK_THEME)
     widget = MemoryMDAWidget(mmcore)
     qtbot.addWidget(widget)
@@ -4673,11 +4673,16 @@ def test_position_subsequence_popup_is_collapsed_and_themed(
     popup.show()
     QApplication.processEvents()
 
-    # _MDAPopup.mda_tabs is typed as the base MDATabs since its concrete type
-    # is chosen dynamically at runtime (see _MDAPopup.__init__); this popup is
-    # opened from a Collapsible/CoreConnected tree, so it's always these here.
-    tabs = cast("CollapsibleCoreMDATabs", popup.mda_tabs)
-    assert all(not section.expanded for section in tabs.sections)
+    # A position sub-sequence only supports a grid plan, so _MDAPopup always
+    # falls back to the plain, non-collapsible CoreMDATabs -- every other axis
+    # is removed entirely (a real QTabWidget.removeTab, so indexOf is -1) and
+    # the grid tab is the one left current.
+    tabs = cast("CoreMDATabs", popup.mda_tabs)
+    assert type(tabs).__name__ == "CoreMDATabs"
+    removed_axes = (tabs.channels, tabs.stage_positions, tabs.z_plan, tabs.time_plan)
+    for axis_widget in removed_axes:
+        assert tabs.indexOf(axis_widget) == -1
+    assert tabs.currentIndex() == tabs.indexOf(tabs.grid_plan)
     assert all(
         not child.styleSheet()
         for child in (popup, *popup.findChildren(QWidget))

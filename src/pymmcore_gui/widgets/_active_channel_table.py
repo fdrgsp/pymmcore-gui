@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any, cast
 from pymmcore_widgets.mda import (
     CollapsibleCoreMDATabs,
     CoreConnectedChannelTable,
-    SectionMetrics,
 )
 from pymmcore_widgets.useq_widgets._column_info import ColumnInfo
 from superqt.utils import signals_blocked
@@ -19,10 +18,9 @@ from pymmcore_gui._array_viewer import (
     set_source_icon,
     unstyle_widgets,
 )
-from pymmcore_gui._modern_gui._theme import theme
-from pymmcore_gui._qt.QtCore import QEvent, QSize, Qt, QTimer
+from pymmcore_gui._qt.QtCore import QEvent, QObject, Qt
 from pymmcore_gui._qt.QtWidgets import (
-    QAbstractButton,
+    QApplication,
     QHeaderView,
     QPushButton,
     QTableWidgetItem,
@@ -145,22 +143,6 @@ class ActiveChannelTable(CoreConnectedChannelTable):
 class ActiveChannelCollapsibleCoreMDATabs(CollapsibleCoreMDATabs):
     """Collapsible MDA tabs using :class:`ActiveChannelTable`."""
 
-    def __init__(
-        self,
-        parent: QWidget | None = None,
-        core: CMMCorePlus | None = None,
-    ) -> None:
-        # Position-table sub-sequences are hosted by pymmcore-widgets' private
-        # _MDAPopup.  Remember that context before the superclass builds the
-        # complete editor tree; the same tab class is also used by the main MDA
-        # widget, where Channels intentionally starts expanded.
-        self._is_subsequence_editor = (
-            parent is not None and type(parent).__name__ == "_MDAPopup"
-        )
-        super().__init__(parent, core)
-        if self._is_subsequence_editor:
-            self._configure_subsequence_editor()
-
     def create_subwidgets(self) -> None:
         super().create_subwidgets()
         inherited_channels = self.channels
@@ -172,70 +154,73 @@ class ActiveChannelCollapsibleCoreMDATabs(CollapsibleCoreMDATabs):
         with suppress(RuntimeError):
             super()._apply_editor_min_heights()
 
-    def _configure_subsequence_editor(self) -> None:
-        """Make a position sub-sequence popup match the app's MDA styling."""
-        for section in self.sections:
-            section.set_expanded(False)
 
-        self._apply_subsequence_theme()
-        self.grid_plan.valueChanged.connect(self._apply_subsequence_theme)
-        bounds = cast("Any", self.grid_plan)._core_xy_bounds
-        bounds.go_middle.toggled.connect(self._refresh_subsequence_bounds_icons)
+def _theme_subsequence_popup(popup: QWidget) -> None:
+    """Match a position sub-sequence popup's styling to the rest of the app."""
+    unstyle_widgets(popup)
 
-        # _MDAPopup creates its OK/Cancel button box after constructing us.
-        # Re-run once its constructor has completed so the dialog chrome, not
-        # just this child editor, receives the same normalization.
-        QTimer.singleShot(0, self._apply_subsequence_theme)
+    # The grid's Mark/Move bounds buttons swap their raw icon at runtime
+    # (mode toggle, go_middle checkbox), so re-theme them whenever that
+    # happens rather than relying on the one-off sweep above.
+    grid_plan = getattr(getattr(popup, "mda_tabs", None), "grid_plan", None)
+    bounds = getattr(grid_plan, "_core_xy_bounds", None)
+    if grid_plan is None or bounds is None:
+        return
 
-    def _apply_subsequence_theme(self, *_: object) -> None:
-        popup = self.parentWidget()
-        unstyle_widgets(popup if popup is not None else self)
-
-        t = theme()
-        self.set_section_metrics(
-            SectionMetrics(
-                header_height=t.row_height,
-                disclosure_width=t.scaled(24),
-                header_spacing=t.sp_xxs,
-                body_margin_h=t.sp_sm,
-                body_margin_top=t.sp_xs,
-                body_margin_bottom=t.sp_sm,
-                body_spacing=t.sp_sm,
-                content_spacing=t.sp_xxs,
-                footer_margin_h=t.sp_sm,
-                footer_margin_top=t.sp_xs,
-                footer_margin_bottom=t.sp_sm,
-            )
-        )
-
-        icon_size = QSize(t.scaled(16), t.scaled(16))
-        for table in (self.channels, self.stage_positions, self.time_plan):
-            table.toolBar().setIconSize(icon_size)
-        self._refresh_subsequence_bounds_icons()
-
-        root = popup if popup is not None else self
-        for button in root.findChildren(QAbstractButton):
-            ensure_visible_icon(button)
-
-    def _refresh_subsequence_bounds_icons(self, *_: object) -> None:
-        """Re-theme the raw Mark/Move glyphs installed by the bounds editor."""
-        bounds = cast("Any", self.grid_plan)._core_xy_bounds
-        for button in bounds.findChildren(QPushButton):
+    def _refresh_bounds_icons(*_: object) -> None:
+        for button in cast("Any", bounds).findChildren(QPushButton):
             set_source_icon(button, button.icon())
             ensure_visible_icon(button)
 
-    def changeEvent(self, a0: QEvent | None) -> None:
-        super().changeEvent(a0)
+    _refresh_bounds_icons()
+    bounds.go_middle.toggled.connect(_refresh_bounds_icons)
+    grid_plan.valueChanged.connect(_refresh_bounds_icons)
+
+
+class _SubsequencePopupThemer(QObject):
+    """Applies the app's MDA styling to position sub-sequence popups.
+
+    pymmcore-widgets' private ``_MDAPopup`` always builds its grid editor
+    from the plain, non-collapsible ``CoreMDATabs`` now (every other axis is
+    removed, so there is nothing left for a collapsible section to disclose
+    there) -- there is no app-specific subclass left to hook construction-time
+    theming into. Watch every Show event application-wide instead, and theme
+    the popup (matched by its private class name, since pymmcore-widgets
+    gives no public hook) the moment it appears.
+    """
+
+    def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
         if (
-            a0 is not None
-            and a0.type() == QEvent.Type.StyleChange
-            and getattr(self, "_is_subsequence_editor", False)
+            a1 is not None
+            and a1.type() == QEvent.Type.Show
+            and a0 is not None
+            and type(a0).__name__ == "_MDAPopup"
+            and not a0.property("_pymmcore_gui_themed")
         ):
-            self._apply_subsequence_theme()
+            a0.setProperty("_pymmcore_gui_themed", True)
+            _theme_subsequence_popup(cast("QWidget", a0))
+        return False
+
+
+_popup_themer: _SubsequencePopupThemer | None = None
+
+
+def install_subsequence_popup_theming() -> None:
+    """Install the app-wide filter that themes position sub-sequence popups.
+
+    Idempotent -- safe to call from every ``MemoryMDAWidget`` instance.
+    """
+    global _popup_themer
+    app = QApplication.instance()
+    if app is None or _popup_themer is not None:  # pragma: no cover
+        return
+    _popup_themer = _SubsequencePopupThemer(app)
+    app.installEventFilter(_popup_themer)
 
 
 __all__ = [
     "CURRENT_CHANNEL_COLUMN",
     "ActiveChannelCollapsibleCoreMDATabs",
     "ActiveChannelTable",
+    "install_subsequence_popup_theming",
 ]

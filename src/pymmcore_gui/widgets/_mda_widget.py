@@ -51,6 +51,7 @@ from pymmcore_gui._qt.QtWidgets import (
 from ._active_channel_table import (
     CURRENT_CHANNEL_COLUMN,
     ActiveChannelCollapsibleCoreMDATabs,
+    install_subsequence_popup_theming,
 )
 
 if TYPE_CHECKING:
@@ -149,6 +150,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         # it stays right after saving to a *different* file than the loaded one.
         self._light_source_declarations: dict[str, list[tuple[str, str, float]]] = {}
         super().__init__(parent=parent, mmcore=mmcore)
+        install_subsequence_popup_theming()
         self.camera_roi.setRoiInfoVisible(False)
         self._update_time_estimate()
         self._progress_overlay = BusyOverlay(self)
@@ -206,12 +208,12 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         self._apply_table_toolbar_icon_size()
 
         # Channels/Positions/Time are tables: each row is a fresh cell widget
-        # built on demand (e.g. the Positions row's black "mdi:axis" Sub-
-        # Sequence button, or the row's spinboxes), created only when a row
-        # is actually added -- long after the sweep above already ran. Without
-        # this, a row added interactively is never covered by any sweep at
-        # all until the next light/dark toggle (which only revisits icons,
-        # not stylesheets).
+        # built on demand (e.g. the Positions row's black "mdi:grid" per-
+        # position grid button, or the row's spinboxes), created only when a
+        # row is actually added -- long after the sweep above already ran.
+        # Without this, a row added interactively is never covered by any
+        # sweep at all until the next light/dark toggle (which only revisits
+        # icons, not stylesheets).
         for table_widget in (self.channels, self.stage_positions, self.time_plan):
             model = table_widget.table().model()
             if model is not None:
@@ -964,9 +966,9 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         for btn in self.findChildren(MDAButton):
             configured = not btn.clear_btn.isHidden()
             seq_icon = (
-                QIconifyIcon("mdi:axis-arrow", color=green)
+                QIconifyIcon("mdi:grid", color=green)
                 if configured
-                else QIconifyIcon("mdi:axis")
+                else QIconifyIcon("mdi:grid")
             )
             set_source_icon(btn.seq_btn, seq_icon)
             ensure_visible_icon(btn.seq_btn)
