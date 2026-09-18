@@ -170,6 +170,13 @@ class ThemedStageExplorer(StageExplorer):
         if isinstance(button, QToolButton):
             set_source_icon(button, icon)
 
+        scan_action = self.toolBar().scan_action
+        scan_icon = QIconifyIcon("ph:path-duotone", color=green)
+        scan_action.setIcon(scan_icon)
+        scan_button = self.toolBar().widgetForAction(scan_action)
+        if isinstance(scan_button, QToolButton):
+            set_source_icon(scan_button, scan_icon)
+
         red = qcolor(theme().status_red).name()
         stop_action = self.toolBar().stop_scan_action
         stop_icon = QIconifyIcon("bi:sign-stop", color=red)
