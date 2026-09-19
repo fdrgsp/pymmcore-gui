@@ -2994,6 +2994,46 @@ def test_preferences_button_opens_dialog(mmcore: CMMCorePlus, qtbot: QtBot) -> N
     assert len(opened) == 1
 
 
+def test_theme_toggle_button_matches_other_toolbar_icon_buttons(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """The theme toggle used to be a plain sun/moon emoji QPushButton, styled
+    inconsistently next to the icon-based PreferencesButton/NotificationBellButton
+    beside it. It must now use the same QIconifyIcon + subtle-variant treatment,
+    and its icon must both swap glyph (sun/moon) and re-tint on every toggle.
+    """
+    set_theme(DARK_THEME)
+    win = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(win)
+
+    assert win._theme_btn.property("variant") == "subtle"
+    assert win._theme_btn.isFlat()
+    # Starting dark: clicking switches to light, so the icon shows "sunny".
+    assert win._is_dark
+    sun_rgb = _icon_avg_rgb(win._theme_btn.icon(), QSize(18, 18))
+    assert sun_rgb is not None
+
+    win._theme_btn.click()
+
+    assert not win._is_dark
+    moon_rgb = _icon_avg_rgb(win._theme_btn.icon(), QSize(18, 18))
+    assert moon_rgb is not None
+    # Different glyph -> the two renders aren't just a recolor of one shape.
+    assert sun_rgb != moon_rgb
+
+    # Re-tinted to the (now light) theme's text_secondary.
+    light_secondary = qcolor(theme().text_secondary)
+    assert all(
+        abs(actual - expected) < 5
+        for actual, expected in zip(
+            moon_rgb,
+            (light_secondary.red(), light_secondary.green(), light_secondary.blue()),
+            strict=True,
+        )
+    )
+    set_theme(DARK_THEME)
+
+
 def test_collapsible_mda_round_trips_all_original_widgets(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:

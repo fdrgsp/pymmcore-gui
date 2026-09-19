@@ -232,6 +232,46 @@ class ModeTabBar(QWidget):
         super().changeEvent(a0)
 
 
+class ThemeToggleButton(QPushButton):
+    """Light/dark toggle; its icon shows the theme a click switches *to*.
+
+    Same "text_secondary, rebuild on StyleChange" treatment as the other
+    small icon buttons in the top toolbar (``PreferencesButton``,
+    ``NotificationBellButton``) -- previously a plain sun/moon emoji button,
+    which read as visually inconsistent next to those.
+    """
+
+    def __init__(self, *, is_dark: bool, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._is_dark = is_dark
+        self.setFlat(True)
+        self.setProperty("variant", "subtle")
+        self.setFixedSize(32, 32)
+        self.setToolTip("Toggle light/dark theme")
+        self._apply_icon()
+
+    def set_dark(self, is_dark: bool) -> None:
+        """Update the icon to match the app's current theme."""
+        self._is_dark = is_dark
+        self._apply_icon()
+
+    def _apply_icon(self) -> None:
+        name = (
+            "material-symbols:light-mode-rounded"
+            if self._is_dark
+            else "material-symbols:dark-mode-rounded"
+        )
+        color = qcolor(theme().text_secondary).name()
+        self.setIcon(QIconifyIcon(name, color=color))
+        size = theme().scaled(18)
+        self.setIconSize(QSize(size, size))
+
+    def changeEvent(self, e: QEvent | None) -> None:
+        if e is not None and e.type() == QEvent.Type.StyleChange:
+            self._apply_icon()
+        super().changeEvent(e)
+
+
 class NotificationBellButton(QPushButton):
     """Status-bar bell that pops up recent notification history.
 
@@ -353,9 +393,7 @@ class MainWindow(QMainWindow):
         self._preferences_btn = PreferencesButton()
         self._toolbar.addWidget(self._preferences_btn)
 
-        self._theme_btn = QPushButton("☀" if self._is_dark else "🌙")
-        self._theme_btn.setFixedSize(32, 32)
-        self._theme_btn.setToolTip("Toggle light/dark theme")
+        self._theme_btn = ThemeToggleButton(is_dark=self._is_dark)
         self._theme_btn.clicked.connect(self._toggle_theme)
         self._toolbar.addWidget(self._theme_btn)
 
@@ -756,7 +794,7 @@ class MainWindow(QMainWindow):
     def _toggle_theme(self) -> None:
         self._is_dark = not self._is_dark
         set_theme(DARK_THEME if self._is_dark else LIGHT_THEME)
-        self._theme_btn.setText("☀" if self._is_dark else "🌙")
+        self._theme_btn.set_dark(self._is_dark)
 
     def _on_exception(self, exc: BaseException) -> None:
         """Show a toast notification when an unhandled exception is raised."""
