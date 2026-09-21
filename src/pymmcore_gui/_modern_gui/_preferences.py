@@ -149,20 +149,6 @@ class PreferencesDialog(QDialog):
         memory_group = self._build_memory_group()
         layout_group = self._build_layout_group()
 
-        save_btn = QPushButton("Save")
-        save_btn.setProperty("variant", "primary")
-        save_btn.setDefault(True)
-        save_btn.clicked.connect(self._save)
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.setProperty("variant", "subtle")
-        cancel_btn.setAutoDefault(False)
-        cancel_btn.clicked.connect(self.reject)
-
-        buttons = QHBoxLayout()
-        buttons.addStretch()
-        buttons.addWidget(cancel_btn)
-        buttons.addWidget(save_btn)
-
         self.setMinimumWidth(t.scaled(_MIN_WIDTH))
         outer = QVBoxLayout(self)
         outer.setContentsMargins(t.sp_lg, t.sp_lg, t.sp_lg, t.sp_lg)
@@ -170,7 +156,6 @@ class PreferencesDialog(QDialog):
         outer.addWidget(memory_group)
         outer.addWidget(layout_group)
         outer.addWidget(widgets_group)
-        outer.addLayout(buttons)
 
     # ── Show Widgets ─────────────────────────────────────────────
 
@@ -276,11 +261,32 @@ class PreferencesDialog(QDialog):
         self._browse_btn.clicked.connect(self._browse_scratch_dir)
         dir_row = QHBoxLayout()
         dir_row.setContentsMargins(0, 0, 0, 0)
+        dir_row.setSpacing(5)
         dir_row.addWidget(self._scratch_dir)
         dir_row.addWidget(self._browse_btn)
         grid.addWidget(row_label("Spill folder:"), 2, 0)
         grid.addLayout(dir_row, 2, 1)
         self._update_scratch_dir_enabled(self._spill_to_disk.isChecked())
+
+        # Save/Cancel live here, not as a dialog-wide footer: they only ever
+        # apply to this group -- Show Widgets and Layout take effect the
+        # moment you click them (see the class docstring).
+        save_btn = QPushButton("Save")
+        save_btn.setProperty("variant", "primary")
+        save_btn.setDefault(True)
+        save_btn.clicked.connect(self._save)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setProperty("variant", "subtle")
+        cancel_btn.setAutoDefault(False)
+        cancel_btn.clicked.connect(self.reject)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(5)
+        buttons.setContentsMargins(0, t.sp_sm, 0, 0)
+        buttons.addStretch()
+        buttons.addWidget(cancel_btn)
+        buttons.addWidget(save_btn)
+        grid.addLayout(buttons, 3, 0, 1, 2)
 
         return group
 
