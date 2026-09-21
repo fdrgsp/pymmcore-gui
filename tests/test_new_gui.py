@@ -1637,6 +1637,41 @@ def test_acquire_reset_layout_restores_defaults(
     assert mda_area.width() == _MDA_DOCK_WIDTH
 
 
+def test_acquire_reset_layout_does_not_reopen_a_closed_autohidden_panel(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A panel closed while still pinned to the auto-hide sidebar must stay
+    closed after a reset.
+
+    Regression test: pinning a panel to the sidebar leaves it with
+    ``isAutoHide() == True`` even once it's later closed (e.g. by switching
+    to a layout that doesn't include it). ``reset_layout`` un-pins any
+    auto-hidden dock via ``setAutoHide(False)`` -- but that call re-docks the
+    widget into a normal area as a side effect, which makes it visible again.
+    The very next line, ``button.setChecked(info.default_open)``, is a
+    no-op when the button was already unchecked, so nothing then closes the
+    dock the un-pin just silently reopened.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    page.panel_button(PanelKey.EXCEPTION_LOG).setChecked(True)
+    dock = page.panel_dock(PanelKey.EXCEPTION_LOG)
+    assert dock is not None
+    dock.setAutoHide(True, SideBarLocation.SideBarRight)
+    assert not dock.isClosed()
+
+    # Close it the way switching to a layout that doesn't include it would.
+    page.panel_button(PanelKey.EXCEPTION_LOG).setChecked(False)
+    assert dock.isClosed()
+    assert dock.isAutoHide()  # still homed to the sidebar, just closed there
+
+    page.reset_layout()
+
+    assert dock.isClosed()
+    assert PanelKey.EXCEPTION_LOG not in page.open_panels()
+
+
 def test_acquire_select_default_layout_reaches_reset(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:

@@ -875,7 +875,17 @@ class AcquirePage(TabPage):
             if (dock := panel.dock) is not None:
                 with suppress(RuntimeError):
                     if dock.isAutoHide():
+                        # Un-pinning a *closed* auto-hide dock re-docks it
+                        # into a normal area as a side effect, which makes
+                        # it visible again -- resync the button to that
+                        # reality before the setChecked() below, or a panel
+                        # that was already unchecked (closed, e.g. from a
+                        # previously-selected layout) sees no state change,
+                        # never fires toggled, and the accidental reopen
+                        # from setAutoHide() sticks.
                         dock.setAutoHide(False)
+                        with QSignalBlocker(panel.button):
+                            panel.button.setChecked(not dock.isClosed())
             panel.button.setChecked(info.default_open)
 
         self._release_width_locks()
