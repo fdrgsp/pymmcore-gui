@@ -51,7 +51,6 @@ from ._configurations import ConfigurationsPage
 from ._hardware import HardwareSetupPage
 from ._installation import InstallationPage
 from ._panels import PanelKey
-from ._preferences import PreferencesButton
 from ._startup import StartupChoice, StartupDialog
 from ._theme import (
     qcolor,
@@ -236,7 +235,7 @@ class ThemeToggleButton(QPushButton):
     """Light/dark toggle; its icon shows the theme a click switches *to*.
 
     Same "text_secondary, rebuild on StyleChange" treatment as the other
-    small icon buttons in the top toolbar (``PreferencesButton``,
+    small icon buttons elsewhere in the chrome (``PreferencesButton``,
     ``NotificationBellButton``) -- previously a plain sun/moon emoji button,
     which read as visually inconsistent next to those.
     """
@@ -276,9 +275,10 @@ class NotificationBellButton(QPushButton):
     """Status-bar bell that pops up recent notification history.
 
     Chrome, not a state indicator -- same "text_secondary, rebuild on
-    StyleChange" treatment as ``LayoutMenuButton`` in ``_acquire_toolbar``,
-    except it turns ``status_red`` while notifications are waiting to be
-    looked at, resetting the moment the bell is clicked open.
+    StyleChange" treatment as ``SnapButton``/``LiveButton`` in
+    ``_acquire_toolbar``, except it turns ``status_red`` while notifications
+    are waiting to be looked at, resetting the moment the bell is clicked
+    open.
     """
 
     _ICON = "codicon:bell"
@@ -377,7 +377,7 @@ class MainWindow(QMainWindow):
             if hasattr(app, "exceptionRaised"):
                 cast("MMQApplication", app).exceptionRaised.connect(self._on_exception)
 
-        # ── top toolbar: mode tabs + preferences + theme toggle ───
+        # ── top toolbar: mode tabs + theme toggle ───
         self._toolbar = QToolBar()
         self._toolbar.setMovable(False)
         self._toolbar.setFloatable(False)
@@ -389,9 +389,6 @@ class MainWindow(QMainWindow):
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._toolbar.addWidget(spacer)
-
-        self._preferences_btn = PreferencesButton()
-        self._toolbar.addWidget(self._preferences_btn)
 
         self._theme_btn = ThemeToggleButton(is_dark=self._is_dark)
         self._theme_btn.clicked.connect(self._toggle_theme)

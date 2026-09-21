@@ -18,7 +18,6 @@ from pymmcore_gui._layouts import (
     DEFAULT_LAYOUT_NAME,
     RESERVED_LAYOUT_NAMES,
     AcquireLayout,
-    available_layouts,
     delete_layout,
     is_valid_layout_name,
     list_layouts,
@@ -50,7 +49,6 @@ from pymmcore_gui._qt.QtWidgets import (
 
 from ._acquire_stages import StagesPanel
 from ._acquire_toolbar import (
-    LayoutMenuButton,
     LiveButton,
     PanelButtonBar,
     ShuttersBar,
@@ -66,6 +64,7 @@ from ._panels import (
     PanelKey,
     StageKind,
 )
+from ._preferences import PreferencesButton
 from ._tab_page import TabPage
 from ._theme import dock_chrome_stylesheet, qcolor, theme
 
@@ -278,11 +277,8 @@ class AcquirePage(TabPage):
         self.toolbar.add_widget(self._shutters)
 
         self._layout_name = DEFAULT_LAYOUT_NAME
-        self._layout_btn = LayoutMenuButton(DEFAULT_LAYOUT_NAME, self)
-        self._layout_btn.layoutSelected.connect(self.select_layout)
-        self._layout_btn.saveLayoutRequested.connect(self._prompt_save_layout)
-        self._layout_btn.deleteLayoutRequested.connect(self._delete_layout)
-        self.refresh_layout_menu()
+
+        self._preferences_btn = PreferencesButton(self)
 
         # Which STAGE_KIND_FACTORIES entry PanelKey.STAGES currently docks --
         # see the comment on that PanelInfo entry in _panels.py.
@@ -306,7 +302,6 @@ class AcquirePage(TabPage):
             self._panel_bar.button_for(info.key).toggled.connect(
                 partial(self._toggle_panel, info.key)
             )
-        self._panel_bar.panelVisibilityChanged.connect(self._set_panel_visible)
 
         # Default-open panels build now, before any width pinning. MDA goes
         # first and is bound immediately: opening any *other* panel creates
@@ -484,22 +479,15 @@ class AcquirePage(TabPage):
         Moving it into ``MainWindow`` as a draggable ``QToolBar`` is the same
         shape: the bar itself needs no changes, only a different host.
 
-        The layout drop-down shares the row, separated from the panel
-        buttons: switching/saving the whole arrangement is a different
-        concern from toggling one panel.
+        Preferences sits right after the panel buttons, no separator --
+        that's where "Show Widgets" (which buttons are present at all) and
+        "Layout" (switch/save/delete the whole arrangement) now live; see
+        ``_preferences.PreferencesDialog``.
         """
         self.toolbar.add_stretch()
         self.toolbar.add_widget(toolbar_separator())
         self.toolbar.add_widget(self._panel_bar)
-        self.toolbar.add_widget(toolbar_separator())
-        self.toolbar.add_widget(self._layout_btn)
-        # Right-clicking anywhere on the host row opens the same customize
-        # menu as the bar's own ⋯ button -- the Qt convention for toolbars.
-        self.toolbar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.toolbar.customContextMenuRequested.connect(self._popup_panel_menu)
-
-    def _popup_panel_menu(self, pos: QPoint) -> None:
-        self._panel_bar.popup_menu(self.toolbar.mapToGlobal(pos))
+        self.toolbar.add_widget(self._preferences_btn)
 
     def panel_button(self, key: str) -> QPushButton:
         """Return the toolbar toggle button for the panel registered under *key*."""
@@ -529,7 +517,7 @@ class AcquirePage(TabPage):
         """Hide the toolbar buttons for *keys*, showing all the others.
 
         The restore-time counterpart to :meth:`hidden_panels`. Unlike the
-        interactive menu path (:meth:`_set_panel_visible`), showing a button
+        interactive path (:meth:`set_panel_visible`), showing a button
         here must *not* open its panel: which panels are open is
         ``restore_layout``'s business, and forcing them open would both fight
         that and defeat the lazy-construction guarantee -- every registered
@@ -542,14 +530,15 @@ class AcquirePage(TabPage):
             if not visible:
                 self._close_panel(key)
 
-    def _set_panel_visible(self, key: str, visible: bool) -> None:
+    def set_panel_visible(self, key: str, visible: bool) -> None:
         """Show or hide *key*'s toolbar button, taking its dock along with it.
 
-        The customize-menu path. Hiding a button would otherwise strand its
-        panel on screen with no way to close it, so hiding also closes the
-        dock; symmetrically, re-adding a button opens its panel, which is the
-        whole point of picking it from the menu. The widget itself is kept
-        alive either way, matching what plain close/reopen already does.
+        The interactive path, called from Preferences' "Show Widgets"
+        checkboxes. Hiding a button would otherwise strand its panel on
+        screen with no way to close it, so hiding also closes the dock;
+        symmetrically, re-adding a button opens its panel, which is the whole
+        point of checking it in Preferences. The widget itself is kept alive
+        either way, matching what plain close/reopen already does.
         """
         self._panel_bar.set_button_visible(key, visible)
         if visible:
@@ -707,7 +696,7 @@ class AcquirePage(TabPage):
 
     @property
     def layout_name(self) -> str:
-        """Name of the layout currently selected in the toolbar menu."""
+        """Name of the layout currently selected in Preferences' Layout list."""
         return self._layout_name
 
     def select_layout(self, name: str) -> None:
@@ -715,7 +704,7 @@ class AcquirePage(TabPage):
 
         An unknown or vanished name resolves to the built-in arrangement
         rather than doing nothing, so a layout deleted outside the app can't
-        leave the menu pointing at something unreachable.
+        leave the Layout list pointing at something unreachable.
         """
         layout = resolve_layout(name)
         if layout is None or layout.is_empty():
@@ -726,20 +715,15 @@ class AcquirePage(TabPage):
         self._set_layout_name(name)
         self.apply_layout(layout)
 
-    def refresh_layout_menu(self) -> None:
-        """Re-read the available layouts into the toolbar drop-down."""
-        names = available_layouts()
-        if self._layout_name not in names:
-            self._layout_name = DEFAULT_LAYOUT_NAME
-        self._layout_btn.set_layouts(names, self._layout_name)
-
     def _set_layout_name(self, name: str) -> None:
         self._layout_name = name
-        self.refresh_layout_menu()
         self.layoutNameChanged.emit(name)
 
-    def _prompt_save_layout(self) -> None:
-        """Ask for a name, then write the current arrangement under it."""
+    def prompt_save_layout(self) -> None:
+        """Ask for a name, then write the current arrangement under it.
+
+        Called from Preferences' Layout section "Add" button.
+        """
         suggestion = (
             self._layout_name if self._layout_name not in RESERVED_LAYOUT_NAMES else ""
         )
@@ -773,7 +757,11 @@ class AcquirePage(TabPage):
         )
         return choice == QMessageBox.StandardButton.Yes
 
-    def _delete_layout(self, name: str) -> None:
+    def prompt_delete_layout(self, name: str) -> None:
+        """Confirm, then delete the saved layout called *name*.
+
+        Called from Preferences' Layout section "Delete" button.
+        """
         choice = QMessageBox.question(
             self,
             "Delete Layout",
@@ -788,8 +776,6 @@ class AcquirePage(TabPage):
         # showing it -- but it's no longer a name that can be selected.
         if self._layout_name == name:
             self._set_layout_name(DEFAULT_LAYOUT_NAME)
-        else:
-            self.refresh_layout_menu()
 
     def restore_layout(
         self,
@@ -869,7 +855,7 @@ class AcquirePage(TabPage):
         """Restore the out-of-the-box Acquire arrangement.
 
         This *is* the "Default" layout -- there is no stored record of it, so
-        selecting Default from the layout menu comes straight here.
+        selecting Default from Preferences' Layout list comes straight here.
 
         Un-hides every toolbar button, un-pins anything the user sent to an
         auto-hide side bar, closes every panel except the default-open ones

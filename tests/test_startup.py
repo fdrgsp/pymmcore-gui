@@ -17,15 +17,16 @@ from pymmcore_gui._layouts import (
     DEFAULT_LAYOUT_NAME,
     LAST_SESSION_LAYOUT_NAME,
     AcquireLayout,
+    available_layouts,
     list_layouts,
     load_layout,
     save_layout,
     store_session_layout,
 )
 from pymmcore_gui._modern_gui._acquire import AcquirePage
-from pymmcore_gui._modern_gui._acquire_toolbar import _LayoutMenuRow
 from pymmcore_gui._modern_gui._main_win import MainWindow
 from pymmcore_gui._modern_gui._panels import PanelKey
+from pymmcore_gui._modern_gui._preferences import PreferencesDialog
 from pymmcore_gui._modern_gui._startup import DEMO_CONFIG, StartupDialog
 from pymmcore_gui._qt.QtCore import Qt
 from pymmcore_gui._qt.QtWidgets import (
@@ -34,7 +35,6 @@ from pymmcore_gui._qt.QtWidgets import (
     QInputDialog,
     QMessageBox,
     QPushButton,
-    QWidgetAction,
 )
 
 if TYPE_CHECKING:
@@ -343,14 +343,7 @@ def test_loading_a_config_records_it_as_recent(
     window.close()
 
 
-# ── the Acquire toolbar's layout menu ─────────────────────────────
-
-
-def _layout_menu_names(page: object) -> list[str]:
-    menu = page._layout_btn.build_menu()  # type: ignore[attr-defined]
-    names = [a.text() for a in menu.actions() if a.text() and not a.isSeparator()]
-    menu.deleteLater()
-    return names
+# ── Preferences' Layout section ───────────────────────────────────
 
 
 def test_saving_a_layout_writes_it_and_makes_it_current(
@@ -362,13 +355,13 @@ def test_saving_a_layout_writes_it_and_makes_it_current(
     page.panel_button(PanelKey.EXCEPTION_LOG).click()
 
     with patch.object(QInputDialog, "getText", return_value=("My rig", True)):
-        page._prompt_save_layout()
+        page.prompt_save_layout()
 
     saved = load_layout("My rig")
     assert saved is not None
     assert saved.panels == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.EXCEPTION_LOG}
     assert page.layout_name == "My rig"
-    assert "My rig" in _layout_menu_names(page)
+    assert "My rig" in available_layouts()
 
 
 def test_reserved_layout_names_are_refused(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
@@ -380,7 +373,7 @@ def test_reserved_layout_names_are_refused(mmcore: CMMCorePlus, qtbot: QtBot) ->
         patch.object(QInputDialog, "getText", return_value=(DEFAULT_LAYOUT_NAME, True)),
         patch.object(QMessageBox, "warning") as warned,
     ):
-        page._prompt_save_layout()
+        page.prompt_save_layout()
 
     warned.assert_called_once()
     assert list_layouts() == []
@@ -395,12 +388,12 @@ def test_cancelling_the_save_prompt_writes_nothing(
     qtbot.addWidget(page)
 
     with patch.object(QInputDialog, "getText", return_value=("Nope", False)):
-        page._prompt_save_layout()
+        page.prompt_save_layout()
 
     assert list_layouts() == []
 
 
-def test_layout_rows_offer_a_trash_only_for_saved_layouts(
+def test_layout_list_offers_delete_only_for_saved_layouts(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
     """Default and Last session regenerate themselves; they aren't deletable."""
@@ -409,47 +402,48 @@ def test_layout_rows_offer_a_trash_only_for_saved_layouts(
     store_session_layout(_layout())
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
-    page.refresh_layout_menu()
 
-    menu = page._layout_btn.build_menu()
-    rows: dict[str, _LayoutMenuRow] = {
-        a.text(): row
-        for a in menu.actions()
-        if isinstance(a, QWidgetAction)
-        and a.text()
-        and isinstance(row := a.defaultWidget(), _LayoutMenuRow)
-    }
-    assert rows[LAST_SESSION_LAYOUT_NAME]._trash.isHidden()
-    assert rows[DEFAULT_LAYOUT_NAME]._trash.isHidden()
-    assert not rows["My rig"]._trash.isHidden()
-    menu.deleteLater()
+    dlg = PreferencesDialog(page)
+    qtbot.addWidget(dlg)
+
+    all_items = [dlg._layout_list.item(i) for i in range(dlg._layout_list.count())]
+    items = {item.text(): item for item in all_items if item is not None}
+    assert set(items) == {LAST_SESSION_LAYOUT_NAME, DEFAULT_LAYOUT_NAME, "My rig"}
+
+    dlg._layout_list.setCurrentItem(items[LAST_SESSION_LAYOUT_NAME])
+    assert not dlg._delete_layout_btn.isEnabled()
+
+    dlg._layout_list.setCurrentItem(items[DEFAULT_LAYOUT_NAME])
+    assert not dlg._delete_layout_btn.isEnabled()
+
+    dlg._layout_list.setCurrentItem(items["My rig"])
+    assert dlg._delete_layout_btn.isEnabled()
 
 
-def test_trash_deletes_the_layout_after_confirmation(
+def test_deleting_a_layout_after_confirmation(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
 
     save_layout("My rig", _layout())
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
-    page.refresh_layout_menu()
     page.select_layout("My rig")
 
     with patch.object(
         QMessageBox, "question", return_value=QMessageBox.StandardButton.No
     ):
-        page._delete_layout("My rig")
+        page.prompt_delete_layout("My rig")
     assert list_layouts() == ["My rig"]  # declined
 
     with patch.object(
         QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
     ):
-        page._delete_layout("My rig")
+        page.prompt_delete_layout("My rig")
 
     assert list_layouts() == []
     # The page still *looks* the same, but that name is no longer selectable.
     assert page.layout_name == DEFAULT_LAYOUT_NAME
-    assert "My rig" not in _layout_menu_names(page)
+    assert "My rig" not in available_layouts()
 
 
 def test_selecting_a_vanished_layout_falls_back_to_the_default(

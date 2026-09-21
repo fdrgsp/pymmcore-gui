@@ -177,7 +177,7 @@ class PanelInfo:
     unstyle: bool = False
     refresh: Callable[[QWidget], None] | None = None
     always_visible: bool = False
-    """If True, this panel's toolbar button can't be hidden from the customize menu."""
+    """If True, this panel's button can't be hidden from Preferences' Show Widgets."""
 
     @property
     def dock_name(self) -> str:

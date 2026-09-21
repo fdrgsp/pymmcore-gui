@@ -39,6 +39,7 @@ from pymmcore_gui._modern_gui._installation import (
 )
 from pymmcore_gui._modern_gui._main_win import MainWindow
 from pymmcore_gui._modern_gui._panels import PANELS, PanelKey, StageKind
+from pymmcore_gui._modern_gui._preferences import PreferencesDialog
 from pymmcore_gui._modern_gui._startup import StartupDialog
 from pymmcore_gui._modern_gui._theme import (
     UI_FONT_SIZE_PT,
@@ -69,7 +70,6 @@ from pymmcore_gui._qt.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QLabel,
-    QMenu,
     QMessageBox,
     QPushButton,
     QSplitter,
@@ -1397,48 +1397,41 @@ def test_acquire_panel_buttons_match_registry(
     assert page._panel_bar.parent() is page.toolbar
 
 
-def _panel_customize_menu(page: AcquirePage) -> QMenu:
-    """The ⋯ customize menu, built but not exec'd (exec would block the test)."""
-    return page._panel_bar.build_menu()
+def _widgets_dialog(page: AcquirePage, qtbot: QtBot) -> PreferencesDialog:
+    """A fresh Preferences dialog, its Show Widgets checkboxes reflecting
+    *page*'s current ``hidden_panels()`` (not shown/exec'd -- that would
+    block the test)."""
+    dlg = PreferencesDialog(page)
+    qtbot.addWidget(dlg)
+    return dlg
 
 
-def _toggle_customize_menu_entry(page: AcquirePage, title: str, checked: bool) -> None:
-    """Check/uncheck one entry of a freshly built customize menu, as a click would."""
-    menu = _panel_customize_menu(page)
-    action = next(a for a in menu.actions() if a.text() == title)
-    action.setChecked(checked)
-    menu.deleteLater()
+def _toggle_widget_checkbox(
+    page: AcquirePage, qtbot: QtBot, key: str, checked: bool
+) -> None:
+    """Check/uncheck one Show Widgets entry, as a click would."""
+    _widgets_dialog(page, qtbot)._widget_checkboxes[key].setChecked(checked)
 
 
-def test_acquire_customize_menu_lists_hideable_panels(
+def test_preferences_show_widgets_lists_hideable_panels(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    """The ⋯ menu offers every panel except the always-visible MDA one."""
+    """Show Widgets offers every panel except the always-visible MDA one."""
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
 
-    menu = _panel_customize_menu(page)
-    toggles = [a for a in menu.actions() if a.isCheckable()]
-    titles = [a.text() for a in toggles]
-    assert titles == [info.title for info in PANELS if not info.always_visible]
+    checkboxes = _widgets_dialog(page, qtbot)._widget_checkboxes
+    assert list(checkboxes) == [info.key for info in PANELS if not info.always_visible]
     # Everything starts visible, so every entry starts checked.
-    assert all(action.isChecked() for action in toggles)
-    assert "MDA" not in titles
+    assert all(cb.isChecked() for cb in checkboxes.values())
+    assert PanelKey.MDA not in checkboxes
     assert not page.hidden_panels()
 
-    # Nothing else: layout operations live in the layout menu next door.
-    assert [a.text() for a in menu.actions() if not a.isCheckable() and a.text()] == []
 
-    # Both affordances exist: the bar's own ⋯ button, and right-click on the
-    # host toolbar row.
-    assert not page._panel_bar._menu_btn.icon().isNull()
-    assert page.toolbar.contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
-
-
-def test_acquire_customize_menu_hides_button_and_closes_panel(
+def test_preferences_show_widgets_hides_button_and_closes_panel(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    """Unchecking a panel in the ⋯ menu removes its button and closes its dock."""
+    """Unchecking a panel in Show Widgets removes its button and closes its dock."""
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
 
@@ -1446,7 +1439,7 @@ def test_acquire_customize_menu_hides_button_and_closes_panel(
     presets_dock = page.panel_dock(PanelKey.PRESETS)
     assert presets_dock is not None and not presets_dock.isClosed()
 
-    _toggle_customize_menu_entry(page, "Groups and Presets", False)
+    _toggle_widget_checkbox(page, qtbot, PanelKey.PRESETS, False)
     assert page.panel_button(PanelKey.PRESETS).isHidden()
     assert presets_dock.isClosed()
     assert page.hidden_panels() == {PanelKey.PRESETS}
@@ -1455,21 +1448,21 @@ def test_acquire_customize_menu_hides_button_and_closes_panel(
     assert page.panel_widget(PanelKey.PRESETS) is not None
 
     # Re-checking brings the button back *and* re-opens the panel -- that's
-    # the point of picking it from the menu.
-    _toggle_customize_menu_entry(page, "Groups and Presets", True)
+    # the point of checking it in Preferences.
+    _toggle_widget_checkbox(page, qtbot, PanelKey.PRESETS, True)
     assert not page.panel_button(PanelKey.PRESETS).isHidden()
     assert not presets_dock.isClosed()
     assert page.hidden_panels() == set()
 
 
-def test_acquire_customize_menu_cannot_hide_mda(
+def test_acquire_set_panel_visible_cannot_hide_mda(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
     """MDA is always_visible, so even a direct request can't hide its button."""
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
 
-    page._set_panel_visible(PanelKey.MDA, False)
+    page.set_panel_visible(PanelKey.MDA, False)
     assert not page.panel_button(PanelKey.MDA).isHidden()
     assert PanelKey.MDA not in page.hidden_panels()
 
@@ -1496,12 +1489,12 @@ def test_acquire_apply_hidden_panels_round_trips(
 def test_acquire_apply_hidden_panels_never_opens_panels(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    """Showing a button must not open its panel -- only the ⋯ menu does that.
+    """Showing a button must not open its panel -- only Show Widgets does that.
 
     Regression test: ``apply_hidden_panels`` used to route through
-    ``_set_panel_visible``, whose "re-adding a button opens its panel"
-    behaviour is right for an interactive menu click but catastrophic on the
-    restore path -- it force-opened *every* registered panel on launch,
+    ``set_panel_visible``, whose "re-adding a button opens its panel"
+    behaviour is right for an interactive checkbox click but catastrophic on
+    the restore path -- it force-opened *every* registered panel on launch,
     eagerly building all of them and burying the MDA dock.
     """
     page = AcquirePage(mmcore)
@@ -1644,10 +1637,10 @@ def test_acquire_reset_layout_restores_defaults(
     assert mda_area.width() == _MDA_DOCK_WIDTH
 
 
-def test_acquire_layout_menu_reset_entry_is_wired(
+def test_acquire_select_default_layout_reaches_reset(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    """Selecting "Default" from the layout menu reaches AcquirePage.reset_layout.
+    """Selecting "Default" from Preferences' Layout list reaches reset_layout.
 
     Deliberately exercises reset via a *hidden button* rather than an open
     panel: this is a wiring test, and hiding a never-opened panel builds no
@@ -1660,11 +1653,8 @@ def test_acquire_layout_menu_reset_entry_is_wired(
     page.apply_hidden_panels({PanelKey.CONSOLE})
     assert page.panel_button(PanelKey.CONSOLE).isHidden()
 
-    menu = page._layout_btn.build_menu()
-    reset = next(a for a in menu.actions() if a.text() == DEFAULT_LAYOUT_NAME)
     with qtbot.waitSignal(page.layoutReset):
-        reset.trigger()
-    menu.deleteLater()
+        page.select_layout(DEFAULT_LAYOUT_NAME)
 
     assert not page.panel_button(PanelKey.CONSOLE).isHidden()
     assert page.panel_widget(PanelKey.CONSOLE) is None  # still never built
@@ -2931,13 +2921,14 @@ def test_memory_mda_prepare_mda_applies_scratch_prefs(
 
 
 def test_preferences_dialog_round_trips_scratch_settings(
-    qtbot: QtBot, settings: Settings
+    mmcore: CMMCorePlus, qtbot: QtBot, settings: Settings
 ) -> None:
     """Save persists the form's values; the dialog also starts from whatever
     is already in Settings, so reopening it shows the last saved values."""
-    from pymmcore_gui._modern_gui._preferences import PreferencesDialog
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
 
-    dlg = PreferencesDialog()
+    dlg = PreferencesDialog(page)
     qtbot.addWidget(dlg)
     dlg._max_memory.setValue(8.0)
     dlg._spill_to_disk.setChecked(False)
@@ -2955,7 +2946,7 @@ def test_preferences_dialog_round_trips_scratch_settings(
     assert prefs.scratch_dir == Path("/tmp/my-scratch")
 
     # A freshly opened dialog reflects what was just saved.
-    dlg2 = PreferencesDialog()
+    dlg2 = PreferencesDialog(page)
     qtbot.addWidget(dlg2)
     assert dlg2._max_memory.value() == 8.0
     assert dlg2._spill_to_disk.isChecked()
@@ -2963,12 +2954,13 @@ def test_preferences_dialog_round_trips_scratch_settings(
 
 
 def test_preferences_dialog_cancel_does_not_persist(
-    qtbot: QtBot, settings: Settings
+    mmcore: CMMCorePlus, qtbot: QtBot, settings: Settings
 ) -> None:
-    from pymmcore_gui._modern_gui._preferences import PreferencesDialog
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
 
     original = settings.scratch.max_memory_gb
-    dlg = PreferencesDialog()
+    dlg = PreferencesDialog(page)
     qtbot.addWidget(dlg)
     dlg._max_memory.setValue(original + 10)
     dlg.reject()
@@ -2977,8 +2969,6 @@ def test_preferences_dialog_cancel_does_not_persist(
 
 
 def test_preferences_button_opens_dialog(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
-    from pymmcore_gui._modern_gui._preferences import PreferencesDialog
-
     win = MainWindow(mmcore=mmcore)
     qtbot.addWidget(win)
 
@@ -2989,7 +2979,7 @@ def test_preferences_button_opens_dialog(mmcore: CMMCorePlus, qtbot: QtBot) -> N
         return QDialog.DialogCode.Rejected
 
     with patch.object(PreferencesDialog, "exec", fake_exec):
-        win._preferences_btn.click()
+        win._acquire._preferences_btn.click()
 
     assert len(opened) == 1
 
@@ -2999,8 +2989,9 @@ def test_theme_toggle_button_matches_other_toolbar_icon_buttons(
 ) -> None:
     """The theme toggle used to be a plain sun/moon emoji QPushButton, styled
     inconsistently next to the icon-based PreferencesButton/NotificationBellButton
-    beside it. It must now use the same QIconifyIcon + subtle-variant treatment,
-    and its icon must both swap glyph (sun/moon) and re-tint on every toggle.
+    elsewhere in the chrome. It must now use the same QIconifyIcon +
+    subtle-variant treatment, and its icon must both swap glyph (sun/moon)
+    and re-tint on every toggle.
     """
     set_theme(DARK_THEME)
     win = MainWindow(mmcore=mmcore)
