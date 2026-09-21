@@ -224,6 +224,14 @@ class ModernWindowSettingsV1(BaseMMSettings):
         return bool(self.acquire_dock_state and self.acquire_panels)
 
 
+def _default_max_memory_gb() -> float:
+    """80% of the system's currently available RAM, as a first-run default."""
+    from pymmcore_gui._utils import system_memory_gb
+
+    _, available_gb = system_memory_gb()
+    return round(available_gb * 0.8, 1)
+
+
 class ScratchSettingsV1(BaseMMSettings):
     """Where acquisitions that are not saved to disk keep their data.
 
@@ -231,7 +239,7 @@ class ScratchSettingsV1(BaseMMSettings):
     ``ome_writers.ScratchFormat``).
     """
 
-    max_memory_gb: float = Field(default=4.0, gt=0)
+    max_memory_gb: float = Field(default_factory=_default_max_memory_gb, gt=0)
     """Largest run (in GB) held entirely in RAM."""
     spill_to_disk: bool = True
     """Above ``max_memory_gb``: spill to ``scratch_dir`` (True) or refuse the run."""

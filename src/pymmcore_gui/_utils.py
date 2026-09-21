@@ -2,7 +2,21 @@ import urllib.error
 import urllib.request
 from functools import cache
 
+import psutil
+
 GH_REPO_URL = "http://github.com/pymmcore-plus/pymmcore-gui"
+
+_BYTES_PER_GB = 1024**3
+
+
+def system_memory_gb() -> tuple[float, float]:
+    """Return (total, available) system RAM in GB.
+
+    ``available`` is what the OS considers free for new allocations right
+    now (unlike ``total - used``, it accounts for reclaimable caches/buffers).
+    """
+    vm = psutil.virtual_memory()
+    return vm.total / _BYTES_PER_GB, vm.available / _BYTES_PER_GB
 
 
 def get_treeish() -> str:

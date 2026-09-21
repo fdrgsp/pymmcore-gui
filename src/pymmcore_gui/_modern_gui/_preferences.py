@@ -9,6 +9,7 @@ the user's ``pmm_settings.json`` (see ``pymmcore_gui._settings``).
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 from typing import Final
 
@@ -21,7 +22,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QDialog,
     QDoubleSpinBox,
     QFileDialog,
-    QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -31,9 +32,18 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 from pymmcore_gui._settings import Settings
+from pymmcore_gui._utils import system_memory_gb
 
 _MIN_WIDTH: Final = 420
-_MAX_MEMORY_GB_RANGE: Final = (0.1, 256.0)
+
+
+def _max_memory_gb_range() -> tuple[float, float]:
+    """(min, max) allowed for the "Max in-memory size" spinbox.
+
+    The upper bound is the machine's total physical RAM.
+    """
+    total_gb, _ = system_memory_gb()
+    return (0.1, round(total_gb, 1))
 
 
 class PreferencesButton(QPushButton):
@@ -92,26 +102,38 @@ class PreferencesDialog(QDialog):
             "Controls where an acquisition's data lives when the Saving "
             "section is unchecked."
         )
-        form = QFormLayout()
-        form.setLabelAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(t.sp_sm)
+        grid.setVerticalSpacing(t.sp_xs)
+        grid.setColumnStretch(1, 1)
+        group.setLayout(grid)
+
+        # Left-align every row label and size them all to the widest one, so
+        # the fields that follow start at a common x position.
+        row_labels = ("Max in-memory size:", "Spill folder:")
+        label_width = max(
+            self.fontMetrics().horizontalAdvance(text) for text in row_labels
         )
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        form.setHorizontalSpacing(t.sp_sm)
-        form.setVerticalSpacing(t.sp_xs)
-        group.setLayout(form)
+
+        def row_label(text: str) -> QLabel:
+            lbl = QLabel(text)
+            lbl.setFixedWidth(label_width)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            return lbl
 
         self._max_memory = QDoubleSpinBox()
-        self._max_memory.setRange(*_MAX_MEMORY_GB_RANGE)
+        self._max_memory.setRange(*_max_memory_gb_range())
         self._max_memory.setDecimals(1)
         self._max_memory.setSingleStep(0.5)
         self._max_memory.setSuffix(" GB")
         self._max_memory.setValue(prefs.max_memory_gb)
         self._max_memory.setToolTip(
             "The largest run held entirely in RAM before spilling to disk\n"
-            "(or refusing to run, depending on the option below)."
+            "(or refusing to run, depending on the option below). Defaults\n"
+            "to 80% of the RAM free on this machine."
         )
-        form.addRow("Max in-memory size:", self._max_memory)
+        grid.addWidget(row_label("Max in-memory size:"), 0, 0)
+        grid.addWidget(self._max_memory, 0, 1)
 
         self._spill_to_disk = QCheckBox("Spill to disk when exceeded")
         self._spill_to_disk.setChecked(prefs.spill_to_disk)
@@ -120,18 +142,21 @@ class PreferencesDialog(QDialog):
             "Unchecked: refuse to start a run that would exceed it."
         )
         self._spill_to_disk.toggled.connect(self._update_scratch_dir_enabled)
-        form.addRow("", self._spill_to_disk)
+        grid.addWidget(self._spill_to_disk, 1, 1)
 
         self._scratch_dir = QLineEdit()
         self._scratch_dir.setPlaceholderText("System temp folder")
-        if prefs.scratch_dir is not None:
-            self._scratch_dir.setText(str(prefs.scratch_dir))
+        self._scratch_dir.setText(
+            str(prefs.scratch_dir) if prefs.scratch_dir is not None else _system_tmp()
+        )
         self._scratch_dir.setToolTip(
-            "Parent folder for spilled data. Leave empty to use the system\n"
-            "temp folder -- set this to a drive with enough free space if\n"
-            "runs are spilling to a small system disk."
+            "Parent folder for spilled data, shared by all runs that spill.\n"
+            "Defaults to the system temp folder -- point this at a drive\n"
+            "with more free space if runs are spilling to a small system\n"
+            "disk."
         )
         self._browse_btn = QPushButton("...")
+        self._browse_btn.setProperty("variant", "subtle")
         self._browse_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._browse_btn.setFixedWidth(t.scaled(32))
         self._browse_btn.clicked.connect(self._browse_scratch_dir)
@@ -139,15 +164,9 @@ class PreferencesDialog(QDialog):
         dir_row.setContentsMargins(0, 0, 0, 0)
         dir_row.addWidget(self._scratch_dir)
         dir_row.addWidget(self._browse_btn)
-        form.addRow("Scratch folder:", dir_row)
+        grid.addWidget(row_label("Spill folder:"), 2, 0)
+        grid.addLayout(dir_row, 2, 1)
         self._update_scratch_dir_enabled(self._spill_to_disk.isChecked())
-
-        note = QLabel(
-            "Applies to acquisitions run without saving to disk (the "
-            "Saving section unchecked)."
-        )
-        note.setWordWrap(True)
-        note.setStyleSheet(f"color: {qcolor(t.text_secondary).name()};")
 
         save_btn = QPushButton("Save")
         save_btn.setProperty("variant", "primary")
@@ -168,7 +187,6 @@ class PreferencesDialog(QDialog):
         outer.setContentsMargins(t.sp_lg, t.sp_lg, t.sp_lg, t.sp_lg)
         outer.setSpacing(t.sp_lg)
         outer.addWidget(group)
-        outer.addWidget(note)
         outer.addLayout(buttons)
 
     def _update_scratch_dir_enabled(self, spill_to_disk: bool) -> None:
@@ -178,7 +196,7 @@ class PreferencesDialog(QDialog):
     def _browse_scratch_dir(self) -> None:
         start = self._scratch_dir.text() or str(Path.home())
         if directory := QFileDialog.getExistingDirectory(
-            self, "Select Scratch Folder", start
+            self, "Select Spill Folder", start
         ):
             self._scratch_dir.setText(directory)
 
@@ -187,6 +205,12 @@ class PreferencesDialog(QDialog):
         prefs.max_memory_gb = self._max_memory.value()
         prefs.spill_to_disk = self._spill_to_disk.isChecked()
         text = self._scratch_dir.text().strip()
-        prefs.scratch_dir = Path(text) if text else None
+        # Treat "still the system temp folder" as "no override", so it keeps
+        # tracking the OS temp dir rather than pinning today's resolved path.
+        prefs.scratch_dir = None if (not text or text == _system_tmp()) else Path(text)
         Settings.instance().flush()
         self.accept()
+
+
+def _system_tmp() -> str:
+    return str(Path(tempfile.gettempdir()))
