@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from contextlib import suppress
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from pymmcore_widgets import StageExplorer
 from superqt.iconify import QIconifyIcon
@@ -20,7 +20,9 @@ from pymmcore_gui._qt.QtWidgets import QMessageBox, QToolButton
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
+    from vispy.app.canvas import MouseEvent
 
+    from pymmcore_gui._qt.QtGui import QAction
     from pymmcore_gui._qt.QtWidgets import QWidget
 
 
@@ -28,6 +30,21 @@ class ThemedStageExplorer(StageExplorer):
     """Stage Explorer adapted to this app's style and MDA editor."""
 
     sendToMDARequested = Signal(list, bool)
+
+    MDA_ALLOWED_ACTIONS: ClassVar[tuple[str, ...]] = (
+        "zoom_to_fit_action",
+        "auto_zoom_to_fit_action",
+        "show_grid_action",
+        "map_memory_action",
+    )
+    """Toolbar actions that stay usable while an acquisition is running.
+
+    Everything else on the toolbar either drives the hardware (snap, stage
+    polling, ROI scanning) or edits state a running acquisition owns (Clear
+    View, Delete ROIs, Send to MDA), so :meth:`setMdaLocked` shuts it off.
+    What is left is pure navigation of what has already been mapped -- the
+    reason the panel stays reachable at all during a run.
+    """
 
     def __init__(
         self,
@@ -48,6 +65,12 @@ class ThemedStageExplorer(StageExplorer):
         self._send_to_mda_action.setToolTip(
             "Add the Explorer regions to the MDA stage-position plan"
         )
+
+        self._mda_locked = False
+        # Enabled state each locked action had before the lock, so releasing
+        # it can't hand back an action that was already unavailable for its
+        # own reasons (e.g. ``_update_actions_enabled`` with no devices).
+        self._pre_lock_action_states: dict[QAction, bool] = {}
 
         self._normalize_style()
 
@@ -98,6 +121,62 @@ class ThemedStageExplorer(StageExplorer):
 
     def _on_pixel_size_affine_changed(self) -> None:
         self.refreshPixelGeometry()
+
+    def setMdaLocked(self, locked: bool) -> None:
+        """Restrict the Explorer to viewing while an acquisition is running.
+
+        The panel is deliberately not disabled outright: watching the map fill
+        in -- and zooming/panning around it -- is the one thing this widget is
+        useful for mid-run. Only the actions that would touch the microscope
+        or the acquisition are taken away (see :attr:`MDA_ALLOWED_ACTIONS`),
+        along with double-click-to-move-stage.
+        """
+        if locked == self._mda_locked:
+            return
+        self._mda_locked = locked
+        if locked:
+            self._pre_lock_action_states = {}
+            for action in self._locked_actions():
+                self._pre_lock_action_states[action] = action.isEnabled()
+                action.setEnabled(False)
+        else:
+            for action, enabled in self._pre_lock_action_states.items():
+                action.setEnabled(enabled)
+            self._pre_lock_action_states = {}
+
+    def _locked_actions(self) -> list[QAction]:
+        """Return every action that an acquisition takes away."""
+        toolbar = self.toolBar()
+        allowed = {
+            action
+            for name in self.MDA_ALLOWED_ACTIONS
+            if (action := getattr(toolbar, name, None)) is not None
+        }
+        # The ROI drawing modes are already among the toolbar's actions;
+        # ``mode_actions`` is included anyway so they stay covered if upstream
+        # ever moves them into a popup menu the way marker mode is. Marker
+        # mode is left alone: it only changes what is drawn on the map.
+        candidates = [*toolbar.actions(), *self.roi_manager.mode_actions.actions()]
+        return [a for a in dict.fromkeys(candidates) if a not in allowed]
+
+    def _update_actions_enabled(self) -> None:
+        """Keep an acquisition's restrictions in place across upstream refreshes.
+
+        ``StageExplorer`` re-derives every action's enabled state from the
+        loaded devices (on construction and on ``systemConfigurationLoaded``),
+        which would otherwise hand back actions the lock had taken away.
+        """
+        super()._update_actions_enabled()
+        if getattr(self, "_mda_locked", False):
+            for action in self._locked_actions():
+                self._pre_lock_action_states[action] = action.isEnabled()
+                action.setEnabled(False)
+
+    def _on_mouse_double_click(self, event: MouseEvent) -> None:
+        """Ignore double-click-to-move-stage while an acquisition is running."""
+        if self._mda_locked:
+            return
+        super()._on_mouse_double_click(event)
 
     def _normalize_style(self) -> None:
         """Remove upstream one-off styling and use the application's QStyle."""

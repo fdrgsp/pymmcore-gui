@@ -18,7 +18,15 @@ from pymmcore_gui._layouts import (
     store_session_layout,
 )
 from pymmcore_gui._notification_manager import NotificationManager
-from pymmcore_gui._qt.QtCore import QEvent, QRectF, QSize, Qt, QTimer, Signal
+from pymmcore_gui._qt.QtCore import (
+    QEvent,
+    QRectF,
+    QSignalBlocker,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
+)
 from pymmcore_gui._qt.QtGui import (
     QAction,
     QCloseEvent,
@@ -371,6 +379,10 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("pyMM")
         self.setWindowState(Qt.WindowState.WindowMaximized)
 
+        # Set while a close is waiting for a cancelled acquisition to finish
+        # tearing down -- see closeEvent / _on_mda_running.
+        self._close_pending = False
+
         self._notification_manager = NotificationManager(self)
         self._bell_button = NotificationBellButton(self._notification_manager, self)
         if app := QApplication.instance():
@@ -431,6 +443,7 @@ class MainWindow(QMainWindow):
             self._acquire.refresh_stage_explorer_pixel_geometry
         )
 
+        self._acquire.mdaRunningChanged.connect(self._on_mda_running)
         self._acquire.layoutReset.connect(self._on_acquire_layout_reset)
         self._acquire.layoutNameChanged.connect(self._on_layout_name_changed)
         self._mmc.events.systemConfigurationLoaded.connect(self._on_config_loaded)
@@ -732,8 +745,113 @@ class MainWindow(QMainWindow):
                 else "Ready"
             )
 
+    def _on_mda_running(self, running: bool) -> None:
+        """Keep the whole window on Acquire, watching, for the duration of a run.
+
+        The other three modes all reconfigure the microscope (installing a
+        different Micro-Manager, loading devices, rewriting the configuration),
+        so none of them may be reached while an acquisition owns the hardware.
+        ``AcquirePage.set_mda_lock`` has already locked the Acquire page itself
+        by the time this runs; only the window chrome is left.
+
+        Switching to Acquire matters for runs that weren't started from there
+        (a script in the console, or ``mda.run()`` from anywhere else): a
+        disabled tab still leaves whatever page is showing fully interactive.
+        """
+        acquire_index = self._stack.indexOf(self._acquire)
+        for page in (self._installation, self._hardware, self._configurations):
+            self._mode_tabs.setTabEnabled(self._stack.indexOf(page), not running)
+        if running and acquire_index >= 0:
+            # Bypass _on_mode_tab_changed's unsaved-configuration prompt: a run
+            # is no time to ask, and its Cancel branch would strand the user on
+            # a Configurations page whose tab is now disabled. Pending edits
+            # stay pending -- the prompt still comes the next time the user
+            # leaves that page themselves.
+            with QSignalBlocker(self._mode_tabs):
+                self._mode_tabs._select(acquire_index)
+            self._stack.setCurrentIndex(acquire_index)
+        if status_bar := self.statusBar():
+            status_bar.showMessage(
+                "Acquisition running — the microscope is busy" if running else "Ready"
+            )
+        if not running and self._close_pending:
+            # The close this cancellation was requested for can now run its
+            # normal course. Deferred so the rest of the unlock (and the
+            # runner's own teardown handlers) finish first.
+            QTimer.singleShot(0, self.close)
+
+    def _ready_to_close_during_acquisition(self) -> bool:
+        """Return whether closing may proceed, cancelling a live run if asked to.
+
+        Closing mid-run is gated rather than forbidden: the hazard is tearing
+        the writer down halfway through, which leaves the data store on disk
+        incomplete, so the run is cancelled and allowed to finalize *first*.
+        The wait is asynchronous -- the close is dropped here and re-attempted
+        from ``_on_mda_running`` once the runner reports idle -- so no nested
+        event loop is needed and the "Cancelling acquisition…" overlay keeps
+        animating. Meanwhile the acquisition lock already prevents the user
+        from doing anything but watch.
+
+        Hitting close again during that wait offers a force quit: a wedged
+        writer must never be able to trap the user in an app they can't exit.
+        """
+        if self._mmc.mda.status.phase.value == "idle":
+            self._close_pending = False
+            return True
+
+        if self._close_pending:
+            return self._confirm_force_quit()
+
+        if not self._confirm(
+            "Acquisition running",
+            "An acquisition is still running.\n\n"
+            "Quitting cancels it. Frames already written to disk are kept and "
+            "properly closed, but the acquisition will be incomplete.",
+            accept="Cancel acquisition and quit",
+            reject="Keep acquiring",
+        ):
+            return False
+
+        self._close_pending = True
+        self._acquire.cancel_acquisition()
+        return False
+
+    def _confirm_force_quit(self) -> bool:
+        """Offer to quit without waiting for a run that isn't stopping."""
+        if not self._confirm(
+            "Still stopping",
+            "The acquisition has been cancelled but hasn't finished stopping "
+            "yet.\n\n"
+            "Quitting now may leave the data store on disk incomplete.",
+            accept="Quit anyway",
+            reject="Keep waiting",
+        ):
+            return False
+        self._close_pending = False
+        return True
+
+    def _confirm(self, title: str, text: str, *, accept: str, reject: str) -> bool:
+        """Ask a two-button question, defaulting to the safe (*reject*) answer."""
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle(title)
+        msg.setText(text)
+        accept_btn = msg.addButton(accept, QMessageBox.ButtonRole.DestructiveRole)
+        reject_btn = msg.addButton(reject, QMessageBox.ButtonRole.RejectRole)
+        for button, variant in ((accept_btn, "danger"), (reject_btn, "primary")):
+            if button is not None:
+                button.setProperty("variant", variant)
+        if reject_btn is not None:
+            msg.setDefaultButton(reject_btn)
+        msg.exec()
+        return msg.clickedButton() is accept_btn
+
     def closeEvent(self, a0: QCloseEvent | None) -> None:
-        """Offer to save hardware / group / pixel edits before closing."""
+        """Stop a running acquisition, then offer to save configuration edits."""
+        if not self._ready_to_close_during_acquisition():
+            if a0 is not None:
+                a0.ignore()
+            return
         # Restoration is part of the calibration transaction.  Do not destroy
         # its worker (or ask the user to save) until that transaction has ended.
         self._configurations.shutdownCalibration()

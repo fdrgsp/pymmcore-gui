@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 import useq
 from pymmcore_plus import PropertyType
+from pymmcore_plus.mda import MDARunner
 from pymmcore_widgets import MDAWidget as UpstreamMDAWidget
 from pymmcore_widgets import StageWidget, XYZStageWidget
 from pymmcore_widgets.mda._core_channels import PROPERTY_SEPARATOR
@@ -59,7 +60,14 @@ from pymmcore_gui._qt.QtAds import (
     SideBarLocation,
 )
 from pymmcore_gui._qt.QtCore import QPoint, QRect, QSize, Qt
-from pymmcore_gui._qt.QtGui import QAction, QCursor, QImage, QPainter, QPalette
+from pymmcore_gui._qt.QtGui import (
+    QAction,
+    QCloseEvent,
+    QCursor,
+    QImage,
+    QPainter,
+    QPalette,
+)
 from pymmcore_gui._qt.QtWidgets import (
     QWIDGETSIZE_MAX,
     QAbstractButton,
@@ -95,6 +103,7 @@ if TYPE_CHECKING:
     from pymmcore_widgets.useq_widgets._data_table import DataTable
     from pytestqt.qtbot import QtBot
     from qtpy.QtCore import QModelIndex
+    from vispy.app.canvas import MouseEvent
 
     from pymmcore_gui._app import WindowProtocol
     from pymmcore_gui._modern_gui._theme import Color
@@ -1327,6 +1336,258 @@ def test_per_device_stage_widget_snap_checkbox_still_ensures_preview(
     with patch.object(page._viewers, "ensure_preview") as ensure_preview:
         stage_widget.snap_checkbox.setChecked(True)
     ensure_preview.assert_called_once()
+
+
+def test_mda_lock_restricts_acquire_page_to_watching(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A running acquisition disables every control that steers the microscope."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.panel_button(PanelKey.STAGE_EXPLORER).click()
+    page.panel_button(PanelKey.CONSOLE).click()
+    explorer = page.panel_widget(PanelKey.STAGE_EXPLORER)
+    assert isinstance(explorer, ThemedStageExplorer)
+    console = page.panel_widget(PanelKey.CONSOLE)
+    presets = page.panel_widget(PanelKey.PRESETS)
+    assert console is not None
+    assert presets is not None
+
+    page.set_mda_lock(True)
+
+    assert not page._snap_btn.isEnabled()
+    assert not page._live_btn.isEnabled()
+    assert not page._shutters.isEnabled()
+    assert not page._panel_bar.isEnabled()
+    assert not page._preferences_btn.isEnabled()
+    assert not presets.isEnabled()
+    # The escape hatches stay usable, as does the MDA panel itself (which
+    # disables its own editors but keeps Pause/Cancel live).
+    assert console.isEnabled()
+    assert page._mda.isEnabled()
+    assert page._mda.control_btns.isEnabled()
+
+    # Explorer: navigation only.
+    toolbar = explorer.toolBar()
+    assert toolbar.zoom_to_fit_action.isEnabled()
+    assert toolbar.auto_zoom_to_fit_action.isEnabled()
+    assert not toolbar.snap_action.isEnabled()
+    assert not toolbar.scan_action.isEnabled()
+    assert not toolbar.clear_action.isEnabled()
+    assert not explorer._send_to_mda_action.isEnabled()
+
+    page.set_mda_lock(False)
+
+    assert page._snap_btn.isEnabled()
+    assert page._panel_bar.isEnabled()
+    assert page._preferences_btn.isEnabled()
+    assert presets.isEnabled()
+    assert toolbar.snap_action.isEnabled()
+    assert explorer._send_to_mda_action.isEnabled()
+
+
+def test_mda_lock_preserves_already_disabled_state(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Releasing the lock restores, rather than assumes, the prior enabled state."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    presets = page.panel_widget(PanelKey.PRESETS)
+    assert presets is not None
+    presets.setEnabled(False)
+
+    page.set_mda_lock(True)
+    page.set_mda_lock(False)
+
+    assert not presets.isEnabled()
+
+
+def test_mda_lock_ignores_stage_explorer_double_click(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Double-clicking the map must not move the stage mid-acquisition."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.panel_button(PanelKey.STAGE_EXPLORER).click()
+    explorer = page.panel_widget(PanelKey.STAGE_EXPLORER)
+    assert isinstance(explorer, ThemedStageExplorer)
+    controller = Mock()
+    explorer._stage_controller = controller
+    event = cast("MouseEvent", SimpleNamespace(pos=(0, 0)))
+
+    page.set_mda_lock(True)
+    explorer._on_mouse_double_click(event)
+    controller.move_absolute.assert_not_called()
+
+
+def test_mda_lock_released_by_runner_polling(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    """The lock can't outlive the run, even if ``sequenceFinished`` is missed.
+
+    ``_sync_mda_state`` is the same safety net that recovers the MDA widget's
+    own controls; this asserts the app-wide lock rides on it rather than on
+    the signal alone.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    states: list[bool] = []
+    page.mdaRunningChanged.connect(states.append)
+
+    # Start, with no matching sequenceFinished arriving afterward.
+    page._mda._on_sequence_started_in_gui()
+    assert states == [True]
+    assert not page._snap_btn.isEnabled()
+
+    # The runner is (already) idle: the next poll tick lets go of everything.
+    page._mda._sync_mda_state()
+    assert states == [True, False]
+    assert page._snap_btn.isEnabled()
+    assert not page._mda._mda_state_timer.isActive()
+
+
+def test_mda_lock_locks_other_main_window_modes(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A run confines the window to Acquire, whichever page it was started from."""
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+    install_index = window._stack.indexOf(window._installation)
+    hardware_index = window._stack.indexOf(window._hardware)
+    config_index = window._stack.indexOf(window._configurations)
+    acquire_index = window._stack.indexOf(window._acquire)
+    window._mode_tabs._select(hardware_index)
+    assert window._stack.currentWidget() is window._hardware
+
+    window._acquire.set_mda_lock(True)
+
+    assert window._stack.currentWidget() is window._acquire
+    assert window._mode_tabs._tabs[acquire_index].active
+    assert not window._mode_tabs._tabs[install_index].isEnabled()
+    assert not window._mode_tabs._tabs[hardware_index].isEnabled()
+    assert not window._mode_tabs._tabs[config_index].isEnabled()
+    window._mode_tabs._select(hardware_index)
+    assert window._stack.currentWidget() is window._acquire
+
+    window._acquire.set_mda_lock(False)
+
+    assert window._mode_tabs._tabs[install_index].isEnabled()
+    assert window._mode_tabs._tabs[hardware_index].isEnabled()
+    assert window._mode_tabs._tabs[config_index].isEnabled()
+
+
+@contextmanager
+def _pretend_runner_phase(phase: str) -> Iterator[None]:
+    """Report *phase* from ``mmc.mda.status`` without running an acquisition."""
+    status = SimpleNamespace(phase=SimpleNamespace(value=phase))
+    with patch.object(MDARunner, "status", property(lambda _self: status)):
+        yield
+
+
+def _click(text: str) -> Callable[[QMessageBox], int]:
+    """Answer the next ``QMessageBox.exec`` by clicking the button labelled *text*.
+
+    ``QMessageBox`` connects every button's ``clicked`` itself, so clicking one
+    sets ``clickedButton()`` exactly as a real interaction would -- without the
+    dialog ever being shown.
+    """
+
+    def _exec(message: QMessageBox) -> int:
+        labels = [button.text() for button in message.buttons()]
+        for button in message.buttons():
+            if button.text() == text:
+                button.click()
+                return 0
+        raise AssertionError(f"no {text!r} button among {labels}")
+
+    return _exec
+
+
+def test_close_during_acquisition_can_be_declined(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """ "Keep acquiring" leaves both the run and the window alone."""
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+    event = QCloseEvent()
+
+    with (
+        _pretend_runner_phase("acquiring"),
+        patch.object(QMessageBox, "exec", return_value=0),
+        patch.object(window._acquire, "cancel_acquisition") as cancel,
+    ):
+        window.closeEvent(event)
+
+    assert not event.isAccepted()
+    assert not cancel.called
+    assert not window._close_pending
+
+
+def test_close_during_acquisition_cancels_and_waits(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """The close is deferred until the cancelled run has finished tearing down."""
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+    event = QCloseEvent()
+
+    with (
+        _pretend_runner_phase("acquiring"),
+        patch.object(QMessageBox, "exec", _click("Cancel acquisition and quit")),
+        patch.object(window._acquire, "cancel_acquisition") as cancel,
+    ):
+        window.closeEvent(event)
+
+    assert cancel.called
+    # The window stays up while the writer finalizes ...
+    assert not event.isAccepted()
+    assert window._close_pending
+
+    # ... and closes itself once the runner reports idle.
+    with patch.object(MainWindow, "close") as close:
+        window._acquire.set_mda_lock(True)
+        window._acquire.set_mda_lock(False)
+        qtbot.waitUntil(lambda: close.called)
+
+
+def test_close_while_still_stopping_offers_a_force_quit(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A writer that never finishes must not trap the user in the app."""
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+    window._close_pending = True
+
+    with (
+        _pretend_runner_phase("finishing"),
+        patch.object(QMessageBox, "exec", return_value=0) as exec_,
+    ):
+        first = QCloseEvent()
+        window.closeEvent(first)
+        assert not first.isAccepted()  # "Keep waiting"
+        assert exec_.called
+
+    with (
+        _pretend_runner_phase("finishing"),
+        patch.object(QMessageBox, "exec", _click("Quit anyway")),
+    ):
+        second = QCloseEvent()
+        window.closeEvent(second)
+
+    assert second.isAccepted()
+    assert not window._close_pending
+
+
+def test_close_when_idle_asks_nothing_about_acquisitions(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+    event = QCloseEvent()
+
+    with patch.object(QMessageBox, "exec") as exec_:
+        window.closeEvent(event)
+
+    assert not exec_.called
+    assert event.isAccepted()
 
 
 def test_stage_explorer_sends_positions_to_mda(

@@ -94,6 +94,22 @@ _ADS_NEUTRAL_ICON_BUTTONS = frozenset(
 )
 _ADS_TAB_CLOSE_BUTTON = "tabCloseButton"
 _REMOVED_PANEL_KEYS = frozenset({"camera_roi"})
+_MDA_UNLOCKED_PANELS = frozenset(
+    {
+        # Disables its own editors while keeping Pause/Cancel live -- see
+        # MDAWidgetCollapsible._enable_widgets upstream.
+        PanelKey.MDA,
+        # No microscope access at all: an escape hatch for inspecting (or
+        # rescuing) a run in progress, which is exactly when it's needed.
+        PanelKey.CONSOLE,
+        # Read-only record. Locking it would mean not being able to scroll or
+        # copy a traceback raised *by* the running acquisition.
+        PanelKey.EXCEPTION_LOG,
+        # Restricted rather than disabled: view/zoom stays, hardware actions
+        # go -- see ThemedStageExplorer.setMdaLocked.
+        PanelKey.STAGE_EXPLORER,
+    }
+)
 
 _ads_configured = False
 
@@ -172,6 +188,13 @@ class AcquirePage(TabPage):
 
     layoutNameChanged = Signal(str)
     """Emitted with the new name whenever the selected layout changes."""
+
+    mdaRunningChanged = Signal(bool)
+    """Emitted True while an acquisition owns the hardware, False once it's idle.
+
+    Relays ``MemoryMDAWidget.mdaLockChanged`` after this page has locked
+    itself, so ``MainWindow`` can lock the window chrome it owns.
+    """
 
     def __init__(
         self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
@@ -294,6 +317,12 @@ class AcquirePage(TabPage):
         stages_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         stages_btn.customContextMenuRequested.connect(self._popup_stage_kind_menu)
 
+        self._mda_locked = False
+        # Enabled state each widget had when the lock engaged, so releasing it
+        # can't enable something that was already unavailable for its own
+        # reasons (no camera loaded, no configuration, ...).
+        self._pre_lock_enabled: dict[QWidget, bool] = {}
+
         self._panels: dict[str, _Panel] = {
             info.key: _Panel(info=info, button=self._panel_bar.button_for(info.key))
             for info in PANELS
@@ -313,6 +342,8 @@ class AcquirePage(TabPage):
         for info in PANELS:
             if info.default_open and info.key != PanelKey.MDA:
                 self._panel_bar.button_for(info.key).setChecked(True)
+
+        self._mda.mdaLockChanged.connect(self.set_mda_lock)
 
         self._snap_btn.snapRequested.connect(self._mda.apply_active_channel_for_capture)
         self._snap_btn.snapRequested.connect(self._viewers.ensure_preview)
@@ -462,6 +493,62 @@ class AcquirePage(TabPage):
         widget = self._stage_widget_for(kind)
         panel.widget = widget
         panel.dock.setWidget(widget, CDockWidget.eInsertMode.ForceNoScrollArea)
+
+    # -------------------------------------------------------------- mda lock
+
+    def set_mda_lock(self, locked: bool) -> None:
+        """Lock the page down to watching while an acquisition is running.
+
+        Everything that could steer the microscope out from under the runner
+        goes away: snap/live, the shutters, the panel buttons (opening a panel
+        mid-run would also *build* it, querying the core), Preferences, and
+        every open panel except the few in :data:`_MDA_UNLOCKED_PANELS`.
+        Viewers are untouched on purpose -- watching frames arrive, and
+        adjusting their contrast, is the point of the run.
+
+        Driven by ``MemoryMDAWidget.mdaLockChanged``, whose False edge comes
+        from that widget's own runner polling: if a ``sequenceFinished`` is
+        ever missed, the lock is still released.
+        """
+        if locked == self._mda_locked:
+            return
+        self._mda_locked = locked
+
+        if locked:
+            self._pre_lock_enabled = {}
+            for widget in self._mda_locked_widgets():
+                self._pre_lock_enabled[widget] = widget.isEnabled()
+                widget.setEnabled(False)
+        else:
+            for widget, enabled in self._pre_lock_enabled.items():
+                with suppress(RuntimeError):  # deleted while locked
+                    widget.setEnabled(enabled)
+            self._pre_lock_enabled = {}
+
+        if explorer := self.panel_widget(PanelKey.STAGE_EXPLORER):
+            cast("ThemedStageExplorer", explorer).setMdaLocked(locked)
+
+        self.mdaRunningChanged.emit(locked)
+
+    def cancel_acquisition(self) -> None:
+        """Ask the running acquisition to stop, without waiting for it."""
+        self._mda.cancel_acquisition()
+
+    def _mda_locked_widgets(self) -> list[QWidget]:
+        """Return the widgets an acquisition takes away, toolbar first."""
+        widgets: list[QWidget] = [
+            self._snap_btn,
+            self._live_btn,
+            self._shutters,
+            self._panel_bar,
+            self._preferences_btn,
+        ]
+        widgets += [
+            panel.widget
+            for key, panel in self._panels.items()
+            if panel.widget is not None and key not in _MDA_UNLOCKED_PANELS
+        ]
+        return widgets
 
     # ------------------------------------------------------------------ panels
 

@@ -61,6 +61,7 @@ if TYPE_CHECKING:
 
     import useq
     from pymmcore_plus import CMMCorePlus
+    from pymmcore_plus.mda import SingleOutput
     from pymmcore_widgets.mda._xy_bounds import CoreXYBoundsControl
 
     from pymmcore_gui._qt.QtGui import QResizeEvent
@@ -148,6 +149,17 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
     _sequenceStartedInGui = Signal()
     _sequenceFinishedInGui = Signal()
 
+    mdaLockChanged = Signal(bool)
+    """Emitted True when a run takes the hardware, False once the runner is idle.
+
+    The app-wide acquisition lock hangs off this (see
+    ``AcquirePage.set_mda_lock``). The False edge is emitted from
+    ``_sync_mda_state``, which polls the runner for as long as a run is
+    active, so the same safety net that recovers this widget's own controls
+    from a missed ``sequenceFinished`` also releases the rest of the GUI --
+    the lock can never outlive the acquisition.
+    """
+
     def _create_tab_widget(self) -> CollapsibleCoreMDATabs:
         return ActiveChannelCollapsibleCoreMDATabs(None, self._mmc)
 
@@ -164,6 +176,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         self._restoring_sequence = False
         self._applying_channel_config = False
         self._cancel_requested = False
+        self._mda_locked = False
         # {channel preset: [(device, property, intensity), ...]}, parsed from the
         # loaded cfg's comment block. Held in memory rather than re-read per use, so
         # it stays right after saving to a *different* file than the loaded one.
@@ -307,9 +320,33 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         self._cancel_requested = False
         self._progress_overlay.stop()
         self._mda_state_timer.start()
+        self._set_mda_lock(True)
 
     def _on_sequence_finished_in_gui(self) -> None:
         self._sync_mda_state()
+
+    def cancel_acquisition(self) -> None:
+        """Cancel a run from outside this widget, with the same feedback as its button.
+
+        Exactly what ``control_btns.cancel_btn`` does (it is wired to both
+        ``_on_cancel_requested`` here and ``mda.cancel`` upstream), so a
+        cancellation requested by e.g. the window closing still gets the
+        "Cancelling acquisition…" overlay. A no-op when nothing is running.
+        """
+        if self._mmc.mda.status.phase.value == "idle":
+            return
+        self._on_cancel_requested()
+        self._mmc.mda.cancel()
+        # Normally already running (sequenceStarted starts it). Starting it here
+        # too means a caller waiting on the idle transition still gets it even
+        # if that signal was missed and the timer was never started.
+        self._mda_state_timer.start()
+
+    def _set_mda_lock(self, locked: bool) -> None:
+        """Announce a change in whether an acquisition owns the hardware."""
+        if locked != self._mda_locked:
+            self._mda_locked = locked
+            self.mdaLockChanged.emit(locked)
 
     def _on_cancel_requested(self) -> None:
         """Show cancellation progress until the runner has completely stopped."""
@@ -358,6 +395,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         controls.cancel_btn.hide()
         controls._on_mda_paused(False)
         self._apply_themed_icons()
+        self._set_mda_lock(False)
 
     def _disconnect(self) -> None:
         """Disconnect this subclass's MDA callbacks, then the upstream ones."""
@@ -1008,7 +1046,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
             self._apply_theme_metrics()
             self._apply_table_toolbar_icon_size()
 
-    def prepare_mda(self) -> bool | str | Path | AcquisitionSettings | None:
+    def prepare_mda(self) -> bool | SingleOutput | None:
         """Return a disk path or a scratch sink that supports live viewing."""
         output = super().prepare_mda()
         return _memory_output_settings() if output is None else output
