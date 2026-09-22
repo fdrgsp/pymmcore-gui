@@ -163,8 +163,9 @@ class PreferencesDialog(QDialog):
         """One checkbox per hideable panel; toggling applies immediately.
 
         Replaces the old ⋯ customize menu -- same panels (every registry
-        entry except the always-visible MDA one), same effect
-        (:meth:`AcquirePage.set_panel_visible`).
+        entry except the always-visible MDA one). See
+        :meth:`AcquirePage.set_panel_visible` for what checking/unchecking
+        actually does (they're not symmetric).
         """
         group = QGroupBox("Show Widgets")
         group.setToolTip(

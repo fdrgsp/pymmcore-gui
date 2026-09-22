@@ -1708,12 +1708,37 @@ def test_preferences_show_widgets_hides_button_and_closes_panel(
     # The widget is kept alive, same as a plain close/reopen.
     assert page.panel_widget(PanelKey.PRESETS) is not None
 
-    # Re-checking brings the button back *and* re-opens the panel -- that's
-    # the point of checking it in Preferences.
+    # Re-checking brings the button back *and* re-opens the panel, since it
+    # was open at the moment it got hidden.
     _toggle_widget_checkbox(page, qtbot, PanelKey.PRESETS, True)
     assert not page.panel_button(PanelKey.PRESETS).isHidden()
     assert not presets_dock.isClosed()
     assert page.hidden_panels() == set()
+
+
+def test_preferences_show_widgets_recheck_stays_closed_if_it_was(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A panel that was already closed when hidden stays closed when re-shown.
+
+    Only a panel that was *open* the moment it got hidden reopens when its
+    checkbox is checked again -- one that was already closed (or never
+    built at all) just gets its button back, matching one that was never
+    hidden in the first place.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    assert page.panel_dock(PanelKey.CONSOLE) is None  # never opened
+
+    _toggle_widget_checkbox(page, qtbot, PanelKey.CONSOLE, False)
+    assert page.panel_button(PanelKey.CONSOLE).isHidden()
+
+    _toggle_widget_checkbox(page, qtbot, PanelKey.CONSOLE, True)
+    assert not page.panel_button(PanelKey.CONSOLE).isHidden()
+    assert PanelKey.CONSOLE not in page.open_panels()
+    # Laziness is preserved: showing the button never builds the panel.
+    assert page.panel_widget(PanelKey.CONSOLE) is None
 
 
 def test_acquire_set_panel_visible_cannot_hide_mda(

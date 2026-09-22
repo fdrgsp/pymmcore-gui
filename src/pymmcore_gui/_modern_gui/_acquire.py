@@ -169,6 +169,14 @@ class _Panel:
     button: QPushButton
     widget: QWidget | None = None
     dock: CDockWidget | None = None
+    reopen_on_show: bool = False
+    """Was this panel open the moment its button got hidden via Preferences?
+
+    Set by :meth:`AcquirePage.set_panel_visible` right before it closes the
+    panel to hide the button; read back the next time that button is shown
+    again, so re-checking the box in Preferences restores what was on
+    screen instead of always coming back closed.
+    """
 
 
 class AcquirePage(TabPage):
@@ -618,19 +626,25 @@ class AcquirePage(TabPage):
                 self._close_panel(key)
 
     def set_panel_visible(self, key: str, visible: bool) -> None:
-        """Show or hide *key*'s toolbar button, taking its dock along with it.
+        """Show or hide *key*'s toolbar button.
 
         The interactive path, called from Preferences' "Show Widgets"
-        checkboxes. Hiding a button would otherwise strand its panel on
-        screen with no way to close it, so hiding also closes the dock;
-        symmetrically, re-adding a button opens its panel, which is the whole
-        point of checking it in Preferences. The widget itself is kept alive
-        either way, matching what plain close/reopen already does.
+        checkboxes. Hiding a button would otherwise strand its open panel on
+        screen with no way to close it, so hiding also closes the dock --
+        remembering whether it was open (:attr:`_Panel.reopen_on_show`), so
+        checking the box again restores that, rather than always coming back
+        closed. A panel that was already closed when hidden stays closed
+        when re-shown, same as one that was never hidden. The widget itself
+        is kept alive either way, matching what plain close/reopen does.
         """
-        self._panel_bar.set_button_visible(key, visible)
+        panel = self._panels[key]
         if visible:
-            self.panel_button(key).setChecked(True)
+            self._panel_bar.set_button_visible(key, True)
+            if panel.reopen_on_show:
+                panel.button.setChecked(True)
         else:
+            panel.reopen_on_show = panel.button.isChecked()
+            self._panel_bar.set_button_visible(key, False)
             self._close_panel(key)
 
     def _close_panel(self, key: str) -> None:
