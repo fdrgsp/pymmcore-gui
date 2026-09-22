@@ -19,6 +19,11 @@ def test_settings() -> None:
     assert not hasattr(v, "random_value")
 
 
+def test_default_scratch_memory_leaves_room_for_map() -> None:
+    with patch("pymmcore_gui._utils.system_memory_gb", return_value=(16.0, 10.0)):
+        assert _settings._default_max_memory_gb() == 6.0
+
+
 def test_user_settings(tmp_path: Path) -> None:
     fake_settings = tmp_path / "settings.json"
     with patch.object(_settings, "SETTINGS_FILE_NAME", fake_settings):

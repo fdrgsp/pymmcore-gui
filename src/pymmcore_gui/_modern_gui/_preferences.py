@@ -233,7 +233,7 @@ class PreferencesDialog(QDialog):
         self._max_memory.setToolTip(
             "The largest run held entirely in RAM before spilling to disk\n"
             "(or refusing to run, depending on the option below). Defaults\n"
-            "to 80% of the RAM free on this machine."
+            "to 60% of the RAM free on this machine."
         )
         grid.addWidget(row_label("Max in-memory size:"), 0, 0)
         grid.addWidget(self._max_memory, 0, 1)

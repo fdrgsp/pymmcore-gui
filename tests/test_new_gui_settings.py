@@ -162,10 +162,19 @@ def test_modern_window_persists_hidden_panel_buttons(
     win2.close()
 
 
-def test_reset_layout_clears_only_the_persisted_layout_keys(
+def test_reset_layout_snapshots_the_reset_arrangement_as_last_session(
     mmcore: CMMCorePlus, qtbot: QtBot, settings: Settings
 ) -> None:
-    """Reset Layout drops the saved arrangement but keeps geometry/theme/zoom.
+    """Reset Layout updates "Last session" to the just-reset arrangement --
+    it doesn't wipe it -- and leaves geometry/theme/zoom alone.
+
+    Regression test: this used to clear ``acquire_dock_state``/
+    ``acquire_panels`` to nothing so a crash right after a reset couldn't
+    resurrect the pre-reset arrangement, but that also made "Last session"
+    disappear from Preferences' Layout list the moment "Default" was
+    clicked. Snapshotting the fresh (Default) state instead keeps the row
+    present while offering the same crash protection, since what's stored
+    is always current, never stale.
 
     Uses a hidden button rather than an open side panel to trigger a
     non-default state: resetting an open panel would empty its dock area,
@@ -186,8 +195,10 @@ def test_reset_layout_clears_only_the_persisted_layout_keys(
 
     win._acquire.reset_layout()
 
-    assert prefs.acquire_dock_state is None
-    assert prefs.acquire_panels == set()
+    # Reflects the just-reset (Default) arrangement -- not wiped, so
+    # "Last session" stays selectable in Preferences' Layout list.
+    assert prefs.acquire_dock_state
+    assert prefs.acquire_panels == {PanelKey.MDA, PanelKey.PRESETS}
     assert prefs.acquire_hidden_panels == set()
     # Preferences are not layout -- losing these to a layout reset would be
     # a surprise.

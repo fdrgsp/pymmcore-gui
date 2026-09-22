@@ -225,11 +225,15 @@ class ModernWindowSettingsV1(BaseMMSettings):
 
 
 def _default_max_memory_gb() -> float:
-    """80% of the system's currently available RAM, as a first-run default."""
+    """60% of the system's currently available RAM, as a first-run default.
+
+    Stage Explorer uses another 20% for its map, leaving 20% headroom for the
+    application, Qt, and the operating system when both features are active.
+    """
     from pymmcore_gui._utils import system_memory_gb
 
     _, available_gb = system_memory_gb()
-    return round(available_gb * 0.8, 1)
+    return round(available_gb * 0.6, 1)
 
 
 class ScratchSettingsV1(BaseMMSettings):
