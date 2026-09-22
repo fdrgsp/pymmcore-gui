@@ -101,6 +101,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
 
     from pymmcore_plus import CMMCorePlus
+    from pymmcore_plus.mda import SinkProtocol
     from pymmcore_plus.model import Device
     from pymmcore_widgets.mda._core_grid import CoreConnectedGridPlanWidget
     from pymmcore_widgets.mda._core_mda import CoreMDATabs
@@ -4323,6 +4324,25 @@ class _FakeViewer:
 
     def close(self) -> None:
         pass
+
+
+def test_runner_sink_compatibility_for_released_pymmcore_plus() -> None:
+    """The declared dependency floor predates get_sink()/release_sink()."""
+    sink = cast("SinkProtocol", object())
+    legacy_runner = SimpleNamespace(_sink=sink, is_running=lambda: False)
+
+    assert acquire_viewers_module._runner_sink(legacy_runner) is sink
+    assert acquire_viewers_module._release_runner_sink(legacy_runner, sink)
+    assert legacy_runner._sink is None
+
+    newer_sink = cast("SinkProtocol", object())
+    legacy_runner._sink = newer_sink
+    assert not acquire_viewers_module._release_runner_sink(legacy_runner, sink)
+    assert legacy_runner._sink is newer_sink
+
+    legacy_runner.is_running = lambda: True
+    assert not acquire_viewers_module._release_runner_sink(legacy_runner, newer_sink)
+    assert legacy_runner._sink is newer_sink
 
 
 def test_acquire_closing_viewer_releases_its_sink(

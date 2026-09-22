@@ -5,7 +5,7 @@ from __future__ import annotations
 import gc
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pymmcore_plus.mda import OmeWritersSink, frame_meta_to_ome
 
@@ -29,6 +29,27 @@ if TYPE_CHECKING:
 
     from pymmcore_gui._qt.QtAds import CDockAreaWidget, CDockManager
     from pymmcore_gui._qt.QtWidgets import QWidget
+
+
+def _runner_sink(runner: Any) -> SinkProtocol | None:
+    """Return the runner's sink across released and development plus versions."""
+    if callable(get_sink := getattr(runner, "get_sink", None)):
+        return cast("SinkProtocol | None", get_sink())
+    # get_sink() was added after pymmcore-plus 0.18.1. The runner has used
+    # this same internal attribute since before our declared minimum version.
+    return cast("SinkProtocol | None", getattr(runner, "_sink", None))
+
+
+def _release_runner_sink(runner: Any, sink: SinkProtocol) -> bool:
+    """Release ``sink``, with the same safeguards as newer pymmcore-plus."""
+    if callable(release_sink := getattr(runner, "release_sink", None)):
+        return bool(release_sink(sink))
+    # Compatibility for released pymmcore-plus versions that predate the
+    # public method. Never mutate a running acquisition or a newer run's sink.
+    if runner.is_running() or _runner_sink(runner) is not sink:
+        return False
+    runner._sink = None
+    return True
 
 
 class _StreamSignalBridge(QObject):
@@ -219,7 +240,7 @@ class AcquireViewersManager(QObject):
         # The sink object itself is also kept (record.sink), so this specific
         # run's data can be released later by identity, even after the
         # runner's own `get_sink()` has moved on to a newer run.
-        sink = self._core.mda.get_sink()
+        sink = _runner_sink(self._core.mda)
         record.sink = sink
         if isinstance(sink, OmeWritersSink):
             acquisition = AcquisitionRecord(
@@ -338,7 +359,7 @@ class AcquireViewersManager(QObject):
         collect the data can survive until the next cyclic-GC run instead of
         being freed the moment this viewer closes.
         """
-        released = self._core.mda.release_sink(sink)
+        released = _release_runner_sink(self._core.mda, sink)
         if released:
             QTimer.singleShot(0, gc.collect)
         return released
