@@ -12,11 +12,7 @@ from pymmcore_plus import CMMCorePlus, Keyword, find_micromanager
 from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import set_source_icon
-from pymmcore_gui._layouts import (
-    LAST_SESSION_LAYOUT_NAME,
-    AcquireLayout,
-    store_session_layout,
-)
+from pymmcore_gui._layouts import LAST_SESSION_LAYOUT_NAME, store_session_layout
 from pymmcore_gui._notification_manager import NotificationManager
 from pymmcore_gui._qt.QtCore import (
     QEvent,
@@ -515,16 +511,19 @@ class MainWindow(QMainWindow):
             self._notification_manager.reposition_notifications()
 
     def _on_acquire_layout_reset(self) -> None:
-        """Drop the persisted "Last session" layout so a crash can't resurrect it.
+        """Snapshot the just-reset arrangement into "Last session" right away.
 
-        ``_save_state`` would write the freshly-reset arrangement on close
-        anyway; clearing now just means the reset also survives an abnormal
-        exit. Scoped to the layout keys only -- geometry, theme and zoom are
-        preferences, not layout. Named layouts are untouched: resetting the
-        page is not deleting anything the user saved.
+        ``_save_state`` would write it on a clean close anyway; doing it
+        immediately means an abnormal exit right after a reset still shows
+        the freshly-reset arrangement next launch, not whatever was on
+        screen before it -- and "Last session" stays in Preferences' Layout
+        list instead of dropping out until the next close. Scoped to the
+        layout keys only -- geometry, theme and zoom are preferences, not
+        layout. Named layouts are untouched: resetting the page is not
+        deleting anything the user saved.
         """
         settings = Settings.instance()
-        store_session_layout(AcquireLayout())
+        store_session_layout(self._acquire.current_layout())
         settings.flush()
 
     def _on_layout_name_changed(self, name: str) -> None:

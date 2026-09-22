@@ -128,11 +128,14 @@ class PreferencesDialog(QDialog):
     * **Show Widgets** and **Layout** act on the live :class:`AcquirePage`
       immediately -- checking a box shows/hides its toolbar button right
       now, clicking a layout switches to it right now. There's nothing to
-      "save": closing the dialog (Save *or* Cancel) never undoes them,
+      "save": closing the dialog (however it closes) never undoes them,
       exactly like the toolbar buttons they replaced never needed an undo.
     * **Data & Memory** is the odd one out: values are read from
-      ``Settings.instance()`` at construction and written back (then flushed
-      to disk) only when "Save" is clicked; "Cancel" discards the edit.
+      ``Settings.instance()`` at construction and written back (then
+      flushed to disk) when "Save" is clicked -- which persists but,
+      unlike the old single-purpose dialog, does *not* close this one, so
+      Show Widgets/Layout stay usable afterward. "Cancel" both discards
+      any unsaved edit here and closes the dialog.
     """
 
     def __init__(
@@ -303,6 +306,7 @@ class PreferencesDialog(QDialog):
             self._scratch_dir.setText(directory)
 
     def _save(self) -> None:
+        """Persist Data & Memory, without closing -- Show Widgets/Layout stay usable."""
         prefs = Settings.instance().scratch
         prefs.max_memory_gb = self._max_memory.value()
         prefs.spill_to_disk = self._spill_to_disk.isChecked()
@@ -311,7 +315,6 @@ class PreferencesDialog(QDialog):
         # tracking the OS temp dir rather than pinning today's resolved path.
         prefs.scratch_dir = None if (not text or text == _system_tmp()) else Path(text)
         Settings.instance().flush()
-        self.accept()
 
     # ── Layout ───────────────────────────────────────────────────
 

@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 DEFAULT_LAYOUT_NAME: Final = "Default"
 """The built-in arrangement. Selecting it means "reset", not "restore"."""
 
-LAST_SESSION_LAYOUT_NAME: Final = "Last session"
+LAST_SESSION_LAYOUT_NAME: Final = "Last Session"
 """The arrangement auto-saved on close, kept in settings rather than here."""
 
 RESERVED_LAYOUT_NAMES: Final = frozenset(

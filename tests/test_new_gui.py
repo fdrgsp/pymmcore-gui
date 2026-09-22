@@ -23,7 +23,11 @@ import pymmcore_gui._modern_gui._acquire_toolbar as acquire_toolbar_module
 import pymmcore_gui._modern_gui._acquire_viewers as acquire_viewers_module
 from pymmcore_gui._app import create_mmgui
 from pymmcore_gui._array_viewer import _icon_avg_rgb
-from pymmcore_gui._layouts import DEFAULT_LAYOUT_NAME
+from pymmcore_gui._layouts import (
+    DEFAULT_LAYOUT_NAME,
+    LAST_SESSION_LAYOUT_NAME,
+    available_layouts,
+)
 from pymmcore_gui._modern_gui._acquire import (
     _MDA_DOCK_WIDTH,
     _RIGHT_DOCK_MAX_WIDTH,
@@ -1982,6 +1986,35 @@ def test_acquire_select_default_layout_reaches_reset(
     assert page.open_panels() == {PanelKey.MDA, PanelKey.PRESETS}
 
 
+def test_selecting_default_keeps_last_session_in_the_layout_list(
+    mmcore: CMMCorePlus, qtbot: QtBot, settings: Settings
+) -> None:
+    """ "Last session" must not disappear from Preferences' Layout list the
+    moment "Default" is clicked.
+
+    Regression test: ``MainWindow._on_acquire_layout_reset`` used to wipe
+    "Last session" to an empty ``AcquireLayout()`` so a crash right after a
+    reset couldn't resurrect the pre-reset arrangement on next launch. That
+    made the row disappear from the list immediately, which reads as data
+    loss even though nothing else was affected. Snapshotting the just-reset
+    arrangement instead (rather than clearing it) keeps the row present and
+    still protects against the same crash, since what's stored is always the
+    freshly-reset state, never stale.
+    """
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+
+    window._acquire.panel_button(PanelKey.EXCEPTION_LOG).setChecked(True)
+    window._save_state()
+    assert LAST_SESSION_LAYOUT_NAME in available_layouts()
+
+    with qtbot.waitSignal(window._acquire.layoutReset):
+        window._acquire.reset_layout()
+
+    assert LAST_SESSION_LAYOUT_NAME in available_layouts()
+    assert settings.modern_window.has_last_session_layout
+
+
 def test_acquire_reset_layout_after_restore_repins_default_widths(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
@@ -3272,6 +3305,34 @@ def test_preferences_dialog_round_trips_scratch_settings(
     assert dlg2._max_memory.value() == 8.0
     assert dlg2._spill_to_disk.isChecked()
     assert dlg2._scratch_dir.text() == "/tmp/my-scratch"
+
+
+def test_preferences_dialog_save_does_not_close(
+    mmcore: CMMCorePlus, qtbot: QtBot, settings: Settings
+) -> None:
+    """Save persists Data & Memory but leaves the dialog open.
+
+    Unlike the dialog's original single-purpose design, Save no longer
+    closes it: Show Widgets/Layout must stay usable afterward, and Save
+    only ever applies to Data & Memory now that it lives inside that
+    group's box.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    dlg = PreferencesDialog(page)
+    qtbot.addWidget(dlg)
+    dlg._max_memory.setValue(9.0)
+
+    with (
+        patch.object(dlg, "accept") as accept,
+        patch.object(dlg, "reject") as reject,
+    ):
+        dlg._save()
+
+    accept.assert_not_called()
+    reject.assert_not_called()
+    assert settings.scratch.max_memory_gb == 9.0
 
 
 def test_preferences_dialog_cancel_does_not_persist(
