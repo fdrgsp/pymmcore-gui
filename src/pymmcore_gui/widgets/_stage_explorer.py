@@ -11,6 +11,7 @@ from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import (
     ensure_visible_icon,
+    set_icon_tint,
     set_source_icon,
     unstyle_widgets,
 )
@@ -225,22 +226,58 @@ class ThemedStageExplorer(StageExplorer):
             reposition()
 
     def _apply_themed_icons(self) -> None:
-        foreground = qcolor(theme().text_primary).name()
-        marker_icon = QIconifyIcon("mdi:map-marker-outline", color=foreground)
-        marker_action = self.toolBar().poll_stage_action
-        marker_action.setIcon(marker_icon)
-        marker_button = self.toolBar().widgetForAction(marker_action)
-        if isinstance(marker_button, QToolButton):
-            set_source_icon(marker_button, marker_icon)
+        """Recolor every neutral toolbar icon to match the app's chrome.
+
+        Upstream bakes these in as a fixed ``#666`` gray (see
+        ``pymmcore_widgets.control._rois.roi_manager.GRAY``), which has no
+        light/dark theme awareness and doesn't match this app's other
+        toolbar icons (e.g. the gear button in ``_preferences.py``, which
+        uses ``theme().text_secondary``). Re-deriving every neutral icon
+        from that same token keeps this toolbar consistent with the rest of
+        the app in both themes; only the semantic (green/red) actions below
+        are deliberately left off-token.
+        """
+        toolbar = self.toolBar()
+        muted = qcolor(theme().text_secondary).name()
+
+        def _recolor(action: QAction, glyph: str) -> None:
+            icon = QIconifyIcon(glyph, color=muted)
+            action.setIcon(icon)
+            button = toolbar.widgetForAction(action)
+            if isinstance(button, QToolButton):
+                set_source_icon(button, icon)
+
+        _recolor(toolbar.clear_action, "mdi:close")
+        _recolor(toolbar.zoom_to_fit_action, "mdi:fullscreen")
+        _recolor(toolbar.snap_action, "mdi:camera-outline")
+        _recolor(toolbar.poll_stage_action, "mdi:map-marker-outline")
+        _recolor(toolbar.show_grid_action, "mdi:grid")
+        _recolor(toolbar.map_memory_action, "mdi:memory")
+        _recolor(toolbar.delete_rois_action, "mdi:vector-square-remove")
+
+        # Auto Zoom to Fit's icon is a static SVG with a baked-in fill, not a
+        # QIconifyIcon glyph, so it's tinted after the fact instead.
+        auto_zoom_button = toolbar.widgetForAction(toolbar.auto_zoom_to_fit_action)
+        if isinstance(auto_zoom_button, QToolButton):
+            set_icon_tint(auto_zoom_button, qcolor(theme().text_secondary))
 
         marker_mode_icons = {
             "FOV Rectangle": "ic:outline-check-box-outline-blank",
             "FOV Center": "ic:baseline-plus",
             "Both": "ic:outline-add-box",
         }
-        for action in self.toolBar().marker_mode_action_group.actions():
+        for action in toolbar.marker_mode_action_group.actions():
             if glyph := marker_mode_icons.get(action.text()):
-                action.setIcon(QIconifyIcon(glyph, color=foreground))
+                action.setIcon(QIconifyIcon(glyph, color=muted))
+
+        roi_mode_icons = {
+            "Select": "mdi:cursor-default-outline",
+            "Rectangle": "mdi:vector-square",
+            "Polygon": "mdi:vector-polygon",
+        }
+        for action in self.roi_manager.mode_actions.actions():
+            if glyph := roi_mode_icons.get(action.text()):
+                action.setIcon(QIconifyIcon(glyph, color=muted))
 
         green = qcolor(theme().status_green).name()
         icon = QIconifyIcon("mdi:send", color=green)
