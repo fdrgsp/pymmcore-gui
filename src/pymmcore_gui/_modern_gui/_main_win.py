@@ -39,6 +39,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QApplication,
     QDialog,
     QHBoxLayout,
+    QLabel,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -54,6 +55,7 @@ from ._acquire import AcquirePage
 from ._configurations import ConfigurationsPage
 from ._hardware import HardwareSetupPage
 from ._installation import InstallationPage
+from ._mda_status import MDAStatusWidget
 from ._panels import PanelKey
 from ._startup import StartupChoice, StartupDialog
 from ._theme import (
@@ -449,8 +451,23 @@ class MainWindow(QMainWindow):
         self._select_startup_tab()
 
         if status_bar := self.statusBar():
-            status_bar.showMessage("Ready")
+            # A full-width permanent container keeps acquisition status on the
+            # left without letting temporary messages obscure it. Mirror native
+            # messages here so existing showMessage()/timeout callers still work.
+            content = QWidget(status_bar)
+            row = QHBoxLayout(content)
+            row.setContentsMargins(0, 0, 0, 0)
+            self._mda_status = MDAStatusWidget(self._mmc, content)
+            row.addWidget(self._mda_status)
+            self._status_message = QLabel(content)
+            self._status_message.setTextFormat(Qt.TextFormat.PlainText)
+            self._status_message.setMinimumWidth(0)
+            row.addWidget(self._status_message, 1)
+            status_bar.messageChanged.connect(self._status_message.setText)
+            status_bar.addPermanentWidget(content, 1)
             status_bar.addPermanentWidget(self._bell_button)
+            self._stack.currentChanged.connect(self._update_mda_status_visibility)
+            self._update_mda_status_visibility()
 
         # ── zoom shortcuts ────────────────────────────────────────
         mods = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
@@ -658,6 +675,9 @@ class MainWindow(QMainWindow):
         if status_bar := self.statusBar():
             status_bar.showMessage(message, 5000)
 
+    def _update_mda_status_visibility(self, *_: object) -> None:
+        self._mda_status.set_idle_visible(self._stack.currentWidget() is self._acquire)
+
     def _on_mode_tab_changed(self, index: int) -> None:
         """Gate leaving Configurations with unsaved group/pixel edits.
 
@@ -741,7 +761,7 @@ class MainWindow(QMainWindow):
             status_bar.showMessage(
                 "Pixel calibration is controlling the camera and XY stage"
                 if running
-                else "Ready"
+                else ""
             )
 
     def _on_mda_running(self, running: bool) -> None:
@@ -769,10 +789,6 @@ class MainWindow(QMainWindow):
             with QSignalBlocker(self._mode_tabs):
                 self._mode_tabs._select(acquire_index)
             self._stack.setCurrentIndex(acquire_index)
-        if status_bar := self.statusBar():
-            status_bar.showMessage(
-                "Acquisition running — the microscope is busy" if running else "Ready"
-            )
         if not running and self._close_pending:
             # The close this cancellation was requested for can now run its
             # normal course. Deferred so the rest of the unlock (and the

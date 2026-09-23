@@ -124,6 +124,21 @@ def _row_index(table: DataTable, row: int, col: int = 0) -> QModelIndex:
     return model.index(row, col)
 
 
+def _unwrap_card(widget: QWidget | None) -> QWidget | None:
+    """Return a card-wrapped section's real content widget.
+
+    Some ``CollapsibleAcquisitionSection`` content widgets (grid, z, saving)
+    are nested one level deep in a bordered ``_CardFrame`` -- see
+    ``MDACollapsibleTabs._wrap_in_card`` upstream. Unwrap it so identity
+    checks reach the actual widget rather than its decorative container.
+    """
+    layout = widget.layout() if widget is not None else None
+    if layout is not None and layout.count() == 1 and (item := layout.itemAt(0)):
+        if (inner := item.widget()) is not None:
+            return inner
+    return widget
+
+
 def test_accepting_startup_config_selects_acquire(
     mmcore: CMMCorePlus,
     settings: Settings,
@@ -775,10 +790,10 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     ]
     assert tabs.section("c").content_widget is page._mda.channels
     assert tabs.section("p").content_widget is page._mda.stage_positions
-    assert tabs.section("g").content_widget is page._mda.grid_plan
-    assert tabs.section("z").content_widget is page._mda.z_plan
+    assert _unwrap_card(tabs.section("g").content_widget) is page._mda.grid_plan
+    assert _unwrap_card(tabs.section("z").content_widget) is page._mda.z_plan
     assert tabs.section("t").content_widget is page._mda.time_plan
-    assert tabs.saving_section.content_widget is page._mda.save_info
+    assert _unwrap_card(tabs.saving_section.content_widget) is page._mda.save_info
     assert tabs.saving_section is tabs.sections[-2]
     assert tabs.settings_section is tabs.sections[-1]
     tab_bar = tabs.tabBar()
@@ -5409,19 +5424,51 @@ def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     )
     assert not toolbar.stop_scan_action.icon().isNull()
 
-    expected = qcolor(theme().text_primary)
+    # Neutral/navigation icons all match the app's muted toolbar-icon token
+    # (the same one the gear button uses), not upstream's fixed "#666" gray
+    # and not the near-white body-text color.
+    expected = qcolor(theme().text_secondary)
     expected_rgb = expected.red(), expected.green(), expected.blue()
-    marker_actions = (
+    neutral_actions = (
+        toolbar.clear_action,
+        toolbar.zoom_to_fit_action,
+        toolbar.snap_action,
         toolbar.poll_stage_action,
+        toolbar.show_grid_action,
+        toolbar.map_memory_action,
+        toolbar.delete_rois_action,
         *toolbar.marker_mode_action_group.actions(),
+        *explorer.roi_manager.mode_actions.actions(),
     )
-    for action in marker_actions:
+    for action in neutral_actions:
         rgb = _icon_avg_rgb(action.icon(), QSize(24, 24))
         assert rgb is not None
         assert all(
             abs(actual - wanted) < 2
             for actual, wanted in zip(rgb, expected_rgb, strict=True)
-        )
+        ), action.text()
+
+    # The SVG-backed Auto Zoom to Fit icon is tinted to the same token rather
+    # than recolored from a glyph.
+    auto_zoom_button = toolbar.widgetForAction(toolbar.auto_zoom_to_fit_action)
+    assert isinstance(auto_zoom_button, QToolButton)
+    auto_zoom_rgb = _icon_avg_rgb(auto_zoom_button.icon(), QSize(24, 24))
+    assert auto_zoom_rgb is not None
+    assert all(
+        abs(actual - wanted) < 2
+        for actual, wanted in zip(auto_zoom_rgb, expected_rgb, strict=True)
+    )
+
+    # Semantic (state) icons stay off the neutral token.
+    green = qcolor(theme().status_green)
+    green_rgb = green.red(), green.green(), green.blue()
+    for action in (toolbar.send_to_mda_action, toolbar.scan_action):
+        rgb = _icon_avg_rgb(action.icon(), QSize(24, 24))
+        assert rgb is not None
+        assert all(
+            abs(actual - wanted) < 2
+            for actual, wanted in zip(rgb, green_rgb, strict=True)
+        ), action.text()
 
 
 def test_slider_style_only_paints_requested_subcontrols(qapp: QApplication) -> None:
