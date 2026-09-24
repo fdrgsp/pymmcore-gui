@@ -133,12 +133,12 @@ STAGE_KIND_FACTORIES: Final[Mapping[str, tuple[PanelFactory, bool]]] = {
 }
 
 
-def _create_console(_parent: QWidget, core: CMMCorePlus) -> QWidget:
+def _create_console(parent: QWidget, core: CMMCorePlus) -> QWidget:
     # local import: keeps IPython/qtconsole out of startup for users who
     # never open the console panel.
     from pymmcore_gui.widgets._mm_console import MMConsole
 
-    return MMConsole(mmcore=core)
+    return MMConsole(parent=parent, mmcore=core)
 
 
 def _refresh_mda(widget: QWidget) -> None:

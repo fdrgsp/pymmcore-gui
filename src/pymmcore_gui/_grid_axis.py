@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import numpy as np
 import useq
@@ -23,6 +23,7 @@ from ndv.models import DataWrapper
 
 if TYPE_CHECKING:
     from collections.abc import Hashable, Mapping, Sequence
+    from typing import TypeGuard
 
     from ome_writers import AcquisitionSettings
 
@@ -36,6 +37,12 @@ class GridAxisLayoutKind(str, Enum):
     """Only `g` is exposed; there is no independent stage position."""
     REGULAR = "regular"
     """Both `p` and `g` are exposed, as a rectangular `n_positions x n_tiles`."""
+    RAGGED = "ragged"
+    """Both `p` and `g` are exposed, but positions have differing tile counts
+    (including a plain, ungridded position, treated as one tile). `g`'s
+    slider range is the largest per-position count; a position with fewer
+    tiles reads as blank/zero once `g` exceeds its own count -- never another
+    position's real tile."""
 
 
 class GridOrder(str, Enum):
@@ -64,6 +71,21 @@ class GridAxisLayout:
     order: GridOrder
     n_flat: int
     raw_position_axis: int | None
+    # True when the *sequence* has a grid somewhere (global or per-position)
+    # that could not be exposed as independent sliders (ragged, well-plate,
+    # or otherwise unsupported) -- meaningful only when `kind` is NONE. Lets
+    # `_follow_index` tell "no grid at all" (a raw event's "p" already names
+    # its correct flattened slot) apart from "grid exists but unsupported"
+    # (arrival-order remapping is still required), without which a mixed
+    # gridded/plain sequence's plain positions would resolve to the wrong
+    # flattened slot once an earlier position's grid tiles have consumed
+    # extra slots.
+    has_grid: bool = False
+    # RAGGED only: per-position tile count and cumulative flat offset (both
+    # length n_positions). Precomputed once in `build()`; a table like this is
+    # proportional to the number of positions, never to the number of frames.
+    tile_counts: tuple[int, ...] = ()
+    offsets: tuple[int, ...] = ()
 
     @property
     def exposed_axes(self) -> tuple[str, ...]:
@@ -72,10 +94,18 @@ class GridAxisLayout:
             return ()
         if self.kind is GridAxisLayoutKind.GRID_ONLY:
             return ("g",)
+        if self.kind is GridAxisLayoutKind.RAGGED:
+            return ("p", "g")  # per-position flattening is always position-first
         return ("p", "g") if self.order is GridOrder.POSITION_FIRST else ("g", "p")
 
     def flat_index(self, p: int | None, g: int | None) -> int:
-        """Map a logical `(p, g)` pair to the writer's flattened position slot."""
+        """Map a logical `(p, g)` pair to the writer's flattened position slot.
+
+        Raises `IndexError` when `p`/`g` is out of the layout's overall range,
+        or (RAGGED only) when `g` is within the overall range but exceeds
+        this specific position's own tile count -- callers must treat that
+        case as "no data here", never substitute a different position's tile.
+        """
         if self.kind is GridAxisLayoutKind.NONE:
             raise ValueError("flat_index() is not valid for a GridAxisLayoutKind.NONE")
         if self.kind is GridAxisLayoutKind.GRID_ONLY:
@@ -87,6 +117,13 @@ class GridAxisLayout:
         g = 0 if g is None else g
         if not 0 <= p < self.n_positions:
             raise IndexError(f"p={p} out of range for n_positions={self.n_positions}")
+        if self.kind is GridAxisLayoutKind.RAGGED:
+            if not 0 <= g < self.tile_counts[p]:
+                raise IndexError(
+                    f"g={g} out of range for position {p} "
+                    f"(has {self.tile_counts[p]} tiles)"
+                )
+            return self.offsets[p] + g
         if not 0 <= g < self.n_tiles:
             raise IndexError(f"g={g} out of range for n_tiles={self.n_tiles}")
         if self.order is GridOrder.POSITION_FIRST:
@@ -94,7 +131,7 @@ class GridAxisLayout:
         return g * self.n_positions + p
 
     @classmethod
-    def none(cls) -> GridAxisLayout:
+    def none(cls, *, has_grid: bool = False) -> GridAxisLayout:
         """The universal fallback: no grid axis, flattened `p` is used as-is."""
         return cls(
             kind=GridAxisLayoutKind.NONE,
@@ -103,6 +140,7 @@ class GridAxisLayout:
             order=GridOrder.POSITION_FIRST,
             n_flat=0,
             raw_position_axis=None,
+            has_grid=has_grid,
         )
 
     @classmethod
@@ -137,25 +175,38 @@ class GridAxisLayout:
             # flattened `p` is already correct, no adapter needed.
             return cls.none()
 
-        try:
-            kind, n_positions, n_tiles, order = cls._derive(
-                sequence, stage_positions, has_global_grid
-            )
-        except ValueError:
-            return cls.none()
-        if n_tiles < 1:
-            return cls.none()
+        spec = cls._derive(sequence, stage_positions, has_global_grid)
+        if spec is None:
+            # Ragged/unsupported: ome-writers still flattens these tiles into
+            # its single position dimension, so events will carry real "g"
+            # (and/or "p") values that a naive passthrough would misinterpret.
+            return cls.none(has_grid=True)
+        kind, n_positions, n_tiles, order, tile_counts = spec
+        if n_tiles < 1 or (tile_counts is not None and any(c < 1 for c in tile_counts)):
+            return cls.none(has_grid=True)
 
-        expected_n_flat = (
-            n_tiles if kind is GridAxisLayoutKind.GRID_ONLY else (n_positions * n_tiles)
-        )
+        offsets: tuple[int, ...] = ()
+        if kind is GridAxisLayoutKind.RAGGED:
+            assert tile_counts is not None
+            expected_n_flat = sum(tile_counts)
+            total = 0
+            running: list[int] = []
+            for count in tile_counts:
+                running.append(total)
+                total += count
+            offsets = tuple(running)
+        elif kind is GridAxisLayoutKind.GRID_ONLY:
+            expected_n_flat = n_tiles
+        else:
+            expected_n_flat = n_positions * n_tiles
+
         resolved_positions = settings.positions
         if len(resolved_positions) != expected_n_flat:
             # Integrity cross-check against the sink's actual resolved
             # positions -- catches any disagreement between our own
             # derivation and what ome-writers actually built (e.g. a grid
             # plan whose fov size resolves differently than expected).
-            return cls.none()
+            return cls.none(has_grid=True)
 
         return cls(
             kind=kind,
@@ -164,6 +215,8 @@ class GridAxisLayout:
             order=order,
             n_flat=expected_n_flat,
             raw_position_axis=pos_dim_idx,
+            tile_counts=tile_counts or (),
+            offsets=offsets,
         )
 
     @staticmethod
@@ -171,13 +224,25 @@ class GridAxisLayout:
         sequence: useq.MDASequence,
         stage_positions: tuple[useq.AbsolutePosition, ...],
         has_global_grid: bool,
-    ) -> tuple[GridAxisLayoutKind, int, int, GridOrder]:
-        """Return `(kind, n_positions, n_tiles, order)` or raise `ValueError`."""
+    ) -> tuple[GridAxisLayoutKind, int, int, GridOrder, tuple[int, ...] | None] | None:
+        """Return `(kind, n_positions, n_tiles, order, tile_counts)`.
+
+        `tile_counts` is `None` except for `RAGGED` (where `n_tiles` is the
+        largest per-position count, used only for the slider's overall
+        range). Returns `None` when no derivable layout exists (defensive;
+        the caller has already ruled out the no-grid-at-all case).
+        """
         if not stage_positions:
             # Grid-plan only, no stage positions.
             assert sequence.grid_plan is not None
             n_tiles = len(list(sequence.grid_plan))
-            return GridAxisLayoutKind.GRID_ONLY, 1, n_tiles, GridOrder.POSITION_FIRST
+            return (
+                GridAxisLayoutKind.GRID_ONLY,
+                1,
+                n_tiles,
+                GridOrder.POSITION_FIRST,
+                None,
+            )
 
         n_positions = len(stage_positions)
         sub_grids = [
@@ -186,7 +251,7 @@ class GridAxisLayout:
         ]
         if all(g is None for g in sub_grids):
             if not has_global_grid:
-                raise ValueError("no grid plan found")  # pragma: no cover
+                return None  # pragma: no cover
             assert sequence.grid_plan is not None
             n_tiles = len(list(sequence.grid_plan))
             grid_first = (
@@ -196,24 +261,37 @@ class GridAxisLayout:
                 < sequence.axis_order.index(useq.Axis.POSITION)
             )
             order = GridOrder.GRID_FIRST if grid_first else GridOrder.POSITION_FIRST
-        elif all(g is not None for g in sub_grids):
-            counts = [len(list(g)) for g in sub_grids]  # type: ignore[arg-type]
-            if len(set(counts)) != 1:
-                raise ValueError("ragged per-position grid sizes")
-            n_tiles = counts[0]
-            # Per-position subsequence grids always flatten position-first in
-            # ome_writers, regardless of axis_order.
-            order = GridOrder.POSITION_FIRST
-        else:
-            raise ValueError("mixed gridded/plain stage positions")
+            return GridAxisLayoutKind.REGULAR, n_positions, n_tiles, order, None
 
-        return GridAxisLayoutKind.REGULAR, n_positions, n_tiles, order
+        # At least one position carries its own grid subsequence (uniform,
+        # ragged, or mixed with plain positions). Per-position subsequence
+        # grids always flatten position-first in ome_writers, regardless of
+        # axis_order. A plain (ungridded) position counts as one tile.
+        tile_counts = tuple(len(list(g)) if g is not None else 1 for g in sub_grids)
+        if len(set(tile_counts)) == 1:
+            # Uniform: the simple arithmetic case applies.
+            n_tiles = tile_counts[0]
+            return (
+                GridAxisLayoutKind.REGULAR,
+                n_positions,
+                n_tiles,
+                GridOrder.POSITION_FIRST,
+                None,
+            )
+        return (
+            GridAxisLayoutKind.RAGGED,
+            n_positions,
+            max(tile_counts),
+            GridOrder.POSITION_FIRST,
+            tile_counts,
+        )
 
 
 class GridAxisDataWrapper(DataWrapper[Any]):
-    """Read-only `ndv.DataWrapper` presenting a flattened writer position axis
-    as logical `p`/`g` axes, with no additional pixel copy for a single
-    `(p, g)` selection.
+    """Read-only `ndv.DataWrapper` presenting a flattened writer position axis.
+
+    Exposes logical `p`/`g` axes instead, with no additional pixel copy for a
+    single `(p, g)` selection.
     """
 
     # Never auto-detected by DataWrapper.create(); always constructed
@@ -244,11 +322,16 @@ class GridAxisDataWrapper(DataWrapper[Any]):
         }
 
     @classmethod
-    def supports(cls, obj: Any) -> bool:
-        # Required by the ABC; never used for autodetection since instances
-        # are always constructed explicitly (DataWrapper.create() returns an
-        # already-built DataWrapper instance unchanged).
-        return hasattr(obj, "dims") and hasattr(obj, "coords_changed")
+    def supports(cls, obj: Any) -> TypeGuard[Any]:
+        # Required by the ABC. Always False: this wrapper takes a mandatory
+        # `layout` argument DataWrapper.create()'s `subclass(data)` can never
+        # supply, so answering True here would only make every unwrapped
+        # StreamView construction log a spurious "missing argument" warning
+        # before falling through to ArrayLikeWrapper. Instances are always
+        # constructed explicitly and passed straight into MMArrayViewer;
+        # DataWrapper.create() returns an already-built DataWrapper instance
+        # unchanged, so autodetection is never actually needed.
+        return False
 
     @property
     def layout(self) -> GridAxisLayout:
@@ -259,7 +342,7 @@ class GridAxisDataWrapper(DataWrapper[Any]):
         return self._dims
 
     @property
-    def coords(self) -> Mapping[str, Sequence[Any]]:
+    def coords(self) -> Mapping[Hashable, Sequence[Any]]:
         out = dict(self._data.coords)
         pos_name = self._raw_dims[self._raw_position_axis]
         out.pop(pos_name, None)
@@ -273,27 +356,37 @@ class GridAxisDataWrapper(DataWrapper[Any]):
         return out
 
     @property
-    def dtype(self) -> np.dtype:
-        return np.dtype(self._data.dtype)
+    def dtype(self) -> np.dtype[Any]:
+        return cast("np.dtype[Any]", np.dtype(self._data.dtype))
 
     def isel(self, index: Mapping[int, int | slice]) -> np.ndarray:
         p_val, p_collapse = self._resolve_singleton(
-            index.get(self._p_axis) if self._p_axis is not None else None,
-            self._layout.n_positions,
+            index.get(self._p_axis) if self._p_axis is not None else None
         )
         g_val, g_collapse = self._resolve_singleton(
-            index.get(self._g_axis) if self._g_axis is not None else None,
-            self._layout.n_tiles,
+            index.get(self._g_axis) if self._g_axis is not None else None
         )
-        flat = self._layout.flat_index(p_val, g_val)
 
         raw_key: list[Any] = [slice(None)] * len(self._raw_dims)
-        raw_key[self._raw_position_axis] = flat
         for my_axis, raw_axis in self._passthrough_raw_axis.items():
             if my_axis in index:
                 raw_key[raw_axis] = index[my_axis]
 
-        result = np.asarray(self._data[tuple(raw_key)])
+        try:
+            flat = self._layout.flat_index(p_val, g_val)
+        except IndexError:
+            # RAGGED only in practice: g is within the slider's overall
+            # range but exceeds this specific position's own tile count.
+            # There is no real frame here -- read a real, valid slot purely
+            # to get a correctly-shaped/typed array, then blank it. Never
+            # substitute another position's real tile.
+            probe_key = list(raw_key)
+            probe_key[self._raw_position_axis] = 0
+            probe = np.asarray(self._data[tuple(probe_key)])
+            result = np.zeros_like(probe)
+        else:
+            raw_key[self._raw_position_axis] = flat
+            result = np.asarray(self._data[tuple(raw_key)])
 
         # Restore each retained (non-collapsed) p/g axis, smallest wrapper-
         # axis index first, so each expand_dims' `axis=` stays correct
@@ -308,7 +401,7 @@ class GridAxisDataWrapper(DataWrapper[Any]):
         return result
 
     @staticmethod
-    def _resolve_singleton(req: int | slice | None, n: int) -> tuple[int, bool]:
+    def _resolve_singleton(req: int | slice | None) -> tuple[int, bool]:
         """Resolve one p/g request to `(value, collapse)`.
 
         `None` (axis absent from the request) and a bare `int` (a direct

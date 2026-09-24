@@ -22,7 +22,9 @@ from pymmcore_gui._ndv_viewers import (
     _extract_scales,
     _follow_index,
     _LiveRefresh,
+    _RaggedFallbackCounter,
     _runner_sink,
+    _StreamSignalBridge,
 )
 from pymmcore_gui._qt.QtAds import CDockWidget, DockWidgetArea
 from pymmcore_gui._qt.QtCore import QObject, QTimer, Signal
@@ -55,12 +57,6 @@ def _release_runner_sink(runner: Any, sink: SinkProtocol) -> bool:
     return True
 
 
-class _StreamSignalBridge(QObject):
-    """Marshal ome-writers stream notifications onto the Qt GUI thread."""
-
-    dimsChanged = Signal()
-
-
 @dataclass
 class _ViewerRecord:
     viewer: ndv.ArrayViewer
@@ -77,6 +73,9 @@ class _ViewerRecord:
     refresh: _LiveRefresh | None = None
     pending_index: dict[str, int] | None = None
     dims_gate: _DimsChangeGate | None = None
+    ragged_fallback: _RaggedFallbackCounter = field(
+        default_factory=_RaggedFallbackCounter
+    )
 
     def disconnect(self) -> None:
         """Disconnect the live stream from a viewer that is being closed."""
@@ -266,8 +265,7 @@ class AcquireViewersManager(QObject):
         if coords_signal is not None and wrapper is not None:
             gate = _DimsChangeGate(wrapper)
             record.dims_gate = gate
-            bridge = _StreamSignalBridge(widget)
-            bridge.dimsChanged.connect(gate.maybe_emit)
+            bridge = _StreamSignalBridge(gate.maybe_emit, widget)
             callback = bridge.dimsChanged.emit
             coords_signal.connect(callback)
             record.bridge = bridge
@@ -315,7 +313,9 @@ class AcquireViewersManager(QObject):
         ):
             return
 
-        record.pending_index = _follow_index(event, record.layout)
+        record.pending_index = _follow_index(
+            event, record.layout, record.ragged_fallback
+        )
         if record.refresh is not None:
             record.refresh.request()
 

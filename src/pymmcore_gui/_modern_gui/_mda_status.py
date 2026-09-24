@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import suppress
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from pymmcore_plus.mda import FinishReason, RunState
@@ -51,6 +52,29 @@ def _shorten(value: object, limit: int = 24) -> str:
     return text if len(text) <= limit else f"{text[: limit - 1]}…"
 
 
+def _format_countdown(seconds: float) -> str:
+    """Format a wait duration, staying second-precise at every scale.
+
+    "9s" under a minute, "1:05" under an hour, "1:59:00" under a day -- so a
+    two-hour wait never turns into "119:00" -- and "2d 01:58:30" beyond that.
+    Seconds are kept even past a day: rounding them off would leave the
+    display looking frozen for up to a minute at a stretch, which reads as
+    "this isn't actually counting down."
+    """
+    # timedelta normalizes the day boundary for us: .seconds is always the
+    # 0-86399 remainder within the current day, however many days .days holds.
+    td = timedelta(seconds=max(0, round(seconds)))
+    hours, remainder = divmod(td.seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if td.days:
+        return f"{td.days}d {hours:02d}:{minutes:02d}:{secs:02d}"
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    if minutes:
+        return f"{minutes}:{secs:02d}"
+    return f"{secs}s"
+
+
 def _format_event(event: MDAEvent, sizes: Mapping[str, int]) -> str:
     """Format an event's coordinates using one-based, human-facing indices."""
     index = {str(axis): int(value) for axis, value in event.index.items()}
@@ -90,7 +114,7 @@ class MDAStatusWidget(QWidget):
     """Display the active MDA runner state and its latest useful coordinates."""
 
     _sequenceStarted = Signal(object)
-    _awaitingEvent = Signal(object)
+    _awaitingEvent = Signal(object, float)
     _eventStarted = Signal(object)
     _frameObserved = Signal(object)
     _pauseToggled = Signal()
@@ -105,6 +129,7 @@ class MDAStatusWidget(QWidget):
         self._last_event: MDAEvent | None = None
         self._current_event: MDAEvent | None = None
         self._next_event: MDAEvent | None = None
+        self._next_event_remaining: float | None = None
         self._cancel_seen = False
         self._result: str | None = None
         self._result_kind = "green"
@@ -177,8 +202,8 @@ class MDAStatusWidget(QWidget):
     def _relay_sequence_started(self, sequence: MDASequence, *_: object) -> None:
         self._sequenceStarted.emit(sequence)
 
-    def _relay_awaiting_event(self, event: MDAEvent, _remaining: float) -> None:
-        self._awaitingEvent.emit(event)
+    def _relay_awaiting_event(self, event: MDAEvent, remaining: float) -> None:
+        self._awaitingEvent.emit(event, remaining)
 
     def _relay_frame_ready(
         self, _image: object, event: MDAEvent, _meta: object
@@ -205,6 +230,7 @@ class MDAStatusWidget(QWidget):
         self._last_event = None
         self._current_event = None
         self._next_event = None
+        self._next_event_remaining = None
         self._cancel_seen = False
         self.show()
 
@@ -220,18 +246,23 @@ class MDAStatusWidget(QWidget):
         self._last_phase = _enum_value(self._runner.status.phase)
         self._render()
 
-    def _on_awaiting_event(self, event: MDAEvent) -> None:
+    def _on_awaiting_event(self, event: MDAEvent, remaining: float) -> None:
         # Rendering is coalesced by _status_timer; some acquisitions emit events
-        # much faster than it is useful to repaint a status bar.
+        # much faster than it is useful to repaint a status bar. The runner
+        # re-emits this at least every 0.5s while waiting, so remaining_sec
+        # stays fresh without any polling of our own.
         self._next_event = event
+        self._next_event_remaining = remaining
 
     def _on_event_started(self, event: MDAEvent) -> None:
         self._current_event = event
         self._next_event = None
+        self._next_event_remaining = None
 
     def _on_frame_observed(self, event: MDAEvent) -> None:
         self._last_event = event
         self._next_event = None
+        self._next_event_remaining = None
 
     def _on_sequence_canceled(self) -> None:
         self._cancel_seen = True
@@ -292,6 +323,9 @@ class MDAStatusWidget(QWidget):
             return "Acquiring", "green"
         if phase == RunState.WAITING.value:
             if self._next_event is not None:
+                if self._next_event_remaining is not None:
+                    countdown = _format_countdown(self._next_event_remaining)
+                    return f"Waiting {countdown}", "amber"
                 return "Waiting", "amber"
             return "Running", "green"
         return "", "green"

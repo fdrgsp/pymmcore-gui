@@ -43,16 +43,51 @@ def _runner_sink(runner: Any) -> SinkProtocol | None:
     return cast("SinkProtocol | None", getattr(runner, "_sink", None))
 
 
-def _follow_index(event: MDAEvent, layout: GridAxisLayout) -> dict[str, int]:
+class _RaggedFallbackCounter:
+    """Arrival-order `(p, g) -> flattened-p` counter for unsupported layouts.
+
+    Used only for layouts with no planned mapping (ragged or otherwise
+    unsupported grid combinations). `GridAxisLayout.build()` deliberately
+    declines to build a planned mapping
+    for these layouts (a rectangular table would misrepresent them), so there
+    is no way to compute the correct flattened slot from `(p, g)` alone. This
+    reproduces the pre-existing arrival-order behavior as a fallback only for
+    this unsupported path -- it is not a source of storage truth, and (like
+    the code it replaces) is not reliable across `sink.skip()`.
+    """
+
+    def __init__(self) -> None:
+        self._slots: dict[tuple[object, object], int] = {}
+
+    def reset(self) -> None:
+        self._slots.clear()
+
+    def resolve(self, p: object, g: object) -> int:
+        return self._slots.setdefault((p, g), len(self._slots))
+
+
+def _follow_index(
+    event: MDAEvent, layout: GridAxisLayout, fallback: _RaggedFallbackCounter
+) -> dict[str, int]:
     """Derive a viewer's display index for `event` from the planned layout.
 
-    Unlike the arrival-order counter this replaces, this is a pure function of
+    For a supported layout (GRID_ONLY/REGULAR), this is a pure function of
     the event and the (immutable, pre-validated) layout: it never desyncs
     under `sink.skip()`, and revisiting the same `(p, g)` at a later timepoint
-    is naturally idempotent.
+    is naturally idempotent. For an unsupported/ragged layout (`layout.
+    has_grid`), `fallback` provides the same arrival-order behavior as before:
+    a grid exists somewhere in the sequence, so even a "p"-only event (an
+    ungridded position) may not already name its correct flattened slot, once
+    another position's grid tiles have consumed extra slots ahead of it. When
+    the sequence has no grid at all, a "p" value already is the correct
+    flattened slot and needs no counter.
     """
     index = {str(axis): value for axis, value in event.index.items()}
     if layout.kind is GridAxisLayoutKind.NONE:
+        if layout.has_grid and ("p" in index or "g" in index):
+            p = index.pop("p", None)
+            g = index.pop("g", None)
+            index["p"] = fallback.resolve(p, g)
         return index
     p = index.pop("p", None)
     g = index.pop("g", None)
@@ -153,6 +188,7 @@ class NDVViewersManager(QObject):
         self._refresh: _LiveRefresh | None = None
         self._pending_index: dict[str, int] | None = None
         self._dims_gate: _DimsChangeGate | None = None
+        self._ragged_fallback = _RaggedFallbackCounter()
         # Snapshot of the active run's sink settings/summary metadata, so
         # MMArrayViewer._save_data() can export canonical data even for the
         # classic GUI (mirrors AcquireViewersManager's AcquisitionRecord).
@@ -205,6 +241,7 @@ class NDVViewersManager(QObject):
         self._layout = GridAxisLayout.none()
         self._pending_index = None
         self._dims_gate = None
+        self._ragged_fallback.reset()
         self._current_acquisition = None
         if self._refresh is not None:
             self._refresh.stop()
@@ -227,12 +264,12 @@ class NDVViewersManager(QObject):
         if (acquisition := self._current_acquisition) is not None:
             acquisition.frame_meta.append(frame_meta_to_ome(meta))
 
-        if (viewer := self._active_mda_viewer) is None:
+        if self._active_mda_viewer is None:
             return  # pragma: no cover
         if not self._follow_acquisition:
             return
 
-        self._pending_index = _follow_index(event, self._layout)
+        self._pending_index = _follow_index(event, self._layout, self._ragged_fallback)
         if self._refresh is not None:
             self._refresh.request()
 
@@ -292,9 +329,8 @@ class NDVViewersManager(QObject):
         if hasattr(view, "coords_changed") and wrapper is not None:
             gate = _DimsChangeGate(wrapper)
             self._dims_gate = gate
-            bridge = _StreamSignalBridge(ndv_viewer.widget())
+            bridge = _StreamSignalBridge(gate.maybe_emit, ndv_viewer.widget())
             view.coords_changed.connect(bridge.dimsChanged.emit)
-            bridge.dimsChanged.connect(gate.maybe_emit)
 
         self._refresh = _LiveRefresh(
             self._apply_pending_index, parent=ndv_viewer.widget()
@@ -373,6 +409,18 @@ class _StreamSignalBridge(QObject):
     """Marshal ome-writers dimension changes onto the Qt GUI thread."""
 
     dimsChanged = Signal()
+
+    def __init__(self, callback: Any, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._callback = callback
+        # The receiver is deliberately a QObject-bound method.  Connecting the
+        # signal straight to a regular Python callable lets PyQt invoke it in
+        # the writer thread, which means ndv may create/hide sliders off the GUI
+        # thread as live dimensions grow.
+        self.dimsChanged.connect(self._notify)
+
+    def _notify(self) -> None:
+        self._callback()
 
 
 def _add_follow_lock_button(ndv_viewer: ndv.ArrayViewer, manager: Any) -> None:

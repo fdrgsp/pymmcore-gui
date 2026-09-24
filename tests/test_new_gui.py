@@ -23,6 +23,7 @@ import pymmcore_gui._modern_gui._acquire_toolbar as acquire_toolbar_module
 import pymmcore_gui._modern_gui._acquire_viewers as acquire_viewers_module
 from pymmcore_gui._app import create_mmgui
 from pymmcore_gui._array_viewer import _icon_avg_rgb
+from pymmcore_gui._grid_axis import GridAxisDataWrapper, GridAxisLayoutKind
 from pymmcore_gui._layouts import (
     DEFAULT_LAYOUT_NAME,
     LAST_SESSION_LAYOUT_NAME,
@@ -57,6 +58,7 @@ from pymmcore_gui._modern_gui._theme import (
 )
 from pymmcore_gui._modern_gui._theme._dark import DARK_THEME
 from pymmcore_gui._modern_gui._theme._light import LIGHT_THEME
+from pymmcore_gui._ndv_viewers import _runner_sink
 from pymmcore_gui._qt.QtAds import (
     CDockManager,
     CDockWidget,
@@ -1141,6 +1143,28 @@ def test_acquire_console_dock_is_lazy(
     assert dock.isClosed()
     assert not page.panel_button(PanelKey.CONSOLE).isChecked()
     assert page.panel_widget(PanelKey.CONSOLE) is console  # not rebuilt
+
+
+def test_modern_console_exposes_window_acquire_and_mda_widget(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("IPYTHONDIR", str(tmp_path / "ipython"))
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+
+    window.acquire.panel_button(PanelKey.CONSOLE).click()
+    console = window.acquire.panel_widget(PanelKey.CONSOLE)
+    assert console is not None
+    namespace = console.get_user_variables()  # type: ignore[attr-defined]
+
+    assert window.mmcore is mmcore
+    assert namespace["window"] is window
+    assert namespace["acquire"] is window.acquire
+    assert namespace["mdawidget"] is window.acquire.mda_widget
+    assert namespace["mda_widget"] is window.acquire.mda_widget
 
 
 def test_acquire_stage_explorer_is_a_lazy_toolbar_dock(
@@ -4122,6 +4146,84 @@ def test_acquire_page_adds_sink_backed_mda_tab(
     assert viewer.closed
 
 
+def test_acquire_viewer_follows_time_and_grid_axes(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A timed grid w/ one stage position exposes a hidden-p/visible-g pair.
+
+    With only one real stage position, `p` never varies (ome-writers stores the
+    four grid tiles in its single position slot), so the grid adapter exposes a
+    hidden singleton `p` and a real, independently-followed 4-value `g` slider
+    -- rather than showing the four tiles as a mislabeled flattened `p` -- even
+    when `p`/`g` are non-adjacent in `axis_order`.
+    """
+
+    class Emitter:
+        def emit(self) -> None:
+            pass
+
+    class FakeViewer:
+        def __init__(self, data: object, /, **kwargs: object) -> None:
+            self.data = data
+            self.display_model = SimpleNamespace(current_index={})
+            self.data_wrapper = SimpleNamespace(
+                dims_changed=Emitter(), data_changed=Emitter(), sizes=lambda: {}
+            )
+            self._widget = QWidget()
+
+        def widget(self) -> QWidget:
+            return self._widget
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(acquire_viewers_module, "MMArrayViewer", FakeViewer)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    requested = useq.MDASequence(
+        axis_order=tuple("ptgc"),
+        stage_positions=(useq.AbsolutePosition(x=-256.005, y=256.005, z=0.0),),
+        grid_plan=useq.GridRowsColumns(
+            fov_width=512.0, fov_height=512.0, rows=2, columns=2
+        ),
+        channels=(useq.Channel(config="Cy5", exposure=0.1),),
+        time_plan=useq.TIntervalLoops(interval=timedelta(0), loops=5),
+    )
+    page.mda_widget.setValue(requested)
+    assert page.mda_widget.value().axis_order == tuple("ptgc")
+
+    # The plan runs exactly as entered, non-adjacent p/g and all: with a single
+    # stage position the grid is the only thing that varies, so ome-writers puts
+    # the flattened position dimension in g's slot instead of demanding that the
+    # two axes be adjacent.
+    with patch.object(mmcore, "run_mda") as run_mda:
+        page.mda_widget.execute_mda("memory")
+    executed = run_mda.call_args.args[0]
+    assert executed.axis_order == tuple("ptgc")
+
+    mmcore.mda.run(requested, output="memory")
+    qtbot.waitUntil(
+        lambda: bool(
+            page._viewers.active_viewer
+            and page._viewers.active_viewer.display_model.current_index.get("t") == 4
+            and page._viewers.active_viewer.display_model.current_index.get("g") == 3
+        )
+    )
+
+    viewer = page._viewers.active_viewer
+    assert isinstance(viewer, FakeViewer)
+    assert isinstance(viewer.data, GridAxisDataWrapper)
+    layout = viewer.data.layout
+    assert layout.kind is GridAxisLayoutKind.REGULAR
+    assert (layout.n_positions, layout.n_tiles) == (1, 4)
+    assert viewer.data.dims[:3] == ("t", "p", "g")
+    # p never varies (a single real stage position); g follows every tile.
+    assert viewer.display_model.current_index["p"] == 0
+    assert viewer.display_model.current_index["g"] == 3
+
+
 def test_acquire_viewer_close_reclaims_space_without_moving_mda(
     mmcore: CMMCorePlus,
     qtbot: QtBot,
@@ -4347,7 +4449,7 @@ def test_runner_sink_compatibility_for_released_pymmcore_plus() -> None:
     sink = cast("SinkProtocol", object())
     legacy_runner = SimpleNamespace(_sink=sink, is_running=lambda: False)
 
-    assert acquire_viewers_module._runner_sink(legacy_runner) is sink
+    assert _runner_sink(legacy_runner) is sink
     assert acquire_viewers_module._release_runner_sink(legacy_runner, sink)
     assert legacy_runner._sink is None
 

@@ -9,6 +9,7 @@ from useq import Channel, MDASequence, Position, TIntervalLoops, ZRangeAround
 
 from pymmcore_gui._modern_gui._mda_status import (
     MDAStatusWidget,
+    _format_countdown,
     _format_event,
     _sequence_sizes,
 )
@@ -56,6 +57,17 @@ def test_mda_status_formats_regular_and_irregular_coordinates() -> None:
     assert _sequence_sizes(irregular) == {}
 
 
+def test_format_countdown_gets_coarser_with_duration() -> None:
+    assert _format_countdown(9.6) == "10s"
+    assert _format_countdown(0.4) == "0s"
+    assert _format_countdown(-1.0) == "0s"
+    assert _format_countdown(65.0) == "1:05"
+    assert _format_countdown(7140.0) == "1:59:00"  # 119 minutes, not "119:00"
+    assert _format_countdown(90000.0) == "1d 01:00:00"  # a day and an hour
+    assert _format_countdown(89880.0) == "1d 00:58:00"  # minutes keep it ticking
+    assert _format_countdown(89882.0) == "1d 00:58:02"  # seconds keep it too
+
+
 def test_mda_status_tracks_runner_transitions_and_coordinate_meaning(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
@@ -80,8 +92,15 @@ def test_mda_status_tracks_runner_transitions_and_coordinate_meaning(
     runner.events.awaitingEvent.emit(event, 10.0)
     qtbot.waitUntil(lambda: widget._next_event is event)
     widget._render()
-    assert widget._state_label.text() == "Waiting"
+    assert widget._state_label.text() == "Waiting 10s"
     assert widget._details_label.text().startswith("Next: T 1/2")
+
+    # The runner keeps re-emitting awaitingEvent with a falling remaining_sec
+    # while it waits; the status bar's countdown should track it down to 0.
+    runner.events.awaitingEvent.emit(event, 4.4)
+    qtbot.waitUntil(lambda: widget._next_event_remaining == 4.4)
+    widget._render()
+    assert widget._state_label.text() == "Waiting 4s"
 
     runner._state = RunState.ACQUIRING
     runner.events.eventStarted.emit(event)
@@ -89,6 +108,8 @@ def test_mda_status_tracks_runner_transitions_and_coordinate_meaning(
     widget._render()
     assert widget._state_label.text() == "Acquiring"
     assert widget._details_label.text().startswith("Current: T 1/2")
+    # The countdown belongs to the wait that just ended, not the next one.
+    assert widget._next_event_remaining is None
 
     runner.events.frameReady.emit(np.zeros((1, 1)), event, {})
     qtbot.waitUntil(lambda: widget._last_event is event)
