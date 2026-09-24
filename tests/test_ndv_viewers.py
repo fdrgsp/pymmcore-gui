@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import threading
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
@@ -9,7 +10,7 @@ import useq
 from useq import MDASequence
 
 import pymmcore_gui._ndv_viewers as viewers_module
-from pymmcore_gui._ndv_viewers import NDVViewersManager
+from pymmcore_gui._ndv_viewers import NDVViewersManager, _StreamSignalBridge
 from pymmcore_gui._qt.QtWidgets import QApplication, QWidget
 
 if TYPE_CHECKING:
@@ -25,6 +26,26 @@ class _Emitter:
 
     def emit(self) -> None:
         self.calls += 1
+
+
+def test_stream_dimension_bridge_marshals_to_gui_thread(
+    qtbot: QtBot, qapp: QApplication
+) -> None:
+    """Live coordinate growth must never mutate ndv widgets from its writer thread."""
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    callback_threads: list[int] = []
+    bridge = _StreamSignalBridge(
+        lambda: callback_threads.append(threading.get_ident()), parent
+    )
+
+    worker = threading.Thread(target=bridge.dimsChanged.emit)
+    worker.start()
+    worker.join()
+
+    assert callback_threads == []
+    qtbot.waitUntil(lambda: bool(callback_threads))
+    assert callback_threads == [threading.get_ident()]
 
 
 class _FakeViewer(ndv.ArrayViewer):

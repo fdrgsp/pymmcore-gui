@@ -11,7 +11,11 @@ from pymmcore_plus.mda import OmeWritersSink, frame_meta_to_ome
 
 from pymmcore_gui._array_viewer import MMArrayViewer
 from pymmcore_gui._mda_export import AcquisitionRecord
-from pymmcore_gui._ndv_viewers import _add_follow_lock_button, _extract_scales
+from pymmcore_gui._ndv_viewers import (
+    _add_follow_lock_button,
+    _extract_scales,
+    _StreamSignalBridge,
+)
 from pymmcore_gui._qt.QtAds import CDockWidget, DockWidgetArea
 from pymmcore_gui._qt.QtCore import QObject, QTimer, Signal
 from pymmcore_gui._qt.QtWidgets import QSplitter
@@ -50,12 +54,6 @@ def _release_runner_sink(runner: Any, sink: SinkProtocol) -> bool:
         return False
     runner._sink = None
     return True
-
-
-class _StreamSignalBridge(QObject):
-    """Marshal ome-writers stream notifications onto the Qt GUI thread."""
-
-    dimsChanged = Signal()
 
 
 @dataclass
@@ -251,8 +249,7 @@ class AcquireViewersManager(QObject):
         wrapper = viewer.data_wrapper
         coords_signal = getattr(view, "coords_changed", None)
         if coords_signal is not None and wrapper is not None:
-            bridge = _StreamSignalBridge(widget)
-            bridge.dimsChanged.connect(wrapper.dims_changed.emit)
+            bridge = _StreamSignalBridge(wrapper.dims_changed.emit, widget)
             callback = bridge.dimsChanged.emit
             coords_signal.connect(callback)
             record.bridge = bridge

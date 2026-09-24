@@ -97,11 +97,43 @@ class MMConsole(QtConsole):
             "np": numpy,
         }
         mmc = self._mmc
-        for wdg in QApplication.topLevelWidgets():
-            if wdg.objectName() == "MicroManagerGUI":
-                default_vars["window"] = wdg
-                mmc = mmc or getattr(wdg, "mmc", None)
-                break
+        # Prefer the actual owning window.  The modern GUI is named ``pyMMGUI``
+        # (the legacy one is ``MicroManagerGUI``), so the old object-name-only
+        # search stopped injecting ``window`` when the console moved into the
+        # modern Acquire page.
+        owner = QWidget.window(self)
+        candidates = [owner, *QApplication.topLevelWidgets()]
+        window = next(
+            (
+                wdg
+                for wdg in candidates
+                if wdg is not None
+                and wdg is not self
+                and (
+                    wdg.objectName() in {"MicroManagerGUI", "pyMMGUI"}
+                    or hasattr(wdg, "mmcore")
+                )
+            ),
+            None,
+        )
+        if window is not None:
+            default_vars["window"] = window
+            mmc = mmc or getattr(window, "mmcore", None)
+
+            # The modern GUI keeps acquisition controls together on its
+            # Acquire page.  Give console users convenient, stable names while
+            # retaining ``window`` for access to the rest of the application.
+            acquire = getattr(window, "acquire", None)
+            if acquire is None:
+                acquire = getattr(window, "_acquire", None)
+            if acquire is not None:
+                default_vars["acquire"] = acquire
+                mda_widget = getattr(acquire, "mda_widget", None)
+                if mda_widget is None:
+                    mda_widget = getattr(acquire, "_mda", None)
+                if mda_widget is not None:
+                    default_vars["mdawidget"] = mda_widget
+                    default_vars["mda_widget"] = mda_widget
 
         mmc = mmc or pymmcore_plus.CMMCorePlus.instance()
         default_vars.update({"mmc": mmc, "core": mmc, "mmcore": mmc, "mda": mmc.mda})
@@ -119,6 +151,11 @@ class MMConsole(QtConsole):
         ]
         if "window" in self.shell.user_ns:
             lines.append("Use \033[1;33mwindow\033[0m to interact with the MainWindow.")
+        if "acquire" in self.shell.user_ns:
+            lines.append(
+                "Use \033[1;33macquire\033[0m for the Acquire page and "
+                "\033[1;33mmdawidget\033[0m for its MDA controls."
+            )
         return "\n".join(lines)
 
     def push(self, variables: dict[str, Any]) -> None:

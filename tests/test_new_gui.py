@@ -1143,6 +1143,28 @@ def test_acquire_console_dock_is_lazy(
     assert page.panel_widget(PanelKey.CONSOLE) is console  # not rebuilt
 
 
+def test_modern_console_exposes_window_acquire_and_mda_widget(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("IPYTHONDIR", str(tmp_path / "ipython"))
+    window = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(window)
+
+    window.acquire.panel_button(PanelKey.CONSOLE).click()
+    console = window.acquire.panel_widget(PanelKey.CONSOLE)
+    assert console is not None
+    namespace = console.get_user_variables()  # type: ignore[attr-defined]
+
+    assert window.mmcore is mmcore
+    assert namespace["window"] is window
+    assert namespace["acquire"] is window.acquire
+    assert namespace["mdawidget"] is window.acquire.mda_widget
+    assert namespace["mda_widget"] is window.acquire.mda_widget
+
+
 def test_acquire_stage_explorer_is_a_lazy_toolbar_dock(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
@@ -4120,6 +4142,71 @@ def test_acquire_page_adds_sink_backed_mda_tab(
     dock.closeDockWidget()
     assert page._viewers.active_viewer is None
     assert viewer.closed
+
+
+def test_acquire_viewer_follows_time_and_grid_axes(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A timed grid keeps independent ``t`` and flattened ``p`` controls."""
+
+    class Emitter:
+        def emit(self) -> None:
+            pass
+
+    class FakeViewer:
+        def __init__(self, data: object, /, **kwargs: object) -> None:
+            self.data = data
+            self.display_model = SimpleNamespace(current_index={})
+            self.data_wrapper = SimpleNamespace(
+                dims_changed=Emitter(), data_changed=Emitter()
+            )
+            self._widget = QWidget()
+
+        def widget(self) -> QWidget:
+            return self._widget
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(acquire_viewers_module, "MMArrayViewer", FakeViewer)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    requested = useq.MDASequence(
+        axis_order=tuple("ptgc"),
+        stage_positions=(useq.AbsolutePosition(x=-256.005, y=256.005, z=0.0),),
+        grid_plan=useq.GridRowsColumns(
+            fov_width=512.0, fov_height=512.0, rows=2, columns=2
+        ),
+        channels=(useq.Channel(config="Cy5", exposure=0.1),),
+        time_plan=useq.TIntervalLoops(interval=timedelta(0), loops=5),
+    )
+    page.mda_widget.setValue(requested)
+    assert page.mda_widget.value().axis_order == tuple("ptgc")
+
+    # The plan runs exactly as entered, non-adjacent p/g and all: with a single
+    # stage position the grid is the only thing that varies, so ome-writers puts
+    # the flattened position dimension in g's slot instead of demanding that the
+    # two axes be adjacent.
+    with patch.object(mmcore, "run_mda") as run_mda:
+        page.mda_widget.execute_mda("memory")
+    executed = run_mda.call_args.args[0]
+    assert executed.axis_order == tuple("ptgc")
+
+    mmcore.mda.run(requested, output="memory")
+    qtbot.waitUntil(
+        lambda: bool(
+            page._viewers.active_viewer
+            and page._viewers.active_viewer.display_model.current_index.get("t") == 4
+            and page._viewers.active_viewer.display_model.current_index.get("p") == 3
+        )
+    )
+
+    viewer = page._viewers.active_viewer
+    assert isinstance(viewer, FakeViewer)
+    assert viewer.data.dims[:2] == ("t", "p")
+    assert viewer.data.shape[:2] == (5, 4)
 
 
 def test_acquire_viewer_close_reclaims_space_without_moving_mda(

@@ -476,6 +476,11 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(mods | Qt.Key.Key_Minus), self, zoom_out)  # type: ignore
         QShortcut(QKeySequence(mods | Qt.Key.Key_0), self, reset_zoom)  # type: ignore
 
+    @property
+    def acquire(self) -> AcquirePage:
+        """Return the window's Acquire page."""
+        return self._acquire
+
     def _apply_saved_appearance(self) -> None:
         """Apply the saved theme/zoom before any widget exists, so nothing flashes."""
         self._is_dark = apply_saved_appearance()

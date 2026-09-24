@@ -164,9 +164,10 @@ class NDVViewersManager(QObject):
         if hasattr(view, "coords_changed") and hasattr(
             ndv_viewer.data_wrapper, "dims_changed"
         ):
-            bridge = _StreamSignalBridge(ndv_viewer.widget())
+            bridge = _StreamSignalBridge(
+                ndv_viewer.data_wrapper.dims_changed.emit, ndv_viewer.widget()
+            )
             view.coords_changed.connect(bridge.dimsChanged.emit)
-            bridge.dimsChanged.connect(ndv_viewer.data_wrapper.dims_changed.emit)
         self._follow_acquisition = True
         with suppress(Exception):
             _add_follow_lock_button(ndv_viewer, self)
@@ -240,6 +241,18 @@ class _StreamSignalBridge(QObject):
     """Marshal ome-writers dimension changes onto the Qt GUI thread."""
 
     dimsChanged = Signal()
+
+    def __init__(self, callback: Any, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._callback = callback
+        # The receiver is deliberately a QObject-bound method.  Connecting the
+        # signal straight to a regular Python callable lets PyQt invoke it in
+        # the writer thread, which means ndv may create/hide sliders off the GUI
+        # thread as live dimensions grow.
+        self.dimsChanged.connect(self._notify)
+
+    def _notify(self) -> None:
+        self._callback()
 
 
 def _add_follow_lock_button(ndv_viewer: ndv.ArrayViewer, manager: Any) -> None:

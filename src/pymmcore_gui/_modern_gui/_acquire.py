@@ -396,6 +396,11 @@ class AcquirePage(TabPage):
         self._dock_icon_poll_timer.start()
         self._refresh_dock_icons()
 
+    @property
+    def mda_widget(self) -> MemoryMDAWidget:
+        """Return the MDA controls embedded in this Acquire page."""
+        return self._mda
+
     def _ensure_preview_for_roi_auto_snap(self, *_args: object) -> None:
         """Create the lazy Preview before Camera ROI performs an Auto Snap."""
         if self._viewers.preview is not None:
