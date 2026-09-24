@@ -4,14 +4,26 @@ from __future__ import annotations
 
 import gc
 from contextlib import suppress
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 from pymmcore_plus.mda import OmeWritersSink, frame_meta_to_ome
 
 from pymmcore_gui._array_viewer import MMArrayViewer
+from pymmcore_gui._grid_axis import (
+    GridAxisDataWrapper,
+    GridAxisLayout,
+    GridAxisLayoutKind,
+)
 from pymmcore_gui._mda_export import AcquisitionRecord
-from pymmcore_gui._ndv_viewers import _add_follow_lock_button, _extract_scales
+from pymmcore_gui._ndv_viewers import (
+    _add_follow_lock_button,
+    _DimsChangeGate,
+    _extract_scales,
+    _follow_index,
+    _LiveRefresh,
+    _runner_sink,
+)
 from pymmcore_gui._qt.QtAds import CDockWidget, DockWidgetArea
 from pymmcore_gui._qt.QtCore import QObject, QTimer, Signal
 from pymmcore_gui._qt.QtWidgets import QSplitter
@@ -29,15 +41,6 @@ if TYPE_CHECKING:
 
     from pymmcore_gui._qt.QtAds import CDockAreaWidget, CDockManager
     from pymmcore_gui._qt.QtWidgets import QWidget
-
-
-def _runner_sink(runner: Any) -> SinkProtocol | None:
-    """Return the runner's sink across released and development plus versions."""
-    if callable(get_sink := getattr(runner, "get_sink", None)):
-        return cast("SinkProtocol | None", get_sink())
-    # get_sink() was added after pymmcore-plus 0.18.1. The runner has used
-    # this same internal attribute since before our declared minimum version.
-    return cast("SinkProtocol | None", getattr(runner, "_sink", None))
 
 
 def _release_runner_sink(runner: Any, sink: SinkProtocol) -> bool:
@@ -68,6 +71,12 @@ class _ViewerRecord:
     # The exact sink object behind this viewer's data, captured at
     # sequenceStarted -- see AcquireViewersManager._on_viewer_closed.
     sink: SinkProtocol | None = None
+    # Planned p/g -> flattened-position mapping for this viewer, and the
+    # coalesced-refresh state that follows it.
+    layout: GridAxisLayout = field(default_factory=GridAxisLayout.none)
+    refresh: _LiveRefresh | None = None
+    pending_index: dict[str, int] | None = None
+    dims_gate: _DimsChangeGate | None = None
 
     def disconnect(self) -> None:
         """Disconnect the live stream from a viewer that is being closed."""
@@ -120,9 +129,6 @@ class AcquireViewersManager(QObject):
         self._active_dock: CDockWidget | None = None
         self._follow_acquisition = True
         self._connected = True
-        # {(p, g): flattened "p"-slider slot}, reset per sequence -- see
-        # _on_frame_ready for why this exists.
-        self._shot_indices: dict[tuple[object, object], int] = {}
         # Set when a still-running run's viewer is closed: release_sink()
         # refuses to drop a sink while it's being written to, so the release
         # is retried once sequenceFinished confirms the run is done.
@@ -219,7 +225,6 @@ class AcquireViewersManager(QObject):
         """Create a viewer backed by the acquisition's live sink view."""
         self._active_viewer = None
         self._active_dock = None
-        self._shot_indices = {}
         view = self._core.mda.get_view()
         if view is None:
             # Runs without a path, AcquisitionSettings, or "memory" output have
@@ -227,12 +232,6 @@ class AcquireViewersManager(QObject):
             # supplying "memory" whenever file saving is disabled.
             return
 
-        viewer = MMArrayViewer(view, scales=_extract_scales(sequence, meta))
-        widget = viewer.widget()
-        sha = str(sequence.uid)[:8]
-        widget.setObjectName(f"ndv-{sha}")
-
-        record = _ViewerRecord(viewer)
         # Snapshot the sink's resolved settings + summary metadata now: the
         # sink is replaced wholesale on the *next* run, so a viewer left open
         # across two acquisitions must hold its own copy to export correctly
@@ -241,23 +240,43 @@ class AcquireViewersManager(QObject):
         # run's data can be released later by identity, even after the
         # runner's own `get_sink()` has moved on to a newer run.
         sink = _runner_sink(self._core.mda)
-        record.sink = sink
+        acquisition: AcquisitionRecord | None = None
+        layout = GridAxisLayout.none()
         if isinstance(sink, OmeWritersSink):
+            layout = GridAxisLayout.build(sequence, sink.settings)
             acquisition = AcquisitionRecord(
                 settings=sink.settings, summary_meta=sink.summary_meta, view=view
             )
+
+        data: Any = view
+        if layout.kind is not GridAxisLayoutKind.NONE:
+            data = GridAxisDataWrapper(view, layout)
+
+        viewer = MMArrayViewer(data, scales=_extract_scales(sequence, meta))
+        widget = viewer.widget()
+        sha = str(sequence.uid)[:8]
+        widget.setObjectName(f"ndv-{sha}")
+
+        record = _ViewerRecord(viewer, sink=sink, layout=layout)
+        if acquisition is not None:
             record.acquisition = acquisition
             viewer._acquisition_record = acquisition  # read by MMArrayViewer._save_data
         wrapper = viewer.data_wrapper
         coords_signal = getattr(view, "coords_changed", None)
         if coords_signal is not None and wrapper is not None:
+            gate = _DimsChangeGate(wrapper)
+            record.dims_gate = gate
             bridge = _StreamSignalBridge(widget)
-            bridge.dimsChanged.connect(wrapper.dims_changed.emit)
+            bridge.dimsChanged.connect(gate.maybe_emit)
             callback = bridge.dimsChanged.emit
             coords_signal.connect(callback)
             record.bridge = bridge
             record.coords_signal = coords_signal
             record.coords_callback = callback
+
+        record.refresh = _LiveRefresh(
+            lambda: self._apply_pending_index(record), parent=widget
+        )
 
         self._follow_acquisition = True
         with suppress(Exception):
@@ -283,50 +302,51 @@ class AcquireViewersManager(QObject):
         position tracks new frames, and must not also silently truncate the
         metadata used later by the viewer's Save button.
         """
+        record = None
         if (dw := self._active_dock) is not None:
             record = self._records.get(dw)
             if record is not None and record.acquisition is not None:
                 record.acquisition.frame_meta.append(frame_meta_to_ome(meta))
 
-        viewer = self._active_viewer
-        if viewer is None or not self._follow_acquisition:
+        if (
+            self._active_viewer is None
+            or record is None
+            or not self._follow_acquisition
+        ):
             return
 
-        current_index = viewer.display_model.current_index
-        wrapper = viewer.data_wrapper
-        index = {str(axis): value for axis, value in event.index.items()}
-        if "p" in index or "g" in index:
-            # A position's own grid sub-sequence yields both "p" (the real
-            # position) and "g" (the tile within it) on the same event.
-            # Naively renaming "g" -> "p" clobbered the real position value
-            # and collided with another position's index. Route every
-            # position-like event -- plain positions and position/tile pairs
-            # alike -- through one shared counter instead, so every distinct
-            # (position, tile) identity gets its own, strictly increasing
-            # "p"-slider slot, assigned in acquisition order. That keeps a
-            # plain position's slot from numerically colliding with a
-            # flattened tile slot from another position's grid, and the
-            # slider always ends on the true last frame. Revisiting the same
-            # location later (e.g. the next timepoint) reuses its existing
-            # slot rather than minting a new one.
-            shot_key = (index.pop("p", None), index.pop("g", None))
-            index["p"] = self._shot_indices.setdefault(
-                shot_key, len(self._shot_indices)
-            )
+        record.pending_index = _follow_index(event, record.layout)
+        if record.refresh is not None:
+            record.refresh.request()
 
-        def _update() -> None:
-            try:
-                current_index.update(index.items())
-                if wrapper is not None:
-                    wrapper.data_changed.emit()
-            except Exception:  # viewer may have closed during the async write
-                pass
-
-        # Sink writes may complete asynchronously after frameReady.
-        QTimer.singleShot(10, _update)
+    def _apply_pending_index(self, record: _ViewerRecord) -> None:
+        pending = record.pending_index
+        if pending is None:
+            return
+        try:
+            viewer = record.viewer
+            current_index = viewer.display_model.current_index
+            wrapper = viewer.data_wrapper
+            before = dict(current_index)
+            current_index.update(pending.items())
+            if wrapper is not None and all(
+                before.get(k) == v for k, v in pending.items()
+            ):
+                # current_index.update() was a full no-op (every requested key
+                # already matched) -- force a redraw anyway, since the pixels
+                # at this unchanged index may have just been written.
+                wrapper.data_changed.emit()
+        except Exception:  # viewer may have closed during the async write
+            pass
 
     def _on_sequence_finished(self, sequence: MDASequence) -> None:
-        """Retry releasing a just-finished run's data if its viewer already closed."""
+        """Flush the just-finished run's display, then retry releasing its data."""
+        if (dw := self._active_dock) is not None:
+            record = self._records.get(dw)
+            if record is not None and record.refresh is not None:
+                # The last frame must not be left stale behind a still-pending
+                # coalesced refresh.
+                record.refresh.flush_now()
         if (sink := self._pending_release) is not None:
             self._pending_release = None
             self._release_sink(sink)
@@ -336,6 +356,8 @@ class AcquireViewersManager(QObject):
         if record is not None:
             self.mdaViewerClosed.emit(record.viewer)
             record.disconnect()
+            if record.refresh is not None:
+                record.refresh.stop()
         if dw is self._active_dock:
             self._active_dock = None
             self._active_viewer = None
@@ -378,6 +400,8 @@ class AcquireViewersManager(QObject):
         for record in self._records.values():
             self.mdaViewerClosed.emit(record.viewer)
             record.disconnect()
+            if record.refresh is not None:
+                record.refresh.stop()
         self._records.clear()
         self._active_viewer = None
         self._active_dock = None

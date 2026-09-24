@@ -20,6 +20,7 @@ from pymmcore_plus.metadata import summary_metadata
 from superqt import QIconifyIcon
 from superqt.sliders._labeled import SliderLabel
 
+from pymmcore_gui._grid_axis import GridAxisDataWrapper
 from pymmcore_gui._mda_export import AcquisitionRecord, export_acquisition
 from pymmcore_gui._qt.QtCore import QEvent, QObject, QSize, Qt
 from pymmcore_gui._qt.QtGui import QColor, QIcon, QPainter, QPalette
@@ -147,6 +148,17 @@ class MMArrayViewer(ndv.ArrayViewer):
 
         _guard_vispy_camera_resets(self._canvas)
 
+        with suppress(Exception):
+            wrapper = self.data_wrapper
+            if wrapper is not None and "z" not in wrapper.dims:
+                # Without a genuine Z axis, ndv's own ndim-toggle fallback
+                # (guess_z_axis() -> "last axis not already visible") would
+                # happily promote p/g/t/c to a fake Z if the button is
+                # pressed. Hiding it is the only thing that actually
+                # prevents that -- guess_z_axis() returning None is not
+                # enough on its own.
+                self._viewer_model.show_3d_button = False
+
         if show_save_button:
             with suppress(Exception):
                 _add_save_button(self)
@@ -255,6 +267,24 @@ class MMArrayViewer(ndv.ArrayViewer):
             # snap/live Preview (the only place an RGB frame can appear), so
             # fall back to a direct, non-metadata TIFF write for that one case.
             self._save_rgb_snapshot()
+            return
+
+        if self._acquisition_record is None and isinstance(
+            self.data_wrapper, GridAxisDataWrapper
+        ):
+            # A grid/position-adapted viewer's data_wrapper exposes synthetic
+            # p/g display axes -- _synthesize_record() would build settings
+            # from those instead of the canonical flattened storage. Both
+            # viewer managers always attach a real AcquisitionRecord for a
+            # grid-wrapped viewer, so reaching this should be unreachable in
+            # practice; refuse rather than export the wrong axes.
+            QMessageBox.critical(
+                self.widget(),
+                "Save failed",
+                "Internal error: this viewer's grid/position axes have no "
+                "attached acquisition record. Refusing to export from "
+                "synthetic display axes.",
+            )
             return
 
         prompt = _prompt_save_path(self.widget())
@@ -367,9 +397,13 @@ class MMArrayViewer(ndv.ArrayViewer):
         nd_index[resolved.visible_axes[-2]] = slice(y0i, y1i)
         nd_index[resolved.visible_axes[-1]] = slice(x0i, x1i)
 
-        ndim = len(self.data.shape)
-        idx = tuple(nd_index.get(i, slice(None)) for i in range(ndim))
-        arr = np.asarray(self.data[idx])
+        if (wrapper := self.data_wrapper) is None:
+            return None
+        # Go through the wrapper's isel(), not a raw tuple-index against
+        # self.data: nd_index's keys are ndv's *logical* (wrapper) axis
+        # positions, which only coincide with self.data's own axis positions
+        # when the wrapper is a trivial passthrough (e.g. no grid adapter).
+        arr = np.asarray(wrapper.isel(nd_index))
         return arr if arr.size > 0 else None
 
 
@@ -567,6 +601,7 @@ _TYPE_BY_AXIS_NAME: dict[str, _DimType] = {
     "c": "channel",
     "z": "space",
     "p": "position",
+    "g": "other",
 }
 
 

@@ -9,6 +9,7 @@ import useq
 from useq import MDASequence
 
 import pymmcore_gui._ndv_viewers as viewers_module
+from pymmcore_gui._grid_axis import GridAxisDataWrapper, GridAxisLayoutKind
 from pymmcore_gui._ndv_viewers import NDVViewersManager
 from pymmcore_gui._qt.QtWidgets import QApplication, QWidget
 
@@ -35,9 +36,10 @@ class _FakeViewer(ndv.ArrayViewer):
             current_index={}
         )
         self._fake_data_wrapper = SimpleNamespace(
-            dims_changed=_Emitter(), data_changed=_Emitter()
+            dims_changed=_Emitter(), data_changed=_Emitter(), sizes=lambda: {}
         )
         self._widget = QWidget()
+        self._acquisition_record: object | None = None
 
     @property
     def data(self) -> object:
@@ -88,9 +90,44 @@ def test_viewers_manager(
     assert isinstance(viewer, _FakeViewer)
     assert viewer.data is not None
     assert viewer.display_model.current_index["t"] == 1
-    assert viewer.data_wrapper.data_changed.calls > 0
+    # No grid in this sequence: the plain flattened path is used, and a real
+    # AcquisitionRecord is still attached (closing the asymmetry with
+    # AcquireViewersManager, which always attached one).
+    assert manager._layout.kind is GridAxisLayoutKind.NONE
+    assert viewer._acquisition_record is not None
 
     with qtbot.waitSignal(dummy.destroyed, timeout=1000):
         dummy.deleteLater()
     QApplication.processEvents()
     assert manager._active_mda_viewer is None
+
+
+def test_viewers_manager_grid_run(
+    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A position+grid sequence is wrapped and followed by real (p, g)."""
+    monkeypatch.setattr(viewers_module, "MMArrayViewer", _FakeViewer)
+    dummy = QWidget()
+    manager = NDVViewersManager(dummy, mmcore)
+
+    mmcore.mda.run(
+        MDASequence(
+            stage_positions=[
+                useq.AbsolutePosition(x=0, y=0),
+                useq.AbsolutePosition(x=100, y=100),
+            ],
+            grid_plan=useq.GridRowsColumns(rows=1, columns=2),
+        ),
+        output="memory",
+    )
+    qtbot.wait(20)
+
+    assert manager._layout.kind is GridAxisLayoutKind.REGULAR
+    viewer = next(manager.viewers())
+    assert isinstance(viewer, _FakeViewer)
+    assert isinstance(viewer.data, GridAxisDataWrapper)
+    # Last planned event is (p=1, g=1); following must land there regardless
+    # of arrival order.
+    assert viewer.display_model.current_index["p"] == 1
+    assert viewer.display_model.current_index["g"] == 1
+    assert viewer._acquisition_record is not None

@@ -4088,7 +4088,7 @@ def test_acquire_page_adds_sink_backed_mda_tab(
             self.kwargs = kwargs
             self.display_model = SimpleNamespace(current_index={})
             self.data_wrapper = SimpleNamespace(
-                dims_changed=Emitter(), data_changed=Emitter()
+                dims_changed=Emitter(), data_changed=Emitter(), sizes=lambda: {}
             )
             self._widget = QWidget()
             self.closed = False
@@ -4138,7 +4138,7 @@ def test_acquire_viewer_close_reclaims_space_without_moving_mda(
             self.data = data
             self.display_model = SimpleNamespace(current_index={})
             self.data_wrapper = SimpleNamespace(
-                dims_changed=Emitter(), data_changed=Emitter()
+                dims_changed=Emitter(), data_changed=Emitter(), sizes=lambda: {}
             )
             self._widget = QWidget()
             self.closed = False
@@ -4281,7 +4281,7 @@ def test_acquire_viewer_records_frame_metadata_regardless_of_follow_lock(
             self.data = data
             self.display_model = SimpleNamespace(current_index={})
             self.data_wrapper = SimpleNamespace(
-                dims_changed=Emitter(), data_changed=Emitter()
+                dims_changed=Emitter(), data_changed=Emitter(), sizes=lambda: {}
             )
             self._widget = QWidget()
 
@@ -4331,6 +4331,7 @@ class _FakeViewer:
         self.data_wrapper = SimpleNamespace(
             dims_changed=SimpleNamespace(emit=lambda: None),
             data_changed=SimpleNamespace(emit=lambda: None),
+            sizes=lambda: {},
         )
         self._widget = QWidget()
 

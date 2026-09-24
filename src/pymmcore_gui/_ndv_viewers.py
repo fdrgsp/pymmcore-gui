@@ -7,25 +7,115 @@ from weakref import WeakSet, WeakValueDictionary
 
 import ndv
 import useq
+from pymmcore_plus.mda import OmeWritersSink, frame_meta_to_ome
 
 from pymmcore_gui._array_viewer import MMArrayViewer
+from pymmcore_gui._grid_axis import (
+    GridAxisDataWrapper,
+    GridAxisLayout,
+    GridAxisLayoutKind,
+)
+from pymmcore_gui._mda_export import AcquisitionRecord
 from pymmcore_gui._qt.QtAds import CDockWidget
 from pymmcore_gui._qt.QtCore import QObject, QTimer, Signal
 from pymmcore_gui._qt.QtWidgets import QWidget
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator, Mapping
 
     import numpy as np
-    from ndv.models._array_display_model import (
-        IndexMap,  # pyright: ignore[reportPrivateImportUsage]
-    )
+    from ndv.models import DataWrapper
     from pymmcore_plus import CMMCorePlus
+    from pymmcore_plus.mda import SinkProtocol
     from pymmcore_plus.metadata import FrameMetaV1, SummaryMetaV1
-    from useq import MDASequence
+    from useq import MDAEvent, MDASequence
 
     from pymmcore_gui.widgets.image_preview._preview_base import ImagePreviewBase
+
+
+def _runner_sink(runner: Any) -> SinkProtocol | None:
+    """Return the runner's sink across released and development plus versions."""
+    if callable(get_sink := getattr(runner, "get_sink", None)):
+        return cast("SinkProtocol | None", get_sink())
+    # get_sink() was added after pymmcore-plus 0.18.1. The runner has used
+    # this same internal attribute since before our declared minimum version.
+    return cast("SinkProtocol | None", getattr(runner, "_sink", None))
+
+
+def _follow_index(event: MDAEvent, layout: GridAxisLayout) -> dict[str, int]:
+    """Derive a viewer's display index for `event` from the planned layout.
+
+    Unlike the arrival-order counter this replaces, this is a pure function of
+    the event and the (immutable, pre-validated) layout: it never desyncs
+    under `sink.skip()`, and revisiting the same `(p, g)` at a later timepoint
+    is naturally idempotent.
+    """
+    index = {str(axis): value for axis, value in event.index.items()}
+    if layout.kind is GridAxisLayoutKind.NONE:
+        return index
+    p = index.pop("p", None)
+    g = index.pop("g", None)
+    if layout.kind is GridAxisLayoutKind.GRID_ONLY:
+        index["g"] = g if g is not None else 0
+    else:
+        index["p"] = p if p is not None else 0
+        index["g"] = g if g is not None else 0
+    return index
+
+
+class _LiveRefresh:
+    """Coalesce rapid frameReady/follow updates into one bounded-rate refresh.
+
+    At most one `QTimer` is ever pending; `request()` may be called as often
+    as frames arrive without growing a backlog of scheduled work.
+    """
+
+    def __init__(
+        self,
+        apply: Callable[[], None],
+        *,
+        interval_ms: int = 33,
+        parent: QObject | None = None,
+    ) -> None:
+        self._apply = apply
+        self._timer = QTimer(parent)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(interval_ms)
+        self._timer.timeout.connect(self._apply)
+
+    def request(self) -> None:
+        """Mark a refresh as needed; schedule at most one pending timer."""
+        if not self._timer.isActive():
+            self._timer.start()
+
+    def flush_now(self) -> None:
+        """Apply immediately, cancelling any pending timer."""
+        self._timer.stop()
+        self._apply()
+
+    def stop(self) -> None:
+        """Cancel any pending timer without applying."""
+        self._timer.stop()
+
+
+class _DimsChangeGate:
+    """Suppress a `dims_changed` emission when no exposed coordinate grew.
+
+    Wraps the raw view's `coords_changed` -> wrapper `dims_changed` bridge:
+    `sizes()` is available on every `DataWrapper` (grid-wrapped or the plain
+    fallback), so this applies uniformly to both, not just grid viewers.
+    """
+
+    def __init__(self, wrapper: DataWrapper[Any]) -> None:
+        self._wrapper = wrapper
+        self._last_sizes: Mapping[Any, int] = dict(wrapper.sizes())
+
+    def maybe_emit(self) -> None:
+        sizes = dict(self._wrapper.sizes())
+        if sizes != self._last_sizes:
+            self._last_sizes = sizes
+            self._wrapper.dims_changed.emit()
 
 
 # NOTE: we make this a QObject mostly so that the lifetime of this object is tied to
@@ -57,9 +147,16 @@ class NDVViewersManager(QObject):
         self._seq_viewers = WeakValueDictionary[str, ndv.ArrayViewer]()
         self._preview_dock_widgets = WeakSet[CDockWidget]()
         self._active_mda_viewer: ndv.ArrayViewer | None = None
-        # {(p, g): flattened "p"-slider slot}, reset per sequence -- see
-        # _on_frame_ready for why this exists.
-        self._shot_indices: dict[tuple[object, object], int] = {}
+        # Planned p/g -> flattened-position mapping for the active run, and the
+        # coalesced-refresh state that follows it -- reset per sequence.
+        self._layout: GridAxisLayout = GridAxisLayout.none()
+        self._refresh: _LiveRefresh | None = None
+        self._pending_index: dict[str, int] | None = None
+        self._dims_gate: _DimsChangeGate | None = None
+        # Snapshot of the active run's sink settings/summary metadata, so
+        # MMArrayViewer._save_data() can export canonical data even for the
+        # classic GUI (mirrors AcquireViewersManager's AcquisitionRecord).
+        self._current_acquisition: AcquisitionRecord | None = None
 
         # CONNECTIONS ---------------------------------------------------------
 
@@ -89,6 +186,9 @@ class NDVViewersManager(QObject):
 
     def _cleanup(self, obj: QObject | None = None) -> None:
         self._active_mda_viewer = None
+        if self._refresh is not None:
+            self._refresh.stop()
+            self._refresh = None
         mda_ev = self._runner.events
         with suppress(Exception):
             mda_ev.sequenceStarted.disconnect(self._sequence_started_callback)
@@ -102,7 +202,13 @@ class NDVViewersManager(QObject):
     ) -> None:
         """Create a viewer backed by the MDA runner's live sink view."""
         self._is_mda_running = True
-        self._shot_indices = {}
+        self._layout = GridAxisLayout.none()
+        self._pending_index = None
+        self._dims_gate = None
+        self._current_acquisition = None
+        if self._refresh is not None:
+            self._refresh.stop()
+            self._refresh = None
         view = self._runner.get_view()
         self._active_mda_viewer = (
             self._create_ndv_viewer(view, sequence, meta) if view is not None else None
@@ -111,47 +217,51 @@ class NDVViewersManager(QObject):
     def _on_frame_ready(
         self, frame: np.ndarray, event: useq.MDAEvent, meta: FrameMetaV1
     ) -> None:
-        """Follow the latest acquired index and redraw the sink-backed viewer."""
+        """Record frame metadata for export, then follow the latest acquired index.
+
+        Metadata capture happens unconditionally, before the follow-lock check
+        below: the lock only controls whether the displayed slider position
+        tracks new frames, and must not also silently truncate the metadata
+        used later by the viewer's Save button.
+        """
+        if (acquisition := self._current_acquisition) is not None:
+            acquisition.frame_meta.append(frame_meta_to_ome(meta))
+
         if (viewer := self._active_mda_viewer) is None:
             return  # pragma: no cover
         if not self._follow_acquisition:
             return
 
-        current_index = viewer.display_model.current_index
-        wrapper = viewer.data_wrapper
-        index = dict(event.index)
-        if "p" in index or "g" in index:
-            # A position's own grid sub-sequence yields both "p" (the real
-            # position) and "g" (the tile within it) on the same event.
-            # Naively renaming "g" -> "p" clobbered the real position value
-            # and collided with another position's index. Route every
-            # position-like event -- plain positions and position/tile pairs
-            # alike -- through one shared counter instead, so every distinct
-            # (position, tile) identity gets its own, strictly increasing
-            # "p"-slider slot, assigned in acquisition order. That keeps a
-            # plain position's slot from numerically colliding with a
-            # flattened tile slot from another position's grid, and the
-            # slider always ends on the true last frame. Revisiting the same
-            # location later (e.g. the next timepoint) reuses its existing
-            # slot rather than minting a new one.
-            shot_key = (index.pop("p", None), index.pop("g", None))
-            index["p"] = self._shot_indices.setdefault(
-                shot_key, len(self._shot_indices)
-            )
+        self._pending_index = _follow_index(event, self._layout)
+        if self._refresh is not None:
+            self._refresh.request()
 
-        def _update(_idx: IndexMap = current_index) -> None:
-            try:
-                _idx.update(index.items())
-                if wrapper is not None:
-                    wrapper.data_changed.emit()
-            except Exception:  # viewer may have closed during the async write
-                pass
-
-        QTimer.singleShot(10, _update)
+    def _apply_pending_index(self) -> None:
+        pending = self._pending_index
+        if pending is None or (viewer := self._active_mda_viewer) is None:
+            return
+        try:
+            current_index = viewer.display_model.current_index
+            wrapper = viewer.data_wrapper
+            before = dict(current_index)
+            current_index.update(pending.items())
+            if wrapper is not None and all(
+                before.get(k) == v for k, v in pending.items()
+            ):
+                # current_index.update() was a full no-op (every requested key
+                # already matched) -- force a redraw anyway, since the pixels
+                # at this unchanged index may have just been written.
+                wrapper.data_changed.emit()
+        except Exception:  # viewer may have closed during the async write
+            pass
 
     def _on_sequence_finished(self, sequence: useq.MDASequence) -> None:
         """Called when a sequence has finished."""
         self._is_mda_running = False
+        if self._refresh is not None:
+            # The last frame must not be left stale behind a still-pending
+            # coalesced refresh.
+            self._refresh.flush_now()
 
     def _create_ndv_viewer(
         self,
@@ -160,13 +270,36 @@ class NDVViewersManager(QObject):
         meta: SummaryMetaV1 | None = None,
     ) -> ndv.ArrayViewer:
         """Create a shared MMArrayViewer backed by an ome-writers stream view."""
-        ndv_viewer = MMArrayViewer(view, scales=_extract_scales(sequence, meta))
-        if hasattr(view, "coords_changed") and hasattr(
-            ndv_viewer.data_wrapper, "dims_changed"
-        ):
+        sink = _runner_sink(self._runner)
+        layout = GridAxisLayout.none()
+        if isinstance(sink, OmeWritersSink):
+            layout = GridAxisLayout.build(sequence, sink.settings)
+            self._current_acquisition = AcquisitionRecord(
+                settings=sink.settings, summary_meta=sink.summary_meta, view=view
+            )
+        self._layout = layout
+
+        data: Any = view
+        if layout.kind is not GridAxisLayoutKind.NONE:
+            data = GridAxisDataWrapper(view, layout)
+
+        ndv_viewer = MMArrayViewer(data, scales=_extract_scales(sequence, meta))
+        if self._current_acquisition is not None:
+            # read by MMArrayViewer._save_data
+            ndv_viewer._acquisition_record = self._current_acquisition
+
+        wrapper = ndv_viewer.data_wrapper
+        if hasattr(view, "coords_changed") and wrapper is not None:
+            gate = _DimsChangeGate(wrapper)
+            self._dims_gate = gate
             bridge = _StreamSignalBridge(ndv_viewer.widget())
             view.coords_changed.connect(bridge.dimsChanged.emit)
-            bridge.dimsChanged.connect(ndv_viewer.data_wrapper.dims_changed.emit)
+            bridge.dimsChanged.connect(gate.maybe_emit)
+
+        self._refresh = _LiveRefresh(
+            self._apply_pending_index, parent=ndv_viewer.widget()
+        )
+
         self._follow_acquisition = True
         with suppress(Exception):
             _add_follow_lock_button(ndv_viewer, self)
