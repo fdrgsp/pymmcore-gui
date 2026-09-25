@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import gc
+import hashlib
 from contextlib import suppress
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from ome_writers import ScratchFormat
 from pymmcore_plus.mda import OmeWritersSink, frame_meta_to_ome
 
+from pymmcore_gui._acquisition_loader import open_acquisition as _open_acquisition
 from pymmcore_gui._array_viewer import MMArrayViewer
 from pymmcore_gui._mda_export import AcquisitionRecord
 from pymmcore_gui._ndv_viewers import (
@@ -66,6 +70,15 @@ class _ViewerRecord:
     # The exact sink object behind this viewer's data, captured at
     # sequenceStarted -- see AcquireViewersManager._on_viewer_closed.
     sink: SinkProtocol | None = None
+    # True only for a viewer created by _on_sequence_started (a live MDA
+    # run). Gates whether mdaViewerCreated/mdaViewerClosed fire for it --
+    # those drive CameraRoiSyncController's live-camera ROI observation,
+    # which a reopened acquisition (arbitrary old pixel data, nothing to do
+    # with the microscope's *current* camera/ROI) must never enter.
+    is_live: bool = False
+    # Releases a reopened acquisition's file handle(s)/zarr store. None for
+    # a live viewer, whose data is owned by the runner/sink instead.
+    loader_cleanup: Callable[[], None] | None = None
 
     def disconnect(self) -> None:
         """Disconnect the live stream from a viewer that is being closed."""
@@ -102,6 +115,9 @@ class AcquireViewersManager(QObject):
     previewClosed = Signal()
     mdaViewerCreated = Signal(object)
     mdaViewerClosed = Signal(object)
+    # (MDASequence, source_title) -- emitted when the user picks "Re-use
+    # MDA…" on either a live MDA viewer or a reopened acquisition's viewer.
+    reuseMDARequested = Signal(object, str)
 
     def __init__(
         self,
@@ -162,6 +178,37 @@ class AcquireViewersManager(QObject):
             self._dock_manager.addDockWidgetTabToArea(dw, target)
         return dw
 
+    @staticmethod
+    def _disk_backed_title(sink: Any) -> str | None:
+        """Return a real disk-backed sink's destination filename, else None.
+
+        A memory/"scratch"-backed run (Saving unchecked in the MDA editor)
+        has no meaningful destination to show -- `ScratchFormat.output_path`
+        is just an identity/spill path, not something the user chose to
+        save to.
+        """
+        if not isinstance(sink, OmeWritersSink):
+            return None
+        with suppress(Exception):
+            settings = sink.settings
+            if not isinstance(settings.format, ScratchFormat):
+                return Path(settings.output_path).name
+        return None
+
+    @staticmethod
+    def _rename_viewer_tab(dw: CDockWidget, viewer: MMArrayViewer, path: str) -> None:
+        """Rename a viewer's dock/tab (and its `source_title`) to `path`'s filename.
+
+        Used both when a live run's viewer is later saved and when a
+        reopened acquisition's viewer is re-exported (e.g. as a different
+        format) -- either way, the tab should reflect where the data now
+        actually lives rather than its original generic/source label.
+        """
+        title = Path(path).name
+        with suppress(RuntimeError):  # the dock may have been closed meanwhile
+            dw.setWindowTitle(title)
+        viewer.source_title = title
+
     def _viewer_target_area(self) -> CDockAreaWidget | None:
         """Return a visible viewer area to receive a newly-created viewer."""
         with suppress(RuntimeError):
@@ -213,6 +260,56 @@ class AcquireViewersManager(QObject):
         """Return the viewer following the current MDA, if any."""
         return self._active_viewer
 
+    def open_acquisition(self, path: str | Path) -> ndv.ArrayViewer:
+        """Load a previously-acquired OME-TIFF/OME-Zarr dataset into a new tab.
+
+        Unlike a live MDA run's viewer, the resulting viewer never becomes
+        `active_viewer`/`_active_dock` (those track *only* the run currently
+        being followed) and never fires `mdaViewerCreated` -- it isn't backed
+        by the microscope's current camera/ROI, so it must stay invisible to
+        `CameraRoiSyncController`'s live-camera ROI observation.
+
+        Raises
+        ------
+        ValueError
+            If `path` isn't a supported/openable acquisition -- propagated
+            from `_acquisition_loader.open_acquisition` for the caller (e.g.
+            a drag-and-drop handler) to report without crashing.
+        """
+        loaded = _open_acquisition(path)
+
+        viewer = MMArrayViewer(loaded.wrapper)
+        widget = viewer.widget()
+        # Keyed to the resolved path (not a random id), so re-dropping the
+        # exact same file is idempotent about naming; two different files
+        # sharing a basename still get distinct object names.
+        digest = hashlib.sha1(str(loaded.source_path).encode()).hexdigest()[:8]
+        widget.setObjectName(f"ndv-loaded-{digest}")
+
+        viewer.mda_sequence = loaded.sequence
+        viewer.source_title = loaded.title
+        if loaded.sequence is not None:
+            sequence, title = loaded.sequence, loaded.title
+            viewer._reuse_mda_callback = lambda: self.reuseMDARequested.emit(
+                sequence, title
+            )
+        # So the Save button re-exports this acquisition's *real* recovered
+        # metadata (dimensions, physical scale, channel names, summary
+        # metadata) instead of falling back to stamping the microscope's
+        # current state -- see MMArrayViewer._save_data.
+        viewer._acquisition_record = loaded.record
+
+        record = _ViewerRecord(viewer, loader_cleanup=loaded.close)
+
+        dw = self._new_dock(loaded.title)
+        dw.setWidget(widget, CDockWidget.eInsertMode.ForceNoScrollArea)
+        dw.closed.connect(lambda: self._on_viewer_closed(dw))
+        dw.setAsCurrentTab()
+        viewer._on_saved = lambda path: self._rename_viewer_tab(dw, viewer, path)
+
+        self._records[dw] = record
+        return viewer
+
     def _on_sequence_started(self, sequence: MDASequence, meta: SummaryMetaV1) -> None:
         """Create a viewer backed by the acquisition's live sink view."""
         self._active_viewer = None
@@ -230,7 +327,20 @@ class AcquireViewersManager(QObject):
         sha = str(sequence.uid)[:8]
         widget.setObjectName(f"ndv-{sha}")
 
-        record = _ViewerRecord(viewer)
+        # The sink object itself is fetched here (rather than only later) so
+        # a disk-backed run's tab can be titled with its real destination
+        # filename from the start, not just "MDA <sha>" until someone
+        # manually saves it -- see _on_saved below for that latter case.
+        sink = _runner_sink(self._core.mda)
+        title = self._disk_backed_title(sink) or f"MDA {sha}"
+
+        viewer.mda_sequence = sequence
+        viewer.source_title = title
+        viewer._reuse_mda_callback = lambda: self.reuseMDARequested.emit(
+            sequence, title
+        )
+
+        record = _ViewerRecord(viewer, is_live=True)
         # Snapshot the sink's resolved settings + summary metadata now: the
         # sink is replaced wholesale on the *next* run, so a viewer left open
         # across two acquisitions must hold its own copy to export correctly
@@ -238,7 +348,6 @@ class AcquireViewersManager(QObject):
         # The sink object itself is also kept (record.sink), so this specific
         # run's data can be released later by identity, even after the
         # runner's own `get_sink()` has moved on to a newer run.
-        sink = _runner_sink(self._core.mda)
         record.sink = sink
         if isinstance(sink, OmeWritersSink):
             acquisition = AcquisitionRecord(
@@ -260,10 +369,11 @@ class AcquireViewersManager(QObject):
         with suppress(Exception):
             _add_follow_lock_button(viewer, self)
 
-        dw = self._new_dock(f"MDA {sha}")
+        dw = self._new_dock(title)
         dw.setWidget(widget, CDockWidget.eInsertMode.ForceNoScrollArea)
         dw.closed.connect(lambda: self._on_viewer_closed(dw))
         dw.setAsCurrentTab()
+        viewer._on_saved = lambda path: self._rename_viewer_tab(dw, viewer, path)
 
         self._records[dw] = record
         self._active_viewer = viewer
@@ -331,7 +441,12 @@ class AcquireViewersManager(QObject):
     def _on_viewer_closed(self, dw: CDockWidget) -> None:
         record = self._records.pop(dw, None)
         if record is not None:
-            self.mdaViewerClosed.emit(record.viewer)
+            # Only a live MDA run's viewer was ever announced via
+            # mdaViewerCreated (CameraRoiSyncController's live-camera ROI
+            # observation) -- a reopened acquisition never was, so it must
+            # not raise the paired mdaViewerClosed either.
+            if record.is_live:
+                self.mdaViewerClosed.emit(record.viewer)
             record.disconnect()
         if dw is self._active_dock:
             self._active_dock = None
@@ -339,6 +454,9 @@ class AcquireViewersManager(QObject):
         if record is not None:
             with suppress(Exception):
                 record.viewer.close()
+            if record.loader_cleanup is not None:
+                with suppress(Exception):
+                    record.loader_cleanup()
             # Drop the runner's own reference to this run's data (freeing
             # scratch/memory-backed runs and their spill files), unless it's
             # still being written to -- release_sink() is a no-op if `sink`

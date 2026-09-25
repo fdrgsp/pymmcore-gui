@@ -7,20 +7,23 @@ from __future__ import annotations
 
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import ndv
 import numpy as np
 import tifffile
 from ndv.models import ChannelMode
 from ndv.models._viewer_model import InteractionMode
-from ome_writers import AcquisitionSettings, Dimension
 from pymmcore_plus import CMMCorePlus
 from pymmcore_plus.metadata import summary_metadata
 from superqt import QIconifyIcon
 from superqt.sliders._labeled import SliderLabel
 
-from pymmcore_gui._mda_export import AcquisitionRecord, export_acquisition
+from pymmcore_gui._mda_export import (
+    AcquisitionRecord,
+    export_acquisition,
+    record_from_wrapper,
+)
 from pymmcore_gui._qt.QtCore import QEvent, QObject, QSize, Qt
 from pymmcore_gui._qt.QtGui import QColor, QIcon, QPainter, QPalette
 from pymmcore_gui._qt.QtWidgets import (
@@ -28,6 +31,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QAbstractSlider,
     QApplication,
     QFileDialog,
+    QMenu,
     QMessageBox,
     QProgressDialog,
     QPushButton,
@@ -36,6 +40,10 @@ from pymmcore_gui._qt.QtWidgets import (
 from pymmcore_gui.actions.widget_actions import WidgetAction, _get_mm_main_window
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from useq import MDASequence
+
     from pymmcore_gui._mda_export import ExportFormat
 
 # icons this dark (or darker) are effectively invisible against a dark
@@ -48,12 +56,26 @@ _MAX_ICON_GRAYSCALE_SPREAD = 30
 
 
 class _KeyFilter(QObject):
+    """Compatibility seam for events vispy's canvas would otherwise swallow.
+
+    Installed on both the ndv widget and its canvas (see
+    `MMArrayViewer.__init__`), so it catches key presses and right-clicks
+    aimed at the canvas even though vispy's own event handling isn't
+    reachable through the normal QWidget/eventFilter chain.
+    """
+
     def __init__(self, viewer: MMArrayViewer) -> None:
         super().__init__()
         self._viewer = viewer
 
     def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
         if a1 is None or a0 is None:
+            return False
+
+        if a1.type() == QEvent.Type.ContextMenu:
+            global_pos = getattr(a1, "globalPos", None)
+            if global_pos is not None:
+                return self._viewer._show_context_menu(global_pos())
             return False
 
         event_key = getattr(a1, "key", lambda: None)
@@ -139,6 +161,23 @@ class MMArrayViewer(ndv.ArrayViewer):
         # falls back to synthesizing a minimal one from what's on screen.
         self._acquisition_record: AcquisitionRecord | None = None
 
+        # Set by the viewer manager for both a live MDA run's viewer (the
+        # sequence actually running) and a reopened acquisition (the sequence
+        # recovered from its on-disk metadata, if any). Drives the "Re-use
+        # MDA…" context-menu action below; left None for the snap/live
+        # Preview (which isn't an MMArrayViewer at all) and for a reopened
+        # file with no recoverable sequence metadata.
+        self.mda_sequence: MDASequence | None = None
+        self.source_title: str = ""
+        # Invoked (no args) when "Re-use MDA…" is selected. The viewer never
+        # reaches into the MDA widget itself -- the manager that created this
+        # viewer supplies this callback and decides what happens next.
+        self._reuse_mda_callback: Callable[[], None] | None = None
+        # Invoked with the resolved output path after a successful manual
+        # save (see _save_data). The manager that created this viewer uses
+        # it to rename this viewer's dock/tab to the saved filename.
+        self._on_saved: Callable[[str], None] | None = None
+
         self._key_filter = _KeyFilter(self)
         widget = self.widget()
         widget.installEventFilter(self._key_filter)
@@ -155,6 +194,8 @@ class MMArrayViewer(ndv.ArrayViewer):
                 _add_roll_axes_button(self)
         with suppress(Exception):
             unstyle_widgets(widget)
+        with suppress(Exception):
+            _enable_1based_slider_labels(widget)
 
     def _roll_axes(self) -> None:
         """Cycle visible axes through the three orthogonal ZYX views."""
@@ -171,6 +212,33 @@ class MMArrayViewer(ndv.ArrayViewer):
         except ValueError:
             idx = 0
         self.display_model.visible_axes = _ORTHO_VIEWS[(idx + 1) % len(_ORTHO_VIEWS)]
+
+    def _show_context_menu(self, global_pos: Any) -> bool:
+        """Show the right-click menu; return whether one was actually shown.
+
+        Absent (rather than merely disabled) when this viewer has no
+        associated sequence at all -- e.g. the snap/live Preview never
+        reaches here (it isn't an `MMArrayViewer`), and a reopened file with
+        no recoverable sequence metadata leaves `mda_sequence` unset.
+        """
+        if self.mda_sequence is None:
+            return False
+
+        menu = QMenu(self.widget())
+        action = menu.addAction("Re-use MDA…")
+        if action is None:
+            return False
+        # Disabled during a run: the sequence just recovered/observed could
+        # otherwise replace the parameters for an acquisition already in
+        # progress out from under it.
+        action.setEnabled(
+            self._reuse_mda_callback is not None
+            and not CMMCorePlus.instance().mda.is_running()
+        )
+        if callback := self._reuse_mda_callback:
+            action.triggered.connect(callback)
+        menu.exec(global_pos)
+        return True
 
     def set_roi_selection_active(self, active: bool) -> None:
         """Enter or leave ndv's rectangular ROI interaction mode."""
@@ -287,7 +355,7 @@ class MMArrayViewer(ndv.ArrayViewer):
         error before any frame is written, so the retry never double-writes.
         """
 
-        def _run(*, overwrite: bool) -> None:
+        def _run(*, overwrite: bool) -> str | None:
             dlg = QProgressDialog("Saving…", "Cancel", 0, 0, self.widget())
             dlg.setWindowModality(Qt.WindowModality.WindowModal)
             dlg.setMinimumDuration(0)
@@ -301,14 +369,14 @@ class MMArrayViewer(ndv.ArrayViewer):
                 return not dlg.wasCanceled()
 
             try:
-                export_acquisition(
+                return export_acquisition(
                     record, path, fmt, overwrite=overwrite, progress=_progress
                 )
             finally:
                 dlg.close()
 
         try:
-            _run(overwrite=False)
+            output_path = _run(overwrite=False)
         except FileExistsError:
             reply = QMessageBox.question(
                 self.widget(),
@@ -316,8 +384,16 @@ class MMArrayViewer(ndv.ArrayViewer):
                 f"{path} already exists.\n\nOverwrite it?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
-            if reply == QMessageBox.StandardButton.Yes:
+            output_path = (
                 _run(overwrite=True)
+                if reply == QMessageBox.StandardButton.Yes
+                else None
+            )
+
+        # None means either cancellation (see _run/export_acquisition) or that
+        # the user declined the overwrite -- neither actually wrote anything.
+        if output_path is not None and self._on_saved is not None:
+            self._on_saved(output_path)
 
     def _save_rgb_snapshot(self) -> None:
         """Save a single RGB/RGBA frame directly as TIFF (no ome_writers path)."""
@@ -531,6 +607,85 @@ def unstyle_widgets(widget: Any) -> None:
             ensure_visible_icon(w)
 
 
+def _patch_dim_row_1based(row: Any) -> None:
+    """Patch one DimRow so its index label and out-of total display 1-based counts.
+
+    Internal ndv slider values stay 0-based (used for array indexing); only
+    the displayed text is shifted by +1 for user-friendliness.
+
+    Safe to call multiple times on the same row: the signal-level patch is
+    applied once (guarded by ``_1based_patched``), but the range and text
+    fixes are reapplied every call so they survive coord-range extensions that
+    happen during a live acquisition (``create_sliders`` is re-entered each
+    time new frames arrive).
+    """
+    q_sld = row.slider  # QLabeledSlider
+    inner = q_sld._slider  # internal QSlider
+    lbl = row.index_label  # SliderLabel (QDoubleSpinBox subclass)
+
+    if not getattr(q_sld, "_1based_patched", False):
+        q_sld._1based_patched = True
+
+        # SliderLabel is connected to inner.rangeChanged to keep its own
+        # editing range in sync with the slider.  Intercept that connection so
+        # the editable range is always 1-based (1..N instead of 0..N-1).
+        with suppress(Exception):
+            inner.rangeChanged.disconnect(lbl.setRange)
+        inner.rangeChanged.connect(lambda mn, mx: lbl.setRange(mn + 1, mx + 1))
+
+        # QLabeledSlider._on_slider_value_changed does two things: it sets
+        # the label's (0-based) value, and it re-emits inner.valueChanged as
+        # QLabeledSlider.valueChanged -- which is what _QDimsSliders.
+        # create_sliders connects straight to currentIndexChanged, i.e. what
+        # actually tells the viewer to redraw the new frame. Disconnecting
+        # it (as an earlier version of this patch did) silently drops that
+        # re-emission: the slider moves and the label updates, but the
+        # displayed frame never does. So it stays connected, and this just
+        # adds a second connection after it -- Qt calls slots in connection
+        # order, so ours runs second and simply overwrites the label with
+        # the 1-based value.
+        inner.valueChanged.connect(lambda v: lbl.setValue(v + 1))
+
+        # When the user edits the label directly, subtract 1 before passing
+        # the typed value back to the internal slider.
+        with suppress(Exception):
+            lbl.valueEdited.disconnect(q_sld._setValue)
+        lbl.valueEdited.connect(lambda v: inner.setValue(int(v) - 1))
+
+    # Reapply on every create_sliders call: the range may have grown.
+    lbl.setRange(inner.minimum() + 1, inner.maximum() + 1)
+    lbl.setValue(inner.value() + 1)
+
+    # Fix the "/ N" total label from 0-based max to 1-based count.
+    txt = row.out_of.text()
+    if txt.startswith("/ "):
+        with suppress(ValueError):
+            row.out_of.setText(f"/ {int(txt[2:]) + 1}")
+
+
+def _enable_1based_slider_labels(widget: Any) -> None:
+    """Wrap ``dims_sliders.create_sliders`` to keep DimRow labels 1-based."""
+    dims_sliders = getattr(widget, "dims_sliders", None)
+    if dims_sliders is None:
+        return
+
+    with suppress(ImportError):
+        from ndv.views._qt._array_view import (
+            DimRow,  # pyright: ignore[reportPrivateImportUsage]
+        )
+
+        orig_create = dims_sliders.create_sliders
+
+        def _wrapped(coords: Any, _orig: Any = orig_create) -> None:
+            _orig(coords)
+            for row in dims_sliders.findChildren(DimRow):
+                _patch_dim_row_1based(row)
+
+        dims_sliders.create_sliders = _wrapped
+        for row in dims_sliders.findChildren(DimRow):
+            _patch_dim_row_1based(row)
+
+
 def _add_save_button(viewer: MMArrayViewer) -> QPushButton:
     q_widget = viewer.widget()
     btn_layout = q_widget._btn_layout
@@ -560,14 +715,6 @@ def _add_roll_axes_button(viewer: MMArrayViewer) -> QPushButton:
 
 
 _SAVE_FILTERS = "OME-TIFF (*.ome.tiff *.ome.tif);;OME-Zarr (*.ome.zarr)"
-
-_DimType = Literal["space", "time", "channel", "position", "other"]
-_TYPE_BY_AXIS_NAME: dict[str, _DimType] = {
-    "t": "time",
-    "c": "channel",
-    "z": "space",
-    "p": "position",
-}
 
 
 class _RecordSource(Protocol):
@@ -610,48 +757,25 @@ def _synthesize_record(viewer: _RecordSource) -> AcquisitionRecord | None:
     Used whenever no live `AcquisitionRecord` was attached at acquisition time
     -- e.g. the snap/live Preview (not backed by an MDA at all), or an MDA
     viewer whose manager didn't attach one. Per-frame metadata is unavailable
-    here, and non-spatial axes get sequential (not necessarily named)
-    coordinates; physical scale comes only from the viewer's current
-    `display_model.scales`. `viewer.data` (never materialized) is used
-    directly as the record's view -- it already supports the same
-    acquisition-order tuple indexing `export_acquisition` relies on, whether
-    it's a live `StreamView` or an `ndv` `RingBuffer`.
+    here; physical scale prefers the viewer's current `display_model.scales`
+    override, falling back to whatever the data's own wrapper can derive.
+    `viewer.data` (never materialized) is used directly as the record's view
+    -- it already supports the same acquisition-order tuple indexing
+    `export_acquisition` relies on, whether it's a live `StreamView` or an
+    `ndv` `RingBuffer`.
     """
     data = viewer.data
     wrapper = viewer.data_wrapper
     if data is None or wrapper is None:
         return None
 
-    sizes = dict(wrapper.sizes())
-    if len(sizes) < 2:
-        return None
-    names = list(sizes)
-    n = len(names)
-    scales = dict(viewer.display_model.scales)
-
-    dims: list[Dimension] = []
-    for i, name in enumerate(names):
-        is_frame_axis = i >= n - 2
-        axis_name = ("y", "x")[i - (n - 2)] if is_frame_axis else str(name)
-        dim_type: _DimType = (
-            "space" if is_frame_axis else _TYPE_BY_AXIS_NAME.get(axis_name, "other")
-        )
-        scale = scales.get(axis_name)
-        dims.append(
-            Dimension(
-                name=axis_name,
-                count=sizes[name],
-                type=dim_type,
-                scale=scale,
-                unit="micrometer" if (dim_type == "space" and scale) else None,
-            )
-        )
-
     summary_meta = None
     with suppress(Exception):
         summary_meta = summary_metadata(CMMCorePlus.instance())
 
-    settings = AcquisitionSettings(
-        dimensions=tuple(dims), dtype=str(np.dtype(wrapper.dtype))
+    return record_from_wrapper(
+        wrapper,
+        data,
+        summary_meta=summary_meta,
+        scale_overrides=dict(viewer.display_model.scales),
     )
-    return AcquisitionRecord(settings=settings, summary_meta=summary_meta, view=data)

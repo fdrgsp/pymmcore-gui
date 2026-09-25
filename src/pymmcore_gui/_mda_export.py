@@ -25,14 +25,14 @@ from itertools import product
 from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
-from ome_writers import AcquisitionSettings, create_stream
+from ome_writers import AcquisitionSettings, Channel, Dimension, Position, create_stream
 from pymmcore_plus.mda._sink import _serialize_summary_meta
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from pathlib import Path
 
-    from ome_writers import Dimension
+    from ndv.models import DataWrapper
     from pymmcore_plus.metadata import SummaryMetaV1
 
 logger = logging.getLogger(__name__)
@@ -42,6 +42,14 @@ ExportFormat = Literal["ome-tiff", "ome-zarr"]
 # after the frame just written -- whatever was flushed to disk stays there,
 # same as a user-cancelled live MDA leaves a partial file.
 ProgressCallback = Callable[[int, int], bool]
+
+_DimType = Literal["space", "time", "channel", "position", "other"]
+_TYPE_BY_AXIS_NAME: dict[str, _DimType] = {
+    "t": "time",
+    "c": "channel",
+    "z": "space",
+    "p": "position",
+}
 
 
 @dataclass
@@ -189,3 +197,88 @@ def _clamp_dimensions(settings: AcquisitionSettings, view: Any) -> list[Dimensio
                 dim = dim.model_copy(update={"count": n})
         dims.append(dim)
     return dims
+
+
+def dimensions_from_wrapper(
+    wrapper: DataWrapper, *, scale_overrides: Mapping[str, float] | None = None
+) -> list[Dimension]:
+    """Build `ome_writers.Dimension` specs from any ndv `DataWrapper`'s own metadata.
+
+    A general-purpose bridge from ndv's `dims`/`coords`/`axis_scales()` to
+    `ome_writers`' `Dimension`, usable for *any* wrapper -- a live acquisition's
+    view, a reopened OME-TIFF/OME-Zarr's lazy wrapper, or (via `scale_overrides`)
+    a viewer whose physical scale was only ever set as a display-model override
+    rather than being recoverable from the data itself.
+
+    Channel and position axes get real `Channel`/`Position` coords whenever the
+    wrapper's own coords for that axis are more informative than a plain
+    `range` (matching how `DataWrapper.channel_names()` decides the same
+    thing); every other axis is left as an unlabeled, sequential dimension of
+    the given count, with physical scale attached where available.
+    """
+    sizes = dict(wrapper.sizes())
+    if len(sizes) < 2:
+        return []
+    names = list(sizes)
+    n = len(names)
+    wrapper_scales = wrapper.axis_scales()
+    overrides = scale_overrides or {}
+
+    dims: list[Dimension] = []
+    for i, name in enumerate(names):
+        is_frame_axis = i >= n - 2
+        axis_name = ("y", "x")[i - (n - 2)] if is_frame_axis else str(name)
+        dim_type: _DimType = (
+            "space" if is_frame_axis else _TYPE_BY_AXIS_NAME.get(axis_name, "other")
+        )
+        # Only ever meaningful for space/time -- a channel/position axis's
+        # "coords" are often numeric-looking *labels* (e.g. tifffile's
+        # zero-padded position index strings), which axis_scales() would
+        # otherwise happily (and wrongly) treat as an evenly-spaced physical
+        # scale.
+        scale = None
+        if dim_type in ("space", "time"):
+            scale = overrides.get(axis_name, wrapper_scales.get(axis_name))
+        coords: list[str | float | Channel | Position] | None = None
+        if not is_frame_axis:
+            raw_coords = wrapper.coords.get(name)
+            if raw_coords is not None and not isinstance(raw_coords, range):
+                if dim_type == "channel":
+                    coords = [Channel(name=str(v)) for v in raw_coords]
+                elif dim_type == "position":
+                    coords = [Position(name=str(v)) for v in raw_coords]
+        dims.append(
+            Dimension(
+                name=axis_name,
+                count=sizes[name],
+                type=dim_type,
+                scale=scale,
+                unit="micrometer" if (dim_type == "space" and scale) else None,
+                coords=coords,
+            )
+        )
+    return dims
+
+
+def record_from_wrapper(
+    wrapper: DataWrapper,
+    view: Any,
+    *,
+    summary_meta: SummaryMetaV1 | None = None,
+    scale_overrides: Mapping[str, float] | None = None,
+) -> AcquisitionRecord | None:
+    """Build an `AcquisitionRecord` straight from any ndv `DataWrapper`'s own metadata.
+
+    `view` must support the same acquisition-order tuple indexing
+    `export_acquisition` relies on (see `AcquisitionRecord.view`) -- for a
+    `DataWrapper`, that's `wrapper.isel(dict(enumerate(idx)))` wrapped in a
+    tiny `__getitem__` adapter; callers that already have such a view (e.g.
+    a live `StreamView`) can pass it directly instead.
+    """
+    dims = dimensions_from_wrapper(wrapper, scale_overrides=scale_overrides)
+    if not dims:
+        return None
+    settings = AcquisitionSettings(
+        dimensions=tuple(dims), dtype=str(np.dtype(wrapper.dtype))
+    )
+    return AcquisitionRecord(settings=settings, summary_meta=summary_meta, view=view)

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, ClassVar, cast
 from pymmcore_plus import CMMCorePlus, Keyword, find_micromanager
 from superqt.iconify import QIconifyIcon
 
+from pymmcore_gui._acquisition_loader import supports_path
 from pymmcore_gui._array_viewer import set_source_icon
 from pymmcore_gui._layouts import LAST_SESSION_LAYOUT_NAME, store_session_layout
 from pymmcore_gui._notification_manager import NotificationManager
@@ -26,6 +27,9 @@ from pymmcore_gui._qt.QtCore import (
 from pymmcore_gui._qt.QtGui import (
     QAction,
     QCloseEvent,
+    QDragEnterEvent,
+    QDragMoveEvent,
+    QDropEvent,
     QEnterEvent,
     QFontMetricsF,
     QKeySequence,
@@ -376,6 +380,7 @@ class MainWindow(QMainWindow):
         self.setObjectName("pyMMGUI")
         self.setWindowTitle("pyMM")
         self.setWindowState(Qt.WindowState.WindowMaximized)
+        self.setAcceptDrops(True)
 
         # Set while a close is waiting for a cancelled acquisition to finish
         # tearing down -- see closeEvent / _on_mda_running.
@@ -865,6 +870,50 @@ class MainWindow(QMainWindow):
             msg.setDefaultButton(reject_btn)
         msg.exec()
         return msg.clickedButton() is accept_btn
+
+    def dragEnterEvent(self, a0: QDragEnterEvent | None) -> None:
+        """Accept a drag only if it carries at least one openable acquisition.
+
+        Anything else (unrelated file types, internal Qt/QtAds drag
+        operations, which don't use this MIME-based protocol at all) is left
+        untouched, so it keeps working exactly as before.
+        """
+        if a0 is not None and self._dropped_acquisition_paths(a0):
+            a0.acceptProposedAction()
+
+    def dragMoveEvent(self, a0: QDragMoveEvent | None) -> None:
+        """Mirror dragEnterEvent's acceptance so Qt keeps offering the drop."""
+        if a0 is not None and self._dropped_acquisition_paths(a0):
+            a0.acceptProposedAction()
+
+    def dropEvent(self, a0: QDropEvent | None) -> None:
+        """Open every supported dropped path, one viewer tab per dataset."""
+        if a0 is None:
+            return
+        paths = self._dropped_acquisition_paths(a0)
+        if not paths:
+            return
+        a0.acceptProposedAction()
+
+        opened = False
+        for path in paths:
+            try:
+                self._acquire.viewers.open_acquisition(path)
+            except ValueError as e:
+                self._notification_manager.show_error_message(str(e))
+            else:
+                opened = True
+        if opened:
+            self._activate_acquire()
+
+    @staticmethod
+    def _dropped_acquisition_paths(a0: QDragMoveEvent | QDropEvent) -> list[Path]:
+        """Return this drag/drop event's local file/directory URLs that we can open."""
+        mime = a0.mimeData()
+        if mime is None or not mime.hasUrls():
+            return []
+        paths = (Path(url.toLocalFile()) for url in mime.urls() if url.isLocalFile())
+        return [p for p in paths if supports_path(p)]
 
     def closeEvent(self, a0: QCloseEvent | None) -> None:
         """Stop a running acquisition, then offer to save configuration edits."""
