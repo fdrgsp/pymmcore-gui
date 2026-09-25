@@ -607,21 +607,30 @@ def unstyle_widgets(widget: Any) -> None:
             ensure_visible_icon(w)
 
 
-def _patch_dim_row_1based(row: Any) -> None:
+def _patch_dim_row_1based(dims_sliders: Any, row: Any) -> None:
     """Patch one DimRow so its index label and out-of total display 1-based counts.
 
-    Internal ndv slider values stay 0-based (used for array indexing); only
-    the displayed text is shifted by +1 for user-friendliness.
+    Internal ndv slider values are untouched (still used for array indexing
+    and for ``current_index()``); only the displayed text is shifted so it
+    counts positions within the slider's range starting at 1, rather than raw
+    values starting at ``slider.minimum()``. For the sliders this codebase
+    actually produces, ``minimum()`` is always 0 (every coord path here is
+    either a plain list or a ``range(size)``), so that position *is* the
+    value and this is just "+1, displayed". The position-within-range framing
+    is kept general anyway, in case a coord axis is ever range-based with a
+    non-zero start (e.g. a physical coordinate ndv treats as the literal
+    slider value): a slider running 5..14 should still read "1..10", not
+    "6..15".
 
     Safe to call multiple times on the same row: the signal-level patch is
-    applied once (guarded by ``_1based_patched``), but the range and text
-    fixes are reapplied every call so they survive coord-range extensions that
-    happen during a live acquisition (``create_sliders`` is re-entered each
-    time new frames arrive).
+    applied once (guarded by ``_1based_patched``), and the range and total
+    fixes are recomputed from the slider itself every call, so they survive
+    coord-range extensions that happen during a live acquisition
+    (``create_sliders`` is re-entered each time new frames arrive).
     """
     q_sld = row.slider  # QLabeledSlider
     inner = q_sld._slider  # internal QSlider
-    lbl = row.index_label  # SliderLabel (QDoubleSpinBox subclass)
+    lbl = row.index_label  # SliderLabel (QLineEdit subclass)
 
     if not getattr(q_sld, "_1based_patched", False):
         q_sld._1based_patched = True
@@ -631,7 +640,7 @@ def _patch_dim_row_1based(row: Any) -> None:
         # the editable range is always 1-based (1..N instead of 0..N-1).
         with suppress(Exception):
             inner.rangeChanged.disconnect(lbl.setRange)
-        inner.rangeChanged.connect(lambda mn, mx: lbl.setRange(mn + 1, mx + 1))
+        inner.rangeChanged.connect(lambda mn, mx: lbl.setRange(1, mx - mn + 1))
 
         # QLabeledSlider._on_slider_value_changed does two things: it sets
         # the label's (0-based) value, and it re-emits inner.valueChanged as
@@ -643,24 +652,29 @@ def _patch_dim_row_1based(row: Any) -> None:
         # displayed frame never does. So it stays connected, and this just
         # adds a second connection after it -- Qt calls slots in connection
         # order, so ours runs second and simply overwrites the label with
-        # the 1-based value.
-        inner.valueChanged.connect(lambda v: lbl.setValue(v + 1))
+        # the 1-based position.
+        inner.valueChanged.connect(lambda v: lbl.setValue(v - inner.minimum() + 1))
 
-        # When the user edits the label directly, subtract 1 before passing
-        # the typed value back to the internal slider.
+        # When the user edits the label directly, convert the typed 1-based
+        # position back to a raw slider value before passing it on.
         with suppress(Exception):
             lbl.valueEdited.disconnect(q_sld._setValue)
-        lbl.valueEdited.connect(lambda v: inner.setValue(int(v) - 1))
+        lbl.valueEdited.connect(lambda v: inner.setValue(int(v) - 1 + inner.minimum()))
 
-    # Reapply on every create_sliders call: the range may have grown.
-    lbl.setRange(inner.minimum() + 1, inner.maximum() + 1)
-    lbl.setValue(inner.value() + 1)
-
-    # Fix the "/ N" total label from 0-based max to 1-based count.
-    txt = row.out_of.text()
-    if txt.startswith("/ "):
-        with suppress(ValueError):
-            row.out_of.setText(f"/ {int(txt[2:]) + 1}")
+    # Reapply on every create_sliders call: the range may have grown.  Every
+    # value below is derived from the slider, never from the current label
+    # text, so repeated calls converge instead of drifting upward.
+    #
+    # setRowTotal writes the "/ N" text *and* recomputes the fixed widths of
+    # both the total and index labels from N.  Going through it rather than
+    # rewriting the text is what keeps the wider 1-based numbers legible:
+    # ndv sizes those labels for the 0-based max, so a 100-frame axis would
+    # be sized for "99" and SliderLabel, finding no room for "100", would
+    # fall back to scientific notation and render "1e+02".
+    n = inner.maximum() - inner.minimum() + 1
+    dims_sliders.setRowTotal(q_sld, n)
+    lbl.setRange(1, n)
+    lbl.setValue(inner.value() - inner.minimum() + 1)
 
 
 def _enable_1based_slider_labels(widget: Any) -> None:
@@ -679,11 +693,11 @@ def _enable_1based_slider_labels(widget: Any) -> None:
         def _wrapped(coords: Any, _orig: Any = orig_create) -> None:
             _orig(coords)
             for row in dims_sliders.findChildren(DimRow):
-                _patch_dim_row_1based(row)
+                _patch_dim_row_1based(dims_sliders, row)
 
         dims_sliders.create_sliders = _wrapped
         for row in dims_sliders.findChildren(DimRow):
-            _patch_dim_row_1based(row)
+            _patch_dim_row_1based(dims_sliders, row)
 
 
 def _add_save_button(viewer: MMArrayViewer) -> QPushButton:

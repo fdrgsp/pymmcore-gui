@@ -283,10 +283,10 @@ def _make_dims_sliders(n_frames: int = 5) -> tuple[_QDimsSliders, DimRow]:
 
 def test_patch_dim_row_1based_display(qtbot: QtBot) -> None:
     """Index label text and out-of label become 1-based after patching."""
-    _dims, row = _make_dims_sliders(5)
+    dims, row = _make_dims_sliders(5)
     row.slider.setValue(0)
 
-    _patch_dim_row_1based(row)
+    _patch_dim_row_1based(dims, row)
 
     assert row.index_label.text() == "1"
     assert row.out_of.text() == "/ 5"
@@ -294,8 +294,8 @@ def test_patch_dim_row_1based_display(qtbot: QtBot) -> None:
 
 def test_patch_dim_row_1based_slider_value_shows_1based(qtbot: QtBot) -> None:
     """Moving the slider updates the label to the 1-based position."""
-    _dims, row = _make_dims_sliders(5)
-    _patch_dim_row_1based(row)
+    dims, row = _make_dims_sliders(5)
+    _patch_dim_row_1based(dims, row)
 
     row.slider.setValue(3)  # 0-based index 3 → should display 4
 
@@ -314,7 +314,7 @@ def test_patch_dim_row_1based_still_notifies_index_changed(qtbot: QtBot) -> None
     frame silently stops changing.
     """
     dims, row = _make_dims_sliders(5)
-    _patch_dim_row_1based(row)
+    _patch_dim_row_1based(dims, row)
 
     seen: list[object] = []
     dims.currentIndexChanged.connect(lambda: seen.append(dims.current_index()))
@@ -325,8 +325,8 @@ def test_patch_dim_row_1based_still_notifies_index_changed(qtbot: QtBot) -> None
 
 def test_patch_dim_row_1based_label_edit_moves_to_correct_frame(qtbot: QtBot) -> None:
     """Typing a 1-based frame number in the label navigates to the right frame."""
-    _dims, row = _make_dims_sliders(5)
-    _patch_dim_row_1based(row)
+    dims, row = _make_dims_sliders(5)
+    _patch_dim_row_1based(dims, row)
 
     # Simulate the user typing "3" (1-based frame 3 = 0-based index 2).
     row.index_label.valueEdited.emit(3.0)
@@ -335,13 +335,19 @@ def test_patch_dim_row_1based_label_edit_moves_to_correct_frame(qtbot: QtBot) ->
 
 
 def test_patch_dim_row_1based_idempotent(qtbot: QtBot) -> None:
-    """Calling _patch_dim_row_1based twice doesn't double-offset the display."""
-    _dims, row = _make_dims_sliders(5)
-    _patch_dim_row_1based(row)
-    _patch_dim_row_1based(row)  # second call should be a no-op for signals
+    """Repeated _patch_dim_row_1based calls don't double-offset the display.
+
+    The total label is the part that used to drift: it was derived by parsing
+    the label's own text and adding one, so a row re-patched without an
+    intervening `create_sliders` reset counted 5 -> 6 -> 7.
+    """
+    dims, row = _make_dims_sliders(5)
+    for _ in range(3):
+        _patch_dim_row_1based(dims, row)
 
     row.slider.setValue(2)
     assert row.index_label.text() == "3"
+    assert row.out_of.text() == "/ 5"
 
 
 def test_patch_dim_row_1based_range_grows(qtbot: QtBot) -> None:
@@ -358,6 +364,55 @@ def test_patch_dim_row_1based_range_grows(qtbot: QtBot) -> None:
     rows = dims.findChildren(DimRow)
     assert rows[0].out_of.text() == "/ 8"
     assert rows[0].index_label._max == 8
+
+
+@pytest.mark.parametrize("n_frames", [10, 100, 1000])
+def test_patch_dim_row_1based_labels_sized_for_1based_number(
+    qtbot: QtBot, n_frames: int
+) -> None:
+    """Labels are re-sized for the 1-based count, which is one digit wider.
+
+    ndv gives both labels a *fixed* width computed from the 0-based maximum,
+    so at every power of ten the 1-based number needs a digit that isn't
+    there.  SliderLabel reacts to that by switching to scientific notation:
+    frame 100 of 100 rendered as "1e+02".
+    """
+    dims, row = _make_dims_sliders(n_frames)
+    _patch_dim_row_1based(dims, row)
+    row.slider.setValue(n_frames - 1)
+
+    assert row.index_label.text() == str(n_frames)
+    assert row.out_of.text() == f"/ {n_frames}"
+    for label in (row.index_label, row.out_of):
+        needed = label.fontMetrics().horizontalAdvance(label.text())
+        assert label.width() >= needed
+
+
+def test_patch_dim_row_1based_nonzero_start_range(qtbot: QtBot) -> None:
+    """A coord range that doesn't start at 0 still displays 1-based positions.
+
+    No coord path in this codebase produces one today (every axis is either a
+    plain list or `range(size)`), but the patch derives everything from
+    `slider.minimum()`/`.maximum()` rather than assuming the minimum is 0, so
+    a slider running 5..14 (10 frames, raw values 5-14) should read "1..10",
+    not "6..15".
+    """
+    from ndv.views._qt._array_view import DimRow, _QDimsSliders
+
+    dims = _QDimsSliders()
+    dims.create_sliders({"z": range(5, 15)})
+    row = dims.findChildren(DimRow)[0]
+    _patch_dim_row_1based(dims, row)
+
+    assert row.index_label.text() == "1"
+    assert row.out_of.text() == "/ 10"
+
+    row.slider.setValue(14)  # last raw value -> last position (10)
+    assert row.index_label.text() == "10"
+
+    # Typing position "3" should land on raw value 5 + (3 - 1) = 7.
+    row.index_label.valueEdited.emit(3.0)
+    assert row.slider.value() == 7
 
 
 def test_enable_1based_slider_labels_wraps_create_sliders(qtbot: QtBot) -> None:
