@@ -6493,4 +6493,6 @@ def test_tiff_layout_preserves_the_chosen_extension(
     output = wdg.prepare_mda()
     assert isinstance(output, AcquisitionSettings)
     assert output.format.suffix == f".{name.split('.', 1)[1]}"
-    assert Path(output.output_path).name == name
+    # the resolved single-position destination keeps the name that was typed
+    resolved = output.format.get_output_path(output.root_path, num_positions=1)
+    assert Path(resolved).name == name
