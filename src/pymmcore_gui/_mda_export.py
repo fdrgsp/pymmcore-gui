@@ -94,6 +94,7 @@ def export_acquisition(
     *,
     overwrite: bool = False,
     progress: ProgressCallback | None = None,
+    tiff_layout: str | None = None,
 ) -> str | None:
     """Replay `record` through a fresh `ome_writers` stream at `path`.
 
@@ -109,6 +110,10 @@ def export_acquisition(
         Output format.
     overwrite : bool
         Whether to overwrite an existing file/directory at `path`.
+    tiff_layout : str | None
+        OME-TIFF only: how the per-position files relate to each other, as
+        `OmeTiffFormat.multi_file_metadata` (`"self-contained"`, `"master-tiff"`
+        or `"redundant"`). `None` leaves the format's own default in place.
     progress : ProgressCallback | None
         Optional callback invoked after each frame is written, as
         `progress(frames_done, frames_total)`. Return False to cancel.
@@ -128,6 +133,10 @@ def export_acquisition(
     if dims and dims[0].count is None:
         raise ValueError("Nothing to export: no frames have been acquired yet.")
 
+    out_format: Any = fmt
+    if tiff_layout is not None and fmt == "ome-tiff":
+        out_format = {"name": "ome-tiff", "multi_file_metadata": tiff_layout}
+
     target = AcquisitionSettings.model_validate(
         {
             **record.settings.model_dump(
@@ -135,7 +144,7 @@ def export_acquisition(
             ),
             "dimensions": dims,
             "root_path": str(path),
-            "format": fmt,
+            "format": out_format,
             "overwrite": overwrite,
         }
     )

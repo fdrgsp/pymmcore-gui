@@ -317,7 +317,7 @@ class MMArrayViewer(ndv.ArrayViewer):
         prompt = _prompt_save_path(self.widget())
         if prompt is None:
             return
-        path, fmt = prompt
+        path, fmt, tiff_layout = prompt
 
         record = self._acquisition_record or _synthesize_record(self)
         if record is None:
@@ -325,14 +325,18 @@ class MMArrayViewer(ndv.ArrayViewer):
             return
 
         try:
-            self._export_with_overwrite_prompt(record, path, fmt)
+            self._export_with_overwrite_prompt(record, path, fmt, tiff_layout)
         except Exception as e:
             QMessageBox.critical(
                 self.widget(), "Save failed", f"Failed to save data:\n\n{e}"
             )
 
     def _export_with_overwrite_prompt(
-        self, record: AcquisitionRecord, path: Path, fmt: ExportFormat
+        self,
+        record: AcquisitionRecord,
+        path: Path,
+        fmt: ExportFormat,
+        tiff_layout: str | None = None,
     ) -> None:
         """Run `export_acquisition`, confirming before clobbering an existing path.
 
@@ -359,7 +363,12 @@ class MMArrayViewer(ndv.ArrayViewer):
 
             try:
                 return export_acquisition(
-                    record, path, fmt, overwrite=overwrite, progress=_progress
+                    record,
+                    path,
+                    fmt,
+                    overwrite=overwrite,
+                    progress=_progress,
+                    tiff_layout=tiff_layout,
                 )
             finally:
                 dlg.close()
@@ -687,7 +696,26 @@ def _add_roll_axes_button(viewer: MMArrayViewer) -> QPushButton:
     return btn
 
 
-_SAVE_FILTERS = "OME-TIFF (*.ome.tiff *.ome.tif);;OME-Zarr (*.ome.zarr)"
+# filter label -> (format, OME-TIFF layout). The per-position layout rides in the
+# file-type list so exporting still costs exactly one native dialog. Order matters:
+# the first entry is what the dialog preselects.
+_TIFF_EXT = "(*.ome.tiff *.ome.tif)"
+_SAVE_FILTER_MAP: dict[str, tuple[ExportFormat, str | None]] = {
+    f"OME-TIFF, independent file per position {_TIFF_EXT}": (
+        "ome-tiff",
+        "self-contained",
+    ),
+    f"OME-TIFF, linked dataset, metadata in the first file {_TIFF_EXT}": (
+        "ome-tiff",
+        "master-tiff",
+    ),
+    f"OME-TIFF, linked dataset, metadata in every file {_TIFF_EXT}": (
+        "ome-tiff",
+        "redundant",
+    ),
+    "OME-Zarr (*.ome.zarr)": ("ome-zarr", None),
+}
+_SAVE_FILTERS = ";;".join(_SAVE_FILTER_MAP)
 
 
 class _RecordSource(Protocol):
@@ -706,22 +734,30 @@ class _RecordSource(Protocol):
     def display_model(self) -> Any: ...
 
 
-def _prompt_save_path(parent: QWidget) -> tuple[Path, ExportFormat] | None:
-    """Ask for a destination path and format via one native save dialog."""
+def _prompt_save_path(parent: QWidget) -> tuple[Path, ExportFormat, str | None] | None:
+    """Ask for a destination path, format and file layout in one native dialog.
+
+    The per-position layout choice rides in the file-type list rather than a
+    second prompt, so exporting still costs exactly one dialog.
+    """
     path_str, selected_filter = QFileDialog.getSaveFileName(
         parent, "Save Acquisition", "", _SAVE_FILTERS
     )
     if not path_str:
         return None
 
-    fmt: ExportFormat = "ome-zarr" if "Zarr" in selected_filter else "ome-tiff"
+    # An unrecognised filter can only mean the dialog returned something we did
+    # not offer; fall back to the first entry rather than guessing a layout.
+    fmt, layout = _SAVE_FILTER_MAP.get(
+        selected_filter, next(iter(_SAVE_FILTER_MAP.values()))
+    )
     name = path_str.lower()
     if fmt == "ome-zarr":
         if not name.endswith(".zarr"):
             path_str += ".ome.zarr"
     elif not name.endswith((".tif", ".tiff")):
         path_str += ".ome.tiff"
-    return Path(path_str), fmt
+    return Path(path_str), fmt, layout
 
 
 def _synthesize_record(viewer: _RecordSource) -> AcquisitionRecord | None:

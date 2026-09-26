@@ -238,3 +238,61 @@ def test_export_overwrite_flag(tmp_path: Path) -> None:
         out = export_acquisition(record, path, "ome-zarr", overwrite=True)
 
     assert out is not None
+
+
+@pytest.mark.parametrize(
+    ("tiff_layout", "images_per_file", "external_refs"),
+    [
+        (None, 2, 2),
+        ("redundant", 2, 2),
+        ("master-tiff", 2, 2),
+        ("self-contained", 1, 0),
+    ],
+)
+def test_export_tiff_layout_option(
+    tmp_path: Path,
+    tiff_layout: str | None,
+    images_per_file: int,
+    external_refs: int,
+) -> None:
+    """`tiff_layout` decides how the exported files relate to each other."""
+    from ome_types import from_tiff
+
+    settings = AcquisitionSettings(
+        dimensions=tuple(
+            dims_from_standard_axes({"p": ["A1", "B2"], "c": ["DAPI"], "y": 8, "x": 8})
+        ),
+        dtype="uint16",
+        format=ScratchFormat(),
+    )
+    with create_stream(settings) as stream:
+        for p in range(2):
+            stream.append(np.full((8, 8), p, dtype="uint16"))
+        record = AcquisitionRecord(
+            settings=settings, summary_meta=None, view=stream.view()
+        )
+        out = export_acquisition(
+            record,
+            tmp_path / "multi.ome.tiff",
+            "ome-tiff",
+            tiff_layout=tiff_layout,
+        )
+
+    assert out is not None
+    files = sorted(Path(out).glob("*.ome.tiff"))
+    assert len(files) == 2
+
+    # checked on the file carrying the metadata, since master-tiff stubs the rest
+    ome = from_tiff(str(files[0]))
+    external = [
+        td.uuid.file_name
+        for img in ome.images
+        for td in img.pixels.tiff_data_blocks
+        if td.uuid is not None and td.uuid.file_name
+    ]
+    assert len(ome.images) == images_per_file
+    assert len(external) == external_refs
+
+    # pixels survive in every layout
+    for path in files:
+        assert tifffile.imread(path).shape == (8, 8)

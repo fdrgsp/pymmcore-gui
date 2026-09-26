@@ -82,10 +82,12 @@ MMArrayViewer._save_data()                  _array_viewer.py
   │    → _save_rgb_snapshot()  [direct tifffile write, no metadata]
   └─ everything else:
        ├─ _prompt_save_path()
-       │    → one file dialog, OME-TIFF / OME-Zarr filters
+       │    → one file dialog; the filter list carries both the format
+       │      (OME-TIFF / OME-Zarr) and, for OME-TIFF, whether each
+       │      position gets an independent file
        ├─ record = self._acquisition_record
        │            or _synthesize_record(self)  (fallback)
-       └─ _export_with_overwrite_prompt(record, path, fmt)
+       └─ _export_with_overwrite_prompt(record, path, fmt, independent)
             └─ export_acquisition()            _mda_export.py
                  └─ ome_writers.create_stream(new AcquisitionSettings)
                       └─ replays record.view frame-by-frame into the

@@ -67,10 +67,13 @@ from pymmcore_gui._qt.QtCore import QPoint, QRect, QSize, Qt
 from pymmcore_gui._qt.QtGui import (
     QAction,
     QCloseEvent,
+    QColor,
     QCursor,
+    QIcon,
     QImage,
     QPainter,
     QPalette,
+    QPixmap,
 )
 from pymmcore_gui._qt.QtWidgets import (
     QWIDGETSIZE_MAX,
@@ -94,7 +97,7 @@ from pymmcore_gui._qt.QtWidgets import (
 )
 from pymmcore_gui._settings import Settings
 from pymmcore_gui.widgets._active_channel_table import CURRENT_CHANNEL_COLUMN
-from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
+from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget, TiffLayout
 from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 
 if TYPE_CHECKING:
@@ -113,7 +116,6 @@ if TYPE_CHECKING:
     from pymmcore_gui._app import WindowProtocol
     from pymmcore_gui._modern_gui._theme import Color
     from pymmcore_gui._qt.QtAds import CDockAreaWidget
-    from pymmcore_gui._qt.QtGui import QIcon
     from pymmcore_gui._settings import Settings
 
 
@@ -786,7 +788,6 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
         "Time Series",
         "Camera ROI",
         "Saving",
-        "Settings",
     ]
     assert tabs.section("c").content_widget is page._mda.channels
     assert tabs.section("p").content_widget is page._mda.stage_positions
@@ -794,8 +795,7 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert _unwrap_card(tabs.section("z").content_widget) is page._mda.z_plan
     assert tabs.section("t").content_widget is page._mda.time_plan
     assert _unwrap_card(tabs.saving_section.content_widget) is page._mda.save_info
-    assert tabs.saving_section is tabs.sections[-2]
-    assert tabs.settings_section is tabs.sections[-1]
+    assert tabs.saving_section is tabs.sections[-1]
     tab_bar = tabs.tabBar()
     assert tab_bar is not None and tab_bar.isHidden()
 
@@ -3518,7 +3518,7 @@ def test_collapsible_mda_round_trips_all_original_widgets(
     assert result.keep_shutter_open_across == ("z", "t")
     assert all(tabs.isChecked(axis) for axis in "cpgzt")
     assert tabs.saving_section.checked
-    assert tabs.saving_section is tabs.sections[-2]
+    assert tabs.saving_section is tabs.sections[-1]
     assert mda.save_info.save_name.text() == "roundtrip.ome.tif"
 
     channel_table = mda.channels.table()
@@ -3618,6 +3618,16 @@ def test_collapsible_mda_preserves_per_position_af_offsets(
     assert seq1.autofocus_plan.autofocus_motor_offset == -13.0
 
 
+def _resolved_save_path(output: object) -> Path:
+    """The destination `prepare_mda()` settled on, whichever form it returned."""
+    from ome_writers import AcquisitionSettings
+
+    if isinstance(output, AcquisitionSettings):
+        return Path(output.root_path)
+    assert isinstance(output, (str, Path))
+    return Path(output)
+
+
 def test_collapsible_mda_retains_saving_and_execution_controls(
     mmcore: CMMCorePlus,
     qtbot: QtBot,
@@ -3639,8 +3649,10 @@ def test_collapsible_mda_retains_saving_and_execution_controls(
         }
     )
     assert tabs.saving_section.checked
-    assert tabs.saving_section is tabs.sections[-2]
-    assert mda.prepare_mda() == tmp_path / "experiment_001.ome.tif"
+    assert tabs.saving_section is tabs.sections[-1]
+    # The default OME-TIFF layout hands back ome-writers settings rather than a
+    # bare path; what matters here is that the name was still made unique.
+    assert _resolved_save_path(mda.prepare_mda()) == tmp_path / "experiment_001.ome.tif"
 
     sequence = mda.value()
     for suffix in (".yaml", ".json"):
@@ -3819,7 +3831,8 @@ def test_collapsible_mda_disables_every_editor_during_acquisition(
         assert section.checkbox is not None
         assert not section.checkbox.isEnabled(), f"{axis} checkbox stayed enabled"
         assert not widget.isEnabled(), f"{axis} editor stayed enabled"
-    assert not tabs.settings_section._body.isEnabled()
+    # global settings left the sections for an inline footer group
+    assert not mda._settings_group.isEnabled()
     assert tabs.saving_section.checkbox is not None
     assert not tabs.saving_section.checkbox.isEnabled()
     assert not mda.save_info.isEnabled()
@@ -3834,7 +3847,7 @@ def test_collapsible_mda_disables_every_editor_during_acquisition(
         assert section.checkbox is not None
         assert section.checkbox.isEnabled(), f"{axis} checkbox stayed disabled"
         assert widget.isEnabled(), f"{axis} editor stayed disabled"
-    assert tabs.settings_section._body.isEnabled()
+    assert mda._settings_group.isEnabled()
     assert tabs.saving_section.checkbox.isEnabled()
     assert mda.save_info.isEnabled()
     assert not mda.control_btns.run_btn.isHidden()
@@ -6255,3 +6268,199 @@ def test_acquire_settle_retries_until_lock_actually_takes(
     assert mda_area is not None
     assert mda_area.width() == _MDA_DOCK_WIDTH
     assert mda_area.minimumWidth() == mda_area.maximumWidth() == _MDA_DOCK_WIDTH
+
+
+# ---------------------------------------------------------------------------
+# OME-TIFF per-position file layout option
+# ---------------------------------------------------------------------------
+
+
+def _ome_tiff_mda(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    tmp_path: Path,
+    sequence: useq.MDASequence | None = None,
+) -> MemoryMDAWidget:
+    set_theme(DARK_THEME)
+    wdg = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(wdg)
+    # setValue() restores saving state from the sequence metadata, so the
+    # sequence has to go in before the save destination is configured.
+    if sequence is not None:
+        wdg.setValue(sequence)
+    wdg.save_info.setValue(
+        {
+            "save_dir": str(tmp_path),
+            "save_name": "acq.ome.tiff",
+            "format": "ome-tiff",
+            "should_save": True,
+        }
+    )
+    return wdg
+
+
+def test_tiff_layout_option_only_shown_for_ome_tiff(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    """The layout choice is specific to OME-TIFF, so it hides for other writers."""
+    wdg = _ome_tiff_mda(mmcore, qtbot, tmp_path)
+    wdg.show()
+    qtbot.waitExposed(wdg)
+
+    combo = wdg._tiff_layout_combo
+    assert combo.isVisibleTo(wdg.save_info)
+    assert wdg.tiffLayout() == "self-contained", "independent files are the default"
+
+    # all three layouts are offered, each explained on its own entry
+    modes = [combo.itemData(i) for i in range(combo.count())]
+    assert modes == ["self-contained", "master-tiff", "redundant"]
+    for i in range(combo.count()):
+        assert combo.itemData(i, Qt.ItemDataRole.ToolTipRole)
+
+    wdg.save_info._writer_combo.setCurrentText("ome-zarr")
+    assert not combo.isVisibleTo(wdg.save_info)
+    assert not wdg._tiff_layout_label.isVisibleTo(wdg.save_info)
+
+    wdg.save_info._writer_combo.setCurrentText("ome-tiff")
+    assert combo.isVisibleTo(wdg.save_info)
+
+
+@pytest.mark.parametrize("layout", ["self-contained", "master-tiff", "redundant"])
+def test_tiff_layout_reaches_acquisition_settings(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path, layout: TiffLayout
+) -> None:
+    """A non-default layout must carry through as ome-writers settings."""
+    from ome_writers import AcquisitionSettings
+
+    wdg = _ome_tiff_mda(mmcore, qtbot, tmp_path)
+    wdg.setTiffLayout(layout)
+
+    output = wdg.prepare_mda()
+    assert isinstance(output, AcquisitionSettings)
+    assert output.format.name == "ome-tiff"
+    assert output.format.multi_file_metadata == layout
+    # the chosen destination still drives the output path
+    assert str(tmp_path) in str(output.root_path)
+
+
+@pytest.mark.parametrize(
+    ("layout", "images_per_file", "external_refs"),
+    [("self-contained", 1, 0), ("master-tiff", 2, 2), ("redundant", 2, 2)],
+)
+def test_tiff_layout_changes_files_on_disk(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    tmp_path: Path,
+    layout: TiffLayout,
+    images_per_file: int,
+    external_refs: int,
+) -> None:
+    """End-to-end: the chosen layout is what actually lands on disk.
+
+    `images_per_file`/`external_refs` are checked on the file that carries the
+    metadata -- the first one -- since in master-tiff the others are stubs.
+    """
+    import useq
+    from ome_types import from_tiff
+
+    wdg = _ome_tiff_mda(
+        mmcore,
+        qtbot,
+        tmp_path,
+        useq.MDASequence(
+            stage_positions=(
+                useq.Position(x=0, y=0),
+                useq.Position(x=10, y=10),
+            ),
+            channels=(useq.Channel(config="DAPI", exposure=1),),
+        ),
+    )
+    wdg.setTiffLayout(layout)
+
+    with qtbot.waitSignal(mmcore.mda.events.sequenceFinished, timeout=15_000):
+        wdg.run_mda()
+
+    tiffs = sorted((tmp_path / "acq").glob("*.ome.tiff"))
+    assert len(tiffs) == 2
+
+    ome = from_tiff(str(tiffs[0]))
+    external = [
+        td.uuid.file_name
+        for img in ome.images
+        for td in img.pixels.tiff_data_blocks
+        if td.uuid is not None and td.uuid.file_name
+    ]
+    assert len(ome.images) == images_per_file
+    assert len(external) == external_refs
+
+    # only the independent layout leaves every file self-describing
+    second = from_tiff(str(tiffs[1]))
+    if layout == "self-contained":
+        assert second.binary_only is None
+        assert len(second.images) == 1
+    elif layout == "master-tiff":
+        assert second.binary_only is not None
+    else:
+        assert second.binary_only is None
+
+
+def test_collapsible_section_icons_follow_the_theme(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Section header icons are themed, and re-theming does not drift.
+
+    Upstream draws them as uncolored QIconifyIcon pixmaps on labels, which
+    renders them black; the app's other icon sweeps only reach QAbstractButton
+    icons, so these need their own pass.
+    """
+    from pymmcore_widgets.mda._collapsible_mda import _ClickableLabel
+
+    set_theme(DARK_THEME)
+    wdg = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(wdg)
+
+    def icon_colors() -> set[tuple[float, float, float] | None]:
+        labels = [
+            label
+            for label in wdg._collapsible_tabs().findChildren(_ClickableLabel)
+            if (pm := label.pixmap()) is not None and not pm.isNull()
+        ]
+        assert labels, "no section header icons found"
+        return {_icon_avg_rgb(QIcon(label.pixmap()), QSize(24, 24)) for label in labels}
+
+    def wanted() -> tuple[int, int, int]:
+        c = qcolor(theme().text_secondary)
+        return (c.red(), c.green(), c.blue())
+
+    assert icon_colors() == {wanted()}
+
+    # re-applying must land on the new colour exactly, not tint a tinted pixmap
+    set_theme(LIGHT_THEME)
+    wdg._apply_themed_icons()
+    light = icon_colors()
+    assert light == {wanted()}
+
+    set_theme(DARK_THEME)
+    wdg._apply_themed_icons()
+    assert icon_colors() == {wanted()}
+    assert light != icon_colors(), "the two themes must differ, or this proves nothing"
+
+
+def test_section_icon_pass_leaves_deliberately_coloured_pixmaps_alone(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Only header icon labels are tinted; a coloured body pixmap must survive."""
+    set_theme(DARK_THEME)
+    wdg = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(wdg)
+
+    pixmap = QPixmap(16, 16)
+    pixmap.fill(QColor(229, 201, 96))
+    label = QLabel(wdg._collapsible_tabs())
+    label.setPixmap(pixmap)
+
+    wdg._apply_themed_icons()
+
+    after = label.pixmap()
+    assert after is not None
+    assert _icon_avg_rgb(QIcon(after), QSize(16, 16)) == (229.0, 201.0, 96.0)

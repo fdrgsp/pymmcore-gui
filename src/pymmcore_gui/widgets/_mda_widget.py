@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections import defaultdict
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
-from ome_writers import AcquisitionSettings, ScratchFormat
+from ome_writers import AcquisitionSettings, OmeTiffFormat, ScratchFormat
+from ome_writers._schema import _ome_stem_suffix
 from pymmcore_widgets import MDAWidgetCollapsible
 from pymmcore_widgets._icons import StandardIcon
 from pymmcore_widgets.mda import (
@@ -15,6 +16,7 @@ from pymmcore_widgets.mda import (
     CollapsibleCoreMDATabs,
     SectionMetrics,
 )
+from pymmcore_widgets.mda._collapsible_mda import _ClickableLabel
 from pymmcore_widgets.mda._core_channels import NO_LIGHT_SOURCE
 from pymmcore_widgets.useq_widgets._positions import MDAButton
 from superqt.iconify import QIconifyIcon
@@ -39,11 +41,13 @@ from pymmcore_gui._qt.QtCore import (
     QTimer,
     Signal,
 )
+from pymmcore_gui._qt.QtGui import QPainter, QPixmap
 from pymmcore_gui._qt.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QGridLayout,
+    QLabel,
     QMessageBox,
     QPushButton,
     QWidget,
@@ -67,6 +71,55 @@ if TYPE_CHECKING:
     from pymmcore_gui._qt.QtGui import QResizeEvent
 
     from ._active_channel_table import ActiveChannelTable
+
+# Qt's "no maximum", needed to undo a setFixedHeight before recomputing it.
+QWIDGETSIZE_MAX = (1 << 24) - 1
+
+# The subset of `OmeTiffFormat.multi_file_metadata` this GUI offers. "companion-file"
+# is deliberately left out: it splits metadata into a sidecar that is easy to lose,
+# with no advantage over "master-tiff".
+TiffLayout = Literal["self-contained", "master-tiff", "redundant"]
+
+# (label, multi_file_metadata, tooltip) for the OME-TIFF per-position layouts,
+# in the order they are offered. The first is the default.
+TIFF_LAYOUTS: tuple[tuple[str, TiffLayout, str], ...] = (
+    (
+        "Independent file per position",
+        "self-contained",
+        "<b>Each file stands alone.</b><br><br>A file describes only its own "
+        "position and refers to no other, so any file can be opened, moved, "
+        "renamed or deleted on its own, and the data store is created in constant "
+        "time per position.<br><br>Readers show separate single-position images "
+        "rather than one grouped acquisition. Each file still records its own "
+        "stage position, and for a plate its own well, field index and the full "
+        "plate layout — only the grouping is lost.",
+    ),
+    (
+        "Linked dataset, metadata in the first file",
+        "master-tiff",
+        "<b>One grouped acquisition, described once.</b><br><br>The first file "
+        "carries the metadata for every position; the rest hold pixels and point "
+        "back to it. Readers open all positions as a single acquisition, and the "
+        "data store is created as quickly as with independent files.<br><br>The "
+        "set must be kept together: a file on its own carries no metadata at all, "
+        "and losing the first file leaves the others undescribed.",
+    ),
+    (
+        "Linked dataset, metadata in every file",
+        "redundant",
+        "<b>One grouped acquisition, described in every file.</b><br><br>Every "
+        "file repeats the metadata for all positions, so any of them can serve as "
+        "the entry point and no single file is critical.<br><br>That copying makes "
+        "store creation slow down sharply as positions are added — noticeable past "
+        "~100, and tens of seconds for several hundred. The files still reference "
+        "each other, so one taken out of the folder is not usable on its own.",
+    ),
+)
+
+TIFF_LAYOUT_TOOLTIP = (
+    "How the per-position OME-TIFF files relate to each other. "
+    "Hover an entry for what it means."
+)
 
 
 def _align_bounds_grid(bounds: CoreXYBoundsControl) -> None:
@@ -201,6 +254,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
                 combo.removeItem(idx)
                 break
         combo.setCurrentText("ome-tiff")
+        self._install_ome_tiff_options()
 
         # Run/Pause/Cancel/Save/Load default to the "ghost" variant (no
         # visible box until hovered) — give them a persistently visible one,
@@ -991,8 +1045,36 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
             set_source_icon(btn, btn.icon())
             ensure_visible_icon(btn)
 
+    def _apply_themed_section_icons(self) -> None:
+        """Tint the collapsible section header icons to the app's icon color.
+
+        Upstream renders them as uncolored `QIconifyIcon` pixmaps on labels
+        (`_collapsible_mda.py`), so they come out black, and the app's icon
+        sweeps never reach them -- those recolor `QAbstractButton` icons, not
+        label pixmaps. Only `_ClickableLabel` is considered, which is the
+        header's own class: a plain `QLabel` in a section body may hold a
+        deliberately colored pixmap that must not be tinted.
+
+        Tinting is idempotent (`SourceIn` replaces RGB and keeps alpha), so
+        this can re-run on every theme change without drifting.
+        """
+        color = qcolor(theme().text_secondary)
+        for label in self._collapsible_tabs().findChildren(_ClickableLabel):
+            pixmap = label.pixmap()
+            if pixmap is None or pixmap.isNull():
+                continue  # the header's title/summary labels carry text, not icons
+            tinted = QPixmap(pixmap)
+            painter = QPainter(tinted)
+            painter.setCompositionMode(
+                QPainter.CompositionMode.CompositionMode_SourceIn
+            )
+            painter.fillRect(tinted.rect(), color)
+            painter.end()
+            label.setPixmap(tinted)
+
     def _apply_themed_icons(self, *_: object) -> None:
         """Apply the app's semantic green/red to every MDA action icon."""
+        self._apply_themed_section_icons()
         green = qcolor(theme().status_green).name()
         red = qcolor(theme().status_red).name()
 
@@ -1046,7 +1128,72 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
             self._apply_theme_metrics()
             self._apply_table_toolbar_icon_size()
 
+    # ------------------------- OME-TIFF layout option -------------------------
+
+    def _install_ome_tiff_options(self) -> None:
+        """Add the per-position file layout choice to the Saving section."""
+        self._tiff_layout_label = QLabel("Files:")
+        self._tiff_layout_combo = QComboBox()
+        self._tiff_layout_combo.setToolTip(TIFF_LAYOUT_TOOLTIP)
+        for idx, (label, mode, tip) in enumerate(TIFF_LAYOUTS):
+            self._tiff_layout_combo.addItem(label, userData=mode)
+            self._tiff_layout_combo.setItemData(idx, tip, Qt.ItemDataRole.ToolTipRole)
+        # TIFF_LAYOUTS is ordered, and its first entry is the default.
+        self._tiff_layout_combo.setCurrentIndex(0)
+
+        layout = cast("QGridLayout", self.save_info.layout())
+        layout.addWidget(self._tiff_layout_label, 2, 0)
+        layout.addWidget(self._tiff_layout_combo, 2, 1, 1, 3)
+        self.save_info._writer_combo.currentTextChanged.connect(
+            self._sync_ome_tiff_options
+        )
+        self._sync_ome_tiff_options()
+
+    def _sync_ome_tiff_options(self, *_: object) -> None:
+        """Show the layout choice only for the writer it applies to."""
+        visible = self._is_ome_tiff_selected()
+        self._tiff_layout_label.setVisible(visible)
+        self._tiff_layout_combo.setVisible(visible)
+        # SaveGroupBox pins its own height to avoid jiggling when toggled, so the
+        # pin has to be recomputed whenever a row appears or disappears.
+        self.save_info.setMinimumHeight(0)
+        self.save_info.setMaximumHeight(QWIDGETSIZE_MAX)
+        self.save_info.setFixedHeight(self.save_info.minimumSizeHint().height())
+
+    def _is_ome_tiff_selected(self) -> bool:
+        return self.save_info._writer_combo.currentText() == "ome-tiff"
+
+    def tiffLayout(self) -> TiffLayout:
+        """The selected `OmeTiffFormat.multi_file_metadata` mode."""
+        # every item's data came from TIFF_LAYOUTS, so it is one of the literals
+        return cast("TiffLayout", self._tiff_layout_combo.currentData())
+
+    def setTiffLayout(self, mode: TiffLayout) -> None:
+        """Select the layout whose `multi_file_metadata` mode is `mode`."""
+        idx = self._tiff_layout_combo.findData(mode)
+        if idx < 0:  # pragma: no cover
+            raise ValueError(f"Unknown OME-TIFF layout {mode!r}")
+        self._tiff_layout_combo.setCurrentIndex(idx)
+
     def prepare_mda(self) -> bool | SingleOutput | None:
         """Return a disk path or a scratch sink that supports live viewing."""
         output = super().prepare_mda()
-        return _memory_output_settings() if output is None else output
+        if isinstance(output, bool):
+            return output
+        if output is None:
+            return _memory_output_settings()
+        if isinstance(output, (str, Path)) and self._is_ome_tiff_selected():
+            # Always state the layout rather than letting any of them fall through
+            # to ome-writers' default: what the user picked here should not change
+            # meaning if that default is ever changed.
+            # Stating the format means stating its suffix too: OmeTiffFormat
+            # rebuilds the output path from `suffix`, whose default (.ome.tiff)
+            # would quietly rewrite a destination the user named .ome.tif.
+            suffix = _ome_stem_suffix(str(output))[1]
+            tiff_format = (
+                OmeTiffFormat(multi_file_metadata=self.tiffLayout(), suffix=suffix)
+                if suffix
+                else OmeTiffFormat(multi_file_metadata=self.tiffLayout())
+            )
+            return AcquisitionSettings(root_path=str(output), format=tiff_format)
+        return output

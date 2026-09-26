@@ -28,6 +28,8 @@ from ome_writers import (
 )
 
 from pymmcore_gui._array_viewer import (
+    _SAVE_FILTER_MAP,
+    _SAVE_FILTERS,
     MMArrayViewer,
     _enable_1based_slider_labels,
     _patch_dim_row_1based,
@@ -169,13 +171,23 @@ def test_synthesize_record_returns_none_for_single_axis(qtbot: QtBot) -> None:
     assert _synthesize_record(viewer) is None
 
 
+_TIFF_INDEPENDENT = next(
+    f for f, (fmt, lay) in _SAVE_FILTER_MAP.items() if lay == "self-contained"
+)
+_TIFF_MASTER = next(
+    f for f, (fmt, lay) in _SAVE_FILTER_MAP.items() if lay == "master-tiff"
+)
+_ZARR = next(f for f, (fmt, lay) in _SAVE_FILTER_MAP.items() if fmt == "ome-zarr")
+
+
 @pytest.mark.parametrize(
-    ("filter_str", "typed_name", "expected_suffix", "expected_fmt"),
+    ("filter_str", "typed_name", "expected_suffix", "expected_fmt", "expected_layout"),
     [
-        ("OME-TIFF (*.ome.tiff *.ome.tif)", "acq", ".ome.tiff", "ome-tiff"),
-        ("OME-TIFF (*.ome.tiff *.ome.tif)", "acq.ome.tif", ".ome.tif", "ome-tiff"),
-        ("OME-Zarr (*.ome.zarr)", "acq", ".ome.zarr", "ome-zarr"),
-        ("OME-Zarr (*.ome.zarr)", "acq.ome.zarr", ".ome.zarr", "ome-zarr"),
+        (_TIFF_INDEPENDENT, "acq", ".ome.tiff", "ome-tiff", "self-contained"),
+        (_TIFF_INDEPENDENT, "acq.ome.tif", ".ome.tif", "ome-tiff", "self-contained"),
+        (_TIFF_MASTER, "acq", ".ome.tiff", "ome-tiff", "master-tiff"),
+        (_ZARR, "acq", ".ome.zarr", "ome-zarr", None),
+        (_ZARR, "acq.ome.zarr", ".ome.zarr", "ome-zarr", None),
     ],
 )
 def test_prompt_save_path(
@@ -186,6 +198,7 @@ def test_prompt_save_path(
     typed_name: str,
     expected_suffix: str,
     expected_fmt: str,
+    expected_layout: str | None,
 ) -> None:
     typed_path = str(tmp_path / typed_name)
     monkeypatch.setattr(
@@ -195,9 +208,34 @@ def test_prompt_save_path(
     )
     result = _prompt_save_path(QWidget())
     assert result is not None
-    path, fmt = result
+    path, fmt, layout = result
     assert fmt == expected_fmt
+    assert layout == expected_layout
     assert str(path).endswith(expected_suffix)
+
+
+def test_save_filters_offer_every_layout() -> None:
+    """Every OME-TIFF layout is reachable from the dialog, independent first."""
+    entries = _SAVE_FILTERS.split(";;")
+    assert entries == list(_SAVE_FILTER_MAP)
+    assert _SAVE_FILTER_MAP[entries[0]] == ("ome-tiff", "self-contained")
+    tiff_layouts = [lay for fmt, lay in _SAVE_FILTER_MAP.values() if fmt == "ome-tiff"]
+    assert tiff_layouts == ["self-contained", "master-tiff", "redundant"]
+
+
+def test_unknown_filter_falls_back_to_the_first_entry(
+    monkeypatch: pytest.MonkeyPatch, qtbot: QtBot, tmp_path: Path
+) -> None:
+    """A filter we never offered must not silently pick an arbitrary layout."""
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        classmethod(lambda *a, **k: (str(tmp_path / "acq"), "Some Other (*.xyz)")),
+    )
+    result = _prompt_save_path(QWidget())
+    assert result is not None
+    _, fmt, layout = result
+    assert (fmt, layout) == ("ome-tiff", "self-contained")
 
 
 def test_prompt_save_path_cancelled(
