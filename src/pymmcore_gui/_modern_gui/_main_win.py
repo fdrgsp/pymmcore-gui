@@ -28,6 +28,7 @@ from pymmcore_gui._qt.QtGui import (
     QAction,
     QCloseEvent,
     QDragEnterEvent,
+    QDragLeaveEvent,
     QDragMoveEvent,
     QDropEvent,
     QEnterEvent,
@@ -386,6 +387,10 @@ class MainWindow(QMainWindow):
         # tearing down -- see closeEvent / _on_mda_running.
         self._close_pending = False
 
+        # Openable acquisitions carried by the drag currently over this
+        # window -- resolved once in dragEnterEvent, see there.
+        self._drag_paths: list[Path] = []
+
         self._notification_manager = NotificationManager(self)
         self._bell_button = NotificationBellButton(self._notification_manager, self)
         if app := QApplication.instance():
@@ -418,6 +423,10 @@ class MainWindow(QMainWindow):
         self._hardware = HardwareSetupPage(self._mmc)
         self._configurations = ConfigurationsPage(self._mmc)
         self._acquire = AcquirePage(self._mmc)
+        # A background open (see dropEvent) has no caller to raise into.
+        self._acquire.viewers.acquisitionOpenFailed.connect(
+            self._notification_manager.show_error_message
+        )
         self._stack.addWidget(self._installation)
         self._stack.addWidget(self._hardware)
         self._stack.addWidget(self._configurations)
@@ -878,36 +887,47 @@ class MainWindow(QMainWindow):
         operations, which don't use this MIME-based protocol at all) is left
         untouched, so it keeps working exactly as before.
         """
-        if a0 is not None and self._dropped_acquisition_paths(a0):
+        if a0 is None:
+            return
+        # Decided once per drag, not per mouse-move: recognizing an
+        # acquisition means opening the file and parsing its OME metadata,
+        # which costs milliseconds and grows with the position count. A
+        # drag's URLs cannot change between enter and drop, so dragMoveEvent
+        # and dropEvent reuse this answer.
+        self._drag_paths = self._dropped_acquisition_paths(a0)
+        if self._drag_paths:
             a0.acceptProposedAction()
 
     def dragMoveEvent(self, a0: QDragMoveEvent | None) -> None:
         """Mirror dragEnterEvent's acceptance so Qt keeps offering the drop."""
-        if a0 is not None and self._dropped_acquisition_paths(a0):
+        if a0 is not None and self._drag_paths:
             a0.acceptProposedAction()
 
+    def dragLeaveEvent(self, a0: QDragLeaveEvent | None) -> None:
+        self._drag_paths = []
+        super().dragLeaveEvent(a0)
+
     def dropEvent(self, a0: QDropEvent | None) -> None:
-        """Open every supported dropped path, one viewer tab per dataset."""
+        """Open every supported dropped path, one viewer tab per dataset.
+
+        Each dataset is opened on a worker thread, so a large multi-file
+        acquisition cannot freeze the window between the drop and its tab
+        appearing. The Acquire page is raised straight away rather than once
+        the first tab arrives, so the drop visibly did something.
+        """
         if a0 is None:
             return
-        paths = self._dropped_acquisition_paths(a0)
+        paths, self._drag_paths = self._drag_paths, []
         if not paths:
             return
         a0.acceptProposedAction()
 
-        opened = False
         for path in paths:
-            try:
-                self._acquire.viewers.open_acquisition(path)
-            except ValueError as e:
-                self._notification_manager.show_error_message(str(e))
-            else:
-                opened = True
-        if opened:
-            self._activate_acquire()
+            self._acquire.viewers.open_acquisition_async(path)
+        self._activate_acquire()
 
     @staticmethod
-    def _dropped_acquisition_paths(a0: QDragMoveEvent | QDropEvent) -> list[Path]:
+    def _dropped_acquisition_paths(a0: QDragEnterEvent) -> list[Path]:
         """Return this drag/drop event's local file/directory URLs that we can open."""
         mime = a0.mimeData()
         if mime is None or not mime.hasUrls():

@@ -19,8 +19,10 @@ from ome_writers import (
 )
 from pymmcore_widgets.useq_widgets import PYMMCW_METADATA_KEY
 
+import pymmcore_gui._modern_gui._acquire_viewers as acquire_viewers_module
 from pymmcore_gui._modern_gui._acquire import AcquirePage
 from pymmcore_gui._modern_gui._main_win import MainWindow
+from pymmcore_gui._qt.QtCore import QThread
 from pymmcore_gui._qt.QtWidgets import QFileDialog, QMenu, QMessageBox
 
 if TYPE_CHECKING:
@@ -531,3 +533,72 @@ def test_save_cancelled_leaves_dock_title_unchanged(
 
     assert dw.windowTitle() == "orig2.ome.tiff"
     assert viewer.source_title == "orig2.ome.tiff"
+
+
+# --------------------------- background opening ---------------------------
+
+
+def test_open_acquisition_async_creates_tab_off_the_gui_thread(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    seq = useq.MDASequence(channels=_ch("DAPI"))
+    path = _write_acquisition(seq, tmp_path / "async.ome.tiff")
+
+    gui_thread = QThread.currentThread()
+    open_threads: list[QThread | None] = []
+    real_open = acquire_viewers_module._open_acquisition
+
+    def _record_thread(p: object) -> object:
+        open_threads.append(QThread.currentThread())
+        return real_open(p)
+
+    with patch.object(acquire_viewers_module, "_open_acquisition", _record_thread):
+        page.viewers.open_acquisition_async(path)
+        qtbot.waitUntil(lambda: bool(page.viewers._records), timeout=5000)
+
+    assert open_threads and open_threads[0] is not gui_thread
+    titles = [dw.windowTitle() for dw in page.viewers._records]
+    assert path.name in titles
+
+
+def test_open_acquisition_async_reports_failure_instead_of_raising(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    unsupported = tmp_path / "not_a_dataset"
+    unsupported.mkdir()
+
+    with qtbot.waitSignal(page.viewers.acquisitionOpenFailed, timeout=5000) as blocker:
+        page.viewers.open_acquisition_async(unsupported)
+    assert "Not a supported acquisition" in blocker.args[0]
+    assert not page.viewers._records
+
+
+def test_drag_enter_resolves_paths_once_for_the_whole_drag(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    """Recognizing an acquisition costs real file I/O, so it happens once.
+
+    `dragMoveEvent` fires on every mouse-move; re-probing there would open
+    and re-parse each dropped dataset's OME metadata dozens of times a
+    second.
+    """
+    win = MainWindow(mmcore=mmcore)
+    qtbot.addWidget(win)
+    path = _write_acquisition(
+        useq.MDASequence(channels=_ch("DAPI")), tmp_path / "drag.ome.tiff"
+    )
+    event = _FakeDropEvent([path])
+
+    probe = Mock(return_value=[path])
+    with patch.object(MainWindow, "_dropped_acquisition_paths", staticmethod(probe)):
+        win.dragEnterEvent(event)  # type: ignore[arg-type]
+        assert event.accepted
+        for _ in range(10):
+            win.dragMoveEvent(event)  # type: ignore[arg-type]
+        assert probe.call_count == 1
+
+    assert win._drag_paths == [path]

@@ -71,6 +71,12 @@ class GridAxisLayout:
     order: GridOrder
     n_flat: int
     raw_position_axis: int | None
+    # How many of the `n_flat` planned slots the source actually holds. Equal
+    # to `n_flat` for a live run and for any complete dataset; smaller only
+    # for a reopened, truncated one (a cancelled run). It can never be a
+    # *gap*: `ome_writers`' `skip()` writes zero-filled placeholders rather
+    # than omitting a slot, so a short source is always a prefix.
+    n_stored: int = 0
     # True when the *sequence* has a grid somewhere (global or per-position)
     # that could not be exposed as independent sliders (ragged, well-plate,
     # or otherwise unsupported) -- meaningful only when `kind` is NONE. Lets
@@ -101,10 +107,12 @@ class GridAxisLayout:
     def flat_index(self, p: int | None, g: int | None) -> int:
         """Map a logical `(p, g)` pair to the writer's flattened position slot.
 
-        Raises `IndexError` when `p`/`g` is out of the layout's overall range,
-        or (RAGGED only) when `g` is within the overall range but exceeds
-        this specific position's own tile count -- callers must treat that
-        case as "no data here", never substitute a different position's tile.
+        Raises `IndexError` for any planned slot that holds no frame:
+        `p`/`g` outside the layout's overall range, a RAGGED `g` that is
+        within the overall range but past this position's own tile count, or
+        a slot beyond a truncated source's stored extent. Callers must treat
+        all of these as "no data here" and never substitute another slot's
+        tile.
         """
         if self.kind is GridAxisLayoutKind.NONE:
             raise ValueError("flat_index() is not valid for a GridAxisLayoutKind.NONE")
@@ -112,7 +120,7 @@ class GridAxisLayout:
             g = 0 if g is None else g
             if not 0 <= g < self.n_tiles:
                 raise IndexError(f"g={g} out of range for n_tiles={self.n_tiles}")
-            return g
+            return self._stored(g)
         p = 0 if p is None else p
         g = 0 if g is None else g
         if not 0 <= p < self.n_positions:
@@ -123,12 +131,21 @@ class GridAxisLayout:
                     f"g={g} out of range for position {p} "
                     f"(has {self.tile_counts[p]} tiles)"
                 )
-            return self.offsets[p] + g
+            return self._stored(self.offsets[p] + g)
         if not 0 <= g < self.n_tiles:
             raise IndexError(f"g={g} out of range for n_tiles={self.n_tiles}")
         if self.order is GridOrder.POSITION_FIRST:
-            return p * self.n_tiles + g
-        return g * self.n_positions + p
+            return self._stored(p * self.n_tiles + g)
+        return self._stored(g * self.n_positions + p)
+
+    def _stored(self, flat: int) -> int:
+        """`flat`, or `IndexError` if the source stops short of it."""
+        if flat >= self.n_stored:
+            raise IndexError(
+                f"planned slot {flat} is beyond the {self.n_stored} slot(s) "
+                "this source actually holds"
+            )
+        return flat
 
     @classmethod
     def none(cls, *, has_grid: bool = False) -> GridAxisLayout:
@@ -200,15 +217,17 @@ class GridAxisLayout:
         else:
             expected_n_flat = n_positions * n_tiles
 
-        if settings.dimensions[pos_dim_idx].count != expected_n_flat:
-            # Integrity cross-check against the storage dimension actually
-            # built -- catches any disagreement between our own derivation
-            # and what ome-writers (or a reopened file) really contains,
-            # e.g. a grid plan whose fov size resolves differently than
-            # expected, or a partially-written acquisition. `count` is used
-            # rather than `settings.positions`, which falls back to a
-            # single synthetic Position whenever the dimension carries no
-            # coords (as a reopened file's derived settings often do).
+        # Integrity cross-check against the storage dimension actually built.
+        # A source may hold *fewer* slots than planned (a reopened, cancelled
+        # run truncates its tail, and `skip()` placeholders mean it can only
+        # ever be a prefix) -- those trailing slots keep their identity and
+        # read blank. More slots than planned means our derivation disagrees
+        # with what the writer really built, so fall back. `count` is used
+        # rather than `settings.positions`, which collapses to a single
+        # synthetic Position whenever the dimension carries no coords (as a
+        # reopened file's derived settings often do).
+        n_stored = settings.dimensions[pos_dim_idx].count
+        if n_stored is None or not 0 < n_stored <= expected_n_flat:
             return cls.none(has_grid=True)
 
         return cls(
@@ -218,6 +237,7 @@ class GridAxisLayout:
             order=order,
             n_flat=expected_n_flat,
             raw_position_axis=pos_dim_idx,
+            n_stored=n_stored,
             tile_counts=tile_counts or (),
             offsets=offsets,
         )

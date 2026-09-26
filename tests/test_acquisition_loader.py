@@ -7,6 +7,7 @@ Fixtures are built through the real `ome_writers` path, with a global
 
 from __future__ import annotations
 
+import warnings
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -451,5 +452,66 @@ def test_reopened_grid_without_sequence_metadata_keeps_flat_p(
         assert loaded.sequence is None
         assert loaded.display_wrapper is loaded.wrapper
         assert loaded.display_wrapper.sizes()["p"] == 6
+    finally:
+        loaded.close()
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_reopened_cancelled_grid_keeps_planned_extents(
+    tmp_path: Path, fmt: str
+) -> None:
+    """A run cancelled mid-grid still shows the whole planned p x g.
+
+    Only 5 of 9 planned locations were written. The slider extents come from
+    the *plan*, so every acquired tile keeps the identity it was acquired
+    under and the 4 unwritten ones read blank -- rather than the grid
+    collapsing to a smaller rectangle and silently re-labelling tiles.
+    `ome_writers.skip()` writes zero-filled placeholders, so a short source
+    is always a truncated prefix and never has a gap in the middle.
+    """
+    seq = useq.MDASequence(
+        grid_plan=useq.GridRowsColumns(rows=1, columns=3),
+        stage_positions=tuple(useq.AbsolutePosition(x=0, y=i * 9000) for i in range(3)),
+    )
+    ext = "ome.tiff" if fmt == "ome-tiff" else "ome.zarr"
+    # frame i is filled with i + 1, so "written" is distinguishable from blank
+    dims = useq_to_acquisition_settings(seq, 8, 8, pixel_size_um=0.325)["dimensions"]
+    settings = AcquisitionSettings(
+        dimensions=tuple(dims),
+        dtype="uint16",
+        root_path=str(tmp_path / f"cancelled.{ext}"),
+        format=_fmt(fmt),
+    )
+    summary = {
+        "format": "summary-dict",
+        "version": "1.0",
+        "mda_sequence": seq.model_dump(mode="json", exclude_unset=True),
+    }
+    with create_stream(settings) as stream:
+        stream.set_global_metadata("pymmcore_plus", {"summary_metadata": summary})
+        for i in range(5):
+            stream.append(np.full((8, 8), i + 1, dtype="uint16"))
+
+    with warnings.catch_warnings():
+        # tifffile warns about the companion files a cancelled run never wrote
+        warnings.simplefilter("ignore")
+        loaded = open_acquisition(settings.output_path)
+    try:
+        display = loaded.display_wrapper
+        assert dict(display.sizes()) == {"p": 3, "g": 3, "y": 8, "x": 8}
+        written = {
+            (p, g): _grid_frame(display, p, g) for p in range(3) for g in range(3)
+        }
+        assert written == {
+            (0, 0): 1,
+            (0, 1): 2,
+            (0, 2): 3,
+            (1, 0): 4,
+            (1, 1): 5,
+            (1, 2): 0,  # 0 == never acquired
+            (2, 0): 0,
+            (2, 1): 0,
+            (2, 2): 0,
+        }
     finally:
         loaded.close()
