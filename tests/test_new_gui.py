@@ -6464,3 +6464,33 @@ def test_section_icon_pass_leaves_deliberately_coloured_pixmaps_alone(
     after = label.pixmap()
     assert after is not None
     assert _icon_avg_rgb(QIcon(after), QSize(16, 16)) == (229.0, 201.0, 96.0)
+
+
+@pytest.mark.parametrize("name", ["acq.ome.tif", "acq.ome.tiff"])
+def test_tiff_layout_preserves_the_chosen_extension(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path, name: str
+) -> None:
+    """Stating the format must not rewrite the destination the user named.
+
+    `OmeTiffFormat` rebuilds the output path from its own `suffix` field, whose
+    default is ".ome.tiff" -- so a destination named ".ome.tif" would silently
+    come back with the other spelling.
+    """
+    from ome_writers import AcquisitionSettings
+
+    set_theme(DARK_THEME)
+    wdg = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(wdg)
+    wdg.save_info.setValue(
+        {
+            "save_dir": str(tmp_path),
+            "save_name": name,
+            "format": "ome-tiff",
+            "should_save": True,
+        }
+    )
+
+    output = wdg.prepare_mda()
+    assert isinstance(output, AcquisitionSettings)
+    assert output.format.suffix == f".{name.split('.', 1)[1]}"
+    assert Path(output.output_path).name == name
