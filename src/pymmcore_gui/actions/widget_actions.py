@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Annotated, TypeVar, cast
+from typing import TYPE_CHECKING, Annotated, Protocol, TypeVar, cast
 
 from pymmcore_plus import CMMCorePlus
 
@@ -17,7 +17,6 @@ from ._action_info import ActionKey, WidgetActionInfo, _ensure_isinstance
 if TYPE_CHECKING:
     import pymmcore_widgets as pmmw
 
-    from pymmcore_gui._main_window import MicroManagerGUI
     from pymmcore_gui._qt.QtCore import QObject
     from pymmcore_gui.widgets._exception_log import ExceptionLog
     from pymmcore_gui.widgets._mm_console import MMConsole
@@ -47,20 +46,42 @@ class WidgetAction(ActionKey):
 # ######################## Functions that create widgets #########################
 
 
-def _get_mm_main_window(obj: QObject) -> MicroManagerGUI | None:
-    if obj.objectName() == "MicroManagerGUI":
-        return cast("MicroManagerGUI", obj)
+# The two application windows, by objectName: the classic dock-based
+# `MicroManagerGUI` and the modern `MainWindow`. Both must be recognized --
+# a widget built from the actions below can be hosted by either, and
+# resolving only the classic name left the modern GUI silently falling back
+# to the process-wide singleton core instead of its own.
+_MAIN_WINDOW_NAMES = frozenset({"MicroManagerGUI", "pyMMGUI"})
+
+
+class _MainWindowLike(Protocol):
+    """What these factories actually need from whichever window hosts them.
+
+    Deliberately narrower than `MicroManagerGUI`: the modern window is not
+    one, and has no `get_widget`, so anything beyond the core must not be
+    reached through here.
+    """
+
+    @property
+    def mmcore(self) -> CMMCorePlus | None: ...
+
+
+def _get_mm_main_window(obj: QObject) -> _MainWindowLike | None:
+    if obj.objectName() in _MAIN_WINDOW_NAMES:
+        return cast("_MainWindowLike", obj)
     parent = obj.parent()
     while parent is not None:
-        if parent.objectName() == "MicroManagerGUI":
-            return cast("MicroManagerGUI", parent)
+        if parent.objectName() in _MAIN_WINDOW_NAMES:
+            return cast("_MainWindowLike", parent)
         parent = parent.parent()
     return None
 
 
 def _get_core(obj: QObject) -> CMMCorePlus:
-    if win := _get_mm_main_window(obj):
-        return win.mmcore
+    # `mmcore` is optional on the modern window, so a window with no core of
+    # its own still falls back to the singleton.
+    if (win := _get_mm_main_window(obj)) is not None and (core := win.mmcore):
+        return core
     return CMMCorePlus.instance()
 
 

@@ -1,8 +1,9 @@
 """ndv `DataWrapper` for OME-TIFF files and pyMM multi-position directories.
 
-`ome_writers`/pyMM writes one `<stem>_p###.ome.tiff` file per position for a
-multi-position acquisition; this wrapper opens either that directory or a
-single OME-TIFF file.
+`ome_writers`/pyMM writes one file per *stored* position for a multi-position
+acquisition, named `<stem>[_<well>]_p###[_r###_c###].ome.tiff` -- the
+`_r###_c###` tile suffix appears when a stage position holds more than one
+grid tile. This wrapper opens either that directory or a single OME-TIFF file.
 
 Reads are lazy at the single-plane level: only the page(s) needed to satisfy
 a given `isel()` request are ever decoded, so opening a large acquisition
@@ -41,17 +42,64 @@ if TYPE_CHECKING:
 
     from tifffile import TiffPageSeries
 
-_MULTIPOS_RE = re.compile(r"^(?P<stem>.+)_p(?P<index>\d+)\.ome\.tiff?$", re.IGNORECASE)
+_MULTIPOS_RE = re.compile(
+    r"^(?P<stem>.+?)_p(?P<index>\d+)(?P<tile>_r\d+_c\d+)?\.ome\.tiff?$",
+    re.IGNORECASE,
+)
 
 
 def _multiposition_files(directory: Path) -> list[Path]:
-    """Return this directory's `*_p###.ome.tiff` files, sorted by position index."""
+    """Return this directory's per-position OME-TIFF files.
+
+    Filename order is *not* storage order once a grid is involved -- a snake
+    traversal visits `(row 1, col 2)` before `(row 1, col 0)`, so sorting by
+    `r###_c###` would silently relabel tiles. This ordering is only used to
+    pick a file to open and to sanity-check the set on disk; the real order
+    comes from the OME-XML (see `_ome_file_order`).
+    """
     matches = [
-        (int(m["index"]), p)
+        (int(m["index"]), m["tile"] or "", p)
         for p in directory.iterdir()
         if p.is_file() and (m := _MULTIPOS_RE.match(p.name))
     ]
-    return [p for _, p in sorted(matches)]
+    return [p for *_, p in sorted(matches)]
+
+
+def _position_label(filename: str) -> str:
+    """The `###[_r###_c###]` part of a position file's name, or the whole stem."""
+    if m := _MULTIPOS_RE.match(filename):
+        return f"{m['index']}{m['tile'] or ''}"
+    return filename  # pragma: no cover
+
+
+def _ome_file_order(xml_str: str | None) -> list[str]:
+    """Per-position filenames in the OME graph's own `<Image>` order.
+
+    A multi-file OME-TIFF set repeats the whole `<OME>` graph in every file,
+    one `<Image>` per stored position **in acquisition order**, each naming
+    its own file via `<TiffData><UUID FileName="...">`. That order is what
+    `tifffile` exposes as `tf.series[i]`, so it -- not the directory listing
+    -- is what the `p` axis's labels have to follow. Returns `[]` when the
+    metadata is missing or doesn't name exactly one file per image.
+    """
+    if not xml_str:
+        return []
+    with contextlib.suppress(ET.ParseError):
+        root = ET.fromstring(xml_str)
+        names: list[str] = []
+        for image in root.iter():
+            if not image.tag.endswith("Image"):
+                continue
+            uuids = [
+                name
+                for el in image.iter()
+                if el.tag.endswith("UUID") and (name := el.get("FileName"))
+            ]
+            if len(uuids) != 1:
+                return []
+            names.append(uuids[0])
+        return names
+    return []  # pragma: no cover
 
 
 def _resolve_axis(indexer: int | slice, size: int) -> tuple[list[int], bool]:
@@ -154,7 +202,7 @@ class OMETiffWrapper(DataWrapper):
         if self._is_multiposition:
             position_files = _multiposition_files(path)
             if not position_files:
-                raise ValueError(f"No `*_p###.ome.tiff` files found in {path}")
+                raise ValueError(f"No per-position `*.ome.tiff` files found in {path}")
             # Any sibling file exposes every position via tf.series[p] -- see
             # the module docstring. Opening the first one is enough.
             self._tf = tifffile.TiffFile(position_files[0])
@@ -166,10 +214,15 @@ class OMETiffWrapper(DataWrapper):
             first_series = self._tf.series[0]
             inner_dims = tuple(d.lower() for d in first_series.dims)
             self._dims = ("p", *inner_dims)
-            position_labels = [
-                m["index"] for p in position_files if (m := _MULTIPOS_RE.match(p.name))
-            ]
-            coords: dict[Hashable, Sequence] = {"p": position_labels}
+            # Label each position from the file the OME graph assigns to it,
+            # in that graph's order -- which is the same order tifffile
+            # exposes as tf.series[i], and the order the data was acquired in.
+            ordered = _ome_file_order(self._tf.ome_metadata)
+            if len(ordered) == len(self._tf.series):
+                labels = [_position_label(name) for name in ordered]
+            else:
+                labels = [_position_label(p.name) for p in position_files]
+            coords: dict[Hashable, Sequence] = {"p": labels}
             coords.update(_coords_from_series(first_series, inner_dims))
         else:
             self._tf = tifffile.TiffFile(path)

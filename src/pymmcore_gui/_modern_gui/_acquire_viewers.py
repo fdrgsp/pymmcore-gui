@@ -21,7 +21,7 @@ from pymmcore_gui._ndv_viewers import (
     _StreamSignalBridge,
 )
 from pymmcore_gui._qt.QtAds import CDockWidget, DockWidgetArea
-from pymmcore_gui._qt.QtCore import QObject, QTimer, Signal
+from pymmcore_gui._qt.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal
 from pymmcore_gui._qt.QtWidgets import QSplitter
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
 
@@ -35,8 +35,40 @@ if TYPE_CHECKING:
     from pymmcore_plus.metadata import FrameMetaV1, SummaryMetaV1
     from useq import MDAEvent, MDASequence
 
+    from pymmcore_gui._acquisition_loader import LoadedAcquisition
     from pymmcore_gui._qt.QtAds import CDockAreaWidget, CDockManager
     from pymmcore_gui._qt.QtWidgets import QWidget
+
+
+class _OpenAcquisitionSignals(QObject):
+    """GUI-thread delivery point for one `_OpenAcquisitionTask`'s result."""
+
+    finished = Signal(object)  # LoadedAcquisition
+    failed = Signal(str)
+    done = Signal()  # always, after finished/failed -- for cleanup
+
+
+class _OpenAcquisitionTask(QRunnable):
+    """Open one acquisition on a worker thread.
+
+    Only the reader construction happens here; every Qt object is built on
+    the GUI thread from `signals.finished`.
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        super().__init__()
+        self._path = path
+        self.signals = _OpenAcquisitionSignals()
+
+    def run(self) -> None:
+        try:
+            loaded = _open_acquisition(self._path)
+        except Exception as e:
+            self.signals.failed.emit(str(e))
+        else:
+            self.signals.finished.emit(loaded)
+        finally:
+            self.signals.done.emit()
 
 
 def _runner_sink(runner: Any) -> SinkProtocol | None:
@@ -115,6 +147,8 @@ class AcquireViewersManager(QObject):
     previewClosed = Signal()
     mdaViewerCreated = Signal(object)
     mdaViewerClosed = Signal(object)
+    # str -- why a background `open_acquisition_async` could not open a path.
+    acquisitionOpenFailed = Signal(str)
     # (MDASequence, source_title) -- emitted when the user picks "Re-use
     # MDA…" on either a live MDA viewer or a reopened acquisition's viewer.
     reuseMDARequested = Signal(object, str)
@@ -141,6 +175,12 @@ class AcquireViewersManager(QObject):
         # refuses to drop a sink while it's being written to, so the release
         # is retried once sequenceFinished confirms the run is done.
         self._pending_release: SinkProtocol | None = None
+
+        # Background acquisition opening -- see open_acquisition_async. One
+        # at a time, so a multi-file drop can't thrash the disk.
+        self._open_pool = QThreadPool(self)
+        self._open_pool.setMaxThreadCount(1)
+        self._pending_opens: set[_OpenAcquisitionSignals] = set()
 
         self.preview: NDVPreview | None = None
         self._preview_dock: CDockWidget | None = None
@@ -276,8 +316,42 @@ class AcquireViewersManager(QObject):
             from `_acquisition_loader.open_acquisition` for the caller (e.g.
             a drag-and-drop handler) to report without crashing.
         """
-        loaded = _open_acquisition(path)
+        return self._viewer_for_loaded(_open_acquisition(path))
 
+    def open_acquisition_async(self, path: str | Path) -> None:
+        """Open `path` off the GUI thread, then add its tab when it's ready.
+
+        Enumerating a multi-file acquisition, parsing its OME metadata and
+        constructing readers is seconds of work for a large dataset -- doing
+        it inline would freeze the window mid-drop. Failures arrive as
+        `acquisitionOpenFailed` rather than an exception, since there is no
+        longer a caller to raise into.
+
+        Opens run one at a time: dropping ten datasets at once should not
+        put ten readers into contention over the same disk, especially while
+        an acquisition may be writing to it.
+        """
+        task = _OpenAcquisitionTask(path)
+        signals = task.signals
+        # Created here, so it belongs to the GUI thread and the worker's
+        # emissions are delivered as queued events. Held onto because
+        # QThreadPool frees the QRunnable as soon as run() returns.
+        self._pending_opens.add(signals)
+        signals.finished.connect(self._on_acquisition_loaded)
+        signals.failed.connect(self.acquisitionOpenFailed)
+        signals.done.connect(lambda s=signals: self._pending_opens.discard(s))
+        self._open_pool.start(task)
+
+    def _on_acquisition_loaded(self, loaded: LoadedAcquisition) -> None:
+        """Build the viewer for a background-loaded acquisition (GUI thread)."""
+        if not self._connected:
+            # Torn down while this was loading: nothing will ever own the
+            # reader, so release it here rather than leak the file handles.
+            loaded.close()
+            return
+        self._viewer_for_loaded(loaded)
+
+    def _viewer_for_loaded(self, loaded: LoadedAcquisition) -> ndv.ArrayViewer:
         viewer = MMArrayViewer(loaded.wrapper)
         widget = viewer.widget()
         # Keyed to the resolved path (not a random id), so re-dropping the

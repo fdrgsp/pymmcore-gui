@@ -356,3 +356,46 @@ def test_record_for_multiposition_file_without_sequence_metadata(
         assert by_name["p"].count == 2
     finally:
         loaded.close()
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_gridded_acquisition_reopens_in_acquisition_order(
+    tmp_path: Path, fmt: str
+) -> None:
+    """A tiled acquisition can be reopened, with its positions in write order.
+
+    `ome_writers` names a grid's per-position units after the tile's row and
+    column (`_p###_r###_c###` files, `{pos}_{row}_{col}` zarr groups) rather
+    than the plain `_p###` an ungridded run produces. Neither reader used to
+    recognize that shape at all, so a tile scan could not be reopened.
+
+    Snake traversal is what makes the ordering load-bearing: the second row
+    is acquired right-to-left, so the names do not sort into acquisition
+    order and only the OME metadata knows the truth. Frame `i` was written
+    into flat position `i`.
+    """
+    seq = useq.MDASequence(
+        grid_plan=useq.GridRowsColumns(
+            rows=2, columns=3, mode=useq.OrderMode.row_wise_snake
+        ),
+        stage_positions=(
+            useq.AbsolutePosition(x=0, y=0),
+            useq.AbsolutePosition(x=0, y=9000),
+        ),
+    )
+    ext = "ome.tiff" if fmt == "ome-tiff" else "ome.zarr"
+    out = _write_with_sequence(seq, fmt, tmp_path / f"grid.{ext}", n_frames=12)
+
+    assert supports_path(out)
+    loaded = open_acquisition(out)
+    try:
+        wrapper = loaded.wrapper
+        assert wrapper.dims == ("p", "y", "x")
+        assert wrapper.sizes()["p"] == 12
+        vals = [
+            int(wrapper.isel({0: p, 1: slice(None), 2: slice(None)}).ravel()[0])
+            for p in range(12)
+        ]
+        assert vals == list(range(12))
+    finally:
+        loaded.close()

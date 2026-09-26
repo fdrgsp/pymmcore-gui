@@ -37,7 +37,6 @@ from pymmcore_gui._qt.QtWidgets import (
     QPushButton,
     QWidget,
 )
-from pymmcore_gui.actions.widget_actions import WidgetAction, _get_mm_main_window
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -59,9 +58,9 @@ class _KeyFilter(QObject):
     """Compatibility seam for events vispy's canvas would otherwise swallow.
 
     Installed on both the ndv widget and its canvas (see
-    `MMArrayViewer.__init__`), so it catches key presses and right-clicks
-    aimed at the canvas even though vispy's own event handling isn't
-    reachable through the normal QWidget/eventFilter chain.
+    `MMArrayViewer.__init__`), so it catches right-clicks aimed at the canvas
+    even though vispy's own event handling isn't reachable through the normal
+    QWidget/eventFilter chain.
     """
 
     def __init__(self, viewer: MMArrayViewer) -> None:
@@ -76,17 +75,7 @@ class _KeyFilter(QObject):
             global_pos = getattr(a1, "globalPos", None)
             if global_pos is not None:
                 return self._viewer._show_context_menu(global_pos())
-            return False
 
-        event_key = getattr(a1, "key", lambda: None)
-        if a1.type() == QEvent.Type.KeyPress and event_key() == Qt.Key.Key_M:
-            stats_key = getattr(WidgetAction, "STATS_TABLE", None)
-            if stats_key is not None and (main_win := _get_mm_main_window(a0)):
-                with suppress(KeyError):
-                    table = main_win.get_widget(stats_key)
-                    if (data := self._viewer._get_roi_data()) is not None:
-                        table.add_stats(data)
-            return True
         return False
 
 
@@ -417,36 +406,6 @@ class MMArrayViewer(ndv.ArrayViewer):
             QMessageBox.critical(
                 self.widget(), "Save failed", f"Failed to save data:\n\n{e}"
             )
-
-    def _get_roi_data(self) -> np.ndarray | None:
-        """Extract data under the current ROI bounding box."""
-        if self.data is None or (roi := self.roi) is None:
-            return None
-        bbox = roi.bounding_box
-        if bbox == ((0, 0), (0, 0)):
-            return None
-
-        try:
-            resolved = self._resolved
-        except AttributeError:
-            return None
-        if len(resolved.visible_axes) < 2:
-            return None
-
-        (x0, y0), (x1, y1) = bbox
-        x0i, y0i = max(int(np.floor(x0)), 0), max(int(np.floor(y0)), 0)
-        x1i, y1i = int(np.ceil(x1)), int(np.ceil(y1))
-        if x1i <= x0i or y1i <= y0i:
-            return None
-
-        nd_index = dict(resolved.current_index)
-        nd_index[resolved.visible_axes[-2]] = slice(y0i, y1i)
-        nd_index[resolved.visible_axes[-1]] = slice(x0i, x1i)
-
-        ndim = len(self.data.shape)
-        idx = tuple(nd_index.get(i, slice(None)) for i in range(ndim))
-        arr = np.asarray(self.data[idx])
-        return arr if arr.size > 0 else None
 
 
 def _luminance(color: QColor) -> float:
