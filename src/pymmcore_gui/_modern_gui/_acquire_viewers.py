@@ -285,7 +285,10 @@ class AcquireViewersManager(QObject):
         """
         loaded = _open_acquisition(path)
 
-        viewer = MMArrayViewer(loaded.wrapper)
+        # `display_wrapper` may expose separate p/g sliders; `loaded.record`
+        # stays bound to the raw, flattened wrapper so Save re-exports the
+        # canonical storage axes -- see _acquisition_loader._display_wrapper.
+        viewer = MMArrayViewer(loaded.display_wrapper)
         widget = viewer.widget()
         # Keyed to the resolved path (not a random id), so re-dropping the
         # exact same file is idempotent about naming; two different files

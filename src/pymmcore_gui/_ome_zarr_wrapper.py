@@ -13,13 +13,14 @@ from __future__ import annotations
 
 import contextlib
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeGuard, cast
 
 import numpy as np
 from ndv.models import DataWrapper
 
 if TYPE_CHECKING:
-    from collections.abc import Hashable, Mapping, Sequence
+    from collections.abc import Hashable, Sequence
 
     from yaozarrs import ZarrGroup
     from yaozarrs._zarr import ZarrArray
@@ -147,8 +148,17 @@ class OMEZarrWrapper(DataWrapper):
         """Initialize bioformats2raw layout."""
         if "OME" in self._group:
             ome_group = cast("ZarrGroup", self._group["OME"])
-            series = ome_group.metadata.attributes.get("series")
+            attrs = ome_group.metadata.attributes
+            # NGFF v0.5 nests everything under an "ome" key; v0.4 is flat.
+            nested = attrs.get("ome")
+            series = attrs.get("series") or (
+                nested.get("series") if isinstance(nested, Mapping) else None
+            )
             if series:
+                # Authoritative acquisition order -- a grid's tiles are named
+                # "{pos}_{row}_{col}" but visited in the grid's own traversal
+                # order, so a snake row ends ..._1_2, _1_1, _1_0. Sorting the
+                # group names instead would silently relabel those tiles.
                 self._positions = list(series)
         if not self._positions:
             # Find numbered subgroups (0, 1, 2, ...)

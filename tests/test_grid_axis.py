@@ -443,3 +443,28 @@ def test_wrapper_ragged_blank_fill_never_shows_another_position() -> None:
 
 def test_wrapper_supports_never_autodetects() -> None:
     assert GridAxisDataWrapper.supports(object()) is False
+
+
+def test_build_position_without_own_grid_inherits_the_global_one() -> None:
+    # ome_writers' priority is subsequence grid > global grid > no grid, so
+    # the plain position here really holds 3 tiles, not 1 -- making this a
+    # regular 2x3, not a ragged (3, 1).
+    seq = useq.MDASequence(
+        grid_plan=useq.GridRowsColumns(rows=3, columns=1),
+        stage_positions=(
+            useq.AbsolutePosition(
+                x=0,
+                y=0,
+                sequence=useq.MDASequence(
+                    grid_plan=useq.GridRowsColumns(rows=3, columns=1)
+                ),
+            ),
+            useq.AbsolutePosition(x=0, y=5000),
+        ),
+    )
+    settings = _settings(seq)
+    assert settings.dimensions[0].count == 6
+    layout = GridAxisLayout.build(seq, settings)
+    assert layout.kind is GridAxisLayoutKind.REGULAR
+    assert (layout.n_positions, layout.n_tiles) == (2, 3)
+    assert layout.flat_index(1, 0) == 3

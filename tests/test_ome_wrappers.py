@@ -255,3 +255,32 @@ def test_ome_tiff_wrapper_close_releases_handle(tmp: Path) -> None:
     assert w._tf.filehandle.closed is False
     w.close()
     assert w._tf.filehandle.closed is True
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_gridded_multiposition_reads_in_acquisition_order(tmp: Path, fmt: str) -> None:
+    """A grid's tiles land on the flat `p` axis in the order they were written.
+
+    Both backends name a gridded acquisition's per-position units after the
+    tile's grid row/column (`_r###_c###` files, `{pos}_{row}_{col}` zarr
+    groups). A snake traversal visits the second row right-to-left, so those
+    names sort into a *different* order than they were acquired in; the
+    authoritative order lives in the OME metadata (`<Image>` order for TIFF,
+    the `OME/series` attribute for Zarr) and is what the `p` axis must follow.
+    """
+    seq = useq.MDASequence(
+        grid_plan=useq.GridRowsColumns(rows=2, columns=3, mode="row_wise_snake"),
+        stage_positions=(useq.Position(x=0, y=0), useq.Position(x=0, y=9000)),
+    )
+    dims = useq_to_acquisition_settings(seq, 8, 8, pixel_size_um=0.325)["dimensions"]
+    ext = "ome.tiff" if fmt == "ome-tiff" else "ome.zarr"
+    out = _write(dims, fmt, tmp / f"grid.{ext}", n_frames=12)
+
+    assert WRAPPER_TYPE[fmt].supports(Path(out))
+    w = _create(out)
+    try:
+        assert w.sizes()["p"] == 12
+        vals = [w.isel(_full_frame(w.dims, position=p))[0, 0] for p in range(12)]
+        assert vals == list(range(12))
+    finally:
+        w.close()

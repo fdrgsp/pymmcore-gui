@@ -200,12 +200,15 @@ class GridAxisLayout:
         else:
             expected_n_flat = n_positions * n_tiles
 
-        resolved_positions = settings.positions
-        if len(resolved_positions) != expected_n_flat:
-            # Integrity cross-check against the sink's actual resolved
-            # positions -- catches any disagreement between our own
-            # derivation and what ome-writers actually built (e.g. a grid
-            # plan whose fov size resolves differently than expected).
+        if settings.dimensions[pos_dim_idx].count != expected_n_flat:
+            # Integrity cross-check against the storage dimension actually
+            # built -- catches any disagreement between our own derivation
+            # and what ome-writers (or a reopened file) really contains,
+            # e.g. a grid plan whose fov size resolves differently than
+            # expected, or a partially-written acquisition. `count` is used
+            # rather than `settings.positions`, which falls back to a
+            # single synthetic Position whenever the dimension carries no
+            # coords (as a reopened file's derived settings often do).
             return cls.none(has_grid=True)
 
         return cls(
@@ -266,8 +269,15 @@ class GridAxisLayout:
         # At least one position carries its own grid subsequence (uniform,
         # ragged, or mixed with plain positions). Per-position subsequence
         # grids always flatten position-first in ome_writers, regardless of
-        # axis_order. A plain (ungridded) position counts as one tile.
-        tile_counts = tuple(len(list(g)) if g is not None else 1 for g in sub_grids)
+        # axis_order. A position without its own grid inherits the global
+        # one when there is one (ome_writers' subsequence-grid > global-grid
+        # > no-grid priority); only with no grid at all does it count as a
+        # single tile.
+        global_plan = sequence.grid_plan  # == has_global_grid, but narrows
+        n_global = len(list(global_plan)) if global_plan is not None else 1
+        tile_counts = tuple(
+            len(list(g)) if g is not None else n_global for g in sub_grids
+        )
         if len(set(tile_counts)) == 1:
             # Uniform: the simple arithmetic case applies.
             n_tiles = tile_counts[0]
@@ -292,6 +302,12 @@ class GridAxisDataWrapper(DataWrapper[Any]):
 
     Exposes logical `p`/`g` axes instead, with no additional pixel copy for a
     single `(p, g)` selection.
+
+    `raw_view` is either a live `ome_writers` `StreamView` (tuple-indexable)
+    or another `DataWrapper` -- e.g. a reopened acquisition's lazy
+    `OMETiffWrapper`/`OMEZarrWrapper`, which reads through `isel()` instead.
+    Both are indexed with a plain **int** for the flattened position axis, so
+    neither takes the `np.stack` path a length-1 slice would trigger.
     """
 
     # Never auto-detected by DataWrapper.create(); always constructed
@@ -303,22 +319,31 @@ class GridAxisDataWrapper(DataWrapper[Any]):
             raise ValueError("GridAxisDataWrapper requires a non-NONE layout")
         super().__init__(raw_view)
         self._layout = layout
+        self._source_wrapper = raw_view if isinstance(raw_view, DataWrapper) else None
         raw_dims = tuple(raw_view.dims)
         self._raw_dims = raw_dims
         pos_ax = layout.raw_position_axis
         assert pos_ax is not None
         self._raw_position_axis = pos_ax
 
+        # Axis labels are normalized to `str` here (and in `coords`): ndv
+        # only ever matches them by name, and the exposed "p"/"g" labels this
+        # wrapper splices in are strings, so mixing in a raw non-str
+        # `Hashable` key would make `dims` and `coords` disagree.
         exposed = layout.exposed_axes
         self._dims: tuple[str, ...] = (
-            raw_dims[:pos_ax] + exposed + raw_dims[pos_ax + 1 :]
+            tuple(str(d) for d in raw_dims[:pos_ax])
+            + exposed
+            + tuple(str(d) for d in raw_dims[pos_ax + 1 :])
         )
         self._p_axis = self._dims.index("p") if "p" in exposed else None
         self._g_axis = self._dims.index("g") if "g" in exposed else None
         # {logical wrapper-axis index: raw-view axis index} for every axis
         # that is *not* the position axis -- passed straight through.
         self._passthrough_raw_axis: dict[int, int] = {
-            self._dims.index(name): i for i, name in enumerate(raw_dims) if i != pos_ax
+            self._dims.index(str(name)): i
+            for i, name in enumerate(raw_dims)
+            if i != pos_ax
         }
 
     @classmethod
@@ -343,9 +368,10 @@ class GridAxisDataWrapper(DataWrapper[Any]):
 
     @property
     def coords(self) -> Mapping[Hashable, Sequence[Any]]:
-        out = dict(self._data.coords)
         pos_name = self._raw_dims[self._raw_position_axis]
-        out.pop(pos_name, None)
+        out: dict[Hashable, Sequence[Any]] = {
+            str(k): v for k, v in self._data.coords.items() if k != pos_name
+        }
         # p/g extents are fixed at construction from the *planned* layout,
         # never the live/growing raw coords -- a partial acquisition must
         # never look like a smaller grid.
@@ -382,11 +408,10 @@ class GridAxisDataWrapper(DataWrapper[Any]):
             # substitute another position's real tile.
             probe_key = list(raw_key)
             probe_key[self._raw_position_axis] = 0
-            probe = np.asarray(self._data[tuple(probe_key)])
-            result = np.zeros_like(probe)
+            result = np.zeros_like(self._read_raw(probe_key))
         else:
             raw_key[self._raw_position_axis] = flat
-            result = np.asarray(self._data[tuple(raw_key)])
+            result = self._read_raw(raw_key)
 
         # Restore each retained (non-collapsed) p/g axis, smallest wrapper-
         # axis index first, so each expand_dims' `axis=` stays correct
@@ -399,6 +424,12 @@ class GridAxisDataWrapper(DataWrapper[Any]):
             if not collapse:
                 result = np.expand_dims(result, axis=my_axis)
         return result
+
+    def _read_raw(self, raw_key: list[Any]) -> np.ndarray:
+        """Read one request from the wrapped source, in its own axis order."""
+        if (src := self._source_wrapper) is not None:
+            return np.asarray(src.isel(dict(enumerate(raw_key))))
+        return np.asarray(self._data[tuple(raw_key)])
 
     @staticmethod
     def _resolve_singleton(req: int | slice | None) -> tuple[int, bool]:

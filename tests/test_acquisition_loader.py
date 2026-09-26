@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 import pytest
@@ -354,5 +354,102 @@ def test_record_for_multiposition_file_without_sequence_metadata(
         assert by_name["p"].type == "position"
         assert by_name["p"].scale is None  # never a spurious scale for position
         assert by_name["p"].count == 2
+    finally:
+        loaded.close()
+
+
+def _grid_frame(wrapper: Any, p: int, g: int) -> int:
+    """The single pixel value stored at logical `(p, g)` of a `_write_with_sequence`."""
+    idx: dict[int, int | slice] = {}
+    for i, name in enumerate(wrapper.dims):
+        if name in ("y", "x"):
+            idx[i] = slice(None)
+        else:
+            idx[i] = {"p": p, "g": g}.get(str(name), 0)
+    return int(wrapper.isel(idx).ravel()[0])
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_reopened_grid_acquisition_exposes_separate_p_and_g(
+    tmp_path: Path, fmt: str
+) -> None:
+    """A snake grid over two stage positions reopens with independent p/g sliders.
+
+    Snake traversal is the case that catches ordering shortcuts: the second
+    row is visited right-to-left, so neither the directory listing nor the
+    `_r###_c###`/`{pos}_{row}_{col}` names are in acquisition order. Frame `i`
+    was written into flat slot `i`, so logical `(p, g)` must read `p * 6 + g`.
+    """
+    seq = useq.MDASequence(
+        grid_plan=useq.GridRowsColumns(rows=2, columns=3, mode="row_wise_snake"),
+        stage_positions=(
+            useq.AbsolutePosition(x=0, y=0),
+            useq.AbsolutePosition(x=0, y=9000),
+        ),
+    )
+    ext = "ome.tiff" if fmt == "ome-tiff" else "ome.zarr"
+    out = _write_with_sequence(seq, fmt, tmp_path / f"grid.{ext}", n_frames=12)
+
+    loaded = open_acquisition(out)
+    try:
+        assert loaded.wrapper.dims == ("p", "y", "x")
+        display = loaded.display_wrapper
+        assert display.dims == ("p", "g", "y", "x")
+        assert dict(display.sizes()) == {"p": 2, "g": 6, "y": 8, "x": 8}
+        for p in range(2):
+            for g in range(6):
+                assert _grid_frame(display, p, g) == p * 6 + g
+
+        # Export stays bound to the canonical flattened storage axis.
+        assert loaded.record is not None
+        by_name = {d.name: d for d in loaded.record.settings.dimensions}
+        assert "g" not in by_name
+        assert by_name["p"].count == 12
+    finally:
+        loaded.close()
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_reopened_acquisition_without_a_grid_keeps_flat_p(
+    tmp_path: Path, fmt: str
+) -> None:
+    seq = useq.MDASequence(
+        stage_positions=(
+            useq.AbsolutePosition(x=0, y=0),
+            useq.AbsolutePosition(x=0, y=9000),
+        ),
+    )
+    ext = "ome.tiff" if fmt == "ome-tiff" else "ome.zarr"
+    out = _write_with_sequence(seq, fmt, tmp_path / f"flat.{ext}", n_frames=2)
+
+    loaded = open_acquisition(out)
+    try:
+        assert loaded.display_wrapper is loaded.wrapper
+        assert loaded.display_wrapper.dims == ("p", "y", "x")
+    finally:
+        loaded.close()
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_reopened_grid_without_sequence_metadata_keeps_flat_p(
+    tmp_path: Path, fmt: str
+) -> None:
+    """A grid axis is never inferred from position count alone."""
+    seq = useq.MDASequence(
+        grid_plan=useq.GridRowsColumns(rows=1, columns=3),
+        stage_positions=(
+            useq.AbsolutePosition(x=0, y=0),
+            useq.AbsolutePosition(x=0, y=9000),
+        ),
+    )
+    dims = useq_to_acquisition_settings(seq, 8, 8, pixel_size_um=0.325)["dimensions"]
+    ext = "ome.tiff" if fmt == "ome-tiff" else "ome.zarr"
+    out = _write_bare(dims, fmt, tmp_path / f"bare.{ext}", n_frames=6)
+
+    loaded = open_acquisition(out)
+    try:
+        assert loaded.sequence is None
+        assert loaded.display_wrapper is loaded.wrapper
+        assert loaded.display_wrapper.sizes()["p"] == 6
     finally:
         loaded.close()

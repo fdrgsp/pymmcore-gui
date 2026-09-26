@@ -26,6 +26,11 @@ from typing import TYPE_CHECKING, Any, cast
 
 from useq import MDASequence
 
+from pymmcore_gui._grid_axis import (
+    GridAxisDataWrapper,
+    GridAxisLayout,
+    GridAxisLayoutKind,
+)
 from pymmcore_gui._mda_export import AcquisitionRecord, record_from_wrapper
 from pymmcore_gui._ome_tiff_wrapper import OMETiffWrapper
 from pymmcore_gui._ome_zarr_wrapper import OMEZarrWrapper
@@ -65,10 +70,16 @@ class LoadedAcquisition:
     Parameters
     ----------
     wrapper : DataWrapper
-        The lazy, ndv-compatible data. Pass this directly as the `data`
-        argument to `ndv.ArrayViewer`/`MMArrayViewer` -- `DataWrapper.create`
-        returns an already-a-`DataWrapper` argument unchanged, so no data is
-        re-read or re-opened.
+        The lazy, ndv-compatible data, exactly as stored: one flattened `p`
+        axis, as `ome-writers` wrote it. This is the canonical view -- use it
+        for anything about *storage* (export, metadata, closing).
+    display_wrapper : DataWrapper
+        What to actually show: `wrapper` itself, or a `GridAxisDataWrapper`
+        around it when the recovered sequence proves the stored `p` axis is a
+        flattened position/grid pair. Pass this as the `data` argument to
+        `ndv.ArrayViewer`/`MMArrayViewer` -- `DataWrapper.create` returns an
+        already-a-`DataWrapper` argument unchanged, so no data is re-read or
+        re-opened.
     sequence : useq.MDASequence | None
         The acquisition's original sequence, recovered from on-disk
         metadata, or `None` if none was found or it failed to validate.
@@ -88,6 +99,7 @@ class LoadedAcquisition:
     """
 
     wrapper: DataWrapper
+    display_wrapper: DataWrapper
     sequence: MDASequence | None
     record: AcquisitionRecord | None
     source_path: Path
@@ -130,16 +142,40 @@ def open_acquisition(path: str | Path) -> LoadedAcquisition:
         raise ValueError(f"Not a supported acquisition: {path}")
 
     sequence, summary_meta = _recover_summary_metadata(wrapper)
+    # Built from the raw wrapper, never the display one: an AcquisitionRecord
+    # describes *storage*, and re-exporting must reproduce the same flattened
+    # position axis the file already has -- not synthetic p/g display axes.
     record = record_from_wrapper(
         wrapper, _WrapperView(wrapper), summary_meta=summary_meta
     )
     return LoadedAcquisition(
         wrapper=wrapper,
+        display_wrapper=_display_wrapper(wrapper, sequence, record),
         sequence=sequence,
         record=record,
         source_path=path,
         title=path.name,
     )
+
+
+def _display_wrapper(
+    wrapper: DataWrapper, sequence: MDASequence | None, record: AcquisitionRecord | None
+) -> DataWrapper:
+    """Wrap `wrapper` for display when its stored `p` axis is really `p` x `g`.
+
+    The recovered sequence is the only authoritative signal -- a grid axis is
+    never inferred from the position count or the filename. `GridAxisLayout.
+    build` additionally cross-checks its derived extent against the position
+    dimension actually on disk, so a partial/cancelled acquisition (fewer
+    stored positions than planned) keeps the flattened `p` axis rather than
+    advertising tiles that were never written.
+    """
+    if sequence is None or record is None:
+        return wrapper
+    layout = GridAxisLayout.build(sequence, record.settings)
+    if layout.kind is GridAxisLayoutKind.NONE:
+        return wrapper
+    return GridAxisDataWrapper(wrapper, layout)
 
 
 def _recover_summary_metadata(
