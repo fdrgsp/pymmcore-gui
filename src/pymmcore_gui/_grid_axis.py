@@ -403,12 +403,11 @@ class GridAxisDataWrapper(DataWrapper[Any]):
         except IndexError:
             # RAGGED only in practice: g is within the slider's overall
             # range but exceeds this specific position's own tile count.
-            # There is no real frame here -- read a real, valid slot purely
-            # to get a correctly-shaped/typed array, then blank it. Never
-            # substitute another position's real tile.
-            probe_key = list(raw_key)
-            probe_key[self._raw_position_axis] = 0
-            result = np.zeros_like(self._read_raw(probe_key))
+            # There is no real frame here, so nothing is read at all -- the
+            # shape is derived from the request instead. Never substitute
+            # another position's real tile, and never pay for a decode just
+            # to learn the shape of a frame that was never acquired.
+            result = np.zeros(self._blank_shape(raw_key), dtype=self.dtype)
         else:
             raw_key[self._raw_position_axis] = flat
             result = self._read_raw(raw_key)
@@ -424,6 +423,22 @@ class GridAxisDataWrapper(DataWrapper[Any]):
             if not collapse:
                 result = np.expand_dims(result, axis=my_axis)
         return result
+
+    def _blank_shape(self, raw_key: list[Any]) -> tuple[int, ...]:
+        """Shape `_read_raw(raw_key)` would return, without reading anything.
+
+        Raw extents are re-read per call rather than cached: a live
+        `StreamView` grows along `t` as the acquisition proceeds, and a
+        missing tile still has to match the shape its acquired siblings
+        return *now*.
+        """
+        coords = self._data.coords
+        shape: list[int] = []
+        for axis, key in enumerate(raw_key):
+            if axis == self._raw_position_axis or not isinstance(key, slice):
+                continue  # an int index collapses its axis away
+            shape.append(len(range(*key.indices(len(coords[self._raw_dims[axis]])))))
+        return tuple(shape)
 
     def _read_raw(self, raw_key: list[Any]) -> np.ndarray:
         """Read one request from the wrapped source, in its own axis order."""

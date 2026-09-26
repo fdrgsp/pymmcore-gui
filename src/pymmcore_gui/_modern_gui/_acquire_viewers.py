@@ -26,9 +26,9 @@ from pymmcore_gui._ndv_viewers import (
     _extract_scales,
     _follow_index,
     _LiveRefresh,
-    _RaggedFallbackCounter,
     _runner_sink,
     _StreamSignalBridge,
+    _UnplannedSlotCounter,
 )
 from pymmcore_gui._qt.QtAds import CDockWidget, DockWidgetArea
 from pymmcore_gui._qt.QtCore import QObject, QTimer, Signal
@@ -77,8 +77,8 @@ class _ViewerRecord:
     refresh: _LiveRefresh | None = None
     pending_index: dict[str, int] | None = None
     dims_gate: _DimsChangeGate | None = None
-    ragged_fallback: _RaggedFallbackCounter = field(
-        default_factory=_RaggedFallbackCounter
+    unplanned_slots: _UnplannedSlotCounter = field(
+        default_factory=_UnplannedSlotCounter
     )
     # True only for a viewer created by _on_sequence_started (a live MDA
     # run). Gates whether mdaViewerCreated/mdaViewerClosed fire for it --
@@ -422,7 +422,7 @@ class AcquireViewersManager(QObject):
             return
 
         record.pending_index = _follow_index(
-            event, record.layout, record.ragged_fallback
+            event, record.layout, record.unplanned_slots
         )
         if record.refresh is not None:
             record.refresh.request()
@@ -514,7 +514,10 @@ class AcquireViewersManager(QObject):
         with suppress(Exception):
             events.sequenceFinished.disconnect(self._sequence_finished_callback)
         for record in self._records.values():
-            self.mdaViewerClosed.emit(record.viewer)
+            # Same pairing rule as _on_viewer_closed: only a live run's
+            # viewer was ever announced via mdaViewerCreated.
+            if record.is_live:
+                self.mdaViewerClosed.emit(record.viewer)
             record.disconnect()
             if record.refresh is not None:
                 record.refresh.stop()

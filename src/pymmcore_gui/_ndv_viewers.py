@@ -43,17 +43,18 @@ def _runner_sink(runner: Any) -> SinkProtocol | None:
     return cast("SinkProtocol | None", getattr(runner, "_sink", None))
 
 
-class _RaggedFallbackCounter:
+class _UnplannedSlotCounter:
     """Arrival-order `(p, g) -> flattened-p` counter for unsupported layouts.
 
-    Used only for layouts with no planned mapping (ragged or otherwise
-    unsupported grid combinations). `GridAxisLayout.build()` deliberately
-    declines to build a planned mapping
-    for these layouts (a rectangular table would misrepresent them), so there
-    is no way to compute the correct flattened slot from `(p, g)` alone. This
-    reproduces the pre-existing arrival-order behavior as a fallback only for
-    this unsupported path -- it is not a source of storage truth, and (like
-    the code it replaces) is not reliable across `sink.skip()`.
+    Used only where `GridAxisLayout.build()` produced no planned mapping at
+    all (`GridAxisLayoutKind.NONE` with `has_grid`) -- a sequence whose grid
+    it could not derive or could not reconcile with the storage dimension.
+    Genuinely ragged grids are *not* this case: they get a real planned
+    mapping (`GridAxisLayoutKind.RAGGED`) and never reach here. Without a
+    plan there is no way to compute the right flattened slot from `(p, g)`,
+    so this reproduces the pre-existing arrival-order behavior -- which is
+    not a source of storage truth, and (like the code it replaces) is not
+    reliable across `sink.skip()`.
     """
 
     def __init__(self) -> None:
@@ -67,7 +68,7 @@ class _RaggedFallbackCounter:
 
 
 def _follow_index(
-    event: MDAEvent, layout: GridAxisLayout, fallback: _RaggedFallbackCounter
+    event: MDAEvent, layout: GridAxisLayout, fallback: _UnplannedSlotCounter
 ) -> dict[str, int]:
     """Derive a viewer's display index for `event` from the planned layout.
 
@@ -188,7 +189,7 @@ class NDVViewersManager(QObject):
         self._refresh: _LiveRefresh | None = None
         self._pending_index: dict[str, int] | None = None
         self._dims_gate: _DimsChangeGate | None = None
-        self._ragged_fallback = _RaggedFallbackCounter()
+        self._unplanned_slots = _UnplannedSlotCounter()
         # Snapshot of the active run's sink settings/summary metadata, so
         # MMArrayViewer._save_data() can export canonical data even for the
         # classic GUI (mirrors AcquireViewersManager's AcquisitionRecord).
@@ -241,7 +242,7 @@ class NDVViewersManager(QObject):
         self._layout = GridAxisLayout.none()
         self._pending_index = None
         self._dims_gate = None
-        self._ragged_fallback.reset()
+        self._unplanned_slots.reset()
         self._current_acquisition = None
         if self._refresh is not None:
             self._refresh.stop()
@@ -269,7 +270,7 @@ class NDVViewersManager(QObject):
         if not self._follow_acquisition:
             return
 
-        self._pending_index = _follow_index(event, self._layout, self._ragged_fallback)
+        self._pending_index = _follow_index(event, self._layout, self._unplanned_slots)
         if self._refresh is not None:
             self._refresh.request()
 
