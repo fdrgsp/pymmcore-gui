@@ -8,6 +8,7 @@ from functools import partial
 from typing import TYPE_CHECKING, cast
 
 from pymmcore_plus import CMMCorePlus
+from pymmcore_widgets.useq_widgets import PYMMCW_METADATA_KEY
 
 from pymmcore_gui._array_viewer import (
     ensure_visible_icon,
@@ -352,6 +353,7 @@ class AcquirePage(TabPage):
                 self._panel_bar.button_for(info.key).setChecked(True)
 
         self._mda.mdaLockChanged.connect(self.set_mda_lock)
+        self._viewers.reuseMDARequested.connect(self._on_reuse_mda_requested)
 
         self._snap_btn.snapRequested.connect(self._mda.apply_active_channel_for_capture)
         self._snap_btn.snapRequested.connect(self._viewers.ensure_preview)
@@ -400,6 +402,46 @@ class AcquirePage(TabPage):
     def mda_widget(self) -> MemoryMDAWidget:
         """Return the MDA controls embedded in this Acquire page."""
         return self._mda
+
+    @property
+    def viewers(self) -> AcquireViewersManager:
+        """Return the manager for this page's Preview/MDA/reopened viewers."""
+        return self._viewers
+
+    def _on_reuse_mda_requested(
+        self, sequence: useq.MDASequence, source_title: str
+    ) -> None:
+        """Confirm, then replace the MDA editor's parameters with `sequence`.
+
+        Declining (the safe default) or an MDA already running leaves the
+        current MDA parameters untouched.
+        """
+        if self._mda_locked:
+            return
+        reply = QMessageBox.question(
+            self,
+            "Replace MDA parameters?",
+            f"Replace the current MDA parameters with those used to acquire "
+            f"{source_title!r}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        # setValue() blanks the save destination and unchecks saving when the
+        # incoming sequence carries no save-info metadata of its own (e.g. it
+        # was recovered from a file that never embedded any) -- snapshot the
+        # current destination/format and restore it in that case, so reusing
+        # a sequence never changes where -- or whether -- the next run saves.
+        had_save_info = bool(sequence.metadata.get(PYMMCW_METADATA_KEY))
+        save_info = dict(self._mda.save_info.value())
+        self._mda.setValue(sequence)
+        if not had_save_info:
+            self._mda.save_info.setValue(save_info)
+
+        self._panel_bar.button_for(PanelKey.MDA).setChecked(True)
+        self._mda_dock.setAsCurrentTab()
 
     def _ensure_preview_for_roi_auto_snap(self, *_args: object) -> None:
         """Create the lazy Preview before Camera ROI performs an Auto Snap."""

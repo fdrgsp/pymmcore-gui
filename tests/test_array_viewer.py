@@ -29,6 +29,8 @@ from ome_writers import (
 
 from pymmcore_gui._array_viewer import (
     MMArrayViewer,
+    _enable_1based_slider_labels,
+    _patch_dim_row_1based,
     _prompt_save_path,
     _synthesize_record,
 )
@@ -38,6 +40,7 @@ from pymmcore_gui._qt.QtWidgets import QFileDialog, QMessageBox, QWidget
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from ndv.views._qt._array_view import DimRow, _QDimsSliders
     from pytestqt.qtbot import QtBot
 
 
@@ -52,7 +55,16 @@ class _FakeViewer:
         scales: dict[str, float] | None = None,
     ) -> None:
         self.data = data
-        self.data_wrapper = SimpleNamespace(sizes=lambda: sizes, dtype=dtype)
+        self.data_wrapper = SimpleNamespace(
+            sizes=lambda: sizes,
+            dtype=dtype,
+            # Real DataWrapper.axis_scales()/coords derive physical scale and
+            # channel/position labels straight from the data; this fake has
+            # neither, so scale comes only from the (required) override and
+            # every axis reports plain, unlabeled range coords.
+            axis_scales=lambda: {},
+            coords={name: range(size) for name, size in sizes.items()},
+        )
         self.display_model = SimpleNamespace(scales=scales or {})
         self._widget = QWidget()
 
@@ -220,7 +232,7 @@ def test_export_with_overwrite_prompt_writes_new_file(
     # only keeps its parent alive via that same C++ ownership -- a throwaway
     # widget with no surviving Python reference gets GC'd out from under it.
     host = QWidget()
-    fake = SimpleNamespace(widget=lambda: host)
+    fake = SimpleNamespace(widget=lambda: host, _on_saved=None)
 
     MMArrayViewer._export_with_overwrite_prompt(fake, record, path, "ome-zarr")  # type: ignore[arg-type]
 
@@ -233,7 +245,7 @@ def test_export_with_overwrite_prompt_asks_before_clobbering(
     path = tmp_path / "existing.ome.zarr"
     record = _record_with_one_frame(tmp_path)
     host = QWidget()
-    fake = SimpleNamespace(widget=lambda: host)
+    fake = SimpleNamespace(widget=lambda: host, _on_saved=None)
     MMArrayViewer._export_with_overwrite_prompt(fake, record, path, "ome-zarr")  # type: ignore[arg-type]
     first_write = json.loads((path / "zarr.json").read_text())
 
@@ -252,3 +264,168 @@ def test_export_with_overwrite_prompt_asks_before_clobbering(
     record3 = _record_with_one_frame(tmp_path)
     MMArrayViewer._export_with_overwrite_prompt(fake, record3, path, "ome-zarr")  # type: ignore[arg-type]
     assert (path / "zarr.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# 1-based slider label tests
+# ---------------------------------------------------------------------------
+
+
+def _make_dims_sliders(n_frames: int = 5) -> tuple[_QDimsSliders, DimRow]:
+    """Return a (dims_sliders, dim_row) pair with a freshly created DimRow."""
+    from ndv.views._qt._array_view import DimRow, _QDimsSliders
+
+    dims = _QDimsSliders()
+    dims.create_sliders({"t": range(n_frames)})
+    rows = dims.findChildren(DimRow)
+    return dims, rows[0]
+
+
+def test_patch_dim_row_1based_display(qtbot: QtBot) -> None:
+    """Index label text and out-of label become 1-based after patching."""
+    dims, row = _make_dims_sliders(5)
+    row.slider.setValue(0)
+
+    _patch_dim_row_1based(dims, row)
+
+    assert row.index_label.text() == "1"
+    assert row.out_of.text() == "/ 5"
+
+
+def test_patch_dim_row_1based_slider_value_shows_1based(qtbot: QtBot) -> None:
+    """Moving the slider updates the label to the 1-based position."""
+    dims, row = _make_dims_sliders(5)
+    _patch_dim_row_1based(dims, row)
+
+    row.slider.setValue(3)  # 0-based index 3 → should display 4
+
+    assert row.index_label.text() == "4"
+
+
+def test_patch_dim_row_1based_still_notifies_index_changed(qtbot: QtBot) -> None:
+    """Moving the slider must still propagate to `_QDimsSliders.currentIndexChanged`.
+
+    That signal (wired in `_QDimsSliders.create_sliders` via
+    `dim_row.slider.valueChanged.connect(self.currentIndexChanged)`) is what
+    actually tells the viewer to redraw the displayed frame -- it rides on
+    the same `QLabeledSlider._on_slider_value_changed` callback the 1-based
+    patch touches, so a naive patch (disconnecting that callback instead of
+    only adding to it) makes the label lie: it updates while the displayed
+    frame silently stops changing.
+    """
+    dims, row = _make_dims_sliders(5)
+    _patch_dim_row_1based(dims, row)
+
+    seen: list[object] = []
+    dims.currentIndexChanged.connect(lambda: seen.append(dims.current_index()))
+    row.slider.setValue(2)
+
+    assert seen == [{"t": 2}]
+
+
+def test_patch_dim_row_1based_label_edit_moves_to_correct_frame(qtbot: QtBot) -> None:
+    """Typing a 1-based frame number in the label navigates to the right frame."""
+    dims, row = _make_dims_sliders(5)
+    _patch_dim_row_1based(dims, row)
+
+    # Simulate the user typing "3" (1-based frame 3 = 0-based index 2).
+    row.index_label.valueEdited.emit(3.0)
+
+    assert row.slider.value() == 2
+
+
+def test_patch_dim_row_1based_idempotent(qtbot: QtBot) -> None:
+    """Repeated _patch_dim_row_1based calls don't double-offset the display.
+
+    The total label is the part that used to drift: it was derived by parsing
+    the label's own text and adding one, so a row re-patched without an
+    intervening `create_sliders` reset counted 5 -> 6 -> 7.
+    """
+    dims, row = _make_dims_sliders(5)
+    for _ in range(3):
+        _patch_dim_row_1based(dims, row)
+
+    row.slider.setValue(2)
+    assert row.index_label.text() == "3"
+    assert row.out_of.text() == "/ 5"
+
+
+def test_patch_dim_row_1based_range_grows(qtbot: QtBot) -> None:
+    """Out-of label and editable range stay correct when the coord range extends."""
+    from ndv.views._qt._array_view import DimRow, _QDimsSliders
+
+    dims = _QDimsSliders()
+    fake_widget = SimpleNamespace(dims_sliders=dims)
+    _enable_1based_slider_labels(fake_widget)
+    dims.create_sliders({"t": range(3)})
+
+    # Extend range to 8 frames (as happens when more MDA frames arrive).
+    dims.create_sliders({"t": range(8)})
+    rows = dims.findChildren(DimRow)
+    assert rows[0].out_of.text() == "/ 8"
+    assert rows[0].index_label._max == 8
+
+
+@pytest.mark.parametrize("n_frames", [10, 100, 1000])
+def test_patch_dim_row_1based_labels_sized_for_1based_number(
+    qtbot: QtBot, n_frames: int
+) -> None:
+    """Labels are re-sized for the 1-based count, which is one digit wider.
+
+    ndv gives both labels a *fixed* width computed from the 0-based maximum,
+    so at every power of ten the 1-based number needs a digit that isn't
+    there.  SliderLabel reacts to that by switching to scientific notation:
+    frame 100 of 100 rendered as "1e+02".
+    """
+    dims, row = _make_dims_sliders(n_frames)
+    _patch_dim_row_1based(dims, row)
+    row.slider.setValue(n_frames - 1)
+
+    assert row.index_label.text() == str(n_frames)
+    assert row.out_of.text() == f"/ {n_frames}"
+    for label in (row.index_label, row.out_of):
+        needed = label.fontMetrics().horizontalAdvance(label.text())
+        assert label.width() >= needed
+
+
+def test_patch_dim_row_1based_nonzero_start_range(qtbot: QtBot) -> None:
+    """A coord range that doesn't start at 0 still displays 1-based positions.
+
+    No coord path in this codebase produces one today (every axis is either a
+    plain list or `range(size)`), but the patch derives everything from
+    `slider.minimum()`/`.maximum()` rather than assuming the minimum is 0, so
+    a slider running 5..14 (10 frames, raw values 5-14) should read "1..10",
+    not "6..15".
+    """
+    from ndv.views._qt._array_view import DimRow, _QDimsSliders
+
+    dims = _QDimsSliders()
+    dims.create_sliders({"z": range(5, 15)})
+    row = dims.findChildren(DimRow)[0]
+    _patch_dim_row_1based(dims, row)
+
+    assert row.index_label.text() == "1"
+    assert row.out_of.text() == "/ 10"
+
+    row.slider.setValue(14)  # last raw value -> last position (10)
+    assert row.index_label.text() == "10"
+
+    # Typing position "3" should land on raw value 5 + (3 - 1) = 7.
+    row.index_label.valueEdited.emit(3.0)
+    assert row.slider.value() == 7
+
+
+def test_enable_1based_slider_labels_wraps_create_sliders(qtbot: QtBot) -> None:
+    """_enable_1based_slider_labels installs the 1-based patch on new rows too."""
+    from ndv.views._qt._array_view import DimRow, _QDimsSliders
+
+    dims = _QDimsSliders()
+    fake_widget = SimpleNamespace(dims_sliders=dims)
+    _enable_1based_slider_labels(fake_widget)
+
+    dims.create_sliders({"t": range(4)})
+    rows = dims.findChildren(DimRow)
+    assert len(rows) == 1
+    rows[0].slider.setValue(0)
+    assert rows[0].index_label.text() == "1"
+    assert rows[0].out_of.text() == "/ 4"
