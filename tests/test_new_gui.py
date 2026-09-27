@@ -4953,6 +4953,40 @@ def test_acquire_layout_round_trip(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert page_b.panel_widget(PanelKey.CONSOLE) is None
 
 
+def test_reopening_a_panel_left_behind_by_a_layout_switch_stays_docked(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A panel not part of the just-applied layout must not float when reopened.
+
+    Repro: open Stages (docks normally), then live-switch to a saved layout
+    that never had Stages open -- restore_layout()'s underlying
+    CDockManager.restoreState() can't find Stages in that layout, so it
+    drops the dock's area/container entirely rather than merely closing it.
+    Reopening it from the toolbar button used to reveal it as a stray
+    floating window instead of docking it back where a fresh open would.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.show()
+    qtbot.waitExposed(page)
+
+    # The default arrangement never has Stages open.
+    layout_without_stages = page.current_layout()
+    assert PanelKey.STAGES not in layout_without_stages.panels
+
+    page.panel_button(PanelKey.STAGES).click()
+    dock = page.panel_dock(PanelKey.STAGES)
+    assert dock is not None
+    assert not dock.isFloating()
+
+    assert page.apply_layout(layout_without_stages)
+    assert page.panel_dock(PanelKey.STAGES) is dock  # same dock, left dangling
+
+    page.panel_button(PanelKey.STAGES).setChecked(True)
+    assert not dock.isFloating()
+    assert dock.dockAreaWidget() is not None
+
+
 def test_acquire_layout_round_trip_restores_open_stage_devices(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
@@ -5678,6 +5712,31 @@ def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
             abs(actual - wanted) < 2
             for actual, wanted in zip(rgb, green_rgb, strict=True)
         ), action.text()
+
+
+def test_mda_axis_table_toolbars_are_not_autoraise(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """The Channels/Positions/Time Series toolbars read as boxed, not ghost.
+
+    Same fix as Stage Explorer's own toolbar (test_stage_explorer_style):
+    upstream `DataTableWidget` leaves its `QToolBar` buttons auto-raise, which
+    only fills (no border) on hover -- easy to miss next to the rest of the
+    app's persistently boxed "subtle" buttons.
+    """
+    set_theme(DARK_THEME)
+    wdg = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(wdg)
+    for table in (wdg.channels, wdg.stage_positions, wdg.time_plan):
+        toolbar = table.toolBar()
+        tool_buttons = [
+            button
+            for action in toolbar.actions()
+            if isinstance((button := toolbar.widgetForAction(action)), QToolButton)
+        ]
+        assert tool_buttons
+        assert all(not button.autoRaise() for button in tool_buttons)
+        assert all(button.property("variant") == "subtle" for button in tool_buttons)
 
 
 def test_slider_style_only_paints_requested_subcontrols(qapp: QApplication) -> None:

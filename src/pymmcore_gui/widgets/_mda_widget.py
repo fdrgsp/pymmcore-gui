@@ -56,6 +56,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QToolButton,
     QWidget,
 )
 from pymmcore_gui._settings import Settings
@@ -1096,11 +1097,25 @@ class MemoryMDAWidgetBase(_MixinBase):
         sees elsewhere in Acquire. Match those instead (≈20px at the default
         zoom), scaled with the theme. Re-applied on theme/zoom changes from
         ``changeEvent`` because the app-wide pass would otherwise reset it.
+
+        Also turns off each button's auto-raise, matching every other action
+        button in Acquire (see Stage Explorer's own toolbar for the same
+        fix): a QToolBar's buttons default to auto-raise ("ghost" style,
+        fill-only, borderless hover), which reads as barely-there next to the
+        rest of the app's persistently boxed "subtle" buttons.
         """
         icon = theme().scaled(16)
         size = QSize(icon, icon)
         for table in (self.channels, self.stage_positions, self.time_plan):
-            table.toolBar().setIconSize(size)
+            toolbar = table.toolBar()
+            toolbar.setIconSize(size)
+            for action in toolbar.actions():
+                button = toolbar.widgetForAction(action)
+                if isinstance(button, QToolButton):
+                    button.setAutoRaise(False)
+                    if not button.property("variant"):
+                        button.setProperty("variant", "subtle")
+                    ensure_visible_icon(button)
 
     def _apply_theme_metrics(self) -> None:
         """Feed the app's zoom-scaled spacing into the upstream presentation."""

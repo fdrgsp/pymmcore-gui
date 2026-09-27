@@ -798,6 +798,8 @@ class AcquirePage(TabPage):
             self._create_panel(panel)
         dock = panel.dock
         assert dock is not None
+        if checked:
+            self._redock_if_orphaned(panel)
         dock.toggleView(checked)
         if checked:
             dock.setAsCurrentTab()
@@ -812,6 +814,40 @@ class AcquirePage(TabPage):
             self._widen_right_column_soon()
             if panel.info.refresh is not None:
                 QTimer.singleShot(0, partial(self._refresh_panel, key))
+
+    def _redock_if_orphaned(self, panel: _Panel) -> None:
+        """Put a dock ADS detached back where a fresh open would place it.
+
+        ``CDockManager.restoreState()`` (see ``restore_layout``) drops any
+        dock widget it can't find in the layout being applied -- it's left
+        with no dock area and no container at all, not merely closed.
+        Re-showing it via ``toggleView(True)`` in that state is what ADS
+        treats as "float me": it builds a brand new top-level floating
+        container for it despite every dock here having
+        ``DockWidgetFloatable`` disabled (see ``_add_dock``) -- that feature
+        flag only blocks a *user* drag, not this internal fallback. Checked
+        lazily here rather than swept right after every ``restoreState()``
+        call: most panels that fall outside a saved layout are never
+        reopened in the same session, so there is nothing to fix until the
+        user actually asks to reopen one.
+        """
+        dock = panel.dock
+        if dock is None or dock.dockAreaWidget() is not None:
+            return
+        with suppress(RuntimeError):
+            if panel.info.area == DockWidgetArea.LeftDockWidgetArea:
+                self._dock_manager.addDockWidget(panel.info.area, dock)
+                return
+            if (right_area := self._resolve_right_dock_area()) is not None:
+                self._dock_manager.addDockWidget(
+                    DockWidgetArea.CenterDockWidgetArea, dock, right_area
+                )
+                return
+            self._dock_manager.addDockWidget(DockWidgetArea.RightDockWidgetArea, dock)
+            self._right_dock_area = dock.dockAreaWidget()
+            self._pin_dock_widths()
+            pin = partial(self._pin_dock_widths_for_epoch, self._layout_epoch)
+            QTimer.singleShot(0, pin)
 
     def _create_panel(self, panel: _Panel) -> None:
         # Some upstream factories return a QDialog (PropertyBrowser) or set

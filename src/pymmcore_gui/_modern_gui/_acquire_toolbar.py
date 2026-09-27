@@ -19,7 +19,8 @@ from superqt.iconify import QIconifyIcon
 from superqt.utils import create_worker
 
 from pymmcore_gui._array_viewer import ensure_visible_icon, set_source_icon
-from pymmcore_gui._qt.QtCore import QEvent, QSize, Signal
+from pymmcore_gui._qt.QtCore import QEvent, QPointF, QSize, Qt, Signal
+from pymmcore_gui._qt.QtGui import QPainter, QPolygonF
 from pymmcore_gui._qt.QtWidgets import QFrame, QHBoxLayout, QPushButton, QWidget
 
 from ._theme import qcolor, theme
@@ -27,6 +28,7 @@ from ._theme import qcolor, theme
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from pymmcore_gui._qt.QtGui import QPaintEvent
     from pymmcore_gui._qt.QtWidgets import QLayout
 
     from ._panels import PanelInfo
@@ -276,6 +278,39 @@ class ShuttersBar(QWidget):
             self._layout.addWidget(widget)
 
 
+class _PanelToggleButton(QPushButton):
+    """Panel toggle button that self-marks when it also opens a context menu.
+
+    Draws a tiny corner arrow once `setContextMenuPolicy` puts it in
+    `CustomContextMenu` mode, rather than needing a second flag kept in sync
+    with that call -- the two panel buttons that get a right-click kind menu
+    (MDA, Stages; see `AcquirePage.__init__`) pick up the affordance for free,
+    and any future one that gets a context menu the same way does too.
+    """
+
+    def paintEvent(self, a0: QPaintEvent | None) -> None:
+        super().paintEvent(a0)
+        if self.contextMenuPolicy() != Qt.ContextMenuPolicy.CustomContextMenu:
+            return
+        size = theme().scaled(5)
+        margin = theme().scaled(4)
+        w, h = self.width(), self.height()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(qcolor(theme().text_secondary))
+        painter.drawPolygon(
+            QPolygonF(
+                [
+                    QPointF(w - margin - size, h - margin),
+                    QPointF(w - margin, h - margin),
+                    QPointF(w - margin, h - margin - size),
+                ]
+            )
+        )
+        painter.end()
+
+
 class PanelButtonBar(QWidget):
     """Icon-only toggle buttons for the registry panels (see ``_panels.py``).
 
@@ -305,7 +340,7 @@ class PanelButtonBar(QWidget):
 
         self._buttons: dict[str, QPushButton] = {}
         for info in self._panels:
-            btn = QPushButton(self)
+            btn = _PanelToggleButton(self)
             btn.setCheckable(True)
             btn.setProperty("variant", "subtle")
             btn.setToolTip(info.tooltip)
