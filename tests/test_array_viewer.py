@@ -26,6 +26,7 @@ from ome_writers import (
     create_stream,
     dims_from_standard_axes,
 )
+from vispy import scene
 
 from pymmcore_gui._array_viewer import (
     _SAVE_FILTER_MAP,
@@ -101,6 +102,103 @@ def test_existing_roi_editing_uses_pan_zoom_not_creation_mode() -> None:
     viewer._create_roi_view.assert_called_once_with()
     viewer._synchronize_roi.assert_called_once_with()
     viewer.set_roi_visual_selected.assert_called_once_with(True)
+
+
+def _fake_viewer_with_image(width: int, height: int) -> SimpleNamespace:
+    """A duck-typed MMArrayViewer whose canvas scene holds one real image node.
+
+    Real (but canvas-less, GL-context-free) vispy nodes: constructing a bare
+    scene.Node/Image/Line graph -- as opposed to a full MMArrayViewer, which
+    creates a real vispy SceneCanvas -- needs no OpenGL context, so this
+    stays safe under the offscreen Qt platform CI runs under. Exercises the
+    same isinstance/transform-parenting logic _refresh_center_cross actually
+    relies on, rather than a plain Mock standing in for the whole scene.
+    """
+    scene_root = scene.Node()
+    scene.visuals.Image(np.zeros((height, width), dtype=np.uint8), parent=scene_root)
+    canvas = SimpleNamespace(_view=SimpleNamespace(scene=scene_root))
+    viewer = SimpleNamespace(
+        _canvas=canvas, _center_cross_active=False, _center_cross_lines=None
+    )
+    # set_center_cross_active(True) calls self._refresh_center_cross(); wire it
+    # back to the real unbound implementation against this same fake.
+    viewer._refresh_center_cross = lambda: MMArrayViewer._refresh_center_cross(
+        viewer  # type: ignore[arg-type]
+    )
+    return viewer
+
+
+def test_center_cross_spans_the_full_fov_centered(qtbot: QtBot) -> None:
+    """Toggling the crosshair on draws lines through the FOV's exact center."""
+    viewer = _fake_viewer_with_image(width=200, height=100)
+
+    MMArrayViewer.set_center_cross_active(viewer, True)  # type: ignore[arg-type]
+
+    assert MMArrayViewer.center_cross_active(viewer)  # type: ignore[arg-type]
+    h_line, v_line = viewer._center_cross_lines
+    assert h_line.pos.tolist() == [[0, 50], [200, 50]]
+    assert v_line.pos.tolist() == [[100, 0], [100, 100]]
+    # parented to the image itself, so it inherits that node's own transform
+    # (e.g. a calibrated-pixel-size scale) automatically.
+    image = next(
+        c
+        for c in viewer._canvas._view.scene.children
+        if isinstance(c, scene.visuals.Image)
+    )
+    assert h_line.parent is image
+    assert v_line.parent is image
+
+
+def test_center_cross_removed_when_toggled_off(qtbot: QtBot) -> None:
+    viewer = _fake_viewer_with_image(width=200, height=100)
+    MMArrayViewer.set_center_cross_active(viewer, True)  # type: ignore[arg-type]
+    h_line, v_line = viewer._center_cross_lines
+
+    MMArrayViewer.set_center_cross_active(viewer, False)  # type: ignore[arg-type]
+
+    assert not MMArrayViewer.center_cross_active(viewer)  # type: ignore[arg-type]
+    assert viewer._center_cross_lines is None
+    assert h_line.parent is None
+    assert v_line.parent is None
+
+
+def test_center_cross_ignored_while_inactive(qtbot: QtBot) -> None:
+    """_refresh_center_cross (the canvas.refresh hook) is a no-op unless toggled on."""
+    viewer = _fake_viewer_with_image(width=200, height=100)
+
+    MMArrayViewer._refresh_center_cross(viewer)  # type: ignore[arg-type]
+
+    assert viewer._center_cross_lines is None
+
+
+def test_center_cross_rehomes_to_a_resized_image_on_refresh(qtbot: QtBot) -> None:
+    """A later, differently-sized image (e.g. a Camera ROI crop) is picked up.
+
+    _refresh_center_cross is wired to run on every VispyArrayCanvas.refresh()
+    call (see _guard_center_cross_sync), which fires on every new frame --
+    including one whose pixel dimensions differ from when the cross was first
+    drawn. The stale lines must be dropped and redrawn against the new image,
+    not left pointing at a detached node.
+    """
+    viewer = _fake_viewer_with_image(width=200, height=100)
+    MMArrayViewer.set_center_cross_active(viewer, True)  # type: ignore[arg-type]
+    old_h_line, old_v_line = viewer._center_cross_lines
+    old_image = old_h_line.parent
+
+    scene_root = viewer._canvas._view.scene
+    old_image.parent = None
+    new_image = scene.visuals.Image(
+        np.zeros((40, 80), dtype=np.uint8), parent=scene_root
+    )
+
+    MMArrayViewer._refresh_center_cross(viewer)  # type: ignore[arg-type]
+
+    h_line, v_line = viewer._center_cross_lines
+    assert (h_line, v_line) != (old_h_line, old_v_line)
+    assert h_line.parent is new_image
+    assert v_line.parent is new_image
+    assert h_line.pos.tolist() == [[0, 20], [80, 20]]
+    assert v_line.pos.tolist() == [[40, 0], [40, 40]]
 
 
 def test_synthesize_record_from_stream_view(qtbot: QtBot) -> None:

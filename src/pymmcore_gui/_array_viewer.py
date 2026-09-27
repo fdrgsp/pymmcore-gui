@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import ndv
 import numpy as np
@@ -18,6 +18,7 @@ from pymmcore_plus import CMMCorePlus
 from pymmcore_plus.metadata import summary_metadata
 from superqt import QIconifyIcon
 from superqt.sliders._labeled import SliderLabel
+from vispy import scene
 
 from pymmcore_gui._mda_export import (
     AcquisitionRecord,
@@ -128,6 +129,31 @@ def _guard_vispy_camera_resets(canvas: Any) -> None:
         canvas.set_ndim = _set_ndim_and_guard
 
 
+def _guard_center_cross_sync(canvas: Any, viewer: MMArrayViewer) -> None:
+    """Keep the FOV-center crosshair in step with whatever the canvas shows.
+
+    ``VispyArrayCanvas.refresh`` runs after every new frame is pushed to the
+    canvas (live or single-snap alike -- see ``ArrayViewer._on_data_response``
+    upstream), including ones that change the displayed image's pixel
+    dimensions (e.g. a Camera ROI crop applied mid-stream). Wrapping it here
+    re-derives the crosshair's geometry from whatever image is on screen
+    right now, so it never gets stuck showing a stale extent. A no-op
+    whenever the crosshair isn't currently shown (see
+    ``MMArrayViewer._refresh_center_cross``).
+    """
+    refresh = getattr(canvas, "refresh", None)
+    if refresh is None:
+        return
+
+    def _refresh_and_sync_cross(*args: Any, **kwargs: Any) -> Any:
+        result = refresh(*args, **kwargs)
+        viewer._refresh_center_cross()
+        return result
+
+    with suppress(Exception):
+        canvas.refresh = _refresh_and_sync_cross
+
+
 _ORTHO_VIEWS = [("y", "x"), ("z", "x"), ("z", "y")]
 
 
@@ -137,6 +163,7 @@ class MMArrayViewer(ndv.ArrayViewer):
     def __init__(self, data: Any = None, /, **kwargs: Any) -> None:
         show_save_button = bool(kwargs.pop("show_save_button", True))
         show_roll_axes_button = bool(kwargs.pop("show_roll_axes_button", True))
+        show_center_cross_button = bool(kwargs.pop("show_center_cross_button", True))
         opts = kwargs.pop("viewer_options", None) or {}
         opts.setdefault("show_roi_button", True)
         kwargs["viewer_options"] = opts
@@ -167,6 +194,11 @@ class MMArrayViewer(ndv.ArrayViewer):
         # it to rename this viewer's dock/tab to the saved filename.
         self._on_saved: Callable[[str], None] | None = None
 
+        # Yellow crosshair overlay marking the full FOV's center; see
+        # set_center_cross_active/_refresh_center_cross.
+        self._center_cross_active = False
+        self._center_cross_lines: tuple[Any, Any] | None = None
+
         self._key_filter = _KeyFilter(self)
         widget = self.widget()
         widget.installEventFilter(self._key_filter)
@@ -174,6 +206,7 @@ class MMArrayViewer(ndv.ArrayViewer):
             canvas.installEventFilter(self._key_filter)
 
         _guard_vispy_camera_resets(self._canvas)
+        _guard_center_cross_sync(self._canvas, self)
 
         if show_save_button:
             with suppress(Exception):
@@ -181,6 +214,9 @@ class MMArrayViewer(ndv.ArrayViewer):
         if show_roll_axes_button:
             with suppress(Exception):
                 _add_roll_axes_button(self)
+        if show_center_cross_button:
+            with suppress(Exception):
+                _add_center_cross_button(self)
         with suppress(Exception):
             unstyle_widgets(widget)
         with suppress(Exception):
@@ -274,6 +310,61 @@ class MMArrayViewer(ndv.ArrayViewer):
     def roi_visual_visible(self) -> bool:
         """Return whether the current ndv ROI visual is visible."""
         return self._roi_view is not None and self._roi_view.visible()
+
+    def set_center_cross_active(self, active: bool) -> None:
+        """Show or hide a yellow crosshair marking the full FOV's center."""
+        self._center_cross_active = active
+        if active:
+            self._refresh_center_cross()
+        elif self._center_cross_lines is not None:
+            for line in self._center_cross_lines:
+                line.parent = None
+            self._center_cross_lines = None
+
+    def center_cross_active(self) -> bool:
+        """Return whether the FOV-center crosshair is currently shown."""
+        return self._center_cross_active
+
+    def _refresh_center_cross(self) -> None:
+        """(Re)draw the crosshair to match the currently displayed image.
+
+        The two line visuals are parented to the image visual itself, not to
+        the shared scene -- they then inherit that visual's own transform
+        (set by ``VispyArrayCanvas.set_scales`` from the calibrated pixel
+        size, when there is one) automatically, so the cross lines up with
+        the actual FOV whether or not pixel size calibration is in play,
+        with no separate scale bookkeeping here. A no-op until at least one
+        frame has been displayed (no image visual to parent to yet) and
+        whenever the crosshair isn't currently toggled on.
+        """
+        if not self._center_cross_active:
+            return
+        image = next(
+            (
+                child
+                for child in cast("Any", self._canvas)._view.scene.children
+                if isinstance(child, scene.visuals.Image)
+            ),
+            None,
+        )
+        if image is None:
+            return
+        width, height = image.size
+        lines = self._center_cross_lines
+        if lines is None or lines[0].parent is not image:
+            if lines is not None:
+                for line in lines:
+                    line.parent = None
+            h_line = scene.visuals.Line(color="yellow", width=2, method="gl")
+            v_line = scene.visuals.Line(color="yellow", width=2, method="gl")
+            h_line.parent = v_line.parent = image
+            # Above the image, but below the (much higher-order) ROI rectangle
+            # and its drag handles -- see VispyRectangle in ndv's vispy canvas.
+            h_line.order = v_line.order = 5
+            lines = self._center_cross_lines = (h_line, v_line)
+        h_line, v_line = lines
+        h_line.set_data(pos=np.array([[0, height / 2], [width, height / 2]]))
+        v_line.set_data(pos=np.array([[width / 2, 0], [width / 2, height]]))
 
     def reset_zoom(self) -> None:
         """Fit the canvas camera to the currently displayed image."""
@@ -693,6 +784,21 @@ def _add_roll_axes_button(viewer: MMArrayViewer) -> QPushButton:
 
     ndims_idx = btn_layout.indexOf(q_widget.ndims_btn)
     btn_layout.insertWidget(ndims_idx + 1, btn)
+    return btn
+
+
+def _add_center_cross_button(viewer: MMArrayViewer) -> QPushButton:
+    q_widget = viewer.widget()
+    btn_layout = q_widget._btn_layout
+
+    btn = QPushButton(q_widget)
+    btn.setCheckable(True)
+    btn.setIcon(QIconifyIcon("mdi:crosshairs-gps"))
+    btn.setToolTip("Mark the center of the field of view")
+    btn.toggled.connect(viewer.set_center_cross_active)
+
+    roi_idx = btn_layout.indexOf(q_widget.add_roi_btn)
+    btn_layout.insertWidget(roi_idx + 1, btn)
     return btn
 
 
