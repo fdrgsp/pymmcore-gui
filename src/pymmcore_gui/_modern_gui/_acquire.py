@@ -13,6 +13,7 @@ from pymmcore_widgets.useq_widgets import PYMMCW_METADATA_KEY
 from pymmcore_gui._array_viewer import (
     ensure_visible_icon,
     set_icon_tint,
+    set_source_icon,
     unstyle_widgets,
 )
 from pymmcore_gui._layouts import (
@@ -59,8 +60,10 @@ from ._acquire_toolbar import (
 from ._acquire_viewers import AcquireViewersManager
 from ._camera_roi_sync import CameraRoiSyncController
 from ._panels import (
+    MDA_WIDGET_FACTORIES,
     PANELS,
     STAGE_KIND_FACTORIES,
+    MdaKind,
     PanelInfo,
     PanelKey,
     StageKind,
@@ -73,10 +76,11 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     import useq
+    from pymmcore_widgets import CameraRoiWidget
 
     from pymmcore_gui._qt.QtAds import CDockAreaWidget
     from pymmcore_gui._qt.QtGui import QCloseEvent, QResizeEvent, QShowEvent
-    from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
+    from pymmcore_gui.widgets._mda_widget import MemoryMDAWidgetBase
     from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 
 _DOCK_MIN_WIDTH = 0
@@ -94,7 +98,6 @@ _ADS_NEUTRAL_ICON_BUTTONS = frozenset(
     }
 )
 _ADS_TAB_CLOSE_BUTTON = "tabCloseButton"
-_REMOVED_PANEL_KEYS = frozenset({"camera_roi"})
 _MDA_UNLOCKED_PANELS = frozenset(
     {
         # Disables its own editors while keeping Pause/Cancel live -- see
@@ -264,9 +267,9 @@ class AcquirePage(TabPage):
             self._core,
             parent=self,
         )
-        # Connect before the MDA panel constructs CameraRoiWidget.  Its roiSet
-        # handler performs Auto Snap synchronously, so a lazy Preview must be
-        # created by an earlier listener in order to receive imageSnapped.
+        # Connect before the Camera ROI panel constructs CameraRoiWidget. Its
+        # roiSet handler performs Auto Snap synchronously, so a lazy Preview
+        # must be created by an earlier listener to receive imageSnapped.
         self._core.events.roiSet.connect(self._ensure_preview_for_roi_auto_snap)
 
         self._right_dock_area: CDockAreaWidget | None = None
@@ -320,11 +323,20 @@ class AcquirePage(TabPage):
         # instead of losing e.g. every device the user added to StagesPanel.
         self._stage_widgets: dict[str, QWidget] = {}
 
+        # Which MDA_WIDGET_FACTORIES entry PanelKey.MDA currently docks. Cached
+        # like the stage flavors, so switching back and forth keeps whatever the
+        # user had typed into the other presentation.
+        self._mda_kind: str = MdaKind.COLLAPSIBLE
+        self._mda_widgets: dict[str, QWidget] = {}
+
         self._panel_bar = PanelButtonBar(PANELS, self)
         self._place_panel_bar()
         stages_btn = self._panel_bar.button_for(PanelKey.STAGES)
         stages_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         stages_btn.customContextMenuRequested.connect(self._popup_stage_kind_menu)
+        mda_btn = self._panel_bar.button_for(PanelKey.MDA)
+        mda_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        mda_btn.customContextMenuRequested.connect(self._popup_mda_kind_menu)
 
         self._mda_locked = False
         # Enabled state each widget had when the lock engaged, so releasing it
@@ -346,28 +358,19 @@ class AcquirePage(TabPage):
         # the right column, which pins the column widths -- and that reads
         # ``self._mda_dock``.
         self._panel_bar.button_for(PanelKey.MDA).setChecked(True)
-        self._mda = cast("MemoryMDAWidget", self.panel_widget(PanelKey.MDA))
+        self._mda = cast("MemoryMDAWidgetBase", self.panel_widget(PanelKey.MDA))
+        # Seed the flavor cache with the widget the panel factory just built, so
+        # switching away and back reuses it rather than starting from a blank one.
+        self._mda_widgets[self._mda_kind] = self._mda
         self._mda_dock = cast("CDockWidget", self.panel_dock(PanelKey.MDA))
         for info in PANELS:
             if info.default_open and info.key != PanelKey.MDA:
                 self._panel_bar.button_for(info.key).setChecked(True)
 
-        self._mda.mdaLockChanged.connect(self.set_mda_lock)
         self._viewers.reuseMDARequested.connect(self._on_reuse_mda_requested)
-
-        self._snap_btn.snapRequested.connect(self._mda.apply_active_channel_for_capture)
         self._snap_btn.snapRequested.connect(self._viewers.ensure_preview)
-        self._live_btn.liveStartedRequested.connect(
-            self._mda.apply_active_channel_for_capture
-        )
         self._live_btn.liveStartedRequested.connect(self._viewers.ensure_preview)
-        self._roi_sync = CameraRoiSyncController(
-            self._core,
-            self._mda,
-            self._viewers,
-            self._live_btn,
-            parent=self,
-        )
+        self._bind_mda(self._mda)
 
         self._pin_dock_widths()
         self._lock_default_areas()
@@ -399,7 +402,7 @@ class AcquirePage(TabPage):
         self._refresh_dock_icons()
 
     @property
-    def mda_widget(self) -> MemoryMDAWidget:
+    def mda_widget(self) -> MemoryMDAWidgetBase:
         """Return the MDA controls embedded in this Acquire page."""
         return self._mda
 
@@ -447,10 +450,10 @@ class AcquirePage(TabPage):
         """Create the lazy Preview before Camera ROI performs an Auto Snap."""
         if self._viewers.preview is not None:
             return
-        mda = getattr(self, "_mda", None)
-        if mda is None:
+        roi = self._camera_roi_widget()
+        if roi is None:
             return
-        auto_snap = mda.camera_roi.snap_checkbox
+        auto_snap = roi.snap_checkbox
         if auto_snap.isChecked() and auto_snap.isVisible():
             self._viewers.ensure_preview()
 
@@ -507,6 +510,93 @@ class AcquirePage(TabPage):
             widget.stageWidgetAdded.connect(self._on_stage_widget_added)
         self._stage_widgets[kind] = widget
         return widget
+
+    # ------------------------------------------------------- mda flavor
+
+    def _bind_mda(self, widget: MemoryMDAWidgetBase) -> None:
+        """Wire an MDA editor into the page.
+
+        Every cross-widget connection the MDA editor takes part in lives here,
+        so switching flavors is a matter of unbinding one and binding the other
+        rather than hunting for connections scattered through ``_build``.
+        """
+        self._mda = widget
+        widget.mdaLockChanged.connect(self.set_mda_lock)
+        self._snap_btn.snapRequested.connect(widget.apply_active_channel_for_capture)
+        self._live_btn.liveStartedRequested.connect(
+            widget.apply_active_channel_for_capture
+        )
+
+    def _unbind_mda(self) -> None:
+        """Undo :meth:`_bind_mda`, leaving the widget itself intact."""
+        widget = self._mda
+        with suppress(RuntimeError, TypeError):
+            widget.mdaLockChanged.disconnect(self.set_mda_lock)
+            self._snap_btn.snapRequested.disconnect(
+                widget.apply_active_channel_for_capture
+            )
+            self._live_btn.liveStartedRequested.disconnect(
+                widget.apply_active_channel_for_capture
+            )
+
+    def _mda_widget_for(self, kind: str) -> QWidget:
+        """Return the MDA editor for *kind*, building and caching it once."""
+        if (widget := self._mda_widgets.get(kind)) is not None:
+            return widget
+        widget = MDA_WIDGET_FACTORIES[kind](self, self._core)
+        self._mda_widgets[kind] = widget
+        return widget
+
+    def _popup_mda_kind_menu(self, pos: QPoint) -> None:
+        """Right-click on the MDA button: pick which editor presentation docks."""
+        button = self.panel_button(PanelKey.MDA)
+        menu = QMenu(button)
+        group = QActionGroup(menu)
+        group.setExclusive(True)
+        labels = {
+            MdaKind.COLLAPSIBLE: "Collapsible",
+            MdaKind.TOPBAR: "Topbar",
+        }
+        for kind, label in labels.items():
+            action = QAction(label, menu)
+            action.setCheckable(True)
+            action.setChecked(kind == self._mda_kind)
+            action.triggered.connect(partial(self._set_mda_kind, kind))
+            group.addAction(action)
+            menu.addAction(action)
+        menu.exec(button.mapToGlobal(pos))
+
+    def _set_mda_kind(self, kind: str) -> None:
+        """Swap which MDA editor presentation is docked.
+
+        The two are behaviourally identical, so the sequence being edited is
+        carried across and the page is rebound to the new widget. Refused while
+        an acquisition owns the hardware: the running widget holds the lock and
+        the progress overlay, and swapping it out mid-run would strand both.
+        """
+        if kind == self._mda_kind or kind not in MDA_WIDGET_FACTORIES:
+            return
+        if self._mda_locked:
+            return
+
+        outgoing = self._mda
+        sequence = outgoing.value()
+        save_info = dict(outgoing.save_info.value())
+        tiff_layout = outgoing.tiffLayout()
+
+        self._unbind_mda()
+        self._mda_kind = kind
+        widget = cast("MemoryMDAWidgetBase", self._mda_widget_for(kind))
+        widget.setValue(sequence)
+        widget.save_info.setValue(save_info)
+        widget.setTiffLayout(tiff_layout)
+        self._bind_mda(widget)
+
+        panel = self._panels[PanelKey.MDA]
+        panel.widget = widget
+        if (dock := panel.dock) is not None:
+            dock.takeWidget()
+            dock.setWidget(widget, CDockWidget.eInsertMode.ForceNoScrollArea)
 
     def _popup_stage_kind_menu(self, pos: QPoint) -> None:
         """Right-click on the Stages button: pick which widget flavor is docked."""
@@ -744,6 +834,8 @@ class AcquirePage(TabPage):
             panel.dock = self._add_dock(name, title, widget, panel.info.area)
         else:
             panel.dock = self._add_side_dock(name, title, widget)
+        if panel.info.key == PanelKey.CAMERA_ROI:
+            self._bind_camera_roi(cast("CameraRoiWidget", widget))
         if panel.info.key == PanelKey.STAGE_EXPLORER:
             explorer = cast("ThemedStageExplorer", widget)
             explorer.sendToMDARequested.connect(self._on_stage_explorer_send_to_mda)
@@ -755,6 +847,51 @@ class AcquirePage(TabPage):
         # toggleView no-op when already in the target state), so this never
         # loops.
         panel.dock.viewToggled.connect(panel.button.setChecked)
+
+    def _camera_roi_widget(self) -> CameraRoiWidget | None:
+        """The Camera ROI panel's editor, if that panel has been created."""
+        panel = self._panels.get(PanelKey.CAMERA_ROI)
+        return cast("CameraRoiWidget | None", panel.widget if panel else None)
+
+    def _bind_camera_roi(self, widget: CameraRoiWidget) -> None:
+        """Give the Camera ROI panel its live viewer-selection controller.
+
+        Bound to the panel rather than the MDA widget: the ROI is a live
+        camera control now, so it outlives any MDA presentation swap and the
+        controller never needs rebuilding.
+        """
+        self._roi_sync = CameraRoiSyncController(
+            self._core,
+            widget,
+            self._viewers,
+            self._live_btn,
+            parent=self,
+        )
+        self._apply_camera_roi_colors(widget)
+
+    def _apply_camera_roi_colors(self, widget: CameraRoiWidget | None = None) -> None:
+        """Match the Camera ROI panel's crop/live-selection icons to this app.
+
+        Upstream defaults to plain CSS "green"/"red", close to but not this
+        app's status_green/status_red -- re-applied on every theme change
+        (see ``changeEvent``) since the two differ between light and dark.
+        """
+        if widget is None:
+            widget = self._camera_roi_widget()
+        if widget is None:
+            return
+        widget.setAccentColors(
+            qcolor(theme().status_green).name(), qcolor(theme().status_red).name()
+        )
+        set_source_icon(widget.crop_btn, widget.crop_btn.icon())
+        set_source_icon(widget.select_roi_btn, widget.select_roi_btn.icon())
+        # setAccentColors calls plain QAbstractButton.setIcon(), which upstream
+        # rightly knows nothing about this app's icon-contrast stash. Without
+        # this, unstyle_widgets' original ensure_visible_icon() call (made
+        # once, at panel creation, before this method first ran) would keep
+        # being the "pristine" source every later theme toggle re-derives
+        # from -- silently reverting these two icons back to upstream's plain
+        # CSS green/red the next time that sweep runs.
 
     def _on_stage_explorer_send_to_mda(
         self, positions: list[useq.Position], replace: bool
@@ -769,10 +906,7 @@ class AcquirePage(TabPage):
         table.setValue(combined)
 
         # Make the result immediately visible and active in the acquisition.
-        section = self._mda._collapsible_tabs().section("p")
-        section.set_checked(True)
-        section.set_expanded(True)
-        self._mda._collapsible_tabs().refresh_summaries()
+        self._mda.revealAxis("p")
         self.panel_button(PanelKey.MDA).setChecked(True)
 
     def refresh_stage_explorer_pixel_geometry(self) -> None:
@@ -796,6 +930,7 @@ class AcquirePage(TabPage):
             return AcquireLayout(
                 hidden_panels=frozenset(self.hidden_panels()),
                 stage_kind=self._stage_kind,
+                mda_kind=self._mda_kind,
             )
         return AcquireLayout(
             dock_state=self._dock_manager.saveState().data(),
@@ -803,6 +938,7 @@ class AcquirePage(TabPage):
             hidden_panels=frozenset(self.hidden_panels()),
             stage_devices=self._current_stage_devices(),
             stage_kind=self._stage_kind,
+            mda_kind=self._mda_kind,
         )
 
     def _current_stage_devices(self) -> frozenset[str]:
@@ -826,7 +962,11 @@ class AcquirePage(TabPage):
         """
         self.apply_hidden_panels(layout.hidden_panels)
         if self.restore_layout(
-            layout.dock_state, layout.panels, layout.stage_devices, layout.stage_kind
+            layout.dock_state,
+            layout.panels,
+            layout.stage_devices,
+            layout.stage_kind,
+            layout.mda_kind,
         ):
             if self.isVisible():
                 # Startup goes through the showEvent/resize settle path with
@@ -931,6 +1071,7 @@ class AcquirePage(TabPage):
         keys: Iterable[str],
         stage_devices: Iterable[str] = (),
         stage_kind: str = StageKind.XYZ,
+        mda_kind: str = MdaKind.COLLAPSIBLE,
     ) -> bool:
         """Recreate the given panels and restore a previously saved dock layout.
 
@@ -942,20 +1083,20 @@ class AcquirePage(TabPage):
         whether Stages is among *keys*, so the choice survives to whenever the
         user next opens it, not just when it happened to already be open.
 
+        *mda_kind* (see ``MdaKind``) likewise picks which MDA-editor
+        presentation is docked; the two behave identically, so this only
+        restores how the page looked.
+
         Returns True if the layout was restored, False if there was nothing
         to restore or ADS rejected the saved state -- either way, the page
         is left in a working (default) layout.
         """
         requested = set(keys)
-        # ADS state stores dock object names as well as our separate key set. An
-        # old state containing the removed standalone Camera ROI dock cannot be
-        # safely rewritten, so deliberately fall back to the working default once.
-        if requested & _REMOVED_PANEL_KEYS:
-            return False
         wanted = {k for k in requested if k in self._panels}
         if not state or not wanted:
             return False
         self._set_stage_kind(stage_kind)
+        self._set_mda_kind(mda_kind)
         for key in wanted:
             panel = self._panels[key]
             if panel.dock is None:
@@ -1618,6 +1759,7 @@ class AcquirePage(TabPage):
                 self._apply_dock_style()
                 self._refresh_dock_icons()
                 self._refresh_dock_fonts()
+            self._apply_camera_roi_colors()
 
     def shutdown(self) -> None:
         """Stop resources owned by lazily created acquisition panels."""
@@ -1630,6 +1772,7 @@ class AcquirePage(TabPage):
                 timer.stop()
         if roi_sync := getattr(self, "_roi_sync", None):
             roi_sync.stop()
+        self._viewers.close_all_viewers()
         for panel in self._panels.values():
             if panel.widget is not None:
                 with suppress(RuntimeError):

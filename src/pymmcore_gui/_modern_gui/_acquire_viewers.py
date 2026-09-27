@@ -512,6 +512,19 @@ class AcquireViewersManager(QObject):
             self._pending_release = None
             self._release_sink(sink)
 
+    def close_all_viewers(self) -> None:
+        """Close every open viewer dock, releasing whatever each one holds.
+
+        A reopened acquisition's viewer keeps an open file handle on its
+        dataset for as long as it lives (see ``open_acquisition``), and only
+        closing its dock releases it. Shutting the page down without this
+        leaves those handles to garbage collection, which may not run until
+        long after the window is gone.
+        """
+        for dw in list(self._records):
+            with suppress(RuntimeError):
+                dw.closeDockWidget()
+
     def _on_viewer_closed(self, dw: CDockWidget) -> None:
         record = self._records.pop(dw, None)
         if record is not None:

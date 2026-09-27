@@ -13,10 +13,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from pymmcore_plus import CMMCorePlus
-    from pymmcore_widgets import CameraRoiValue
+    from pymmcore_widgets import CameraRoiValue, CameraRoiWidget
 
     from pymmcore_gui._array_viewer import MMArrayViewer
-    from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
     from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
 
     from ._acquire_toolbar import LiveButton
@@ -51,14 +50,14 @@ class CameraRoiSyncController(QObject):
     def __init__(
         self,
         core: CMMCorePlus,
-        mda: MemoryMDAWidget,
+        roi: CameraRoiWidget,
         viewers: AcquireViewersManager,
         live_button: LiveButton,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._core = core
-        self._mda = mda
+        self._roi = roi
         self._viewers = viewers
         self._live_button = live_button
         self._viewer: MMArrayViewer | None = None
@@ -67,16 +66,13 @@ class CameraRoiSyncController(QObject):
         self._transitioning = False
         self._syncing = False
         self._connected = True
-        self._restart_live_after_crop = False
 
-        roi = mda.camera_roi
         roi.setRoiSelectionAvailable(True)
-        mda.roiSelectionRequested.connect(self.set_active)
+        roi.roiSelectionRequested.connect(self.set_active)
         roi.roiChanged.connect(self._on_widget_roi_changed)
         # Hide ndv's ROI visual before CameraRoiWidget's clicked handler changes
         # hardware and causes the live preview to rebuild its data model.
         roi.crop_btn.pressed.connect(self._on_crop_pressed)
-        roi.crop_btn.clicked.connect(self._on_crop_committed)
 
         viewers.previewCreated.connect(self._on_preview_created)
         viewers.previewClosed.connect(self._on_preview_closed)
@@ -108,25 +104,24 @@ class CameraRoiSyncController(QObject):
                 self._viewer.set_existing_roi_editing_active(True)
             return
         if self._core.mda.is_running():
-            self._mda.camera_roi.setLiveSelectionActive(False)
+            self._roi.setLiveSelectionActive(False)
             return
 
-        editor = self._mda.camera_roi
+        editor = self._roi
         planned = editor.roiValue()
 
         self._transitioning = True
         try:
+            self._discard_pending_viewer_roi()
             # Hardware ROI changes require a fresh stream/buffer. Preserve whether
             # live was already running by always returning to live at the end.
             if self._core.isSequenceRunning():
                 self._core.stopSequenceAcquisition()
             editor.applyFullFrame()
 
-            # roiSet reflects the temporary full frame into the editor. Restore the
-            # plan without touching hardware. Starting a selection session means
-            # this ROI should participate in the next MDA run.
+            # roiSet reflects the temporary full frame into the editor. Restore
+            # the plan without touching hardware.
             editor.setRoiValue(planned)
-            self._mda.tabs.roi_section.set_checked(True)
 
             preview = self._viewers.ensure_preview()
             self._attach_preview(preview)
@@ -159,11 +154,29 @@ class CameraRoiSyncController(QObject):
                     # rebuild the preview's data model.
                     self._viewer.clear_roi()
                 self._viewer.set_existing_roi_editing_active(False)
-            self._mda.camera_roi.setLiveSelectionActive(False)
+            self._roi.setLiveSelectionActive(False)
             if was_active and self._core.isSequenceRunning():
                 self._core.stopSequenceAcquisition()
         finally:
             self._transitioning = False
+
+    def _discard_pending_viewer_roi(self) -> None:
+        """Drop a ROI the tool created but the user never dragged out.
+
+        The mirror of the cleanup `stop` does, from the other side. Toggling
+        the viewer's ROI tool on arms a ROI whose handle markers hold no data
+        until the first drag gives it a size. Starting a session rebuilds the
+        preview's data model (the full-frame snap below), which makes ndv
+        recompute the scene's bounds -- and vispy cannot compute bounds for
+        an empty markers visual, so it raises instead. Nothing is lost by
+        dropping it: the session installs its own ROI moments later.
+        """
+        viewer = self._viewer
+        if viewer is None or (roi := viewer.roi) is None:
+            return
+        (x0, y0), (x1, y1) = roi.bounding_box
+        if x0 == x1 or y0 == y1:
+            viewer.clear_roi()
 
     def _on_preview_created(self, preview: NDVPreview) -> None:
         self._attach_preview(preview)
@@ -187,18 +200,13 @@ class CameraRoiSyncController(QObject):
         self._unobserve_viewer(viewer)
 
     def _on_crop_pressed(self) -> None:
-        # Stop the stream before CameraRoiWidget's clicked handler changes the
-        # hardware ROI. The clicked callback below resumes it on the new shape.
-        self._restart_live_after_crop = self._core.isSequenceRunning()
+        # Stop the stream before CameraRoiWidget's own clicked handler changes
+        # the hardware ROI -- cropping is a deliberate "I'm done adjusting,
+        # apply this" action, so live is left stopped afterward rather than
+        # resumed automatically at the new shape.
         self.stop()
         if self._core.isSequenceRunning():
             self._core.stopSequenceAcquisition()
-
-    def _on_crop_committed(self) -> None:
-        restart = self._restart_live_after_crop
-        self._restart_live_after_crop = False
-        if restart and not self._core.mda.is_running():
-            self._live_button.ensure_live()
 
     def _on_preview_closed(self) -> None:
         self.stop()
@@ -309,7 +317,7 @@ class CameraRoiSyncController(QObject):
             self.stop()
             return
         value: CameraRoiValue = {
-            "camera": self._mda.camera_roi.camera,
+            "camera": self._roi.camera,
             "x": x,
             "y": y,
             "width": width,
@@ -333,7 +341,7 @@ class CameraRoiSyncController(QObject):
         observation.last_bbox = bbox
         if self._syncing:
             return
-        editor = self._mda.camera_roi
+        editor = self._roi
         camera = (
             self._core.getCameraDevice()
             if observation.dynamic_hardware_roi
@@ -428,12 +436,11 @@ class CameraRoiSyncController(QObject):
         self._detach_preview()
         for viewer in tuple(self._observed_viewers):
             self._unobserve_viewer(viewer)
-        self._mda.camera_roi.setRoiSelectionAvailable(False)
+        self._roi.setRoiSelectionAvailable(False)
         connections = (
-            (self._mda.roiSelectionRequested, self.set_active),
-            (self._mda.camera_roi.roiChanged, self._on_widget_roi_changed),
-            (self._mda.camera_roi.crop_btn.pressed, self._on_crop_pressed),
-            (self._mda.camera_roi.crop_btn.clicked, self._on_crop_committed),
+            (self._roi.roiSelectionRequested, self.set_active),
+            (self._roi.roiChanged, self._on_widget_roi_changed),
+            (self._roi.crop_btn.pressed, self._on_crop_pressed),
             (self._viewers.previewCreated, self._on_preview_created),
             (self._viewers.previewClosed, self._on_preview_closed),
             (self._viewers.mdaViewerCreated, self._on_mda_viewer_created),

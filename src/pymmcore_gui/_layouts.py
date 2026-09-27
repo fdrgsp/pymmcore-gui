@@ -51,6 +51,11 @@ _DEFAULT_STAGE_KIND: Final = "xyz"
 
 See ``AcquireLayout.stage_kind``.
 """
+_DEFAULT_MDA_KIND: Final = "collapsible"
+"""Must match ``_modern_gui._panels.MdaKind.COLLAPSIBLE``.
+
+See ``AcquireLayout.mda_kind``.
+"""
 
 
 @dataclass(frozen=True)
@@ -82,6 +87,13 @@ class AcquireLayout:
     the same way ``panels``/``hidden_panels`` keep ``PanelKey`` values as
     plain strings -- this module doesn't otherwise depend on ``_modern_gui``.
     """
+    mda_kind: str = _DEFAULT_MDA_KIND
+    """Which MDA-editor presentation is docked under the MDA button.
+
+    A ``_modern_gui._panels.MdaKind`` value, kept as a plain ``str`` for the
+    same reason as ``stage_kind``. The two presentations behave identically,
+    so this only affects how the page looks.
+    """
 
     def is_empty(self) -> bool:
         """True if there is nothing here to restore."""
@@ -98,6 +110,7 @@ class AcquireLayout:
         data["hidden_panels"] = sorted(self.hidden_panels)
         data["stage_devices"] = sorted(self.stage_devices)
         data["stage_kind"] = self.stage_kind
+        data["mda_kind"] = self.mda_kind
         return data
 
     @classmethod
@@ -110,6 +123,7 @@ class AcquireLayout:
             hidden_panels=_str_set(data.get("hidden_panels")),
             stage_devices=_str_set(data.get("stage_devices")),
             stage_kind=str(data.get("stage_kind") or _DEFAULT_STAGE_KIND),
+            mda_kind=str(data.get("mda_kind") or _DEFAULT_MDA_KIND),
         )
 
 

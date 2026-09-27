@@ -6,9 +6,11 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
+from pymmcore_widgets import HCSWizard
 from pymmcore_widgets.mda import (
     CollapsibleCoreMDATabs,
     CoreConnectedChannelTable,
+    TopbarMDATabs,
 )
 from pymmcore_widgets.useq_widgets._column_info import ColumnInfo
 from superqt.utils import signals_blocked
@@ -18,6 +20,7 @@ from pymmcore_gui._array_viewer import (
     set_source_icon,
     unstyle_widgets,
 )
+from pymmcore_gui._modern_gui._theme import theme, ui_font
 from pymmcore_gui._qt.QtCore import QEvent, QObject, Qt
 from pymmcore_gui._qt.QtWidgets import (
     QApplication,
@@ -36,7 +39,10 @@ if TYPE_CHECKING:
 
 _CURRENT_ACTIVE = "●"
 _CURRENT_INACTIVE = "○"
-_CURRENT_COL_WIDTH = 28
+_CURRENT_COL_WIDTH = 46
+# Bigger than the app's default UI font (see `ui_font`'s own default) so the
+# dot itself, not just its column, reads as an obviously clickable control.
+_CURRENT_DOT_FONT_PT = 16.0
 
 
 @dataclass(frozen=True)
@@ -66,6 +72,7 @@ class _CurrentChannelColumn(ColumnInfo):
         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         item.setToolTip("Click to activate this channel on the microscope")
+        item.setFont(ui_font(_CURRENT_DOT_FONT_PT))
         table.setItem(row, col, item)
 
     def get_cell_data(self, table: QTableWidget, row: int, col: int) -> dict[str, Any]:
@@ -103,11 +110,27 @@ class ActiveChannelTable(CoreConnectedChannelTable):
         # Prepend the active-channel indicator at the leftmost position.
         table = self.table()
         table.addColumn(CURRENT_CHANNEL_COLUMN, 0)
-        table.setColumnWidth(0, _CURRENT_COL_WIDTH)
         if (header := table.horizontalHeader()) is not None:
             header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         if header_item := table.horizontalHeaderItem(0):
             header_item.setToolTip("Channel currently active on the microscope")
+        self.apply_theme_metrics()
+
+    def apply_theme_metrics(self) -> None:
+        """Zoom-scale the Current column's width and its dot glyph's size.
+
+        `ColumnInfo.init_cell` sets each row's font once, at construction, via
+        `ui_font` -- zoom-scaled at that instant, not automatically kept in
+        sync afterward the way the app's default-font widgets are. Re-called
+        on theme/zoom changes (see `MemoryMDAWidgetBase`) to catch every row,
+        including ones added after the last theme change.
+        """
+        table = self.table()
+        table.setColumnWidth(0, theme().scaled(_CURRENT_COL_WIDTH))
+        font = ui_font(_CURRENT_DOT_FONT_PT)
+        for row in range(table.rowCount()):
+            if item := table.item(row, 0):
+                item.setFont(font)
 
     def setActiveRow(self, row: int) -> None:
         """Mark *row* as the channel currently active on the microscope.
@@ -155,6 +178,21 @@ class ActiveChannelCollapsibleCoreMDATabs(CollapsibleCoreMDATabs):
             super()._apply_editor_min_heights()
 
 
+class ActiveChannelTopbarMDATabs(TopbarMDATabs):
+    """Top-bar MDA tabs using :class:`ActiveChannelTable`.
+
+    The top-bar twin of :class:`ActiveChannelCollapsibleCoreMDATabs`: both
+    presentations must offer the same channel table, so the swap between them
+    changes only the layout.
+    """
+
+    def create_subwidgets(self) -> None:
+        super().create_subwidgets()
+        inherited_channels = self.channels
+        self.channels = ActiveChannelTable(1, self._mmc)
+        inherited_channels.deleteLater()
+
+
 def _theme_subsequence_popup(popup: QWidget) -> None:
     """Match a position sub-sequence popup's styling to the rest of the app."""
     unstyle_widgets(popup)
@@ -177,50 +215,55 @@ def _theme_subsequence_popup(popup: QWidget) -> None:
     grid_plan.valueChanged.connect(_refresh_bounds_icons)
 
 
-class _SubsequencePopupThemer(QObject):
-    """Applies the app's MDA styling to position sub-sequence popups.
+class _ThirdPartyWindowThemer(QObject):
+    """Applies the app's styling to windows pymmcore-widgets opens itself.
 
-    pymmcore-widgets' private ``_MDAPopup`` always builds its grid editor
-    from the plain, non-collapsible ``CoreMDATabs`` now (every other axis is
-    removed, so there is nothing left for a collapsible section to disclose
-    there) -- there is no app-specific subclass left to hook construction-time
-    theming into. Watch every Show event application-wide instead, and theme
-    the popup (matched by its private class name, since pymmcore-widgets
-    gives no public hook) the moment it appears.
+    Both the position sub-sequence popup and the HCS wizard are constructed
+    on demand, deep inside pymmcore-widgets, with no app-side subclass to
+    hook construction-time theming into -- the popup is private
+    (``_MDAPopup``, matched by class name for want of a public hook) and the
+    wizard is created lazily by the position table's "Well Plate..." button.
+    Watch every Show event application-wide instead and theme each the moment
+    it appears.
     """
 
     def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
         if (
-            a1 is not None
-            and a1.type() == QEvent.Type.Show
-            and a0 is not None
-            and type(a0).__name__ == "_MDAPopup"
-            and not a0.property("_pymmcore_gui_themed")
+            a1 is None
+            or a1.type() != QEvent.Type.Show
+            or a0 is None
+            or a0.property("_pymmcore_gui_themed")
         ):
+            return False
+        if type(a0).__name__ == "_MDAPopup":
             a0.setProperty("_pymmcore_gui_themed", True)
             _theme_subsequence_popup(cast("QWidget", a0))
+        elif isinstance(a0, HCSWizard):
+            a0.setProperty("_pymmcore_gui_themed", True)
+            unstyle_widgets(a0)
         return False
 
 
-_popup_themer: _SubsequencePopupThemer | None = None
+_window_themer: _ThirdPartyWindowThemer | None = None
 
 
-def install_subsequence_popup_theming() -> None:
-    """Install the app-wide filter that themes position sub-sequence popups.
+def install_third_party_window_theming() -> None:
+    """Install the app-wide filter that themes pymmcore-widgets' own windows.
 
     Idempotent -- safe to call from every ``MemoryMDAWidget`` instance.
     """
-    global _popup_themer
+    global _window_themer
     app = QApplication.instance()
-    if app is None or _popup_themer is not None:  # pragma: no cover
+    if app is None or _window_themer is not None:  # pragma: no cover
         return
-    _popup_themer = _SubsequencePopupThemer(app)
-    app.installEventFilter(_popup_themer)
+    _window_themer = _ThirdPartyWindowThemer(app)
+    app.installEventFilter(_window_themer)
 
 
 __all__ = [
     "CURRENT_CHANNEL_COLUMN",
     "ActiveChannelCollapsibleCoreMDATabs",
     "ActiveChannelTable",
-    "install_subsequence_popup_theming",
+    "ActiveChannelTopbarMDATabs",
+    "install_third_party_window_theming",
 ]

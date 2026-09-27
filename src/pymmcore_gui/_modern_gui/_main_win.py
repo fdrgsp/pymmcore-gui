@@ -413,6 +413,7 @@ class MainWindow(QMainWindow):
         self._theme_btn = ThemeToggleButton(is_dark=self._is_dark)
         self._theme_btn.clicked.connect(self._toggle_theme)
         self._toolbar.addWidget(self._theme_btn)
+        self._apply_toolbar_metrics()
 
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._toolbar)
 
@@ -994,6 +995,24 @@ class MainWindow(QMainWindow):
             self._configurations.mark_current_saved()
             return True
         return False
+
+    def _apply_toolbar_metrics(self) -> None:
+        """Inset the toolbar's right edge to match a page's own toolbar.
+
+        `TabToolBar` insets its contents by ``sp_sm``; a bare `QToolBar` uses
+        the style's much smaller default, so the theme toggle would sit closer
+        to the window edge than the page toolbar buttons directly below it.
+        """
+        # StyleChange can arrive while the window is still being built.
+        toolbar = getattr(self, "_toolbar", None)
+        if toolbar is not None and (lay := toolbar.layout()) is not None:
+            left, top, _, bottom = lay.getContentsMargins()
+            lay.setContentsMargins(left, top, theme().sp_sm, bottom)
+
+    def changeEvent(self, a0: QEvent | None) -> None:
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
+            self._apply_toolbar_metrics()
+        super().changeEvent(a0)
 
     def _toggle_theme(self) -> None:
         self._is_dark = not self._is_dark

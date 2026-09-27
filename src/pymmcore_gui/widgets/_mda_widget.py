@@ -5,16 +5,21 @@ from __future__ import annotations
 from collections import defaultdict
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from ome_writers import AcquisitionSettings, OmeTiffFormat, ScratchFormat
 from ome_writers._schema import _ome_stem_suffix
-from pymmcore_widgets import MDAWidgetCollapsible
+from pymmcore_widgets import (
+    MDAWidget,
+    MDAWidgetCollapsible,
+    MDAWidgetTopbar,
+)
 from pymmcore_widgets._icons import StandardIcon
 from pymmcore_widgets.mda import (
     ChannelProperty,
     CollapsibleCoreMDATabs,
     SectionMetrics,
+    TopbarMDATabs,
 )
 from pymmcore_widgets.mda._collapsible_mda import _ClickableLabel
 from pymmcore_widgets.mda._core_channels import NO_LIGHT_SOURCE
@@ -22,6 +27,7 @@ from pymmcore_widgets.useq_widgets._positions import MDAButton
 from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import (
+    _recolor_icon,
     ensure_visible_icon,
     set_source_icon,
     unstyle_widgets,
@@ -57,7 +63,8 @@ from pymmcore_gui._settings import Settings
 from ._active_channel_table import (
     CURRENT_CHANNEL_COLUMN,
     ActiveChannelCollapsibleCoreMDATabs,
-    install_subsequence_popup_theming,
+    ActiveChannelTopbarMDATabs,
+    install_third_party_window_theming,
 )
 
 if TYPE_CHECKING:
@@ -174,6 +181,25 @@ def _align_bounds_grid(bounds: CoreXYBoundsControl) -> None:
     )
 
 
+def _section_metrics() -> SectionMetrics:
+    """The app's zoom-scaled spacing for the collapsible presentation."""
+    t = theme()
+    return SectionMetrics(
+        header_height=t.row_height,
+        disclosure_width=t.scaled(24),
+        header_spacing=t.sp_xxs,
+        body_margin_h=t.sp_sm,
+        body_margin_top=t.sp_xs,
+        body_margin_bottom=t.sp_sm,
+        body_spacing=t.sp_sm,
+        content_spacing=t.sp_xxs,
+        content_margin_h=t.sp_sm,
+        footer_margin_h=t.sp_sm,
+        footer_margin_top=t.sp_xs,
+        footer_margin_bottom=t.sp_sm,
+    )
+
+
 def _memory_output_settings() -> AcquisitionSettings:
     """Build the "no saving" scratch output from the user's Data & Memory prefs.
 
@@ -191,30 +217,57 @@ def _memory_output_settings() -> AcquisitionSettings:
     return AcquisitionSettings(format=fmt)
 
 
-class MemoryMDAWidget(MDAWidgetCollapsible):
-    """Collapsible-sections MDA editor with a viewable memory-sink fallback.
+if TYPE_CHECKING:
+    # Type-checkers see the real base, so everything the mixin touches
+    # (save_info, channels, control_btns, ...) resolves normally.
+    _MixinBase = MDAWidget
+else:
+    # At runtime it must NOT be a QObject: PyQt cannot combine two
+    # QObject-derived classes, and inheriting MDAWidget here as well as through
+    # the concrete flavour corrupts the generated meta-object -- signals then
+    # resolve to the wrong slot (roiSelectionRequested came back as the bool
+    # mdaLockChanged). A plain object mixin sidesteps that entirely.
+    _MixinBase = object
 
-    The sectioned presentation now lives upstream in ``MDAWidgetCollapsible``;
-    this subclass only adds the app theme, semantic icons, the channel-selection
-    core bridge, and the memory-sink output fallback.
+
+class MemoryMDAWidgetBase(_MixinBase):
+    """Everything this app adds to an MDA editor, independent of its presentation.
+
+    Both upstream presentations (`MDAWidgetCollapsible`'s sections,
+    `MDAWidgetTopbar`'s tab bar) derive from `MDAWidget` and expose the same
+    editors, footer and saving widgets, so the app theme, semantic icons, the
+    channel-selection core bridge, the acquisition lock and the memory-sink
+    output fallback all live here and are shared verbatim. Both flavours must
+    behave identically; only their layout differs.
+
+    What genuinely differs is confined to `tabs`: the collapsible one has
+    `sections`/`saving_section`/`refresh_summaries`, while the top bar is a
+    real `QTabWidget` addressed through its native tab API
+    (`setChecked`/`setCurrentWidget`/`indexOf`) instead. Reached through the
+    small hooks below (`_flavor_*`) rather than by branching through the rest
+    of the class.
     """
 
-    _sequenceStartedInGui = Signal()
-    _sequenceFinishedInGui = Signal()
+    if TYPE_CHECKING:
+        # Supplied by whichever concrete flavour this is mixed into. Their tab
+        # widgets share every member used here but have no common subclass that
+        # declares them, so they are typed loosely rather than narrowed to one.
+        #
+        # Both flavours expose `tabs` as a property, so it is declared as one
+        # here too -- a plain annotation would read as an incompatible override.
+        @property
+        def tabs(self) -> Any: ...
 
-    mdaLockChanged = Signal(bool)
-    """Emitted True when a run takes the hardware, False once the runner is idle.
+        # Declared for real on each concrete flavour -- a signal has to be
+        # defined on a QObject subclass, which this mixin deliberately is not.
+        _sequenceStartedInGui: Any
+        _sequenceFinishedInGui: Any
+        mdaLockChanged: Any
 
-    The app-wide acquisition lock hangs off this (see
-    ``AcquirePage.set_mda_lock``). The False edge is emitted from
-    ``_sync_mda_state``, which polls the runner for as long as a run is
-    active, so the same safety net that recovers this widget's own controls
-    from a missed ``sequenceFinished`` also releases the rest of the GUI --
-    the lock can never outlive the acquisition.
-    """
-
-    def _create_tab_widget(self) -> CollapsibleCoreMDATabs:
-        return ActiveChannelCollapsibleCoreMDATabs(None, self._mmc)
+        # The settings card `_install_layout` builds on each concrete flavour
+        # (axis order / keep shutter open / autofocus axis) -- not part of
+        # upstream `MDAWidget`, so `_MixinBase` doesn't carry it either.
+        _settings_box: Any
 
     # ----------- Override type hints in superclass -----------
     # _create_tab_widget above always installs an ActiveChannelTable, which adds
@@ -235,8 +288,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         # it stays right after saving to a *different* file than the loaded one.
         self._light_source_declarations: dict[str, list[tuple[str, str, float]]] = {}
         super().__init__(parent=parent, mmcore=mmcore)
-        install_subsequence_popup_theming()
-        self.camera_roi.setRoiInfoVisible(False)
+        install_third_party_window_theming()
         self._update_time_estimate()
         self._progress_overlay = BusyOverlay(self)
         self._sequenceStartedInGui.connect(self._on_sequence_started_in_gui)
@@ -292,6 +344,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         # and indicator. Re-apply it here (and after each row insert below).
         self._collapsible_tabs().apply_save_body_style()
         self._apply_table_toolbar_icon_size()
+        self.channels.apply_theme_metrics()
 
         # Channels/Positions/Time are tables: each row is a fresh cell widget
         # built on demand (e.g. the Positions row's black "mdi:grid" per-
@@ -474,6 +527,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         self._connect_position_icon_updates()
         self._apply_themed_icons()
         self._apply_light_source_declarations()
+        self.channels.apply_theme_metrics()
 
     def setValue(self, value: useq.MDASequence) -> None:
         """Restore an MDA sequence without applying a selected row to the core."""
@@ -485,7 +539,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
             self._restore_channel_selection(selected, selected_row)
         finally:
             self._restoring_sequence = False
-        self._collapsible_tabs().refresh_summaries()
+        self._flavor_refresh_summaries()
 
     def refresh_channel_table(self) -> None:
         """Refresh core-backed channel choices without changing microscope state."""
@@ -534,7 +588,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         # snapshot restored above predates whatever configuration change prompted
         # this refresh, and the loaded cfg is the more authoritative source.
         self._apply_light_source_declarations()
-        self._collapsible_tabs().refresh_summaries()
+        self._flavor_refresh_summaries()
 
     # ------------- light source declarations (see LIGHT_SOURCE_COMMENT) ---------
 
@@ -990,8 +1044,48 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
                 self.channels.setActiveRow(row)
                 return
 
-    def _collapsible_tabs(self) -> CollapsibleCoreMDATabs:
+    def _collapsible_tabs(self) -> Any:
+        """The tab widget, whichever presentation this flavour installed."""
         return self.tabs
+
+    # ------------------------- per-flavour hooks -------------------------
+
+    def _flavor_apply_theme_metrics(self) -> None:
+        """Feed zoom-scaled spacing to a presentation that has such knobs."""
+
+    def _flavor_refresh_summaries(self) -> None:
+        """Re-render whatever per-axis summary the presentation shows."""
+
+    def _flavor_icon_labels(self) -> Iterable[QLabel]:
+        """Header labels whose pixmaps need tinting to the app's icon colour."""
+        return ()
+
+    def _flavor_apply_tab_icons(self) -> None:
+        """Tint native `QTabBar` tab icons, for a presentation built on one."""
+
+    def _flavor_reveal_axis(self, axis: str, editor: QWidget) -> None:
+        """Bring `axis` into view in whatever way this presentation allows."""
+
+    def axis_editor(self, axis: str) -> QWidget:
+        """The editor widget for an axis key, present in every presentation."""
+        editors: dict[str, QWidget] = {
+            "c": self.channels,
+            "p": self.stage_positions,
+            "g": self.grid_plan,
+            "z": self.z_plan,
+            "t": self.time_plan,
+        }
+        if (editor := editors.get(axis)) is None:  # pragma: no cover
+            raise ValueError(f"Unknown MDA axis: {axis!r}")
+        return editor
+
+    def revealAxis(self, axis: str) -> None:
+        """Turn an axis on and bring its editor into view.
+
+        Flavour-agnostic so callers (e.g. Stage Explorer's "send to MDA") do not
+        have to know whether the axes are collapsible sections or top-bar tabs.
+        """
+        self._flavor_reveal_axis(axis, self.axis_editor(axis))
 
     def _apply_table_toolbar_icon_size(self) -> None:
         """Shrink the axis-table toolbars to the app's compact action-icon size.
@@ -1009,23 +1103,8 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
             table.toolBar().setIconSize(size)
 
     def _apply_theme_metrics(self) -> None:
-        """Feed the app's zoom-scaled spacing into the upstream sections."""
-        t = theme()
-        self.set_section_metrics(
-            SectionMetrics(
-                header_height=t.row_height,
-                disclosure_width=t.scaled(24),
-                header_spacing=t.sp_xxs,
-                body_margin_h=t.sp_sm,
-                body_margin_top=t.sp_xs,
-                body_margin_bottom=t.sp_sm,
-                body_spacing=t.sp_sm,
-                content_spacing=t.sp_xxs,
-                footer_margin_h=t.sp_sm,
-                footer_margin_top=t.sp_xs,
-                footer_margin_bottom=t.sp_sm,
-            )
-        )
+        """Feed the app's zoom-scaled spacing into the upstream presentation."""
+        self._flavor_apply_theme_metrics()
 
     def _connect_position_icon_updates(self) -> None:
         """Keep per-position sub-sequence icons themed after value changes."""
@@ -1059,7 +1138,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
         this can re-run on every theme change without drifting.
         """
         color = qcolor(theme().text_secondary)
-        for label in self._collapsible_tabs().findChildren(_ClickableLabel):
+        for label in self._flavor_icon_labels():
             pixmap = label.pixmap()
             if pixmap is None or pixmap.isNull():
                 continue  # the header's title/summary labels carry text, not icons
@@ -1075,6 +1154,7 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
     def _apply_themed_icons(self, *_: object) -> None:
         """Apply the app's semantic green/red to every MDA action icon."""
         self._apply_themed_section_icons()
+        self._flavor_apply_tab_icons()
         green = qcolor(theme().status_green).name()
         red = qcolor(theme().status_red).name()
 
@@ -1127,12 +1207,13 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
             self._apply_themed_icons()
             self._apply_theme_metrics()
             self._apply_table_toolbar_icon_size()
+            self.channels.apply_theme_metrics()
 
     # ------------------------- OME-TIFF layout option -------------------------
 
     def _install_ome_tiff_options(self) -> None:
         """Add the per-position file layout choice to the Saving section."""
-        self._tiff_layout_label = QLabel("Files:")
+        self._tiff_layout_label = QLabel("Tiff Mode:")
         self._tiff_layout_combo = QComboBox()
         self._tiff_layout_combo.setToolTip(TIFF_LAYOUT_TOOLTIP)
         for idx, (label, mode, tip) in enumerate(TIFF_LAYOUTS):
@@ -1197,3 +1278,87 @@ class MemoryMDAWidget(MDAWidgetCollapsible):
             )
             return AcquisitionSettings(root_path=str(output), format=tiff_format)
         return output
+
+
+class MemoryMDAWidget(MemoryMDAWidgetBase, MDAWidgetCollapsible):
+    """The app's MDA editor, presented as upstream's collapsible sections."""
+
+    _sequenceStartedInGui = Signal()
+    _sequenceFinishedInGui = Signal()
+
+    mdaLockChanged = Signal(bool)
+    """Emitted True when a run takes the hardware, False once the runner is idle.
+
+    The app-wide acquisition lock hangs off this (see
+    ``AcquirePage.set_mda_lock``). The False edge is emitted from
+    ``_sync_mda_state``, which polls the runner for as long as a run is active,
+    so the same safety net that recovers this widget's own controls from a
+    missed ``sequenceFinished`` also releases the rest of the GUI -- the lock
+    can never outlive the acquisition.
+    """
+
+    def _create_tab_widget(self) -> CollapsibleCoreMDATabs:
+        return ActiveChannelCollapsibleCoreMDATabs(None, self._mmc)
+
+    def _flavor_apply_theme_metrics(self) -> None:
+        self.set_section_metrics(_section_metrics())
+
+    def _flavor_refresh_summaries(self) -> None:
+        self.tabs.refresh_summaries()
+
+    def _flavor_icon_labels(self) -> Iterable[QLabel]:
+        return list(self.tabs.findChildren(_ClickableLabel))
+
+    def _flavor_reveal_axis(self, axis: str, editor: QWidget) -> None:
+        section = self.tabs.section(axis)
+        section.set_checked(True)
+        section.set_expanded(True)
+        self.tabs.refresh_summaries()
+
+
+class TopbarMemoryMDAWidget(MemoryMDAWidgetBase, MDAWidgetTopbar):
+    """The same editor, presented as upstream's native icon-labelled top tabs.
+
+    Identical in behaviour to `MemoryMDAWidget` -- everything the app adds lives
+    in `MemoryMDAWidgetBase`. This flavour is structurally the closest to plain
+    `MDAWidget`: `tabs` is a real `QTabWidget`, so the hooks below use its
+    native tab API (`setChecked`/`setCurrentWidget`) directly rather than a
+    presentation-specific row/section object.
+    """
+
+    _sequenceStartedInGui = Signal()
+    _sequenceFinishedInGui = Signal()
+
+    mdaLockChanged = Signal(bool)
+    """Emitted True when a run takes the hardware, False once the runner is idle.
+
+    The app-wide acquisition lock hangs off this (see
+    ``AcquirePage.set_mda_lock``). The False edge is emitted from
+    ``_sync_mda_state``, which polls the runner for as long as a run is active,
+    so the same safety net that recovers this widget's own controls from a
+    missed ``sequenceFinished`` also releases the rest of the GUI -- the lock
+    can never outlive the acquisition.
+    """
+
+    def _create_tab_widget(self) -> TopbarMDATabs:
+        return ActiveChannelTopbarMDATabs(None, self._mmc)
+
+    def _flavor_apply_tab_icons(self) -> None:
+        """Tint every tab's icon to the app's icon colour.
+
+        Upstream sets each tab's icon from a plain, uncolored `QIconifyIcon`
+        (`TopbarMDATabs._add_tab`), which is also cached per index
+        (`tab_icon`) precisely so this can re-derive a themed icon from that
+        stable source on every call instead of compounding tints onto an
+        already-recolored one. Applied through `set_tab_icon` (the button
+        widget's icon), not `QTabBar.setTabIcon` (the native tab's, which
+        this presentation deliberately leaves empty -- see `set_tab_icon`).
+        """
+        color = qcolor(theme().text_secondary)
+        for i in range(self.tabs.count()):
+            if (source := self.tabs.tab_icon(i)) is not None:
+                self.tabs.set_tab_icon(i, _recolor_icon(source, color))
+
+    def _flavor_reveal_axis(self, axis: str, editor: QWidget) -> None:
+        self.tabs.setChecked(editor, True)
+        self.tabs.setCurrentWidget(editor)

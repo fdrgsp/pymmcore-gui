@@ -37,12 +37,29 @@ class PanelKey:
     """
 
     MDA: Final = "mda"
+    CAMERA_ROI: Final = "camera_roi"
     STAGE_EXPLORER: Final = "stage_explorer"
     PRESETS: Final = "presets"
     PROPERTIES: Final = "properties"
     STAGES: Final = "stages"
     CONSOLE: Final = "console"
     EXCEPTION_LOG: Final = "exception_log"
+
+
+class MdaKind:
+    """Which MDA-editor presentation is docked under ``PanelKey.MDA``.
+
+    Both behave identically -- everything this app adds lives in a shared
+    base (``widgets/_mda_widget.py``'s ``MemoryMDAWidgetBase``) -- and differ
+    only in how the axes are laid out. ``AcquirePage`` lets the user pick
+    between them by right-clicking the MDA panel button, the same way it does
+    for the stage flavors below.
+    """
+
+    COLLAPSIBLE: Final = "collapsible"
+    """MemoryMDAWidget -- upstream's stacked, collapsible sections."""
+    TOPBAR: Final = "topbar"
+    """TopbarMemoryMDAWidget -- upstream's top navigation bar."""
 
 
 class StageKind:
@@ -71,6 +88,26 @@ def _create_mda(_parent: QWidget, core: CMMCorePlus) -> QWidget:
     from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
 
     return MemoryMDAWidget(mmcore=core)
+
+
+def _create_camera_roi(_parent: QWidget, core: CMMCorePlus) -> QWidget:
+    from pymmcore_widgets import CameraRoiWidget
+
+    widget = CameraRoiWidget(mmcore=core, show_auto_snap=True)
+    widget.snap_checkbox.setChecked(True)
+    return widget
+
+
+def _create_mda_topbar(_parent: QWidget, core: CMMCorePlus) -> QWidget:
+    from pymmcore_gui.widgets._mda_widget import TopbarMemoryMDAWidget
+
+    return TopbarMemoryMDAWidget(mmcore=core)
+
+
+MDA_WIDGET_FACTORIES: Final[dict[str, PanelFactory]] = {
+    MdaKind.COLLAPSIBLE: _create_mda,
+    MdaKind.TOPBAR: _create_mda_topbar,
+}
 
 
 def _create_presets(_parent: QWidget, core: CMMCorePlus) -> QWidget:
@@ -230,6 +267,14 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
         # Stages button's right-click menu. This default is only the
         # fallback/documentation of the initial kind (see StageKind).
         create=_create_stage_xyz,
+    ),
+    PanelInfo(
+        key=PanelKey.CAMERA_ROI,
+        title="Camera ROI",
+        icon="mdi:crop",
+        tooltip="Camera ROI — show or hide the camera ROI panel",
+        create=_create_camera_roi,
+        unstyle=True,
     ),
     PanelInfo(
         key=PanelKey.STAGE_EXPLORER,
