@@ -12,6 +12,7 @@ from pymmcore_widgets.mda import (
     CoreConnectedChannelTable,
     TopbarMDATabs,
 )
+from pymmcore_widgets.useq_widgets import CustomPlateWidget
 from pymmcore_widgets.useq_widgets._column_info import ColumnInfo
 from superqt.utils import signals_blocked
 
@@ -218,13 +219,15 @@ def _theme_subsequence_popup(popup: QWidget) -> None:
 class _ThirdPartyWindowThemer(QObject):
     """Applies the app's styling to windows pymmcore-widgets opens itself.
 
-    Both the position sub-sequence popup and the HCS wizard are constructed
-    on demand, deep inside pymmcore-widgets, with no app-side subclass to
-    hook construction-time theming into -- the popup is private
-    (``_MDAPopup``, matched by class name for want of a public hook) and the
-    wizard is created lazily by the position table's "Well Plate..." button.
-    Watch every Show event application-wide instead and theme each the moment
-    it appears.
+    The position sub-sequence popup, the HCS wizard, and the wizard's "New
+    Plate" dialog are all constructed on demand, deep inside
+    pymmcore-widgets, with no app-side subclass to hook construction-time
+    theming into -- the popup is private (``_MDAPopup``, matched by class
+    name for want of a public hook), the wizard is created lazily by the
+    position table's "Well Plate..." button, and the custom-plate dialog is
+    created lazily by the wizard's "+" button (so it postdates the wizard's
+    own ``unstyle_widgets()`` sweep and needs its own). Watch every Show
+    event application-wide instead and theme each the moment it appears.
     """
 
     def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
@@ -238,7 +241,7 @@ class _ThirdPartyWindowThemer(QObject):
         if type(a0).__name__ == "_MDAPopup":
             a0.setProperty("_pymmcore_gui_themed", True)
             _theme_subsequence_popup(cast("QWidget", a0))
-        elif isinstance(a0, HCSWizard):
+        elif isinstance(a0, (HCSWizard, CustomPlateWidget)):
             a0.setProperty("_pymmcore_gui_themed", True)
             unstyle_widgets(a0)
         return False
