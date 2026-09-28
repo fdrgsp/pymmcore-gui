@@ -94,7 +94,7 @@ def _format_event(event: MDAEvent, sizes: Mapping[str, int]) -> str:
 
     if event.channel is not None and "c" not in index:
         parts.append(f"C {_shorten(event.channel.config)}")
-    return " · ".join(parts)
+    return "  ·  ".join(parts)
 
 
 def _event_tooltip(event: MDAEvent) -> str:
@@ -346,11 +346,11 @@ class MDAStatusWidget(QWidget):
         if idle and self._result is None:
             pass
         elif self._next_event is not None and not idle:
-            prefix, event = "Next: ", self._next_event
+            prefix, event = " |  Next: ", self._next_event
         elif self._last_event is not None:
-            prefix, event = "Last: ", self._last_event
+            prefix, event = " |  Last: ", self._last_event
         elif self._current_event is not None:
-            prefix, event = "Current: ", self._current_event
+            prefix, event = " |  Current: ", self._current_event
 
         details = _format_event(event, self._sizes) if event is not None else ""
         if self._state_label.text() != state:
