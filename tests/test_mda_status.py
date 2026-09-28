@@ -35,7 +35,7 @@ def test_mda_status_formats_regular_and_irregular_coordinates() -> None:
     event = next(iter(sequence))
 
     assert _format_event(event, _sequence_sizes(sequence)) == (
-        "T 1/2 · P 1/2 (A1) · C 1/2 DAPI · Z 1/3"
+        "T 1/2  ·  P 1/2 (A1)  ·  C 1/2 DAPI  ·  Z 1/3"
     )
 
     irregular = MDASequence(
@@ -93,7 +93,7 @@ def test_mda_status_tracks_runner_transitions_and_coordinate_meaning(
     qtbot.waitUntil(lambda: widget._next_event is event)
     widget._render()
     assert widget._state_label.text() == "Waiting 10s"
-    assert widget._details_label.text().startswith("Next: T 1/2")
+    assert widget._details_label.text().startswith(" |  Next: T 1/2")
 
     # The runner keeps re-emitting awaitingEvent with a falling remaining_sec
     # while it waits; the status bar's countdown should track it down to 0.
@@ -107,14 +107,14 @@ def test_mda_status_tracks_runner_transitions_and_coordinate_meaning(
     qtbot.waitUntil(lambda: widget._current_event is event)
     widget._render()
     assert widget._state_label.text() == "Acquiring"
-    assert widget._details_label.text().startswith("Current: T 1/2")
+    assert widget._details_label.text().startswith(" |  Current: T 1/2")
     # The countdown belongs to the wait that just ended, not the next one.
     assert widget._next_event_remaining is None
 
     runner.events.frameReady.emit(np.zeros((1, 1)), event, {})
     qtbot.waitUntil(lambda: widget._last_event is event)
     widget._render()
-    assert widget._details_label.text().startswith("Last: T 1/2")
+    assert widget._details_label.text().startswith(" |  Last: T 1/2")
     assert "image" not in widget._details_label.text().lower()
 
     runner._pause_requested = True
