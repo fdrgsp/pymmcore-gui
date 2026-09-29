@@ -157,6 +157,10 @@ class ScaledThemeView:
         return self._theme.status_amber
 
     @property
+    def status_yellow(self) -> Color:
+        return self._theme.status_yellow
+
+    @property
     def drag_highlight(self) -> Color:
         return self._theme.drag_highlight
 

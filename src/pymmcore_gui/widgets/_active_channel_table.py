@@ -21,37 +21,74 @@ from pymmcore_gui._array_viewer import (
     set_source_icon,
     unstyle_widgets,
 )
-from pymmcore_gui._modern_gui._theme import theme, ui_font
-from pymmcore_gui._qt.QtCore import QEvent, QObject, Qt
+from pymmcore_gui._modern_gui._theme import qcolor, theme
+from pymmcore_gui._qt.QtCore import QEvent, QObject, QPointF, Qt
+from pymmcore_gui._qt.QtGui import QBrush, QPainter, QPen
 from pymmcore_gui._qt.QtWidgets import (
     QApplication,
     QHeaderView,
     QPushButton,
+    QStyledItemDelegate,
     QTableWidgetItem,
 )
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
-    from qtpy.QtCore import SignalInstance  # type: ignore[attr-defined]
-    from qtpy.QtWidgets import QTableWidget
+    from qtpy.QtCore import QModelIndex, SignalInstance  # type: ignore[attr-defined]
+    from qtpy.QtWidgets import QStyleOptionViewItem, QTableWidget
 
     from pymmcore_gui._qt.QtWidgets import QWidget
 
 
-_CURRENT_ACTIVE = "●"
-_CURRENT_INACTIVE = "○"
+_ACTIVE_ROLE = Qt.ItemDataRole.UserRole
 _CURRENT_COL_WIDTH = 46
-# Bigger than the app's default UI font (see `ui_font`'s own default) so the
-# dot itself, not just its column, reads as an obviously clickable control.
-_CURRENT_DOT_FONT_PT = 16.0
+# Fraction of the cell's shorter side the dot/ring's diameter occupies.
+_CURRENT_DOT_FRACTION = 0.4
+
+
+class _CurrentChannelDelegate(QStyledItemDelegate):
+    """Paints the ``Current`` column's dot/ring indicator.
+
+    Drawn with ``QPainter`` rather than a ``"●"``/``"○"`` text glyph: those two
+    Unicode characters are unrelated glyphs, and at least one common system
+    font (Windows' Segoe UI) renders the filled "black circle" glyph visibly
+    smaller than the outlined "white circle" one at the same point size --
+    drawing our own ellipse keeps both states pixel-identical in size on
+    every platform.
+    """
+
+    def paint(
+        self,
+        painter: QPainter | None,
+        option: QStyleOptionViewItem,
+        index: QModelIndex,
+    ) -> None:
+        super().paint(painter, option, index)
+        if painter is None:
+            return
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = option.rect
+        d = min(rect.width(), rect.height()) * _CURRENT_DOT_FRACTION
+        radius = d / 2
+        center = QPointF(rect.center())
+        if index.data(_ACTIVE_ROLE):
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(qcolor(theme().status_yellow)))
+        else:
+            painter.setPen(QPen(qcolor(theme().text_secondary), 1.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(center, radius, radius)
+        painter.restore()
 
 
 @dataclass(frozen=True)
 class _CurrentChannelColumn(ColumnInfo):
     """Narrow indicator showing which channel is currently active on the microscope.
 
-    Displays ``●`` in the active row and ``○`` in all others. Clicking this
-    column activates the corresponding channel on the microscope.
+    Draws a filled dot in the active row and a hollow ring in all others (see
+    ``_CurrentChannelDelegate``). Clicking this column activates the
+    corresponding channel on the microscope.
     """
 
     key: str = "_current_channel"
@@ -69,11 +106,10 @@ class _CurrentChannelColumn(ColumnInfo):
         change_signal: SignalInstance,
     ) -> None:
         """Populate the cell with an inactive indicator."""
-        item = QTableWidgetItem(_CURRENT_INACTIVE)
-        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        item = QTableWidgetItem("")
         item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         item.setToolTip("Click to activate this channel on the microscope")
-        item.setFont(ui_font(_CURRENT_DOT_FONT_PT))
+        item.setData(_ACTIVE_ROLE, False)
         table.setItem(row, col, item)
 
     def get_cell_data(self, table: QTableWidget, row: int, col: int) -> dict[str, Any]:
@@ -83,9 +119,9 @@ class _CurrentChannelColumn(ColumnInfo):
     def set_cell_data(
         self, table: QTableWidget, row: int, col: int, value: Any
     ) -> None:
-        """Set the cell to ``●`` when *value* is truthy, ``○`` otherwise."""
+        """Mark the cell active (filled dot) or inactive (hollow ring)."""
         if item := table.item(row, col):
-            item.setText(_CURRENT_ACTIVE if value else _CURRENT_INACTIVE)
+            item.setData(_ACTIVE_ROLE, bool(value))
 
 
 CURRENT_CHANNEL_COLUMN = _CurrentChannelColumn()
@@ -94,10 +130,11 @@ CURRENT_CHANNEL_COLUMN = _CurrentChannelColumn()
 class ActiveChannelTable(CoreConnectedChannelTable):
     """Core channel table that tracks which channel is live on the microscope.
 
-    A narrow ``Current`` column is prepended that shows ``●`` in the row whose
-    channel is presently active on the microscope and ``○`` in all others.
-    Clicking that column, or picking a value in a row's Config combo, activates
-    the channel; no other column does so (see ``MemoryMDAWidget`` for the wiring).
+    A narrow ``Current`` column is prepended that shows a filled dot in the
+    row whose channel is presently active on the microscope and a hollow ring
+    in all others. Clicking that column, or picking a value in a row's Config
+    combo, activates the channel; no other column does so (see
+    ``MemoryMDAWidget`` for the wiring).
     """
 
     def __init__(
@@ -111,6 +148,7 @@ class ActiveChannelTable(CoreConnectedChannelTable):
         # Prepend the active-channel indicator at the leftmost position.
         table = self.table()
         table.addColumn(CURRENT_CHANNEL_COLUMN, 0)
+        table.setItemDelegateForColumn(0, _CurrentChannelDelegate(table))
         if (header := table.horizontalHeader()) is not None:
             header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         if header_item := table.horizontalHeaderItem(0):
@@ -118,30 +156,25 @@ class ActiveChannelTable(CoreConnectedChannelTable):
         self.apply_theme_metrics()
 
     def apply_theme_metrics(self) -> None:
-        """Zoom-scale the Current column's width and its dot glyph's size.
+        """Zoom-scale the Current column's width.
 
-        `ColumnInfo.init_cell` sets each row's font once, at construction, via
-        `ui_font` -- zoom-scaled at that instant, not automatically kept in
-        sync afterward the way the app's default-font widgets are. Re-called
-        on theme/zoom changes (see `MemoryMDAWidgetBase`) to catch every row,
-        including ones added after the last theme change.
+        Re-called on theme/zoom changes (see `MemoryMDAWidgetBase`); the
+        indicator itself is painted relative to the cell's rect (see
+        `_CurrentChannelDelegate`), so it scales automatically with the row
+        height and needs no per-row update here.
         """
         table = self.table()
         table.setColumnWidth(0, theme().scaled(_CURRENT_COL_WIDTH))
-        font = ui_font(_CURRENT_DOT_FONT_PT)
-        for row in range(table.rowCount()):
-            if item := table.item(row, 0):
-                item.setFont(font)
 
     def setActiveRow(self, row: int) -> None:
         """Mark *row* as the channel currently active on the microscope.
 
-        Updates the ``●``/``○`` indicator for every row in the ``Current``
+        Updates the dot/ring indicator for every row in the ``Current``
         column, and moves the table's own row highlight to match -- the
-        highlighted row always mirrors the ``●`` row and never changes for any
-        other reason (clicking into an Exposure or Intensity editor, focusing a
-        cell, etc. never moves it). Pass ``-1`` to clear both the indicator and
-        the highlight without marking any row active.
+        highlighted row always mirrors the active-dot row and never changes
+        for any other reason (clicking into an Exposure or Intensity editor,
+        focusing a cell, etc. never moves it). Pass ``-1`` to clear both the
+        indicator and the highlight without marking any row active.
         """
         self._active_row = row
         table = self.table()

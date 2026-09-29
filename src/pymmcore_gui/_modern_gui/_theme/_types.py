@@ -128,6 +128,7 @@ class Theme:
     status_green: Color = Color()
     status_red: Color = Color()
     status_amber: Color = Color()
+    status_yellow: Color = Color()
 
     # -- interaction feedback -----------------------------------------------
     drag_highlight: Color = Color(0xFF, 0xFF, 0xFF, 0x14)  # overlay on hover
