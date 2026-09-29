@@ -112,6 +112,35 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+# Qt6 bundles its own (old) copies of the MSVC C++ redistributable DLLs
+# alongside its binaries (PyQt6/Qt6/bin/*.dll). Windows resolves a DLL's own
+# dependencies from its own directory *before* falling back to an
+# already-loaded module of the same name (LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR),
+# so bundling these lets Qt6Core.dll load a *second*, differently-versioned
+# instance of e.g. msvcp140.dll into the process alongside the one
+# `pymmcore_gui.__init__` preloads from the system -- two incompatible C++
+# runtimes coexisting in one process, which crashes with
+# STATUS_ACCESS_VIOLATION as soon as an object built by one is touched by
+# code linked against the other. Stripping Qt's private copies (but leaving
+# any top-level copy PyInstaller bundles for the interpreter itself alone)
+# forces it to fall back to the already-loaded system version instead.
+_REDUNDANT_MSVC_DLLS = {
+    "msvcp140.dll",
+    "msvcp140_1.dll",
+    "msvcp140_2.dll",
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+    "concrt140.dll",
+}
+a.binaries = [
+    entry
+    for entry in a.binaries
+    if not (
+        Path(entry[0]).name.lower() in _REDUNDANT_MSVC_DLLS
+        and Path(entry[0]).parent != Path(".")
+    )
+]
+
 pyz = PYZ(a.pure)
 if SPLASH:
     splash = Splash(
