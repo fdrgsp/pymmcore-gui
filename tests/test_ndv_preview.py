@@ -5,7 +5,8 @@ from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
 import numpy as np
-from ndv.models import RingBuffer
+from cmap import Colormap
+from ndv.models import ChannelMode, LUTModel, RingBuffer
 
 import pymmcore_gui.widgets.image_preview._ndv_preview as preview_module
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
@@ -50,6 +51,7 @@ def test_first_new_shape_frame_is_applied_then_fitted(
         _buffer_applied=True,
         _core_dtype=("uint16", (512, 512)),
         _viewer=viewer,
+        _update_channel_name=Mock(),
         process_events_on_update=False,
     )
 
@@ -93,3 +95,49 @@ def test_late_roi_set_keeps_buffer_populated_by_auto_snap() -> None:
     preview._init_buffer.assert_not_called()
     assert preview._buffer is buffer
     assert preview._buffer_applied
+
+
+def test_apply_viewer_settings_keeps_preview_composite() -> None:
+    """Applying a new mono or RGB buffer must not reset the GUI's viewer mode."""
+    for is_rgb, expected_axis in ((False, None), (True, 3)):
+        lut = LUTModel(cmap=Colormap("green"))
+        display_model = SimpleNamespace(
+            visible_axes=None,
+            channel_axis=None,
+            channel_mode=None,
+            luts={0: lut},
+        )
+        preview = SimpleNamespace(
+            _viewer=SimpleNamespace(data=None, display_model=display_model),
+            _buffer=object(),
+            _buffer_applied=False,
+            _is_rgb=is_rgb,
+            _apply_control_visibility=Mock(),
+        )
+
+        NDVPreview._apply_viewer_settings(preview)  # type: ignore[arg-type]
+
+        assert display_model.channel_axis == expected_axis
+        assert display_model.channel_mode is ChannelMode.COMPOSITE
+        expected_cmap = "green" if is_rgb else "gray"
+        assert lut.cmap.name.endswith(expected_cmap)
+        assert preview._buffer_applied
+
+
+def test_preview_lut_uses_current_channel_name() -> None:
+    core = Mock()
+    core.getChannelGroup.return_value = "Channel"
+    core.getCurrentConfig.return_value = "FITC"
+    lut = LUTModel()
+    preview = SimpleNamespace(
+        _mmc=core,
+        _is_rgb=False,
+        _viewer=SimpleNamespace(display_model=SimpleNamespace(luts={0: lut})),
+    )
+
+    NDVPreview._update_channel_name(preview)  # type: ignore[arg-type]
+
+    assert lut.name == "FITC"
+    core.getCurrentConfig.return_value = "DAPI"
+    NDVPreview._update_channel_name(preview)  # type: ignore[arg-type]
+    assert lut.name == "DAPI"

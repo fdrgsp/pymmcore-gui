@@ -19,6 +19,7 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
+from ndv.models import ChannelMode
 from ndv.models._viewer_model import InteractionMode
 from ome_writers import (
     AcquisitionSettings,
@@ -73,6 +74,21 @@ class _FakeViewer:
 
     def widget(self) -> QWidget:
         return self._widget
+
+
+def test_viewer_defaults_to_composite_log_histogram(qtbot: QtBot) -> None:
+    viewer = MMArrayViewer(
+        show_save_button=False,
+        show_roll_axes_button=False,
+        show_center_cross_button=False,
+    )
+    qtbot.addWidget(viewer.widget())
+
+    qwidget = viewer.widget()
+    assert viewer.display_model.channel_mode is ChannelMode.COMPOSITE
+    assert qwidget.shared_histogram_btn.isChecked()
+    assert qwidget.shared_hist_log_btn.isChecked()
+    assert viewer._shared_histogram is not None
 
 
 def test_clear_roi_removes_model_and_canvas_visual() -> None:

@@ -3,7 +3,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import ndv.models
-from ndv.models import RingBuffer
+from cmap import Colormap
+from ndv.models import LUTModel, RingBuffer
 from superqt.cmap import QColormapComboBox
 
 from pymmcore_gui._array_viewer import MMArrayViewer
@@ -80,6 +81,7 @@ class NDVPreview(ImagePreviewBase):
                 # not change ndv's dimensionality, so ndv preserves the old
                 # camera range. Fit after the populated image has been rendered.
                 QTimer.singleShot(0, self._viewer.reset_zoom)
+            self._update_channel_name()
             self._viewer.display_model.current_index.update({0: len(self._buffer) - 1})
             self._viewer.data_wrapper.data_changed.emit()
             if self.process_events_on_update:
@@ -121,17 +123,48 @@ class NDVPreview(ImagePreviewBase):
         self._buffer = RingBuffer(max_capacity=BUFFER_SIZE, dtype=core_dtype)
 
     def _apply_viewer_settings(self) -> None:
-        """Assign the buffer and configure grayscale or RGB display."""
+        """Assign the buffer and configure its channel axis for composite display."""
         self._viewer.data = self._buffer
         self._buffer_applied = True
         self._viewer.display_model.visible_axes = (1, 2)
         if self._is_rgb:
             self._viewer.display_model.channel_axis = 3
-            self._viewer.display_model.channel_mode = ndv.models.ChannelMode.RGBA
         else:
-            self._viewer.display_model.channel_mode = ndv.models.ChannelMode.GRAYSCALE
             self._viewer.display_model.channel_axis = None
+        self._viewer.display_model.channel_mode = ndv.models.ChannelMode.COMPOSITE
+        if not self._is_rgb:
+            # Composite mode normally assigns channel 0 the first color in ndv's
+            # cycle (green). Camera previews should start as neutral grayscale;
+            # users may still select another LUT afterward.
+            self._viewer.display_model.luts[0].cmap = Colormap("gray")
         self._apply_control_visibility()
+
+    def _update_channel_name(self) -> None:
+        """Label snap/live LUTs from the microscope's selected channel preset."""
+        name = ""
+        if (core := self._mmc) is not None:
+            try:
+                group = str(core.getChannelGroup())
+                if group:
+                    name = str(core.getCurrentConfig(group))
+            except Exception:
+                pass
+
+        if self._is_rgb:
+            names = {
+                key: f"{name} {component}" if name else component
+                for key, component in enumerate("RGB")
+            }
+        else:
+            names = {0: name}
+
+        luts = self._viewer.display_model.luts
+        for key, label in names.items():
+            if (lut := luts.get(key)) is None:
+                if label:
+                    luts[key] = LUTModel(name=label)
+            else:
+                lut.name = label
 
     def _apply_control_visibility(self) -> None:
         """Apply initial NDV control options and optional colormap hiding.
