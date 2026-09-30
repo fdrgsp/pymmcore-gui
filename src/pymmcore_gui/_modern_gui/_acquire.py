@@ -301,6 +301,21 @@ class AcquirePage(TabPage):
         self._width_settle_timer.setSingleShot(True)
         self._width_settle_timer.setInterval(_WIDTH_SETTLE_DELAY_MS)
         self._width_settle_timer.timeout.connect(self._settle_and_lock_widths)
+        # Debounced the same way: dockAreasAdded/dockAreasRemoved can each
+        # fire more than once while ADS rebuilds the tree for a single drag.
+        self._topology_relock_timer = QTimer(self)
+        self._topology_relock_timer.setSingleShot(True)
+        self._topology_relock_timer.setInterval(_WIDTH_SETTLE_DELAY_MS)
+        self._topology_relock_timer.timeout.connect(self._relock_after_topology_change)
+        # Connected only now, not alongside dockAreaCreated up in __init__'s
+        # dock-manager setup: central-widget construction above already fires
+        # dockAreasAdded a few times, before ``_mda_width_locked_at_real_size``
+        # (checked by the handler) or this very timer exist yet. Dragging a
+        # panel to a new split location (as opposed to merely toggling an
+        # existing one open/closed) can rebuild the splitter/handle chain the
+        # MDA width lock is attached to -- see ``_schedule_topology_relock``.
+        self._dock_manager.dockAreasAdded.connect(self._schedule_topology_relock)
+        self._dock_manager.dockAreasRemoved.connect(self._schedule_topology_relock)
 
         # toolbar: snap|live ‖ shutters … [panel buttons]
         self._shutters = ShuttersBar(self._core)
@@ -1905,3 +1920,30 @@ class AcquirePage(TabPage):
             self._width_settle_timer.start()
             return
         self._mda_width_locked_at_real_size = True
+
+    def _schedule_topology_relock(self, *_args: object) -> None:
+        """(Re)start the debounce timer for ``_relock_after_topology_change``.
+
+        ``dockAreasAdded``/``dockAreasRemoved`` (connected in ``__init__``)
+        fire not just for ordinary panel open/close, but also when the user
+        drags a dock widget to a genuinely new split location -- which can
+        make ADS rebuild the splitter/handle chain that ``_install_width_lock``
+        attached its ``eventFilter`` to, even for columns that didn't move.
+        The stale handle then never receives Enter/Press again, so its column
+        stays frozen at whatever width it last locked to: draggable wider
+        (nothing enforces the old maximum any more once ADS resets that side
+        of the constraint) but never narrower.  Ignored before the initial
+        settle (see ``_settle_and_lock_widths``) -- there's nothing valid to
+        preserve yet, and that path installs the first lock itself.
+        """
+        if self._mda_width_locked_at_real_size:
+            self._topology_relock_timer.start()
+
+    def _relock_after_topology_change(self) -> None:
+        """Re-resolve and reinstall the MDA width lock at its current width.
+
+        ``pin=False``: this must never reset the column back to the
+        canonical default, only re-attach the lock (and its handle
+        eventFilter) to whatever the live splitter tree looks like now.
+        """
+        self._relock_widths(pin=False)
