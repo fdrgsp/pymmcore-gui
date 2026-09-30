@@ -2140,8 +2140,8 @@ wheels = [
 
 [[package]]
 name = "ndv"
-version = "0.5.1.dev2"
-source = { registry = "https://pypi.org/simple" }
+version = "0.1.dev267+g107f8546d"
+source = { git = "https://github.com/fdrgsp/ndv?rev=cite#107f8546dc47c1ccdc22cc94f8ed417585ff8176" }
 dependencies = [
     { name = "cmap" },
     { name = "ihist" },
@@ -2149,10 +2149,6 @@ dependencies = [
     { name = "psygnal" },
     { name = "pydantic" },
     { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b6/b7/0bc60ef0a29b938f7fec771437762cd961a5ccd03581d640aedb99f8123e/ndv-0.5.1.dev2.tar.gz", hash = "sha256:0be79c894963c25d4770e842f4e4122c35f3ec75dc6c5f8da3d52751daa2b859", size = 323640, upload-time = "2026-04-08T13:38:23.97Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/0d/95/8505d83f6a236cf3734123b0e139fa1f3ded2963f03a5cbbe4158f311127/ndv-0.5.1.dev2-py3-none-any.whl", hash = "sha256:9aef20bddb1a404225ee64d4694365508a0ebaa6e0c374b3c91413be7d94259e", size = 252130, upload-time = "2026-04-08T13:38:25.367Z" },
 ]
 
 [package.optional-dependencies]
@@ -3277,7 +3273,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "ndv", extras = ["vispy"], specifier = ">=0.5.0rc8" },
+    { name = "ndv", extras = ["vispy"], git = "https://github.com/fdrgsp/ndv?rev=cite" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "ome-writers", extras = ["tensorstore", "tifffile"], git = "https://github.com/fdrgsp/ome-writers?rev=cite" },
     { name = "psutil", specifier = ">=7.2.2" },
