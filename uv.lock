@@ -2140,8 +2140,8 @@ wheels = [
 
 [[package]]
 name = "ndv"
-version = "0.1.dev270+g8e7205c2f"
-source = { git = "https://github.com/fdrgsp/ndv?rev=cite#8e7205c2fd674074091b1a1357ee4958eb5add3c" }
+version = "0.1.dev271+gcc1775a7e"
+source = { git = "https://github.com/fdrgsp/ndv?rev=cite#cc1775a7e166055181f580e4665d5b6267a9eb00" }
 dependencies = [
     { name = "cmap" },
     { name = "ihist" },
