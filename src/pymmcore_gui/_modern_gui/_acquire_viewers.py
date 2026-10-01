@@ -14,6 +14,7 @@ from pymmcore_plus.mda import OmeWritersSink, frame_meta_to_ome
 
 from pymmcore_gui._acquisition_loader import open_acquisition as _open_acquisition
 from pymmcore_gui._array_viewer import MMArrayViewer
+from pymmcore_gui._channel_luts import ChannelLUTMemory
 from pymmcore_gui._mda_export import AcquisitionRecord
 from pymmcore_gui._ndv_viewers import (
     _add_follow_lock_button,
@@ -163,6 +164,7 @@ class AcquireViewersManager(QObject):
         self._parent_widget = parent
         self._dock_manager = dock_manager
         self._core = mmcore
+        self._channel_luts = ChannelLUTMemory()
         self._records: dict[CDockWidget, _ViewerRecord] = {}
         self._active_viewer: ndv.ArrayViewer | None = None
         self._active_dock: CDockWidget | None = None
@@ -397,6 +399,7 @@ class AcquireViewersManager(QObject):
             return
 
         viewer = MMArrayViewer(view, scales=_extract_scales(sequence, meta))
+        self._channel_luts.bind_live_mda(viewer, sequence)
         widget = viewer.widget()
         sha = str(sequence.uid)[:8]
         widget.setObjectName(f"ndv-{sha}")

@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 import numpy as np
 import pytest
 import useq
+from cmap import Colormap
 from pymmcore_plus import PropertyType
 from pymmcore_plus.mda import MDARunner
 from pymmcore_widgets import CameraRoiWidget, StageWidget, XYZStageWidget
@@ -4317,6 +4318,42 @@ def test_acquire_page_adds_sink_backed_mda_tab(
     dock.closeDockWidget()
     assert page._viewers.active_viewer is None
     assert viewer.closed
+
+
+def test_live_mda_recalls_lut_by_channel_in_next_viewer(
+    mmcore: CMMCorePlus, qtbot: QtBot, settings: Settings
+) -> None:
+    """A user's channel color follows its identity, not its prior array index."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    mmcore.mda.run(
+        useq.MDASequence(
+            channels=(
+                useq.Channel(group="Channel", config="DAPI", exposure=1),
+                useq.Channel(group="Channel", config="FITC", exposure=1),
+            )
+        ),
+        output="memory",
+    )
+    first = page._viewers.active_viewer
+    assert first is not None
+    first.display_model.luts[0].cmap = Colormap("cyan")
+    assert settings.channel_lut("Channel", "DAPI") == "cmap:cyan"
+
+    mmcore.mda.run(
+        useq.MDASequence(
+            channels=(
+                useq.Channel(group="Channel", config="FITC", exposure=1),
+                useq.Channel(group="Channel", config="DAPI", exposure=1),
+            )
+        ),
+        output="memory",
+    )
+    second = page._viewers.active_viewer
+    assert second is not None and second is not first
+    assert second.display_model.luts[1].cmap.name == "cmap:cyan"
+    assert second.display_model.luts[0].cmap.name != "cmap:cyan"
 
 
 def test_acquire_viewer_follows_time_and_grid_axes(

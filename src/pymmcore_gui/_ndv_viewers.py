@@ -9,6 +9,7 @@ import ndv
 import useq
 
 from pymmcore_gui._array_viewer import MMArrayViewer
+from pymmcore_gui._channel_luts import ChannelLUTMemory
 from pymmcore_gui._qt.QtAds import CDockWidget
 from pymmcore_gui._qt.QtCore import QObject, QTimer, Signal
 from pymmcore_gui._qt.QtWidgets import QWidget
@@ -52,6 +53,7 @@ class NDVViewersManager(QObject):
     def __init__(self, parent: QWidget, mmcore: CMMCorePlus):
         super().__init__(parent)
         self._mmc = mmcore
+        self._channel_luts = ChannelLUTMemory()
 
         # weakref map of {sequence_uid: ndv.ArrayViewer}
         self._seq_viewers = WeakValueDictionary[str, ndv.ArrayViewer]()
@@ -161,6 +163,7 @@ class NDVViewersManager(QObject):
     ) -> ndv.ArrayViewer:
         """Create a shared MMArrayViewer backed by an ome-writers stream view."""
         ndv_viewer = MMArrayViewer(view, scales=_extract_scales(sequence, meta))
+        self._channel_luts.bind_live_mda(ndv_viewer, sequence)
         if hasattr(view, "coords_changed") and hasattr(
             ndv_viewer.data_wrapper, "dims_changed"
         ):

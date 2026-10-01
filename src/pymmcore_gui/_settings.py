@@ -290,6 +290,28 @@ class SettingsV1(BaseMMSettings):
 
     MAX_RECENT_CONFIGS: ClassVar[int] = 10
 
+    channel_luts: dict[str, dict[str, str]] = Field(default_factory=dict)
+    """Last colormap selected for each microscope channel group and preset.
+
+    The nested shape is JSON-friendly and avoids conflating identically named
+    presets from different channel groups.  Values are canonical ``cmap``
+    colormap names; ndv's numeric LUT indices are deliberately not persisted.
+    """
+
+    def channel_lut(self, group: str, preset: str) -> str | None:
+        """Return the remembered colormap name for a microscope channel."""
+        return self.channel_luts.get(group, {}).get(preset)
+
+    def remember_channel_lut(self, group: str, preset: str, cmap: str) -> None:
+        """Persist the most recently selected colormap for a microscope channel."""
+        if not group or not preset or not cmap:
+            return
+        by_preset = self.channel_luts.setdefault(group, {})
+        if by_preset.get(preset) == cmap:
+            return
+        by_preset[preset] = cmap
+        self.flush()
+
     def remember_config(self, path: Path | str) -> None:
         """Record *path* as the most recently used config file.
 
