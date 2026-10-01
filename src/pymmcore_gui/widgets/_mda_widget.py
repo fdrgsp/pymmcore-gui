@@ -1358,6 +1358,21 @@ class TopbarMemoryMDAWidget(MemoryMDAWidgetBase, MDAWidgetTopbar):
     def _create_tab_widget(self) -> TopbarMDATabs:
         return ActiveChannelTopbarMDATabs(None, self._mmc)
 
+    def _enable_widgets(self, enable: bool) -> None:
+        """Disable editors while keeping the topbar footer controls clickable.
+
+        Upstream's generic implementation disables every direct child except
+        ``control_btns``.  In the topbar presentation those controls are not a
+        direct child: they live inside ``mdaExecutionFooter`` with Save/Load.
+        Disabling that frame also disables Pause and Cancel through their
+        ancestor, despite the buttons themselves remaining enabled.  Keep the
+        footer alive and lock only its editing actions explicitly.
+        """
+        self.tabs._enable_tabs(enable)
+        self._settings_box.setEnabled(enable)
+        self._save_button.setEnabled(enable)
+        self._load_button.setEnabled(enable)
+
     def _flavor_apply_tab_icons(self) -> None:
         """Tint every tab's icon to the app's icon colour.
 

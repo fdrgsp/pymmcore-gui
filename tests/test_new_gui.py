@@ -98,7 +98,11 @@ from pymmcore_gui._qt.QtWidgets import (
 )
 from pymmcore_gui._settings import Settings
 from pymmcore_gui.widgets._active_channel_table import CURRENT_CHANNEL_COLUMN
-from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget, TiffLayout
+from pymmcore_gui.widgets._mda_widget import (
+    MemoryMDAWidget,
+    TiffLayout,
+    TopbarMemoryMDAWidget,
+)
 from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 
 if TYPE_CHECKING:
@@ -3966,6 +3970,50 @@ def test_collapsible_mda_disables_every_editor_during_acquisition(
     assert mda.save_info.isEnabled()
     assert not mda.control_btns.run_btn.isHidden()
     assert mda.control_btns.cancel_btn.isHidden()
+
+
+def test_topbar_mda_keeps_pause_and_cancel_clickable(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Topbar's shared footer must not disable its own run controls."""
+    with (
+        patch.object(mmcore.mda, "toggle_pause") as toggle_pause,
+        patch.object(mmcore.mda, "cancel") as cancel,
+    ):
+        page = AcquirePage(mmcore)
+        qtbot.addWidget(page)
+        page._set_mda_kind("topbar")
+        mda = page.mda_widget
+        assert isinstance(mda, TopbarMemoryMDAWidget)
+        sequence = mda.value()
+
+        mmcore.mda.events.sequenceStarted.emit(sequence, {})
+
+        assert page._mda_locked
+        assert not mda.channels.isEnabled()
+        assert not mda.stage_positions.isEnabled()
+        assert not mda.grid_plan.isEnabled()
+        assert not mda.z_plan.isEnabled()
+        assert not mda.time_plan.isEnabled()
+        assert not mda._settings_box.isEnabled()
+        assert not mda._save_button.isEnabled()
+        assert not mda._load_button.isEnabled()
+        footer = mda.control_btns.parentWidget()
+        assert footer is not None and footer.isEnabled()
+        assert mda.control_btns.pause_btn.isEnabled()
+        assert mda.control_btns.cancel_btn.isEnabled()
+
+        mda.control_btns.pause_btn.click()
+        mda.control_btns.cancel_btn.click()
+        toggle_pause.assert_called_once_with()
+        cancel.assert_called_once_with()
+
+        mmcore.mda.events.sequenceFinished.emit(sequence)
+        mda._sync_mda_state()
+        assert not page._mda_locked
+        assert mda.channels.isEnabled()
+        assert mda._save_button.isEnabled()
+        assert mda._load_button.isEnabled()
 
 
 def test_live_opens_preview_before_streaming(
