@@ -38,12 +38,20 @@ class NDVPreview(ImagePreviewBase):
     ):
         super().__init__(parent, mmcore, use_with_mda=use_with_mda)
         px = (self._mmc.getPixelSizeUm() or None) if self._mmc else None
-        self._viewer = MMArrayViewer(
-            scales=({"x": px, "y": px} if px else {}),
-            viewer_options=viewer_options,
-            show_save_button=show_save_button,
-            show_roll_axes_button=show_roll_axes_button,
-        )
+        try:
+            self._viewer = MMArrayViewer(
+                scales=({"x": px, "y": px} if px else {}),
+                viewer_options=viewer_options,
+                show_save_button=show_save_button,
+                show_roll_axes_button=show_roll_axes_button,
+            )
+        except Exception:
+            # ImagePreviewBase attaches core callbacks during construction. If
+            # the embedded viewer cannot be created, disconnect this partial
+            # preview so the same snap does not call ``append`` on it and hide
+            # the original exception behind a second initialization error.
+            self.detach()
+            raise
         self._viewer_options = dict(viewer_options or {})
         self._show_colormap_selector = show_colormap_selector
         self._buffer: RingBuffer | None = None

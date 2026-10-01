@@ -503,7 +503,7 @@ def test_no_resolution_selection_disables_entire_calibration_panel(
     assert panel.isEnabled()
 
 
-def test_calibration_preview_hides_nonessential_controls_and_defaults_to_gray(
+def test_calibration_preview_hides_controls_and_defaults_to_composite_gray(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
     page = ConfigurationsPage(mmcore)
@@ -515,7 +515,8 @@ def test_calibration_preview_hides_nonessential_controls_and_defaults_to_gray(
     viewer = preview.viewer
     viewer_widget = viewer.widget()
 
-    assert viewer.display_model.channel_mode.value == "grayscale"
+    assert viewer.display_model.channel_mode.value == "composite"
+    assert viewer.display_model.luts[0].cmap.name.endswith("gray")
     assert viewer_widget.add_roi_btn.isHidden()
     assert viewer_widget.ndims_btn.isHidden()
     assert viewer_widget.channel_mode_combo.isHidden()

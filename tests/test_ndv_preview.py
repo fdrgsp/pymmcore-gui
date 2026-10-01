@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
 import numpy as np
+import pytest
 from cmap import Colormap
 from ndv.models import ChannelMode, LUTModel, RingBuffer
 
@@ -12,7 +13,30 @@ import pymmcore_gui.widgets.image_preview._ndv_preview as preview_module
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
 
 if TYPE_CHECKING:
-    import pytest
+    from pymmcore_plus import CMMCorePlus
+    from pytestqt.qtbot import QtBot
+
+
+def test_failed_viewer_construction_detaches_core_callbacks(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A partial preview must not receive the snap that exposed its failure."""
+    appended: list[np.ndarray] = []
+
+    def fail_viewer(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("viewer initialization failed")
+
+    monkeypatch.setattr(preview_module, "MMArrayViewer", fail_viewer)
+    monkeypatch.setattr(NDVPreview, "append", lambda _self, data: appended.append(data))
+
+    with pytest.raises(RuntimeError, match="viewer initialization failed"):
+        NDVPreview(mmcore)
+
+    mmcore.snapImage()
+    qtbot.wait(0)
+    assert not appended
 
 
 def test_shape_change_defers_empty_buffer_assignment() -> None:

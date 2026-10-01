@@ -2251,7 +2251,11 @@ def test_camera_roi_live_view_sync_is_bidirectional(
         # ndv's own ROI button remains local: it must not start live or opt the
         # camera ROI editor into a selection session. Drawing only copies the
         # ROI into the editor as a Custom ROI plan.
-        viewer.set_roi_selection_active(True)
+        # Exercise the actual ndv toolbar control, not only its controller API:
+        # this is the path a user takes when drawing a ROI in the preview.
+        roi_button = viewer.widget().add_roi_btn
+        roi_button.click()
+        assert roi_button.isChecked()
         assert not page._roi_sync.active
         assert not mmcore.isSequenceRunning()
         assert viewer.roi is not None
@@ -2266,7 +2270,8 @@ def test_camera_roi_live_view_sync_is_bidirectional(
         assert editor.camera_roi_combo.currentText() == "Custom ROI"
         assert not page._roi_sync.active
         assert not mmcore.isSequenceRunning()
-        viewer.set_roi_selection_active(False)
+        roi_button.click()
+        assert not roi_button.isChecked()
 
         # Only the editor's own action starts a coordinated selection session.
         editor.select_roi_btn.click()

@@ -7,18 +7,16 @@ from __future__ import annotations
 
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol
 
 import ndv
 import numpy as np
 import tifffile
 from ndv.models import ChannelMode
-from ndv.models._viewer_model import InteractionMode
 from pymmcore_plus import CMMCorePlus
 from pymmcore_plus.metadata import summary_metadata
 from superqt import QIconifyIcon
 from superqt.sliders._labeled import SliderLabel
-from vispy import scene
 
 from pymmcore_gui._mda_export import (
     AcquisitionRecord,
@@ -80,80 +78,6 @@ class _KeyFilter(QObject):
         return False
 
 
-def _disable_vispy_backspace_reset(canvas: Any) -> None:
-    """Stop vispy's camera from resetting the view to its pre-data state.
-
-    ``vispy.scene.cameras.BaseCamera.viewbox_key_event`` resets the camera to
-    whatever range was set *before* any image was ever loaded whenever
-    Backspace reaches the canvas (macOS labels this key "delete", and it
-    reliably reaches the canvas since nothing else claims it). The reset
-    target is essentially an empty 1x1 rect, so the image appears to vanish
-    even though no data was touched. Qt-level event filtering can't prevent
-    this -- vispy's key handling isn't reachable through the normal
-    QWidget/eventFilter chain -- so the camera's listener is disconnected
-    from vispy's own key-press emitter directly.
-    """
-    camera = getattr(canvas, "_camera", None)
-    vispy_canvas = getattr(canvas, "_canvas", None)
-    if camera is None or vispy_canvas is None:
-        return
-    with suppress(Exception):
-        vispy_canvas.events.key_press.disconnect(camera.viewbox_key_event)
-    with suppress(Exception):
-        vispy_canvas.events.key_release.disconnect(camera.viewbox_key_event)
-
-
-def _guard_vispy_camera_resets(canvas: Any) -> None:
-    """Apply :func:`_disable_vispy_backspace_reset` to every camera vispy creates.
-
-    Channel-mode changes (grayscale vs. composite) never touch the camera,
-    but toggling ndv's 2D/3D view does: ``VispyArrayCanvas.set_ndim`` is the
-    only place that swaps in a new vispy camera (2D ``PanZoomCamera`` <-> 3D
-    ``ArcballCamera``), and each new camera reconnects its own Backspace-reset
-    listener independently of any previous one that was disarmed. Wrapping
-    ``set_ndim`` re-disarms whichever camera comes out of it, so the fix
-    survives 2D/3D toggling instead of only covering the camera that existed
-    at viewer construction.
-    """
-    _disable_vispy_backspace_reset(canvas)
-    set_ndim = getattr(canvas, "set_ndim", None)
-    if set_ndim is None:
-        return
-
-    def _set_ndim_and_guard(*args: Any, **kwargs: Any) -> Any:
-        result = set_ndim(*args, **kwargs)
-        _disable_vispy_backspace_reset(canvas)
-        return result
-
-    with suppress(Exception):
-        canvas.set_ndim = _set_ndim_and_guard
-
-
-def _guard_center_cross_sync(canvas: Any, viewer: MMArrayViewer) -> None:
-    """Keep the FOV-center crosshair in step with whatever the canvas shows.
-
-    ``VispyArrayCanvas.refresh`` runs after every new frame is pushed to the
-    canvas (live or single-snap alike -- see ``ArrayViewer._on_data_response``
-    upstream), including ones that change the displayed image's pixel
-    dimensions (e.g. a Camera ROI crop applied mid-stream). Wrapping it here
-    re-derives the crosshair's geometry from whatever image is on screen
-    right now, so it never gets stuck showing a stale extent. A no-op
-    whenever the crosshair isn't currently shown (see
-    ``MMArrayViewer._refresh_center_cross``).
-    """
-    refresh = getattr(canvas, "refresh", None)
-    if refresh is None:
-        return
-
-    def _refresh_and_sync_cross(*args: Any, **kwargs: Any) -> Any:
-        result = refresh(*args, **kwargs)
-        viewer._refresh_center_cross()
-        return result
-
-    with suppress(Exception):
-        canvas.refresh = _refresh_and_sync_cross
-
-
 _ORTHO_VIEWS = [("y", "x"), ("z", "x"), ("z", "y")]
 
 
@@ -167,6 +91,7 @@ class MMArrayViewer(ndv.ArrayViewer):
         opts = kwargs.pop("viewer_options", None) or {}
         opts.setdefault("show_roi_button", True)
         opts.setdefault("use_shared_histogram", True)
+        opts.setdefault("show_center_cross_button", show_center_cross_button)
         kwargs["viewer_options"] = opts
         kwargs.setdefault("channel_mode", ChannelMode.COMPOSITE)
         super().__init__(data, **kwargs)
@@ -207,19 +132,11 @@ class MMArrayViewer(ndv.ArrayViewer):
         # it to rename this viewer's dock/tab to the saved filename.
         self._on_saved: Callable[[str], None] | None = None
 
-        # Yellow crosshair overlay marking the full FOV's center; see
-        # set_center_cross_active/_refresh_center_cross.
-        self._center_cross_active = False
-        self._center_cross_lines: tuple[Any, Any] | None = None
-
         self._key_filter = _KeyFilter(self)
         widget = self.widget()
         widget.installEventFilter(self._key_filter)
         if canvas := getattr(widget, "_canvas_widget", None):
             canvas.installEventFilter(self._key_filter)
-
-        _guard_vispy_camera_resets(self._canvas)
-        _guard_center_cross_sync(self._canvas, self)
 
         if show_save_button:
             with suppress(Exception):
@@ -227,13 +144,8 @@ class MMArrayViewer(ndv.ArrayViewer):
         if show_roll_axes_button:
             with suppress(Exception):
                 _add_roll_axes_button(self)
-        if show_center_cross_button:
-            with suppress(Exception):
-                _add_center_cross_button(self)
         with suppress(Exception):
             unstyle_widgets(widget)
-        with suppress(Exception):
-            _enable_1based_slider_labels(widget)
 
     def _roll_axes(self) -> None:
         """Cycle visible axes through the three orthogonal ZYX views."""
@@ -277,127 +189,6 @@ class MMArrayViewer(ndv.ArrayViewer):
             action.triggered.connect(callback)
         menu.exec(global_pos)
         return True
-
-    def set_roi_selection_active(self, active: bool) -> None:
-        """Enter or leave ndv's rectangular ROI interaction mode."""
-        mode = InteractionMode.CREATE_ROI if active else InteractionMode.PAN_ZOOM
-        if self._viewer_model.interaction_mode != mode:
-            self._viewer_model.interaction_mode = mode
-
-    def roi_selection_active(self) -> bool:
-        """Return whether ndv's rectangular ROI interaction mode is active."""
-        return self._viewer_model.interaction_mode is InteractionMode.CREATE_ROI
-
-    def set_existing_roi_editing_active(self, active: bool) -> None:
-        """Show handles for the existing ROI without entering creation mode.
-
-        ndv's ``CREATE_ROI`` mode intentionally uses the next mouse press to
-        start a brand-new rectangle. Existing rectangle handles, however, are
-        selected and dragged in ``PAN_ZOOM`` mode.
-        """
-        if self._viewer_model.interaction_mode is not InteractionMode.PAN_ZOOM:
-            self._viewer_model.interaction_mode = InteractionMode.PAN_ZOOM
-        if active and self.roi is not None:
-            if self._roi_view is None:
-                self._create_roi_view()
-            self._synchronize_roi()
-        self.set_roi_visual_selected(active)
-
-    def existing_roi_editing_active(self) -> bool:
-        """Return whether an existing ROI is selected for handle editing."""
-        return (
-            self._viewer_model.interaction_mode is InteractionMode.PAN_ZOOM
-            and self.roi is not None
-            and self.roi_visual_selected()
-        )
-
-    def set_roi_visual_selected(self, selected: bool) -> None:
-        """Set the current ndv ROI visual's selected/handle state."""
-        if self._roi_view is not None:
-            self._roi_view.set_selected(selected)
-
-    def roi_visual_selected(self) -> bool:
-        """Return whether the current ndv ROI visual is visibly selected."""
-        return self._roi_view is not None and self._roi_view.selected()
-
-    def roi_visual_visible(self) -> bool:
-        """Return whether the current ndv ROI visual is visible."""
-        return self._roi_view is not None and self._roi_view.visible()
-
-    def set_center_cross_active(self, active: bool) -> None:
-        """Show or hide a yellow crosshair marking the full FOV's center."""
-        self._center_cross_active = active
-        if active:
-            self._refresh_center_cross()
-        elif self._center_cross_lines is not None:
-            for line in self._center_cross_lines:
-                line.parent = None
-            self._center_cross_lines = None
-
-    def center_cross_active(self) -> bool:
-        """Return whether the FOV-center crosshair is currently shown."""
-        return self._center_cross_active
-
-    def _refresh_center_cross(self) -> None:
-        """(Re)draw the crosshair to match the currently displayed image.
-
-        The two line visuals are parented to the image visual itself, not to
-        the shared scene -- they then inherit that visual's own transform
-        (set by ``VispyArrayCanvas.set_scales`` from the calibrated pixel
-        size, when there is one) automatically, so the cross lines up with
-        the actual FOV whether or not pixel size calibration is in play,
-        with no separate scale bookkeeping here. A no-op until at least one
-        frame has been displayed (no image visual to parent to yet) and
-        whenever the crosshair isn't currently toggled on.
-        """
-        if not self._center_cross_active:
-            return
-        image = next(
-            (
-                child
-                for child in cast("Any", self._canvas)._view.scene.children
-                if isinstance(child, scene.visuals.Image)
-            ),
-            None,
-        )
-        if image is None:
-            return
-        width, height = image.size
-        lines = self._center_cross_lines
-        if lines is None or lines[0].parent is not image:
-            if lines is not None:
-                for line in lines:
-                    line.parent = None
-            h_line = scene.visuals.Line(color="yellow", width=2, method="gl")
-            v_line = scene.visuals.Line(color="yellow", width=2, method="gl")
-            h_line.parent = v_line.parent = image
-            # Above the image, but below the (much higher-order) ROI rectangle
-            # and its drag handles -- see VispyRectangle in ndv's vispy canvas.
-            h_line.order = v_line.order = 5
-            lines = self._center_cross_lines = (h_line, v_line)
-        h_line, v_line = lines
-        h_line.set_data(pos=np.array([[0, height / 2], [width, height / 2]]))
-        v_line.set_data(pos=np.array([[width / 2, 0], [width / 2, height]]))
-
-    def reset_zoom(self) -> None:
-        """Fit the canvas camera to the currently displayed image."""
-        self._on_view_reset_zoom_clicked()
-
-    def clear_roi(self) -> None:
-        """Remove both the ndv ROI model and its canvas visual."""
-        self.roi = None
-        if self._roi_view is not None:
-            self._roi_view.remove()
-            self._roi_view = None
-
-    def connect_roi_selection_changed(self, callback: Any) -> None:
-        """Connect to ndv interaction-mode changes through one compatibility seam."""
-        self._viewer_model.events.interaction_mode.connect(callback)
-
-    def disconnect_roi_selection_changed(self, callback: Any) -> None:
-        """Disconnect a callback registered by :meth:`connect_roi_selection_changed`."""
-        with suppress(Exception):
-            self._viewer_model.events.interaction_mode.disconnect(callback)
 
     def _save_data(self) -> None:
         """Export the viewer's data as a metadata-complete OME-TIFF or OME-Zarr.
@@ -679,99 +470,6 @@ def unstyle_widgets(widget: Any) -> None:
             ensure_visible_icon(w)
 
 
-def _patch_dim_row_1based(dims_sliders: Any, row: Any) -> None:
-    """Patch one DimRow so its index label and out-of total display 1-based counts.
-
-    Internal ndv slider values are untouched (still used for array indexing
-    and for ``current_index()``); only the displayed text is shifted so it
-    counts positions within the slider's range starting at 1, rather than raw
-    values starting at ``slider.minimum()``. For the sliders this codebase
-    actually produces, ``minimum()`` is always 0 (every coord path here is
-    either a plain list or a ``range(size)``), so that position *is* the
-    value and this is just "+1, displayed". The position-within-range framing
-    is kept general anyway, in case a coord axis is ever range-based with a
-    non-zero start (e.g. a physical coordinate ndv treats as the literal
-    slider value): a slider running 5..14 should still read "1..10", not
-    "6..15".
-
-    Safe to call multiple times on the same row: the signal-level patch is
-    applied once (guarded by ``_1based_patched``), and the range and total
-    fixes are recomputed from the slider itself every call, so they survive
-    coord-range extensions that happen during a live acquisition
-    (``create_sliders`` is re-entered each time new frames arrive).
-    """
-    q_sld = row.slider  # QLabeledSlider
-    inner = q_sld._slider  # internal QSlider
-    lbl = row.index_label  # SliderLabel (QLineEdit subclass)
-
-    if not getattr(q_sld, "_1based_patched", False):
-        q_sld._1based_patched = True
-
-        # SliderLabel is connected to inner.rangeChanged to keep its own
-        # editing range in sync with the slider.  Intercept that connection so
-        # the editable range is always 1-based (1..N instead of 0..N-1).
-        with suppress(Exception):
-            inner.rangeChanged.disconnect(lbl.setRange)
-        inner.rangeChanged.connect(lambda mn, mx: lbl.setRange(1, mx - mn + 1))
-
-        # QLabeledSlider._on_slider_value_changed does two things: it sets
-        # the label's (0-based) value, and it re-emits inner.valueChanged as
-        # QLabeledSlider.valueChanged -- which is what _QDimsSliders.
-        # create_sliders connects straight to currentIndexChanged, i.e. what
-        # actually tells the viewer to redraw the new frame. Disconnecting
-        # it (as an earlier version of this patch did) silently drops that
-        # re-emission: the slider moves and the label updates, but the
-        # displayed frame never does. So it stays connected, and this just
-        # adds a second connection after it -- Qt calls slots in connection
-        # order, so ours runs second and simply overwrites the label with
-        # the 1-based position.
-        inner.valueChanged.connect(lambda v: lbl.setValue(v - inner.minimum() + 1))
-
-        # When the user edits the label directly, convert the typed 1-based
-        # position back to a raw slider value before passing it on.
-        with suppress(Exception):
-            lbl.valueEdited.disconnect(q_sld._setValue)
-        lbl.valueEdited.connect(lambda v: inner.setValue(int(v) - 1 + inner.minimum()))
-
-    # Reapply on every create_sliders call: the range may have grown.  Every
-    # value below is derived from the slider, never from the current label
-    # text, so repeated calls converge instead of drifting upward.
-    #
-    # setRowTotal writes the "/ N" text *and* recomputes the fixed widths of
-    # both the total and index labels from N.  Going through it rather than
-    # rewriting the text is what keeps the wider 1-based numbers legible:
-    # ndv sizes those labels for the 0-based max, so a 100-frame axis would
-    # be sized for "99" and SliderLabel, finding no room for "100", would
-    # fall back to scientific notation and render "1e+02".
-    n = inner.maximum() - inner.minimum() + 1
-    dims_sliders.setRowTotal(q_sld, n)
-    lbl.setRange(1, n)
-    lbl.setValue(inner.value() - inner.minimum() + 1)
-
-
-def _enable_1based_slider_labels(widget: Any) -> None:
-    """Wrap ``dims_sliders.create_sliders`` to keep DimRow labels 1-based."""
-    dims_sliders = getattr(widget, "dims_sliders", None)
-    if dims_sliders is None:
-        return
-
-    with suppress(ImportError):
-        from ndv.views._qt._array_view import (
-            DimRow,  # pyright: ignore[reportPrivateImportUsage]
-        )
-
-        orig_create = dims_sliders.create_sliders
-
-        def _wrapped(coords: Any, _orig: Any = orig_create) -> None:
-            _orig(coords)
-            for row in dims_sliders.findChildren(DimRow):
-                _patch_dim_row_1based(dims_sliders, row)
-
-        dims_sliders.create_sliders = _wrapped
-        for row in dims_sliders.findChildren(DimRow):
-            _patch_dim_row_1based(dims_sliders, row)
-
-
 def _add_save_button(viewer: MMArrayViewer) -> QPushButton:
     q_widget = viewer.widget()
     btn_layout = q_widget._btn_layout
@@ -797,21 +495,6 @@ def _add_roll_axes_button(viewer: MMArrayViewer) -> QPushButton:
 
     ndims_idx = btn_layout.indexOf(q_widget.ndims_btn)
     btn_layout.insertWidget(ndims_idx + 1, btn)
-    return btn
-
-
-def _add_center_cross_button(viewer: MMArrayViewer) -> QPushButton:
-    q_widget = viewer.widget()
-    btn_layout = q_widget._btn_layout
-
-    btn = QPushButton(q_widget)
-    btn.setCheckable(True)
-    btn.setIcon(QIconifyIcon("mdi:crosshairs-gps"))
-    btn.setToolTip("Mark the center of the field of view")
-    btn.toggled.connect(viewer.set_center_cross_active)
-
-    roi_idx = btn_layout.indexOf(q_widget.add_roi_btn)
-    btn_layout.insertWidget(roi_idx + 1, btn)
     return btn
 
 

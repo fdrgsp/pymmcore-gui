@@ -7,6 +7,7 @@ from threading import Event
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
+from cmap import Colormap
 from pymmcore_plus import CMMCorePlus, DeviceType, PropertyType
 from superqt.iconify import QIconifyIcon
 from superqt.utils import signals_blocked
@@ -1316,6 +1317,7 @@ class PixelCalibrationPanel(QWidget):
                 show_roll_axes_button=False,
                 show_colormap_selector=False,
             )
+            preview.viewer.display_model.luts[0].cmap = Colormap("gray")
             # Snap/calibration frames arrive through the worker's queued
             # frameReady signal. Live preview temporarily attaches this viewer
             # to MMCore and detaches it before restoring capture state.

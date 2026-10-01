@@ -15,26 +15,21 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
-from unittest.mock import Mock
 
 import numpy as np
 import pytest
 from ndv.models import ChannelMode
-from ndv.models._viewer_model import InteractionMode
 from ome_writers import (
     AcquisitionSettings,
     ScratchFormat,
     create_stream,
     dims_from_standard_axes,
 )
-from vispy import scene
 
 from pymmcore_gui._array_viewer import (
     _SAVE_FILTER_MAP,
     _SAVE_FILTERS,
     MMArrayViewer,
-    _enable_1based_slider_labels,
-    _patch_dim_row_1based,
     _prompt_save_path,
     _synthesize_record,
 )
@@ -44,7 +39,6 @@ from pymmcore_gui._qt.QtWidgets import QFileDialog, QMessageBox, QWidget
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from ndv.views._qt._array_view import DimRow, _QDimsSliders
     from pytestqt.qtbot import QtBot
 
 
@@ -91,130 +85,19 @@ def test_viewer_defaults_to_composite_log_histogram(qtbot: QtBot) -> None:
     assert viewer._shared_histogram is not None
 
 
-def test_clear_roi_removes_model_and_canvas_visual() -> None:
-    visual = SimpleNamespace(remove=Mock())
-    viewer = SimpleNamespace(roi=object(), _roi_view=visual)
-
-    MMArrayViewer.clear_roi(viewer)  # type: ignore[arg-type]
-
-    assert viewer.roi is None
-    assert viewer._roi_view is None
-    visual.remove.assert_called_once_with()
-
-
-def test_existing_roi_editing_uses_pan_zoom_not_creation_mode() -> None:
-    viewer = SimpleNamespace(
-        _viewer_model=SimpleNamespace(interaction_mode=InteractionMode.CREATE_ROI),
-        roi=object(),
-        _roi_view=None,
-        _create_roi_view=Mock(),
-        _synchronize_roi=Mock(),
-        set_roi_visual_selected=Mock(),
+def test_center_cross_control_comes_from_ndv(qtbot: QtBot) -> None:
+    viewer = MMArrayViewer(
+        show_save_button=False,
+        show_roll_axes_button=False,
     )
+    qtbot.addWidget(viewer.widget())
 
-    MMArrayViewer.set_existing_roi_editing_active(viewer, True)  # type: ignore[arg-type]
+    button = viewer.widget().center_cross_btn
+    assert not button.isHidden()
+    assert "set_center_cross_active" not in MMArrayViewer.__dict__
 
-    assert viewer._viewer_model.interaction_mode is InteractionMode.PAN_ZOOM
-    viewer._create_roi_view.assert_called_once_with()
-    viewer._synchronize_roi.assert_called_once_with()
-    viewer.set_roi_visual_selected.assert_called_once_with(True)
-
-
-def _fake_viewer_with_image(width: int, height: int) -> SimpleNamespace:
-    """A duck-typed MMArrayViewer whose canvas scene holds one real image node.
-
-    Real (but canvas-less, GL-context-free) vispy nodes: constructing a bare
-    scene.Node/Image/Line graph -- as opposed to a full MMArrayViewer, which
-    creates a real vispy SceneCanvas -- needs no OpenGL context, so this
-    stays safe under the offscreen Qt platform CI runs under. Exercises the
-    same isinstance/transform-parenting logic _refresh_center_cross actually
-    relies on, rather than a plain Mock standing in for the whole scene.
-    """
-    scene_root = scene.Node()
-    scene.visuals.Image(np.zeros((height, width), dtype=np.uint8), parent=scene_root)
-    canvas = SimpleNamespace(_view=SimpleNamespace(scene=scene_root))
-    viewer = SimpleNamespace(
-        _canvas=canvas, _center_cross_active=False, _center_cross_lines=None
-    )
-    # set_center_cross_active(True) calls self._refresh_center_cross(); wire it
-    # back to the real unbound implementation against this same fake.
-    viewer._refresh_center_cross = lambda: MMArrayViewer._refresh_center_cross(
-        viewer  # type: ignore[arg-type]
-    )
-    return viewer
-
-
-def test_center_cross_spans_the_full_fov_centered(qtbot: QtBot) -> None:
-    """Toggling the crosshair on draws lines through the FOV's exact center."""
-    viewer = _fake_viewer_with_image(width=200, height=100)
-
-    MMArrayViewer.set_center_cross_active(viewer, True)  # type: ignore[arg-type]
-
-    assert MMArrayViewer.center_cross_active(viewer)  # type: ignore[arg-type]
-    h_line, v_line = viewer._center_cross_lines
-    assert h_line.pos.tolist() == [[0, 50], [200, 50]]
-    assert v_line.pos.tolist() == [[100, 0], [100, 100]]
-    # parented to the image itself, so it inherits that node's own transform
-    # (e.g. a calibrated-pixel-size scale) automatically.
-    image = next(
-        c
-        for c in viewer._canvas._view.scene.children
-        if isinstance(c, scene.visuals.Image)
-    )
-    assert h_line.parent is image
-    assert v_line.parent is image
-
-
-def test_center_cross_removed_when_toggled_off(qtbot: QtBot) -> None:
-    viewer = _fake_viewer_with_image(width=200, height=100)
-    MMArrayViewer.set_center_cross_active(viewer, True)  # type: ignore[arg-type]
-    h_line, v_line = viewer._center_cross_lines
-
-    MMArrayViewer.set_center_cross_active(viewer, False)  # type: ignore[arg-type]
-
-    assert not MMArrayViewer.center_cross_active(viewer)  # type: ignore[arg-type]
-    assert viewer._center_cross_lines is None
-    assert h_line.parent is None
-    assert v_line.parent is None
-
-
-def test_center_cross_ignored_while_inactive(qtbot: QtBot) -> None:
-    """_refresh_center_cross (the canvas.refresh hook) is a no-op unless toggled on."""
-    viewer = _fake_viewer_with_image(width=200, height=100)
-
-    MMArrayViewer._refresh_center_cross(viewer)  # type: ignore[arg-type]
-
-    assert viewer._center_cross_lines is None
-
-
-def test_center_cross_rehomes_to_a_resized_image_on_refresh(qtbot: QtBot) -> None:
-    """A later, differently-sized image (e.g. a Camera ROI crop) is picked up.
-
-    _refresh_center_cross is wired to run on every VispyArrayCanvas.refresh()
-    call (see _guard_center_cross_sync), which fires on every new frame --
-    including one whose pixel dimensions differ from when the cross was first
-    drawn. The stale lines must be dropped and redrawn against the new image,
-    not left pointing at a detached node.
-    """
-    viewer = _fake_viewer_with_image(width=200, height=100)
-    MMArrayViewer.set_center_cross_active(viewer, True)  # type: ignore[arg-type]
-    old_h_line, old_v_line = viewer._center_cross_lines
-    old_image = old_h_line.parent
-
-    scene_root = viewer._canvas._view.scene
-    old_image.parent = None
-    new_image = scene.visuals.Image(
-        np.zeros((40, 80), dtype=np.uint8), parent=scene_root
-    )
-
-    MMArrayViewer._refresh_center_cross(viewer)  # type: ignore[arg-type]
-
-    h_line, v_line = viewer._center_cross_lines
-    assert (h_line, v_line) != (old_h_line, old_v_line)
-    assert h_line.parent is new_image
-    assert v_line.parent is new_image
-    assert h_line.pos.tolist() == [[0, 20], [80, 20]]
-    assert v_line.pos.tolist() == [[40, 0], [40, 40]]
+    button.setChecked(True)
+    assert viewer.center_cross_active()
 
 
 def test_synthesize_record_from_stream_view(qtbot: QtBot) -> None:
@@ -416,168 +299,3 @@ def test_export_with_overwrite_prompt_asks_before_clobbering(
     record3 = _record_with_one_frame(tmp_path)
     MMArrayViewer._export_with_overwrite_prompt(fake, record3, path, "ome-zarr")  # type: ignore[arg-type]
     assert (path / "zarr.json").exists()
-
-
-# ---------------------------------------------------------------------------
-# 1-based slider label tests
-# ---------------------------------------------------------------------------
-
-
-def _make_dims_sliders(n_frames: int = 5) -> tuple[_QDimsSliders, DimRow]:
-    """Return a (dims_sliders, dim_row) pair with a freshly created DimRow."""
-    from ndv.views._qt._array_view import DimRow, _QDimsSliders
-
-    dims = _QDimsSliders()
-    dims.create_sliders({"t": range(n_frames)})
-    rows = dims.findChildren(DimRow)
-    return dims, rows[0]
-
-
-def test_patch_dim_row_1based_display(qtbot: QtBot) -> None:
-    """Index label text and out-of label become 1-based after patching."""
-    dims, row = _make_dims_sliders(5)
-    row.slider.setValue(0)
-
-    _patch_dim_row_1based(dims, row)
-
-    assert row.index_label.text() == "1"
-    assert row.out_of.text() == "/ 5"
-
-
-def test_patch_dim_row_1based_slider_value_shows_1based(qtbot: QtBot) -> None:
-    """Moving the slider updates the label to the 1-based position."""
-    dims, row = _make_dims_sliders(5)
-    _patch_dim_row_1based(dims, row)
-
-    row.slider.setValue(3)  # 0-based index 3 → should display 4
-
-    assert row.index_label.text() == "4"
-
-
-def test_patch_dim_row_1based_still_notifies_index_changed(qtbot: QtBot) -> None:
-    """Moving the slider must still propagate to `_QDimsSliders.currentIndexChanged`.
-
-    That signal (wired in `_QDimsSliders.create_sliders` via
-    `dim_row.slider.valueChanged.connect(self.currentIndexChanged)`) is what
-    actually tells the viewer to redraw the displayed frame -- it rides on
-    the same `QLabeledSlider._on_slider_value_changed` callback the 1-based
-    patch touches, so a naive patch (disconnecting that callback instead of
-    only adding to it) makes the label lie: it updates while the displayed
-    frame silently stops changing.
-    """
-    dims, row = _make_dims_sliders(5)
-    _patch_dim_row_1based(dims, row)
-
-    seen: list[object] = []
-    dims.currentIndexChanged.connect(lambda: seen.append(dims.current_index()))
-    row.slider.setValue(2)
-
-    assert seen == [{"t": 2}]
-
-
-def test_patch_dim_row_1based_label_edit_moves_to_correct_frame(qtbot: QtBot) -> None:
-    """Typing a 1-based frame number in the label navigates to the right frame."""
-    dims, row = _make_dims_sliders(5)
-    _patch_dim_row_1based(dims, row)
-
-    # Simulate the user typing "3" (1-based frame 3 = 0-based index 2).
-    row.index_label.valueEdited.emit(3.0)
-
-    assert row.slider.value() == 2
-
-
-def test_patch_dim_row_1based_idempotent(qtbot: QtBot) -> None:
-    """Repeated _patch_dim_row_1based calls don't double-offset the display.
-
-    The total label is the part that used to drift: it was derived by parsing
-    the label's own text and adding one, so a row re-patched without an
-    intervening `create_sliders` reset counted 5 -> 6 -> 7.
-    """
-    dims, row = _make_dims_sliders(5)
-    for _ in range(3):
-        _patch_dim_row_1based(dims, row)
-
-    row.slider.setValue(2)
-    assert row.index_label.text() == "3"
-    assert row.out_of.text() == "/ 5"
-
-
-def test_patch_dim_row_1based_range_grows(qtbot: QtBot) -> None:
-    """Out-of label and editable range stay correct when the coord range extends."""
-    from ndv.views._qt._array_view import DimRow, _QDimsSliders
-
-    dims = _QDimsSliders()
-    fake_widget = SimpleNamespace(dims_sliders=dims)
-    _enable_1based_slider_labels(fake_widget)
-    dims.create_sliders({"t": range(3)})
-
-    # Extend range to 8 frames (as happens when more MDA frames arrive).
-    dims.create_sliders({"t": range(8)})
-    rows = dims.findChildren(DimRow)
-    assert rows[0].out_of.text() == "/ 8"
-    assert rows[0].index_label._max == 8
-
-
-@pytest.mark.parametrize("n_frames", [10, 100, 1000])
-def test_patch_dim_row_1based_labels_sized_for_1based_number(
-    qtbot: QtBot, n_frames: int
-) -> None:
-    """Labels are re-sized for the 1-based count, which is one digit wider.
-
-    ndv gives both labels a *fixed* width computed from the 0-based maximum,
-    so at every power of ten the 1-based number needs a digit that isn't
-    there.  SliderLabel reacts to that by switching to scientific notation:
-    frame 100 of 100 rendered as "1e+02".
-    """
-    dims, row = _make_dims_sliders(n_frames)
-    _patch_dim_row_1based(dims, row)
-    row.slider.setValue(n_frames - 1)
-
-    assert row.index_label.text() == str(n_frames)
-    assert row.out_of.text() == f"/ {n_frames}"
-    for label in (row.index_label, row.out_of):
-        needed = label.fontMetrics().horizontalAdvance(label.text())
-        assert label.width() >= needed
-
-
-def test_patch_dim_row_1based_nonzero_start_range(qtbot: QtBot) -> None:
-    """A coord range that doesn't start at 0 still displays 1-based positions.
-
-    No coord path in this codebase produces one today (every axis is either a
-    plain list or `range(size)`), but the patch derives everything from
-    `slider.minimum()`/`.maximum()` rather than assuming the minimum is 0, so
-    a slider running 5..14 (10 frames, raw values 5-14) should read "1..10",
-    not "6..15".
-    """
-    from ndv.views._qt._array_view import DimRow, _QDimsSliders
-
-    dims = _QDimsSliders()
-    dims.create_sliders({"z": range(5, 15)})
-    row = dims.findChildren(DimRow)[0]
-    _patch_dim_row_1based(dims, row)
-
-    assert row.index_label.text() == "1"
-    assert row.out_of.text() == "/ 10"
-
-    row.slider.setValue(14)  # last raw value -> last position (10)
-    assert row.index_label.text() == "10"
-
-    # Typing position "3" should land on raw value 5 + (3 - 1) = 7.
-    row.index_label.valueEdited.emit(3.0)
-    assert row.slider.value() == 7
-
-
-def test_enable_1based_slider_labels_wraps_create_sliders(qtbot: QtBot) -> None:
-    """_enable_1based_slider_labels installs the 1-based patch on new rows too."""
-    from ndv.views._qt._array_view import DimRow, _QDimsSliders
-
-    dims = _QDimsSliders()
-    fake_widget = SimpleNamespace(dims_sliders=dims)
-    _enable_1based_slider_labels(fake_widget)
-
-    dims.create_sliders({"t": range(4)})
-    rows = dims.findChildren(DimRow)
-    assert len(rows) == 1
-    rows[0].slider.setValue(0)
-    assert rows[0].index_label.text() == "1"
-    assert rows[0].out_of.text() == "/ 4"
