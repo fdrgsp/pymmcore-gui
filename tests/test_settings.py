@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -70,3 +71,45 @@ def test_user_settings(tmp_path: Path) -> None:
         with patch("pymmcore_gui._settings.TESTING", False):
             _settings.reset_to_defaults()
         assert not fake_settings.exists()
+
+
+@pytest.mark.parametrize("sections", ["legacy", "modern", "mixed"])
+def test_existing_window_sections_round_trip(tmp_path: Path, sections: str) -> None:
+    """Read and save existing settings without mixing incompatible dock state."""
+    legacy = {
+        "geometry": "AAAC",
+        "dock_manager_state": "AAAE",
+        "open_widgets": ["pymmcore_gui.console"],
+    }
+    modern = {
+        "theme": "light",
+        "zoom": 1.25,
+        "acquire_panels": ["mda", "presets", "console"],
+        "acquire_hidden_panels": ["properties"],
+        "acquire_stage_devices": ["XY"],
+        "acquire_stage_kind": "per_device",
+        "last_layout": "My rig",
+    }
+    payload: dict[str, object] = {"version": "1.0"}
+    path = tmp_path / "settings.json"
+    if sections in {"legacy", "mixed"}:
+        payload["window"] = legacy
+    if sections in {"modern", "mixed"}:
+        payload["modern_window"] = modern
+    path.write_text(json.dumps(payload))
+    with patch.object(_settings, "SETTINGS_FILE_NAME", path):
+        loaded = SettingsV1(**MMGuiUserPrefsSource(SettingsV1)())
+        path.write_text(loaded.model_dump_json(exclude_defaults=True))
+        restored = SettingsV1(**MMGuiUserPrefsSource(SettingsV1)())
+    assert restored.model_dump() == loaded.model_dump()
+    if sections in {"legacy", "mixed"}:
+        assert restored.window.dock_manager_state == b"\x00\x00\x04"
+    assert restored.modern_window.acquire_dock_state is None
+    if sections == "legacy":
+        assert restored.modern_window.theme == "dark"
+        assert not restored.modern_window.acquire_panels
+    else:
+        assert restored.modern_window.theme == "light"
+        assert restored.modern_window.acquire_panels == {"mda", "presets", "console"}
+        assert restored.modern_window.acquire_hidden_panels == {"properties"}
+        assert restored.modern_window.acquire_stage_devices == {"XY"}

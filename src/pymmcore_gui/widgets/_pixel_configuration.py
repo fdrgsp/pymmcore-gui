@@ -6,10 +6,10 @@ from pymmcore_widgets import PixelConfigurationWidget as _UpstreamPixelConfigura
 from pymmcore_widgets._icons import StandardIcon
 from superqt.utils import signals_blocked
 
-from pymmcore_gui._modern_gui._theme import qcolor, theme
 from pymmcore_gui._pixel_calibration import PixelCalibrationResult
 from pymmcore_gui._qt.QtCore import QEvent, QTimer, Signal
 from pymmcore_gui._qt.QtWidgets import QSizePolicy
+from pymmcore_gui._theme import qcolor, theme
 from pymmcore_gui.widgets._pixel_calibration_panel import (
     CalibrationTarget,
     PixelCalibrationPanel,

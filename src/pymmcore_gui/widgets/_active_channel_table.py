@@ -21,7 +21,6 @@ from pymmcore_gui._array_viewer import (
     set_source_icon,
     unstyle_widgets,
 )
-from pymmcore_gui._modern_gui._theme import qcolor, theme
 from pymmcore_gui._qt.QtCore import QEvent, QObject, QPointF, Qt
 from pymmcore_gui._qt.QtGui import QBrush, QPainter, QPen
 from pymmcore_gui._qt.QtWidgets import (
@@ -31,6 +30,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QStyledItemDelegate,
     QTableWidgetItem,
 )
+from pymmcore_gui._theme import qcolor, theme
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus

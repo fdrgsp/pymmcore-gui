@@ -1,11 +1,12 @@
 import pytest
-from pymmcore_plus import CMMCorePlus
+from pymmcore_plus import CMMCorePlus, DeviceType
 from pytestqt.qtbot import QtBot
 
-from pymmcore_gui import MicroManagerGUI
-from pymmcore_gui._qt.QtWidgets import QMenu, QWidget
+from pymmcore_gui._qt.QtWidgets import QWidget
 from pymmcore_gui.actions import ActionInfo, CoreAction, WidgetAction, WidgetActionInfo
-from pymmcore_gui.actions.widget_actions import _get_core
+from pymmcore_gui.actions.widget_actions import _get_core, create_stage_widget
+from pymmcore_gui.widgets._acquire import AcquirePage
+from pymmcore_gui.widgets._panels import PANELS, PanelInfo
 
 
 def test_action_registry() -> None:
@@ -20,27 +21,31 @@ def test_action_registry() -> None:
     info = WidgetActionInfo.for_key(WidgetAction.ABOUT)
 
 
-def test_actions_in_menus(qtbot: QtBot) -> None:
-    # people can add new ones
-    text = "My Widget!!!!"
-    act = WidgetActionInfo(
-        key="mywidget",
-        text=text,
-        icon="mdi-light:format-list-bulleted",
-        create_widget=lambda p: QWidget(p),
-    )
-    assert "mywidget" in WidgetActionInfo._registry
-    assert act in ActionInfo.widget_actions().values()
+def test_custom_panel_registration(
+    qtbot: QtBot, mmcore: CMMCorePlus, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Acquire builds custom tools from the same registry as built-in panels.
+    import pymmcore_gui.widgets._acquire as acquire_module
 
-    win = MicroManagerGUI()
-    qtbot.addWidget(win)
-    mb = win.menuBar()
-    assert mb
-    window_menu = next(
-        (m for a in mb.actions() if (m := a.menu()) and m.title() == "Window"), None
+    panel = PanelInfo(
+        key="mywidget",
+        title="My Widget",
+        icon="mdi-light:format-list-bulleted",
+        tooltip="Custom panel",
+        create=lambda parent, core: QWidget(parent),
     )
-    assert isinstance(window_menu, QMenu)
-    assert any(a.text() == text for a in window_menu.actions())
+    monkeypatch.setattr(acquire_module, "PANELS", (*PANELS, panel))
+    page = AcquirePage(mmcore=mmcore)
+    qtbot.addWidget(page)
+    assert page.panel_widget(panel.key) is None
+    page.panel_button(panel.key).click()
+    widget = page.panel_widget(panel.key)
+    assert isinstance(widget, QWidget)
+    dock = page.panel_dock(panel.key)
+    assert dock is not None
+    assert dock.objectName() == panel.dock_name
+    assert page.panel_button(panel.key).isChecked()
+    page.shutdown()
 
 
 @pytest.mark.parametrize("window_name", ["MicroManagerGUI", "pyMMGUI"])
@@ -49,11 +54,8 @@ def test_get_core_uses_the_hosting_window_core(
 ) -> None:
     """Widgets resolve the core of whichever window hosts them.
 
-    Both application windows must be recognized by `objectName`: the classic
-    dock-based `MicroManagerGUI` and the modern `pyMMGUI`. Resolving only the
-    classic name left every `_get_core`-based factory in the modern GUI
-    (e.g. the Property Browser panel, which goes through `_ignoring_core`)
-    silently bound to the process-wide singleton instead.
+    The application and custom hosts using its historical object name both
+    resolve their own core instead of accidentally using the global singleton.
     """
     own_core = CMMCorePlus()
     assert own_core is not CMMCorePlus.instance()  # a real, distinguishable core
@@ -84,3 +86,20 @@ def test_get_core_falls_back_to_the_singleton(
     other.setObjectName("SomeOtherWindow")
     qtbot.addWidget(other)
     assert _get_core(QWidget(other)) is CMMCorePlus.instance()
+
+
+def test_stage_action_factory_uses_modern_controls(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    from pymmcore_gui.widgets._stage_control import StagesPanel
+
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    panel = create_stage_widget(parent)
+    assert isinstance(panel, StagesPanel)
+    expected = {
+        device
+        for kind in (DeviceType.XYStage, DeviceType.Stage)
+        for device in mmcore.getLoadedDevicesOfType(kind)
+    }
+    assert panel.open_devices() == expected

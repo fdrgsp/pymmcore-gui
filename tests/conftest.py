@@ -73,20 +73,14 @@ def layouts_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return directory
 
 
-# install the _modern_gui theme/style before every test that has a QApplication
+# Initialize the application style for every test that has a QApplication.
 @pytest.fixture(autouse=True)
 def _init_gui_theme() -> None:
-    """Guarantee the ``_modern_gui`` theme is initialized for every test.
+    """Initialize the theme without depending on test collection order.
 
-    ``_modern_gui`` widgets — and the shared ``MemoryMDAWidget``/``ThemedStageExplorer``
-    used by the legacy main window — call ``theme()`` during construction, which
-    raises ``RuntimeError`` unless ``set_theme()`` has run (it installs the
-    ``MicroscopeStyle`` and the process-wide scaled-theme view). Only
-    ``test_new_gui.py`` calls it explicitly, so a test that builds those widgets
-    from another file (e.g. ``test_main_window.py``) used to pass or fail purely
-    on collection order. Initializing here removes that dependency and gives
-    every test a deterministic dark-theme baseline; tests that need a specific
-    theme still call ``set_theme`` themselves.
+    Widgets call ``theme()`` during construction. ``set_theme()`` installs the
+    style and scaled-theme view before those calls, with a deterministic dark
+    baseline. Tests that need another appearance can override it themselves.
 
     This deliberately does *not* depend on the ``qapp`` fixture: forcing a
     ``QApplication`` into existence would break tests that assert none exists yet
@@ -96,7 +90,7 @@ def _init_gui_theme() -> None:
     from pymmcore_gui._qt.QtWidgets import QApplication
 
     if QApplication.instance() is not None:
-        from pymmcore_gui._modern_gui._theme import DARK_THEME, reset_zoom, set_theme
+        from pymmcore_gui._theme import DARK_THEME, reset_zoom, set_theme
 
         set_theme(DARK_THEME)
         # set_theme() re-applies the *current* zoom step, it doesn't reset it --

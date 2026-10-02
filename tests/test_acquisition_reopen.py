@@ -19,11 +19,11 @@ from ome_writers import (
 )
 from pymmcore_widgets.useq_widgets import PYMMCW_METADATA_KEY
 
-import pymmcore_gui._modern_gui._acquire_viewers as acquire_viewers_module
-from pymmcore_gui._modern_gui._acquire import AcquirePage
-from pymmcore_gui._modern_gui._main_win import MainWindow
+import pymmcore_gui._ndv_viewers as acquire_viewers_module
+from pymmcore_gui._main_window import MainWindow
 from pymmcore_gui._qt.QtCore import QThread
 from pymmcore_gui._qt.QtWidgets import QFileDialog, QMenu, QMessageBox
+from pymmcore_gui.widgets._acquire import AcquirePage
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus

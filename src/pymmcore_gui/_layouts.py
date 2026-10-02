@@ -47,12 +47,12 @@ _SUFFIX: Final = ".json"
 _VERSION: Final = 1
 _UNSAFE_CHARS = re.compile(r"[^\w.\- ]+")
 _DEFAULT_STAGE_KIND: Final = "xyz"
-"""Must match ``_modern_gui._panels.StageKind.XYZ``.
+"""Must match ``widgets._panels.StageKind.XYZ``.
 
 See ``AcquireLayout.stage_kind``.
 """
 _DEFAULT_MDA_KIND: Final = "collapsible"
-"""Must match ``_modern_gui._panels.MdaKind.COLLAPSIBLE``.
+"""Must match ``widgets._panels.MdaKind.COLLAPSIBLE``.
 
 See ``AcquireLayout.mda_kind``.
 """
@@ -78,19 +78,19 @@ class AcquireLayout:
 
     Stored separately from ``dock_state``: the Stages panel's open devices
     live in its own nested dock manager, which the outer manager's
-    ``saveState()`` doesn't capture -- see ``_modern_gui._acquire_stages``.
+    ``saveState()`` doesn't capture -- see ``widgets._stage_control``.
     """
     stage_kind: str = _DEFAULT_STAGE_KIND
     """Which widget flavor is docked under the Stages button.
 
-    A ``_modern_gui._panels.StageKind`` value, kept as a plain ``str`` here
+    A ``widgets._panels.StageKind`` value, kept as a plain ``str`` here
     the same way ``panels``/``hidden_panels`` keep ``PanelKey`` values as
-    plain strings -- this module doesn't otherwise depend on ``_modern_gui``.
+    plain strings -- this module doesn't import GUI widgets.
     """
     mda_kind: str = _DEFAULT_MDA_KIND
     """Which MDA-editor presentation is docked under the MDA button.
 
-    A ``_modern_gui._panels.MdaKind`` value, kept as a plain ``str`` for the
+    A ``widgets._panels.MdaKind`` value, kept as a plain ``str`` for the
     same reason as ``stage_kind``. The two presentations behave identically,
     so this only affects how the page looks.
     """

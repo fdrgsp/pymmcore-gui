@@ -1,68 +1,41 @@
 from __future__ import annotations
 
 import sys
-from typing import TYPE_CHECKING, cast
+from datetime import timedelta
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
-import ndv
 import pytest
 import useq
 
 from pymmcore_gui import MicroManagerGUI
 from pymmcore_gui._app import MMQApplication
 from pymmcore_gui._notification_manager import NotificationManager
-from pymmcore_gui._qt.QtWidgets import QApplication, QDialog
-from pymmcore_gui.actions import CoreAction, WidgetAction
+from pymmcore_gui._qt.QtWidgets import QApplication
+from pymmcore_gui.widgets._panels import PanelKey
 from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
-from pymmcore_gui.widgets._toolbars import ShuttersToolbar
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from pymmcore_plus import CMMCorePlus
     from pytestqt.qtbot import QtBot
 
-    from pymmcore_gui._qt.QtAds import CDockAreaWidget
     from pymmcore_gui._settings import Settings
 
 
 @pytest.fixture
-def gui(qtbot: QtBot, qapp: QApplication) -> Iterator[MicroManagerGUI]:
-    gui = MicroManagerGUI()
+def gui(
+    qtbot: QtBot, qapp: QApplication, mmcore: CMMCorePlus
+) -> Iterator[MicroManagerGUI]:
+    gui = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(gui)
     yield gui
 
 
-@pytest.mark.parametrize("w_action", list(WidgetAction))
-def test_main_window_widget_actions(
-    gui: MicroManagerGUI, w_action: WidgetAction
-) -> None:
-    action = gui.get_action(w_action)
-    with patch.object(QDialog, "exec", lambda x: x.show()):
-        wdg = gui.get_widget(w_action)
-        assert w_action in gui._qactions
-    if isinstance(wdg, QDialog):
-        # QDialogs are never added to _action_widgets, so MainWindow.closeEvent
-        # never closes them; the test must close it explicitly so it (and any
-        # threaded resources it owns) doesn't outlive the fixture.
-        wdg.close()
-    else:
-        assert w_action in gui._action_widgets
-        assert action.isChecked()
-        gui.get_dock_widget(w_action).toggleView(False)
-        assert not action.isChecked()
-        # Left open: MainWindow.closeEvent (run once, via the `gui` fixture's
-        # qtbot teardown) closes dock-owned widgets like this one already.
-
-
-@pytest.mark.parametrize("c_action", list(CoreAction))
-def test_main_window_core_actions(gui: MicroManagerGUI, c_action: CoreAction) -> None:
-    with patch.object(QDialog, "exec", lambda x: x.show()):
-        _ = gui.get_action(c_action)
-    assert c_action in gui._qactions
-
-
 def test_main_window_close_stops_stage_explorer(gui: MicroManagerGUI) -> None:
-    explorer = gui.get_widget(WidgetAction.STAGE_EXPLORER)
+    gui.acquire.panel_button(PanelKey.STAGE_EXPLORER).click()
+    explorer = gui.acquire.panel_widget(PanelKey.STAGE_EXPLORER)
     assert isinstance(explorer, ThemedStageExplorer)
     assert explorer._stage_poller.isRunning()
 
@@ -71,134 +44,102 @@ def test_main_window_close_stops_stage_explorer(gui: MicroManagerGUI) -> None:
     assert not explorer._stage_poller.isRunning()
 
 
-# this warning only occurs on PySide6 for some reason
 @pytest.mark.filterwarnings("ignore:No device with label")
-def test_shutter_toolbar(gui: MicroManagerGUI, qtbot: QtBot) -> None:
-    sh_toolbar = ShuttersToolbar(gui._mmc, gui)
-
-    # in our test cfg we have 3 shutters
-    assert (layout := sh_toolbar.layout()) is not None
+def test_shutter_bar_refreshes_loaded_devices(
+    gui: MicroManagerGUI, qtbot: QtBot
+) -> None:
+    bar = gui.acquire._shutters
+    assert (layout := bar.layout()) is not None
     assert layout.count() == 3
-    assert len(sh_toolbar.actions()) == 3
 
-    # loading default cfg
     with qtbot.waitSignal(gui._mmc.events.systemConfigurationLoaded):
         gui._mmc.loadSystemConfiguration()
-    # in our test cfg we have 2 shutters
     assert layout.count() == 2
-    assert len(sh_toolbar.actions()) == 2
 
 
-def test_save_restore_state(gui: MicroManagerGUI, settings: Settings) -> None:
-    assert not gui._open_widgets()
-    settings.window.open_widgets.clear()
-
-    # save the state
-    assert not settings.window.open_widgets
-    assert not settings.window.geometry
+def test_save_state_uses_modern_settings(
+    gui: MicroManagerGUI, settings: Settings
+) -> None:
+    classic = settings.window.model_dump()
+    gui.acquire.panel_button(PanelKey.STAGES).click()
     gui._save_state()
-    assert settings.window.geometry
 
-    # add a widget
-    gui.get_widget(WidgetAction.STAGE_CONTROL)
-    assert WidgetAction.STAGE_CONTROL in gui._open_widgets()
-    # restore the state
-    assert not settings.window.open_widgets
-    gui.restore_state()
-    assert WidgetAction.STAGE_CONTROL not in gui._open_widgets()
+    assert settings.modern_window.geometry
+    assert PanelKey.STAGES in settings.modern_window.acquire_panels
+    assert settings.window.model_dump() == classic
 
 
-def test_ndv_viewers_in_main_window(gui: MicroManagerGUI) -> None:
-    central_area = cast("CDockAreaWidget", gui._central_dock_area)
-    assert central_area.dockWidgetsCount() == 1
-    gui.mmcore.mda.run(
-        useq.MDASequence(
-            time_plan=useq.TIntervalLoops(interval=1, loops=2),  # pyright: ignore
-            channels=["DAPI", "FITC"],  #  pyright: ignore
-        ),
-        output="memory",
-    )
-    assert central_area.dockWidgetsCount() == 2
-
-
-def test_main_window_notifications(gui: MicroManagerGUI) -> None:
-    """Test that notifications are created and removed correctly."""
-    assert isinstance(gui.nm, NotificationManager)
-
-    with patch.object(gui.nm, "show_error_message") as mock_show_error:
-        err = ValueError("Boom!")
-        app = QApplication.instance()
-        assert isinstance(app, MMQApplication)
-        app.exceptionRaised.emit(err)
-        mock_show_error.assert_called_once()
-        assert mock_show_error.call_args[0][0] == "Boom!"
-
-
-def test_snap(gui: MicroManagerGUI, qtbot: QtBot) -> None:
-    """Test that snapping creates a new image preview."""
-    vm = gui._viewers_manager
-    assert vm._current_image_preview is None
-    core = gui._mmc
-    with qtbot.waitSignal(vm.previewViewerCreated):
-        core.snapImage()
-    preview = vm._current_image_preview
-    assert preview is not None
-    assert len(vm._preview_dock_widgets) == 1
-
-    # change image dtype/shape.
-    # We should end up with a second preview widget
-    core.setProperty(core.getCameraDevice(), "PixelType", "32bitRGB")
-    with qtbot.waitSignal(vm.previewViewerCreated):
-        core.snapImage()
-    assert vm._current_image_preview is not preview
-    preview = vm._current_image_preview
-    assert preview is not None
-    assert len(vm._preview_dock_widgets) == 2
-
-    # but this should *not* create a new preview
-    core.setProperty(core.getCameraDevice(), "Exposure", "42")
-    with qtbot.waitSignal(core.events.imageSnapped):
-        core.snapImage()
-    assert vm._current_image_preview is preview
-    assert len(vm._preview_dock_widgets) == 2
-
-
-@pytest.mark.skipif(
-    bool(sys.platform == "darwin"),
-    reason="need to debug hanging test on macOS CI",
-)
-def test_stream(gui: MicroManagerGUI, qtbot: QtBot) -> None:
-    """Test that streaming creates a new image preview."""
-    vm = gui._viewers_manager
-    current = vm._current_image_preview
-    assert current is None
-    core = gui._mmc
-    with qtbot.waitSignal(vm.previewViewerCreated):
-        core.startContinuousSequenceAcquisition()
-
-    assert vm._current_image_preview is not None
-    ndv_viewer = vm._current_image_preview.widget()._viewer  # type: ignore
-    assert isinstance(ndv_viewer, ndv.ArrayViewer)
-
-    # we should be able to change the exposure
-    core.setExposure(11)
-    # wait until the ndv viewer actually changes the current index (sanity check)
-    change_signal = ndv_viewer.display_model.current_index.value_changed
-    qtbot.waitSignals([change_signal] * 4)
-    qtbot.wait(40)
-    core.stopSequenceAcquisition()
-
-
-def test_mda(gui: MicroManagerGUI, qtbot: QtBot) -> None:
-    vm = gui._viewers_manager
-    assert vm._active_mda_viewer is None
-    core = gui._mmc
-    with qtbot.waitSignal(vm.mdaViewerCreated):
-        core.mda.run(
+def test_ndv_viewers_in_main_window(gui: MicroManagerGUI, qtbot: QtBot) -> None:
+    manager = gui.acquire.viewers
+    assert not manager._records
+    with qtbot.waitSignal(manager.mdaViewerCreated):
+        gui._mmc.mda.run(
             useq.MDASequence(
-                time_plan=useq.TIntervalLoops(interval=1, loops=2),  # pyright: ignore
-                channels=["DAPI", "FITC"],  #  pyright: ignore
+                time_plan=useq.TIntervalLoops(interval=timedelta(0), loops=2),
+                channels=(
+                    useq.Channel(config="DAPI", exposure=None),
+                    useq.Channel(config="FITC", exposure=None),
+                ),
             ),
             output="memory",
         )
-    assert vm._active_mda_viewer is not None
+    assert len(manager._records) == 1
+    assert manager.active_viewer is not None
+    assert manager.active_viewer.data is not None
+
+
+def test_main_window_notifications(gui: MicroManagerGUI) -> None:
+    assert isinstance(gui.nm, NotificationManager)
+    with patch.object(gui.nm, "show_error_message") as mock_show_error:
+        app = QApplication.instance()
+        assert isinstance(app, MMQApplication)
+        app.exceptionRaised.emit(ValueError("Boom!"))
+        mock_show_error.assert_called_once()
+        assert mock_show_error.call_args.args[:2] == ("Boom!", "See traceback")
+        assert callable(mock_show_error.call_args.kwargs["on_action"])
+
+
+def test_snap_updates_preview_after_camera_format_changes(
+    gui: MicroManagerGUI, qtbot: QtBot
+) -> None:
+    manager = gui.acquire.viewers
+    assert manager.preview is None
+    with qtbot.waitSignal(manager.previewCreated):
+        manager.ensure_preview()
+    gui._mmc.snapImage()
+    preview = manager.preview
+    assert preview is not None
+    original = preview.dtype_shape
+    assert original is not None
+
+    gui._mmc.setProperty(gui._mmc.getCameraDevice(), "PixelType", "32bitRGB")
+    with qtbot.waitSignal(gui._mmc.events.imageSnapped):
+        gui._mmc.snapImage()
+    assert preview.dtype_shape != original
+    assert manager.preview is preview
+
+    gui._mmc.setExposure(42)
+    with qtbot.waitSignal(gui._mmc.events.imageSnapped):
+        gui._mmc.snapImage()
+    assert manager.preview is preview
+
+
+@pytest.mark.skipif(
+    sys.platform == "darwin", reason="need to debug hanging test on macOS CI"
+)
+def test_stream_updates_preview(gui: MicroManagerGUI, qtbot: QtBot) -> None:
+    manager = gui.acquire.viewers
+    with qtbot.waitSignal(manager.previewCreated):
+        gui.acquire._live_btn.click()
+    try:
+        qtbot.waitUntil(gui._mmc.isSequenceRunning)
+        assert manager.preview is not None
+        gui._mmc.setExposure(11)
+        qtbot.waitUntil(
+            lambda: (
+                manager.preview is not None and manager.preview.viewer.data is not None
+            )
+        )
+    finally:
+        gui._mmc.stopSequenceAcquisition()
+    assert not gui._mmc.isSequenceRunning()

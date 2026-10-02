@@ -7,7 +7,7 @@ import numpy as np
 from pymmcore_plus.mda import FinishReason, RunState
 from useq import Channel, MDASequence, Position, TIntervalLoops, ZRangeAround
 
-from pymmcore_gui._modern_gui._mda_status import (
+from pymmcore_gui.widgets._mda_status import (
     MDAStatusWidget,
     _format_countdown,
     _format_event,
@@ -163,7 +163,7 @@ def test_mda_status_preserves_a_transient_status_bar_message(
 def test_main_window_left_status_and_idle_visibility(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    from pymmcore_gui._modern_gui._main_win import MainWindow
+    from pymmcore_gui._main_window import MainWindow
 
     window = MainWindow(mmcore=mmcore)
     qtbot.addWidget(window)

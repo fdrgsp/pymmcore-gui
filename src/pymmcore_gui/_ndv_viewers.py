@@ -1,127 +1,484 @@
+"""Dockable image viewers for the Acquire page."""
+
 from __future__ import annotations
 
+import gc
+import hashlib
 import weakref
 from contextlib import suppress
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
-from weakref import WeakSet, WeakValueDictionary
 
-import ndv
-import useq
+from ome_writers import ScratchFormat
+from pymmcore_plus.mda import OmeWritersSink, frame_meta_to_ome
 
+from pymmcore_gui._acquisition_loader import open_acquisition as _open_acquisition
 from pymmcore_gui._array_viewer import MMArrayViewer
 from pymmcore_gui._channel_luts import ChannelLUTMemory
-from pymmcore_gui._qt.QtAds import CDockWidget
-from pymmcore_gui._qt.QtCore import QObject, QTimer, Signal
-from pymmcore_gui._qt.QtWidgets import QWidget
+from pymmcore_gui._mda_export import AcquisitionRecord
+from pymmcore_gui._qt.QtAds import CDockWidget, DockWidgetArea
+from pymmcore_gui._qt.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal
+from pymmcore_gui._qt.QtWidgets import QSplitter
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable
 
+    import ndv
     import numpy as np
-    from ndv.models._array_display_model import (
-        IndexMap,  # pyright: ignore[reportPrivateImportUsage]
-    )
     from pymmcore_plus import CMMCorePlus
+    from pymmcore_plus.mda import SinkProtocol
     from pymmcore_plus.metadata import FrameMetaV1, SummaryMetaV1
-    from useq import MDASequence
+    from useq import MDAEvent, MDASequence
 
-    from pymmcore_gui.widgets.image_preview._preview_base import ImagePreviewBase
+    from pymmcore_gui._acquisition_loader import LoadedAcquisition
+    from pymmcore_gui._qt.QtAds import CDockAreaWidget, CDockManager
+    from pymmcore_gui._qt.QtWidgets import QWidget
 
 
-# NOTE: we make this a QObject mostly so that the lifetime of this object is tied to
-# the lifetime of the parent QMainWindow.  If inheriting from QObject is removed in
-# the future, make sure not to store a strong reference to this main_window
-class NDVViewersManager(QObject):
-    """Object that mediates a connection between the MDA experiment and ndv viewers.
+class _OpenAcquisitionSignals(QObject):
+    """GUI-thread delivery point for one `_OpenAcquisitionTask`'s result."""
 
-    Parameters
-    ----------
-    parent : QWidget
-        The parent widget.
-    mmcore : CMMCorePlus
-        The CMMCorePlus instance.
+    finished = Signal(object)  # LoadedAcquisition
+    failed = Signal(str)
+    done = Signal()  # always, after finished/failed -- for cleanup
+
+
+class _OpenAcquisitionTask(QRunnable):
+    """Open one acquisition on a worker thread.
+
+    Only the reader construction happens here; every Qt object is built on
+    the GUI thread from `signals.finished`.
     """
 
-    mdaViewerCreated = Signal(ndv.ArrayViewer, useq.MDASequence)
-    previewViewerCreated = Signal(CDockWidget)
-    viewerDestroyed = Signal(str)
+    def __init__(self, path: str | Path) -> None:
+        super().__init__()
+        self._path = path
+        self.signals = _OpenAcquisitionSignals()
+
+    def run(self) -> None:
+        try:
+            loaded = _open_acquisition(self._path)
+        except Exception as e:
+            self.signals.failed.emit(str(e))
+        else:
+            self.signals.finished.emit(loaded)
+        finally:
+            self.signals.done.emit()
+
+
+def _runner_sink(runner: Any) -> SinkProtocol | None:
+    """Return the runner's sink across released and development plus versions."""
+    if callable(get_sink := getattr(runner, "get_sink", None)):
+        return cast("SinkProtocol | None", get_sink())
+    # get_sink() was added after pymmcore-plus 0.18.1. The runner has used
+    # this same internal attribute since before our declared minimum version.
+    return cast("SinkProtocol | None", getattr(runner, "_sink", None))
+
+
+def _release_runner_sink(runner: Any, sink: SinkProtocol) -> bool:
+    """Release ``sink``, with the same safeguards as newer pymmcore-plus."""
+    if callable(release_sink := getattr(runner, "release_sink", None)):
+        return bool(release_sink(sink))
+    # Compatibility for released pymmcore-plus versions that predate the
+    # public method. Never mutate a running acquisition or a newer run's sink.
+    if runner.is_running() or _runner_sink(runner) is not sink:
+        return False
+    runner._sink = None
+    return True
+
+
+@dataclass
+class _ViewerRecord:
+    viewer: ndv.ArrayViewer
+    bridge: _StreamSignalBridge | None = None
+    coords_signal: Any = None
+    coords_callback: Callable[[], None] | None = None
+    acquisition: AcquisitionRecord | None = None
+    # The exact sink object behind this viewer's data, captured at
+    # sequenceStarted -- see AcquireViewersManager._on_viewer_closed.
+    sink: SinkProtocol | None = None
+    # True only for a viewer created by _on_sequence_started (a live MDA
+    # run). Gates whether mdaViewerCreated/mdaViewerClosed fire for it --
+    # those drive CameraRoiSyncController's live-camera ROI observation,
+    # which a reopened acquisition (arbitrary old pixel data, nothing to do
+    # with the microscope's *current* camera/ROI) must never enter.
+    is_live: bool = False
+    # Releases a reopened acquisition's file handle(s)/zarr store. None for
+    # a live viewer, whose data is owned by the runner/sink instead.
+    loader_cleanup: Callable[[], None] | None = None
+
+    def disconnect(self) -> None:
+        """Disconnect the live stream from a viewer that is being closed."""
+        if self.coords_signal is not None and self.coords_callback is not None:
+            with suppress(Exception):
+                self.coords_signal.disconnect(self.coords_callback)
+        self.coords_signal = None
+        self.coords_callback = None
+
+
+class AcquireViewersManager(QObject):
+    """Lazy snap preview plus one dock-tabbed viewer for each MDA run.
+
+    Every Preview/MDA-viewer instance is wrapped in its own ``CDockWidget`` and
+    tabbed into a dedicated nested ``CDockManager`` within the tools workspace.
+
+    Closed viewer docks use ADS's ``DockWidgetDeleteOnClose`` feature so a
+    closed viewer's dock-area/splitter node is actually removed (freeing its
+    Qt widget/canvas resources via the normal parent-child cascade) rather
+    than left behind as a permanently-empty, still-space-occupying shell --
+    otherwise splitting several viewers side by side and closing some of them
+    leaves unreclaimable dead space that the remaining ones can't expand
+    into. The supplied dock manager is dedicated to viewers and nested inside
+    the outer MDA/tools manager. Destroying or splitting a viewer area can
+    therefore relayout only the viewer workspace, never the surrounding tool
+    panels.
+    """
+
     _sequenceStarted = Signal(object, object)
     _frameReady = Signal(object, object, object)
     _sequenceFinished = Signal(object)
+    previewCreated = Signal(object)
+    previewClosed = Signal()
+    mdaViewerCreated = Signal(object)
+    mdaViewerClosed = Signal(object)
+    # str -- why a background `open_acquisition_async` could not open a path.
+    acquisitionOpenFailed = Signal(str)
+    # (MDASequence, source_title) -- emitted when the user picks "Re-use
+    # MDA…" on either a live MDA viewer or a reopened acquisition's viewer.
+    reuseMDARequested = Signal(object, str)
 
-    def __init__(self, parent: QWidget, mmcore: CMMCorePlus):
+    def __init__(
+        self,
+        dock_manager: CDockManager,
+        mmcore: CMMCorePlus,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
-        self._mmc = mmcore
+        self._parent_widget = parent
+        self._dock_manager = dock_manager
+        self._core = mmcore
         self._channel_luts = ChannelLUTMemory()
-
-        # weakref map of {sequence_uid: ndv.ArrayViewer}
-        self._seq_viewers = WeakValueDictionary[str, ndv.ArrayViewer]()
-        self._preview_dock_widgets = WeakSet[CDockWidget]()
-        self._active_mda_viewer: ndv.ArrayViewer | None = None
+        self._records: dict[CDockWidget, _ViewerRecord] = {}
+        self._active_viewer: ndv.ArrayViewer | None = None
+        self._active_dock: CDockWidget | None = None
+        self._follow_acquisition = True
+        self._connected = True
         # {(p, g): flattened "p"-slider slot}, reset per sequence -- see
         # _on_frame_ready for why this exists.
         self._shot_indices: dict[tuple[object, object], int] = {}
+        # Set when a still-running run's viewer is closed: release_sink()
+        # refuses to drop a sink while it's being written to, so the release
+        # is retried once sequenceFinished confirms the run is done.
+        self._pending_release: SinkProtocol | None = None
 
-        # CONNECTIONS ---------------------------------------------------------
+        # Background acquisition opening -- see open_acquisition_async. One
+        # at a time, so a multi-file drop can't thrash the disk.
+        self._open_pool = QThreadPool(self)
+        self._open_pool.setMaxThreadCount(1)
+        self._pending_opens: set[_OpenAcquisitionSignals] = set()
 
-        self._is_mda_running = False
-        self._follow_acquisition = True
-        self._current_image_preview: CDockWidget | None = None
+        self.preview: NDVPreview | None = None
+        self._preview_dock: CDockWidget | None = None
 
-        ev = self._mmc.events
-        ev.imageSnapped.connect(self._on_image_snapped)
-        ev.sequenceAcquisitionStarted.connect(self._on_streaming_started)
-        ev.continuousSequenceAcquisitionStarted.connect(self._on_streaming_started)
-        ev.propertyChanged.connect(self._on_property_changed)
+        # PyQt6Ads 4.4 does not reliably honor EqualSplitOnInsertion when an
+        # existing tab is dragged out into a new viewer area. Normalize only
+        # the newly-created inner splitter after ADS finishes the relocation;
+        # later user resizing of its handle remains untouched.
+        self._dock_manager.dockAreaCreated.connect(self._equalize_new_split)
 
-        self._runner = self._mmc.mda
+        # pymmcore-plus MDA events may be emitted by the acquisition thread.
+        # Re-emitting through QObject signals guarantees that all QWidget and ndv
+        # mutations below happen on this object's GUI thread.
         self._sequenceStarted.connect(self._on_sequence_started)
         self._frameReady.connect(self._on_frame_ready)
         self._sequenceFinished.connect(self._on_sequence_finished)
         self._sequence_started_callback = self._sequenceStarted.emit
         self._frame_ready_callback = self._frameReady.emit
         self._sequence_finished_callback = self._sequenceFinished.emit
-        mda_ev = self._runner.events
-        mda_ev.sequenceStarted.connect(self._sequence_started_callback)
-        mda_ev.frameReady.connect(self._frame_ready_callback)
-        mda_ev.sequenceFinished.connect(self._sequence_finished_callback)
 
-        parent.destroyed.connect(self._cleanup)
+        events = self._core.mda.events
+        events.sequenceStarted.connect(self._sequence_started_callback)
+        events.frameReady.connect(self._frame_ready_callback)
+        events.sequenceFinished.connect(self._sequence_finished_callback)
+        # A bound slot on this QObject may not run during its own destruction.
+        # The owner's destroyed signal arrives before Qt deletes its children,
+        # while this manager can still disconnect runner callbacks safely.
+        if parent is not None:
+            parent.destroyed.connect(self._disconnect)
+        self.destroyed.connect(self._disconnect)
 
-    def _cleanup(self, obj: QObject | None = None) -> None:
-        self._active_mda_viewer = None
-        mda_ev = self._runner.events
-        with suppress(Exception):
-            mda_ev.sequenceStarted.disconnect(self._sequence_started_callback)
-        with suppress(Exception):
-            mda_ev.frameReady.disconnect(self._frame_ready_callback)
-        with suppress(Exception):
-            mda_ev.sequenceFinished.disconnect(self._sequence_finished_callback)
+    def _new_dock(self, title: str) -> CDockWidget:
+        """Create a viewer dock, tabbed with an existing viewer when possible."""
+        dw = CDockWidget(self._dock_manager, title, self._parent_widget)
+        dw.setFeature(CDockWidget.DockWidgetFeature.DockWidgetFloatable, False)
+        dw.setFeature(CDockWidget.DockWidgetFeature.DockWidgetDeleteOnClose, True)
+        if (target := self._viewer_target_area()) is None:
+            self._dock_manager.addDockWidget(DockWidgetArea.CenterDockWidgetArea, dw)
+        else:
+            self._dock_manager.addDockWidgetTabToArea(dw, target)
+        return dw
 
-    def _on_sequence_started(
-        self, sequence: useq.MDASequence, meta: SummaryMetaV1
-    ) -> None:
-        """Create a viewer backed by the MDA runner's live sink view."""
-        self._is_mda_running = True
+    @staticmethod
+    def _disk_backed_title(sink: Any) -> str | None:
+        """Return a real disk-backed sink's destination filename, else None.
+
+        A memory/"scratch"-backed run (Saving unchecked in the MDA editor)
+        has no meaningful destination to show -- `ScratchFormat.output_path`
+        is just an identity/spill path, not something the user chose to
+        save to.
+        """
+        if not isinstance(sink, OmeWritersSink):
+            return None
+        with suppress(Exception):
+            settings = sink.settings
+            if not isinstance(settings.format, ScratchFormat):
+                return Path(settings.output_path).name
+        return None
+
+    @staticmethod
+    def _rename_viewer_tab(dw: CDockWidget, viewer: MMArrayViewer, path: str) -> None:
+        """Rename a viewer's dock/tab (and its `source_title`) to `path`'s filename.
+
+        Used both when a live run's viewer is later saved and when a
+        reopened acquisition's viewer is re-exported (e.g. as a different
+        format) -- either way, the tab should reflect where the data now
+        actually lives rather than its original generic/source label.
+        """
+        title = Path(path).name
+        with suppress(RuntimeError):  # the dock may have been closed meanwhile
+            dw.setWindowTitle(title)
+        viewer.source_title = title
+
+    def _viewer_target_area(self) -> CDockAreaWidget | None:
+        """Return a visible viewer area to receive a newly-created viewer."""
+        with suppress(RuntimeError):
+            focused = self._dock_manager.focusedDockWidget()
+            if focused is not None and (area := focused.dockAreaWidget()) is not None:
+                return area
+            for dock in self._dock_manager.openedDockWidgets():
+                area = dock.dockAreaWidget()
+                if area is not None and area.width() > 0:
+                    return area
+        return None
+
+    def _equalize_new_split(self, area: CDockAreaWidget) -> None:
+        """Share a newly-created viewer split equally between its siblings."""
+        QTimer.singleShot(0, lambda: self._equalize_area_splitter(area))
+
+    @staticmethod
+    def _equalize_area_splitter(area: CDockAreaWidget) -> None:
+        with suppress(RuntimeError):
+            splitter = area.parentWidget()
+            if isinstance(splitter, QSplitter) and splitter.count() > 1:
+                splitter.setSizes([1] * splitter.count())
+
+    def ensure_preview(self) -> NDVPreview:
+        """Create and select the snap preview if it is not already open."""
+        if self.preview is None:
+            preview = self.preview = NDVPreview(
+                mmcore=self._core, parent=self._parent_widget
+            )
+            dw = self._new_dock("Preview")
+            dw.setWidget(preview, CDockWidget.eInsertMode.ForceNoScrollArea)
+            dw.closed.connect(self._on_preview_closed)
+            self._preview_dock = dw
+            self.previewCreated.emit(preview)
+        assert self._preview_dock is not None
+        self._preview_dock.setAsCurrentTab()
+        assert self.preview is not None
+        return self.preview
+
+    def _on_preview_closed(self) -> None:
+        if (preview := self.preview) is not None:
+            preview.detach()
+        self.preview = None
+        self._preview_dock = None
+        self.previewClosed.emit()
+
+    @property
+    def active_viewer(self) -> ndv.ArrayViewer | None:
+        """Return the viewer following the current MDA, if any."""
+        return self._active_viewer
+
+    def open_acquisition(self, path: str | Path) -> ndv.ArrayViewer:
+        """Load a previously-acquired OME-TIFF/OME-Zarr dataset into a new tab.
+
+        Unlike a live MDA run's viewer, the resulting viewer never becomes
+        `active_viewer`/`_active_dock` (those track *only* the run currently
+        being followed) and never fires `mdaViewerCreated` -- it isn't backed
+        by the microscope's current camera/ROI, so it must stay invisible to
+        `CameraRoiSyncController`'s live-camera ROI observation.
+
+        Raises
+        ------
+        ValueError
+            If `path` isn't a supported/openable acquisition -- propagated
+            from `_acquisition_loader.open_acquisition` for the caller (e.g.
+            a drag-and-drop handler) to report without crashing.
+        """
+        return self._viewer_for_loaded(_open_acquisition(path))
+
+    def open_acquisition_async(self, path: str | Path) -> None:
+        """Open `path` off the GUI thread, then add its tab when it's ready.
+
+        Enumerating a multi-file acquisition, parsing its OME metadata and
+        constructing readers is seconds of work for a large dataset -- doing
+        it inline would freeze the window mid-drop. Failures arrive as
+        `acquisitionOpenFailed` rather than an exception, since there is no
+        longer a caller to raise into.
+
+        Opens run one at a time: dropping ten datasets at once should not
+        put ten readers into contention over the same disk, especially while
+        an acquisition may be writing to it.
+        """
+        task = _OpenAcquisitionTask(path)
+        signals = task.signals
+        # Created here, so it belongs to the GUI thread and the worker's
+        # emissions are delivered as queued events. Held onto because
+        # QThreadPool frees the QRunnable as soon as run() returns.
+        self._pending_opens.add(signals)
+        signals.finished.connect(self._on_acquisition_loaded)
+        signals.failed.connect(self.acquisitionOpenFailed)
+        signals.done.connect(lambda s=signals: self._pending_opens.discard(s))
+        self._open_pool.start(task)
+
+    def _on_acquisition_loaded(self, loaded: LoadedAcquisition) -> None:
+        """Build the viewer for a background-loaded acquisition (GUI thread)."""
+        if not self._connected:
+            # Torn down while this was loading: nothing will ever own the
+            # reader, so release it here rather than leak the file handles.
+            loaded.close()
+            return
+        self._viewer_for_loaded(loaded)
+
+    def _viewer_for_loaded(self, loaded: LoadedAcquisition) -> ndv.ArrayViewer:
+        viewer = MMArrayViewer(loaded.wrapper)
+        widget = viewer.widget()
+        # Keyed to the resolved path (not a random id), so re-dropping the
+        # exact same file is idempotent about naming; two different files
+        # sharing a basename still get distinct object names.
+        digest = hashlib.sha1(str(loaded.source_path).encode()).hexdigest()[:8]
+        widget.setObjectName(f"ndv-loaded-{digest}")
+
+        viewer.mda_sequence = loaded.sequence
+        viewer.source_title = loaded.title
+        if loaded.sequence is not None:
+            sequence, title = loaded.sequence, loaded.title
+            viewer._reuse_mda_callback = lambda: self.reuseMDARequested.emit(
+                sequence, title
+            )
+        # So the Save button re-exports this acquisition's *real* recovered
+        # metadata (dimensions, physical scale, channel names, summary
+        # metadata) instead of falling back to stamping the microscope's
+        # current state -- see MMArrayViewer._save_data.
+        viewer._acquisition_record = loaded.record
+
+        record = _ViewerRecord(viewer, loader_cleanup=loaded.close)
+
+        dw = self._new_dock(loaded.title)
+        dw.setWidget(widget, CDockWidget.eInsertMode.ForceNoScrollArea)
+        dw.closed.connect(lambda: self._on_viewer_closed(dw))
+        dw.setAsCurrentTab()
+        viewer._on_saved = lambda path: self._rename_viewer_tab(dw, viewer, path)
+
+        self._records[dw] = record
+        return viewer
+
+    def _on_sequence_started(self, sequence: MDASequence, meta: SummaryMetaV1) -> None:
+        """Create a viewer backed by the acquisition's live sink view."""
+        self._active_viewer = None
+        self._active_dock = None
         self._shot_indices = {}
-        view = self._runner.get_view()
-        self._active_mda_viewer = (
-            self._create_ndv_viewer(view, sequence, meta) if view is not None else None
+        view = self._core.mda.get_view()
+        if view is None:
+            # Runs without a path, AcquisitionSettings, or "memory" output have
+            # no sink to display.  The embedded MDA widget prevents this case by
+            # supplying "memory" whenever file saving is disabled.
+            return
+
+        viewer = MMArrayViewer(view, scales=_extract_scales(sequence, meta))
+        self._channel_luts.bind_live_mda(viewer, sequence)
+        widget = viewer.widget()
+        sha = str(sequence.uid)[:8]
+        widget.setObjectName(f"ndv-{sha}")
+
+        # The sink object itself is fetched here (rather than only later) so
+        # a disk-backed run's tab can be titled with its real destination
+        # filename from the start, not just "MDA <sha>" until someone
+        # manually saves it -- see _on_saved below for that latter case.
+        sink = _runner_sink(self._core.mda)
+        title = self._disk_backed_title(sink) or f"MDA {sha}"
+
+        viewer.mda_sequence = sequence
+        viewer.source_title = title
+        viewer._reuse_mda_callback = lambda: self.reuseMDARequested.emit(
+            sequence, title
         )
 
+        record = _ViewerRecord(viewer, is_live=True)
+        # Snapshot the sink's resolved settings + summary metadata now: the
+        # sink is replaced wholesale on the *next* run, so a viewer left open
+        # across two acquisitions must hold its own copy to export correctly
+        # later. Per-frame metadata is appended live, in _on_frame_ready.
+        # The sink object itself is also kept (record.sink), so this specific
+        # run's data can be released later by identity, even after the
+        # runner's own `get_sink()` has moved on to a newer run.
+        record.sink = sink
+        if isinstance(sink, OmeWritersSink):
+            acquisition = AcquisitionRecord(
+                settings=sink.settings, summary_meta=sink.summary_meta, view=view
+            )
+            record.acquisition = acquisition
+            viewer._acquisition_record = acquisition  # read by MMArrayViewer._save_data
+        wrapper = viewer.data_wrapper
+        coords_signal = getattr(view, "coords_changed", None)
+        if coords_signal is not None and wrapper is not None:
+            bridge = _StreamSignalBridge(wrapper.dims_changed.emit, widget)
+            callback = bridge.dimsChanged.emit
+            coords_signal.connect(callback)
+            record.bridge = bridge
+            record.coords_signal = coords_signal
+            record.coords_callback = callback
+
+        self._follow_acquisition = True
+        with suppress(Exception):
+            _add_follow_lock_button(viewer, self)
+
+        dw = self._new_dock(title)
+        dw.setWidget(widget, CDockWidget.eInsertMode.ForceNoScrollArea)
+        dw.closed.connect(lambda: self._on_viewer_closed(dw))
+        dw.setAsCurrentTab()
+        viewer._on_saved = lambda path: self._rename_viewer_tab(dw, viewer, path)
+
+        self._records[dw] = record
+        self._active_viewer = viewer
+        self._active_dock = dw
+        self.mdaViewerCreated.emit(viewer)
+
     def _on_frame_ready(
-        self, frame: np.ndarray, event: useq.MDAEvent, meta: FrameMetaV1
+        self, frame: np.ndarray, event: MDAEvent, meta: FrameMetaV1
     ) -> None:
-        """Follow the latest acquired index and redraw the sink-backed viewer."""
-        if (viewer := self._active_mda_viewer) is None:
-            return  # pragma: no cover
-        if not self._follow_acquisition:
+        """Record frame metadata for export, then follow the latest acquired index.
+
+        Metadata capture happens unconditionally, *before* the follow-lock
+        check below: the lock only controls whether the displayed slider
+        position tracks new frames, and must not also silently truncate the
+        metadata used later by the viewer's Save button.
+        """
+        if (dw := self._active_dock) is not None:
+            record = self._records.get(dw)
+            if record is not None and record.acquisition is not None:
+                record.acquisition.frame_meta.append(frame_meta_to_ome(meta))
+
+        viewer = self._active_viewer
+        if viewer is None or not self._follow_acquisition:
             return
 
         current_index = viewer.display_model.current_index
         wrapper = viewer.data_wrapper
-        index = dict(event.index)
+        index = {str(axis): value for axis, value in event.index.items()}
         if "p" in index or "g" in index:
             # A position's own grid sub-sequence yields both "p" (the real
             # position) and "g" (the tile within it) on the same event.
@@ -141,103 +498,98 @@ class NDVViewersManager(QObject):
                 shot_key, len(self._shot_indices)
             )
 
-        def _update(_idx: IndexMap = current_index) -> None:
+        def _update() -> None:
             try:
-                _idx.update(index.items())
+                current_index.update(index.items())
                 if wrapper is not None:
                     wrapper.data_changed.emit()
             except Exception:  # viewer may have closed during the async write
                 pass
 
+        # Sink writes may complete asynchronously after frameReady.
         QTimer.singleShot(10, _update)
 
-    def _on_sequence_finished(self, sequence: useq.MDASequence) -> None:
-        """Called when a sequence has finished."""
-        self._is_mda_running = False
+    def _on_sequence_finished(self, sequence: MDASequence) -> None:
+        """Retry releasing a just-finished run's data if its viewer already closed."""
+        if (sink := self._pending_release) is not None:
+            self._pending_release = None
+            self._release_sink(sink)
 
-    def _create_ndv_viewer(
-        self,
-        view: Any,
-        sequence: MDASequence,
-        meta: SummaryMetaV1 | None = None,
-    ) -> ndv.ArrayViewer:
-        """Create a shared MMArrayViewer backed by an ome-writers stream view."""
-        ndv_viewer = MMArrayViewer(view, scales=_extract_scales(sequence, meta))
-        self._channel_luts.bind_live_mda(ndv_viewer, sequence)
-        if hasattr(view, "coords_changed") and hasattr(
-            ndv_viewer.data_wrapper, "dims_changed"
-        ):
-            bridge = _StreamSignalBridge(
-                ndv_viewer.data_wrapper.dims_changed.emit, ndv_viewer.widget()
-            )
-            view.coords_changed.connect(bridge.dimsChanged.emit)
-        self._follow_acquisition = True
+    def close_all_viewers(self) -> None:
+        """Close every open viewer dock, releasing whatever each one holds.
+
+        A reopened acquisition's viewer keeps an open file handle on its
+        dataset for as long as it lives (see ``open_acquisition``), and only
+        closing its dock releases it. Shutting the page down without this
+        leaves those handles to garbage collection, which may not run until
+        long after the window is gone.
+        """
+        for dw in list(self._records):
+            with suppress(RuntimeError):
+                dw.closeDockWidget()
+
+    def _on_viewer_closed(self, dw: CDockWidget) -> None:
+        record = self._records.pop(dw, None)
+        if record is not None:
+            # Only a live MDA run's viewer was ever announced via
+            # mdaViewerCreated (CameraRoiSyncController's live-camera ROI
+            # observation) -- a reopened acquisition never was, so it must
+            # not raise the paired mdaViewerClosed either.
+            if record.is_live:
+                self.mdaViewerClosed.emit(record.viewer)
+            record.disconnect()
+        if dw is self._active_dock:
+            self._active_dock = None
+            self._active_viewer = None
+        if record is not None:
+            with suppress(Exception):
+                record.viewer.close()
+            if record.loader_cleanup is not None:
+                with suppress(Exception):
+                    record.loader_cleanup()
+            # Drop the runner's own reference to this run's data (freeing
+            # scratch/memory-backed runs and their spill files), unless it's
+            # still being written to -- release_sink() is a no-op if `sink`
+            # is no longer the runner's current one (a newer run replaced it;
+            # that run's data was already dropped by the runner itself, and
+            # is kept alive only by this now-closed viewer's own references).
+            if (sink := record.sink) is not None:
+                if not self._release_sink(sink) and self._core.mda.is_running():
+                    self._pending_release = sink
+
+    def _release_sink(self, sink: SinkProtocol) -> bool:
+        """Best-effort `release_sink`, followed by a GC pass to reclaim memory now.
+
+        ndv/Qt objects tend to form reference cycles, so without an explicit
+        collect the data can survive until the next cyclic-GC run instead of
+        being freed the moment this viewer closes.
+        """
+        released = _release_runner_sink(self._core.mda, sink)
+        if released:
+            QTimer.singleShot(0, gc.collect)
+        return released
+
+    def _disconnect(self, obj: QObject | None = None) -> None:
+        if not self._connected:
+            return
+        self._connected = False
+        events = self._core.mda.events
         with suppress(Exception):
-            _add_follow_lock_button(ndv_viewer, self)
-        self._seq_viewers[str(sequence.uid)] = ndv_viewer
-        self.mdaViewerCreated.emit(ndv_viewer, sequence)
-        return ndv_viewer
-
-    def _create_or_show_img_preview(self) -> ImagePreviewBase | None:
-        """Create or show the image preview widget, return True if created."""
-        preview = None
-        if self._current_image_preview is None:
-            preview = NDVPreview(mmcore=self._mmc)
-            if not isinstance((parent := self.parent()), QWidget):
-                parent = None  # pragma: no cover
-
-            # this is a hacky workaround:
-            # Calling CDockWidget('title', parent) is deprecated
-            # It is preferred to instantiate with a CDockManager.
-            # parent will almost always be the MainWindow that dock_manager
-            # (and in reality, will never be None)
-            if dm := getattr(parent, "dock_manager", None):
-                dw = CDockWidget(dm, "Preview", parent)
-            else:  # pragma: no cover
-                dw = CDockWidget("Preview", parent)
-
-            self._current_image_preview = dw
-            self._preview_dock_widgets.add(dw)
-            dw.setWidget(preview)
-            dw.setFeature(dw.DockWidgetFeature.DockWidgetFloatable, False)
-            self.previewViewerCreated.emit(dw)
-        else:
-            self._current_image_preview.toggleView(True)
-
-        return preview
-
-    def _on_streaming_started(self) -> None:
-        if not self._is_mda_running:
-            if preview := self._create_or_show_img_preview():
-                preview._on_streaming_start()
-
-    def _on_image_snapped(self) -> None:
-        if not self._is_mda_running:
-            if preview := self._create_or_show_img_preview():
-                preview.append(self._mmc.getImage())
-
-    def __repr__(self) -> str:  # pragma: no cover
-        return f"<{self.__class__.__name__} {hex(id(self))} ({len(self)} viewer)>"
-
-    def __len__(self) -> int:
-        return len(self._seq_viewers)
-
-    def viewers(self) -> Iterator[ndv.ArrayViewer]:
-        yield from (self._seq_viewers.values())
-
-    def _on_property_changed(self, dev: str, prop: str, value: str) -> None:
-        if self._mmc is None:
-            return  # pragma: no cover
-
-        # if we change any camera property
-        if dev == self._mmc.getCameraDevice() or (dev == "Core" and prop == "Camera"):
-            if self._current_image_preview:
-                # check if the existing viewer still has a valid shape and dtype
-                # (dtype is actually tuple of (dtype, shape))
-                preview = cast("NDVPreview", self._current_image_preview.widget())
-                if preview._get_core_dtype_shape() != preview.dtype_shape:
-                    preview.detach()
-                    self._current_image_preview = None
+            events.sequenceStarted.disconnect(self._sequence_started_callback)
+        with suppress(Exception):
+            events.frameReady.disconnect(self._frame_ready_callback)
+        with suppress(Exception):
+            events.sequenceFinished.disconnect(self._sequence_finished_callback)
+        for record in self._records.values():
+            self.mdaViewerClosed.emit(record.viewer)
+            record.disconnect()
+        self._records.clear()
+        self._active_viewer = None
+        self._active_dock = None
+        self._pending_release = None
+        if self.preview is not None:
+            self.preview.detach()
+            self.preview = None
 
 
 class _StreamSignalBridge(QObject):

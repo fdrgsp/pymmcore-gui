@@ -1,104 +1,400 @@
+"""Acquire-tab toolbar pieces: snap/live and shutters.
+
+Snap and Live are built in-house rather than wrapping ``pymmcore_widgets``'
+``SnapButton``/``LiveButton`` directly: those hardcode their own text,
+30px icon size, and text-swapping behaviour in ways that fought this app's
+"icon-only, persistently-boxed" toolbar style. The core-facing logic they
+wrap (snap-with-shutter, live start/stop) is a handful of lines, so owning it
+directly gives full control over appearance without post-hoc patching.
+"""
+
 from __future__ import annotations
 
-from typing import cast
+from contextlib import suppress
+from typing import TYPE_CHECKING
 
 from pymmcore_plus import CMMCorePlus, DeviceType
 from pymmcore_widgets import ShuttersWidget
+from superqt.iconify import QIconifyIcon
+from superqt.utils import create_worker
 
-from pymmcore_gui._qt.QtWidgets import QToolBar, QWidget, QWidgetAction
+from pymmcore_gui._array_viewer import ensure_visible_icon, set_source_icon
+from pymmcore_gui._qt.QtCore import QEvent, QPointF, QSize, Qt, Signal
+from pymmcore_gui._qt.QtGui import QPainter, QPolygonF
+from pymmcore_gui._qt.QtWidgets import QFrame, QHBoxLayout, QPushButton, QWidget
+from pymmcore_gui._theme import qcolor, theme
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
-class OCToolBar(QToolBar):
-    """A toolbar that allows selection of current channel.
-
-    e.g:
-    | DAPI | FITC | Cy5 |
-    """
-
-    def __init__(self, mmc: CMMCorePlus, parent: QWidget | None = None) -> None:
-        super().__init__("Optical Configs", parent)
-        self.mmc = mmc
-        mmc.events.systemConfigurationLoaded.connect(self._refresh)
-        mmc.events.configGroupChanged.connect(self._refresh)
-        mmc.events.channelGroupChanged.connect(self._refresh)
-        mmc.events.configSet.connect(self._on_config_set)
-        mmc.events.propertyChanged.connect(self._on_property_changed)
-        self._refresh()
-
-    def _on_config_set(self, group: str, config: str) -> None:
-        """Update the checked action when a new config is set."""
-        if group == self.mmc.getChannelGroup():
-            for action in self.actions():
-                action.setChecked(action.text() == config)
-
-    def _on_property_changed(self, device: str, property: str, value: str) -> None:
-        """Refresh the widget when the ChannelGroup property is changed."""
-        if device == "Core" and property == "ChannelGroup":
-            self._refresh()
-
-    def _refresh(self) -> None:
-        """Clear and refresh with all settings in current channel group."""
-        self.clear()
-        mmc = self.mmc
-        if not (ch_group := mmc.getChannelGroup()):
-            return
-
-        current = mmc.getCurrentConfig(ch_group)
-        for preset_name in mmc.getAvailableConfigs(ch_group):
-            if not (action := self.addAction(preset_name)):
-                continue
-            action.setCheckable(True)
-            action.setChecked(preset_name == current)
-
-            @action.triggered.connect
-            def _(checked: bool, pname: str = preset_name) -> None:
-                mmc.setConfig(ch_group, pname)
+    from pymmcore_gui._qt.QtGui import QPaintEvent
+    from pymmcore_gui._qt.QtWidgets import QLayout
+    from pymmcore_gui.widgets._panels import PanelInfo
 
 
-class ShuttersToolbar(QToolBar):
-    """A QToolBar for the loased Shutters."""
+def _icon_size() -> QSize:
+    """The app's compact action-icon size, scaled with the current zoom."""
+    size = theme().scaled(20)
+    return QSize(size, size)
+
+
+def toolbar_separator() -> QFrame:
+    """A thin vertical divider for grouping toolbar sections."""
+    line = QFrame()
+    line.setFrameShape(QFrame.Shape.VLine)
+    line.setFrameShadow(QFrame.Shadow.Plain)
+    return line
+
+
+def _clear(layout: QLayout) -> None:
+    while layout.count():
+        if (item := layout.takeAt(0)) and (w := item.widget()):
+            w.deleteLater()
+
+
+class SnapButton(QPushButton):
+    """Acquire-style icon-only snap button, optionally controlling MMCore."""
+
+    snapRequested = Signal()
 
     def __init__(
         self,
-        mmc: CMMCorePlus,
+        mmcore: CMMCorePlus | None = None,
         parent: QWidget | None = None,
+        *,
+        control_core: bool = True,
     ) -> None:
-        super().__init__("Shutters", parent)
-        self.mmc = mmc
-        self.mmc.events.systemConfigurationLoaded.connect(self._on_cfg_loaded)
-        self._on_cfg_loaded()
+        super().__init__(parent)
+        self._core = mmcore or CMMCorePlus.instance()
 
-    def _on_cfg_loaded(self) -> None:
-        # delete current actions if any
-        self._clear_shutter_toolbar()
+        self._apply_icon()
+        self.setIconSize(_icon_size())
+        self.setToolTip("Snap")
+        self.setProperty("variant", "subtle")
+        if control_core:
+            self.clicked.connect(self._snap)
 
-        shutters = self.mmc.getLoadedDevicesOfType(DeviceType.ShutterDevice)  # pyright: ignore [reportArgumentType]
+        self._core.events.systemConfigurationLoaded.connect(self._on_config_loaded)
+        self.destroyed.connect(self._disconnect)
+        self._on_config_loaded()
+
+    def _apply_icon(self) -> None:
+        color = qcolor(theme().status_green).name()
+        self.setIcon(QIconifyIcon("fluent:camera-24-regular", color=color))
+
+    def changeEvent(self, e: QEvent | None) -> None:
+        # status_green differs between light/dark themes -- a static icon
+        # set once at construction would go stale after a theme toggle. The
+        # icon size is re-applied here too since it's zoom-scaled and this
+        # button (a QPushButton, not a QToolBar) isn't touched by the app's
+        # zoom pass over QToolBar instances.
+        if e is not None and e.type() == QEvent.Type.StyleChange:
+            self._apply_icon()
+            self.setIconSize(_icon_size())
+        super().changeEvent(e)
+
+    def _on_config_loaded(self, *_: object) -> None:
+        self.setEnabled(bool(self._core.getCameraDevice()))
+
+    def _snap(self) -> None:
+        core = self._core
+        if core.isSequenceRunning():
+            core.stopSequenceAcquisition()
+
+        # Emitted synchronously after stopping any live sequence so listeners can
+        # safely apply the active channel's capture settings and a lazy preview can
+        # subscribe before the worker performs the first snap.
+        self.snapRequested.emit()
+
+        def snap_with_shutter() -> None:
+            # Not all shutter devices reliably send their own open/close
+            # signals -- emit them explicitly so listeners stay in sync.
+            autoshutter = core.getAutoShutter()
+            if autoshutter:
+                core.events.propertyChanged.emit(core.getShutterDevice(), "State", True)
+            core.snap()
+            if autoshutter:
+                core.events.propertyChanged.emit(
+                    core.getShutterDevice(), "State", False
+                )
+
+        create_worker(snap_with_shutter, _start_thread=True)
+
+    def _disconnect(self) -> None:
+        with suppress(RuntimeError, TypeError):
+            self._core.events.systemConfigurationLoaded.disconnect(
+                self._on_config_loaded
+            )
+
+
+class LiveButton(QPushButton):
+    """Acquire-style live toggle, optionally controlling MMCore directly."""
+
+    liveStartedRequested = Signal()
+
+    def __init__(
+        self,
+        mmcore: CMMCorePlus | None = None,
+        parent: QWidget | None = None,
+        *,
+        control_core: bool = True,
+    ) -> None:
+        super().__init__(parent)
+        self._core = mmcore or CMMCorePlus.instance()
+
+        self.setCheckable(True)
+        self.setIconSize(_icon_size())
+        self.setProperty("variant", "subtle")
+        self._set_running(False)
+        if control_core:
+            self.clicked.connect(self._toggle)
+
+        ev = self._core.events
+        ev.systemConfigurationLoaded.connect(self._on_config_loaded)
+        ev.continuousSequenceAcquisitionStarted.connect(self._on_started)
+        ev.sequenceAcquisitionStopped.connect(self._on_stopped)
+        self.destroyed.connect(self._disconnect)
+        self._on_config_loaded()
+
+    def _on_config_loaded(self, *_: object) -> None:
+        self.setEnabled(bool(self._core.getCameraDevice()))
+
+    def _toggle(self) -> None:
+        if self._core.isSequenceRunning():
+            self._core.stopSequenceAcquisition()
+        else:
+            self.ensure_live()
+
+    def ensure_live(self) -> None:
+        """Start live mode if needed without toggling an existing stream off."""
+        if self._core.isSequenceRunning():
+            return
+        # Give a lazy preview time to attach to the streaming signals before the
+        # core starts emitting frames.
+        self.liveStartedRequested.emit()
+        self._core.startContinuousSequenceAcquisition()
+
+    def _on_started(self, *_: object) -> None:
+        self._set_running(True)
+
+    def _on_stopped(self, *_: object) -> None:
+        self._set_running(False)
+
+    def _set_running(self, running: bool) -> None:
+        with suppress(RuntimeError):
+            self.setChecked(running)
+        if running:
+            color = qcolor(theme().status_red).name()
+            self.setIcon(QIconifyIcon("fluent:video-off-24-regular", color=color))
+            self.setToolTip("Stop")
+        else:
+            color = qcolor(theme().status_green).name()
+            self.setIcon(QIconifyIcon("fluent:video-24-regular", color=color))
+            self.setToolTip("Live")
+
+    def changeEvent(self, e: QEvent | None) -> None:
+        # status_green/status_red differ between light/dark themes -- re-derive
+        # the icon's color from whichever theme is now active, keeping the
+        # current running state. The icon size is re-applied too since it's
+        # zoom-scaled and this button (a QPushButton, not a QToolBar) isn't
+        # touched by the app's zoom pass over QToolBar instances.
+        is_style_change = e is not None and e.type() == QEvent.Type.StyleChange
+        if is_style_change:
+            self._set_running(self.isChecked())
+            self.setIconSize(_icon_size())
+        super().changeEvent(e)
+
+    def _disconnect(self) -> None:
+        with suppress(RuntimeError, TypeError):
+            ev = self._core.events
+            ev.systemConfigurationLoaded.disconnect(self._on_config_loaded)
+            ev.continuousSequenceAcquisitionStarted.disconnect(self._on_started)
+            ev.sequenceAcquisitionStopped.disconnect(self._on_stopped)
+
+
+class ShuttersBar(QWidget):
+    """Row of :class:`ShuttersWidget` for every loaded shutter device.
+
+    The autoshutter toggle lives on the last shutter, after devices exposing
+    a physical-shutter property.
+    """
+
+    def __init__(
+        self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
+    ) -> None:
+        super().__init__(parent)
+        self._core = mmcore or CMMCorePlus.instance()
+
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(theme().sp_xxs)
+
+        self._core.events.systemConfigurationLoaded.connect(self._refresh)
+        self._refresh()
+
+    def refresh(self) -> None:
+        """Re-scan the core (e.g. after devices change on another tab)."""
+        self._refresh()
+
+    def changeEvent(self, a0: QEvent | None) -> None:
+        # ShuttersWidget bakes its open-shutter icon's color in at
+        # construction time (upstream), so a mere StyleChange event can't
+        # refresh it in place -- rebuild from scratch, picking up the now-
+        # active theme's status_green the same way a real device-list change
+        # already does.
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
+            self._refresh()
+        super().changeEvent(a0)
+
+    def _refresh(self, *_: object) -> None:
+        _clear(self._layout)
+        shutters = self._core.getLoadedDevicesOfType(DeviceType.ShutterDevice)
         if not shutters:
             return
-
-        shutters_devs = sorted(
+        # devices exposing a "Physical Shutter" property come first
+        ordered = sorted(
             shutters,
             key=lambda d: any(
-                "Physical Shutter" in x for x in self.mmc.getDevicePropertyNames(d)
+                "Physical Shutter" in p for p in self._core.getDevicePropertyNames(d)
             ),
             reverse=True,
         )
-
-        for idx, shutter in enumerate(shutters_devs):
-            s = ShuttersWidget(
+        open_color = qcolor(theme().status_green).name()
+        for idx, shutter in enumerate(ordered):
+            widget = ShuttersWidget(
                 shutter,
-                autoshutter=idx == len(shutters_devs) - 1,
+                autoshutter=idx == len(ordered) - 1,
                 button_text_open=shutter,
                 button_text_closed=shutter,
+                icon_color_open=open_color,
+                icon_size=theme().scaled(20),
+                mmcore=self._core,
             )
-            self.addWidget(s)
+            # a persistently visible box, not just on hover — matches Snap/Live
+            widget.shutter_button.setProperty("variant", "subtle")
+            ensure_visible_icon(widget.shutter_button)
+            self._layout.addWidget(widget)
 
-    def _clear_shutter_toolbar(self) -> None:
-        """Delete all actions in the toolbar."""
-        while self.actions():
-            action = cast("QWidgetAction", self.actions()[0])
-            # get the shutter widget associated with the action and delete it
-            widget = action.defaultWidget()
-            if widget is not None:
-                widget.deleteLater()
-            self.removeAction(action)
+
+class _PanelToggleButton(QPushButton):
+    """Panel toggle button that self-marks when it also opens a context menu.
+
+    Draws a tiny corner arrow once `setContextMenuPolicy` puts it in
+    `CustomContextMenu` mode, rather than needing a second flag kept in sync
+    with that call -- the two panel buttons that get a right-click kind menu
+    (MDA, Stages; see `AcquirePage.__init__`) pick up the affordance for free,
+    and any future one that gets a context menu the same way does too.
+    """
+
+    def paintEvent(self, a0: QPaintEvent | None) -> None:
+        super().paintEvent(a0)
+        if self.contextMenuPolicy() != Qt.ContextMenuPolicy.CustomContextMenu:
+            return
+        size = theme().scaled(5)
+        margin = theme().scaled(4)
+        w, h = self.width(), self.height()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(qcolor(theme().text_secondary))
+        painter.drawPolygon(
+            QPolygonF(
+                [
+                    QPointF(w - margin - size, h - margin),
+                    QPointF(w - margin, h - margin),
+                    QPointF(w - margin, h - margin - size),
+                ]
+            )
+        )
+        painter.end()
+
+
+class PanelButtonBar(QWidget):
+    """Icon-only toggle buttons for the registry panels (see ``_panels.py``).
+
+    Each button toggles whether its panel's dock is *open*. Which buttons are
+    present at all (previously a trailing ``⋯`` menu here) and whole-layout
+    operations (previously :class:`LayoutMenuButton`, next door on this row)
+    both moved into the Preferences dialog's "Show Widgets" and "Layout"
+    sections -- see ``_preferences.PreferencesDialog``. This bar kept only
+    what's specific to *this* toolbar row: the open/close toggles themselves.
+
+    A self-contained content strip: no background painting, no assumptions
+    about its parent. That's what makes it relocatable -- today it shares the
+    Acquire toolbar row (see ``AcquirePage._place_panel_bar``), but it could
+    just as easily be dropped onto a second row or into ``MainWindow`` as its
+    own ``QToolBar`` without changing anything here.
+    """
+
+    def __init__(
+        self, panels: Iterable[PanelInfo], parent: QWidget | None = None
+    ) -> None:
+        super().__init__(parent)
+        self._panels = list(panels)
+
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(theme().sp_xxs)
+
+        self._buttons: dict[str, QPushButton] = {}
+        for info in self._panels:
+            btn = _PanelToggleButton(self)
+            btn.setCheckable(True)
+            btn.setProperty("variant", "subtle")
+            btn.setToolTip(info.tooltip)
+            btn.setIconSize(_icon_size())
+            self._layout.addWidget(btn)
+            self._buttons[info.key] = btn
+
+        self._apply_icons()
+
+    # ── buttons ───────────────────────────────────────────────────
+
+    def button_for(self, key: str) -> QPushButton:
+        """Return the toggle button for the panel registered under *key*."""
+        return self._buttons[key]
+
+    def set_button_visible(self, key: str, visible: bool) -> None:
+        """Show or hide *key*'s button. Always-visible panels ignore hiding."""
+        info = self._info_for(key)
+        if info.always_visible and not visible:
+            return
+        self._buttons[key].setVisible(visible)
+
+    def hidden_keys(self) -> set[str]:
+        """Return the keys whose buttons are currently hidden.
+
+        The *hidden* set (rather than the visible one) is what gets persisted:
+        a panel added to the registry in a future release is then visible by
+        default for existing users, instead of silently missing because it
+        wasn't in their saved visible set.
+        """
+        return {
+            info.key
+            for info in self._panels
+            if not info.always_visible and self._buttons[info.key].isHidden()
+        }
+
+    def _info_for(self, key: str) -> PanelInfo:
+        return next(info for info in self._panels if info.key == key)
+
+    # ── theming ───────────────────────────────────────────────────
+
+    def _apply_icons(self) -> None:
+        # QIconifyIcon bakes its color in at construction, so the icon must
+        # be rebuilt (not just resized) whenever the theme changes.
+        panel_color = qcolor(theme().status_green).name()
+        for info in self._panels:
+            btn = self._buttons[info.key]
+            # set_source_icon (not setIcon) refreshes the stash that the
+            # app-wide theme-change sweep (ensure_visible_icon) re-derives
+            # from -- a bare setIcon would leave that sweep recoloring from
+            # the *previous* theme's icon. See the "Theme-aware icons" note
+            # in the panels-toolbar design doc.
+            set_source_icon(btn, QIconifyIcon(info.icon, color=panel_color))
+            btn.setIconSize(_icon_size())
+
+    def changeEvent(self, a0: QEvent | None) -> None:
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
+            self._apply_icons()
+        super().changeEvent(a0)

@@ -46,9 +46,8 @@ if TYPE_CHECKING:
     class StartupChoiceProtocol(Protocol):
         """What a window's startup dialog reports back.
 
-        Structural rather than an import of ``_modern_gui._startup.
-        StartupChoice``: ``create_mmgui`` must stay usable (and importable)
-        without pulling in the modern GUI.
+        Structural so caller-supplied windows can provide their own startup
+        choices without depending on the application's startup dialog type.
         """
 
         @property
@@ -178,13 +177,10 @@ def create_mmgui(
             stacklevel=2,
         )
 
-    # Initialize the theme/style before building any window. Both the standard
-    # (dock-based) MicroManagerGUI and the modern GUI host shared widgets
-    # (MemoryMDAWidget, ThemedStageExplorer) that call ``theme()`` during
-    # construction, which raises unless ``set_style()`` has run. Doing this here
-    # -- while no themed widget exists yet -- guarantees a valid theme for every
-    # window_cls without relying on the window itself to install it.
-    from pymmcore_gui._modern_gui._theme import DARK_THEME, set_theme
+    # Initialize the style before constructing themed widgets, including those
+    # hosted by caller-supplied windows. The application window applies its saved
+    # appearance before creating its pages or showing its startup dialog.
+    from pymmcore_gui._theme import DARK_THEME, set_theme
 
     set_theme(DARK_THEME)
 
@@ -217,7 +213,7 @@ def create_mmgui(
         raise TypeError(f"{window_cls} is not a subclass of QMainWindow")
 
     # A window class may ask the user what to launch with (layout + config)
-    # before it is built -- see `_modern_gui.MainWindow.prompt_startup_choices`.
+    # before it is built -- see `MicroManagerGUI.prompt_startup_choices`.
     # `-c` (and `mm_config=False`) already answer the config question, so
     # they skip the dialog entirely; `-l` only preselects its layout field,
     # since it leaves the config question open.
@@ -232,8 +228,7 @@ def create_mmgui(
 
     win = window_cls(mmcore=mmcore)
     if hasattr(win, "restore_state"):
-        # Only windows that offer a startup dialog understand `layout`;
-        # the classic GUI's restore_state takes `show` alone.
+        # Custom windows without the startup hook may accept only `show`.
         extra = {"layout": layout} if supports_layouts else {}
         QTimer.singleShot(0, lambda: win.restore_state(show=True, **extra))
     else:

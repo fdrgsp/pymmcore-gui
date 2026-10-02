@@ -1,7 +1,7 @@
 """The launch dialog: choosing a layout and a configuration before the window opens.
 
 Replaces the old ``LoadConfigDialog`` ("load the last config?") flow -- see
-``pymmcore_gui._modern_gui._startup``.
+``pymmcore_gui.widgets._startup``.
 """
 
 from __future__ import annotations
@@ -23,11 +23,7 @@ from pymmcore_gui._layouts import (
     save_layout,
     store_session_layout,
 )
-from pymmcore_gui._modern_gui._acquire import AcquirePage
-from pymmcore_gui._modern_gui._main_win import MainWindow
-from pymmcore_gui._modern_gui._panels import PanelKey
-from pymmcore_gui._modern_gui._preferences import PreferencesDialog
-from pymmcore_gui._modern_gui._startup import DEMO_CONFIG, StartupDialog
+from pymmcore_gui._main_window import MainWindow
 from pymmcore_gui._qt.QtCore import Qt
 from pymmcore_gui._qt.QtWidgets import (
     QDialog,
@@ -36,6 +32,10 @@ from pymmcore_gui._qt.QtWidgets import (
     QMessageBox,
     QPushButton,
 )
+from pymmcore_gui.widgets._acquire import AcquirePage
+from pymmcore_gui.widgets._panels import PanelKey
+from pymmcore_gui.widgets._preferences import PreferencesDialog
+from pymmcore_gui.widgets._startup import DEMO_CONFIG, StartupDialog
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus

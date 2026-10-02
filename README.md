@@ -206,6 +206,16 @@ create_mmgui()
 
 This will initialize the application and show the main GUI window.
 
+Python launches, `mmgui`, and the bundled application all use the same interface,
+with Installation, Hardware Setup, Configurations, and Acquire pages. Startup
+asks which configuration and layout to open. An explicit configuration skips
+that dialog; use `mm_config=False` to keep an already configured core unchanged.
+
+The public window class is `pymmcore_gui.MicroManagerGUI`. The legacy GUI and
+`--old` option have been removed. Private imports under `_modern_gui` have moved
+to the canonical package locations described in
+[CONTRIBUTING.md](CONTRIBUTING.md#application-structure).
+
 ### Customizing Before Launch (Script)
 
 If you would like to *further* customize the GUI before starting the application,
@@ -230,6 +240,13 @@ If you already have a `CMMCorePlus` instance that you want the GUI to use, you
 can pass it to `create_mmgui(mmcore=my_core)`. By default the GUI will first
 check if there is a global singleton (`CMMCorePlus.instance()`), and if not, it
 will create a new instance.
+
+The console provides `window`, `acquire`, `mdawidget` (also `mda_widget`), and
+`mmc`/`core`/`mmcore` for the owning window's core. From Python, use
+`window.acquire.mda_widget` and `window.acquire.viewers` to access acquisition
+controls and viewers. Custom tools are registered through `PanelInfo` and
+`PANELS`; the legacy `get_widget()`, `get_action()`, `MENUS`, and `TOOLBARS`
+extension methods no longer apply.
 
 ## Prior Work
 

@@ -1,573 +1,1057 @@
+"""Application window for microscope setup, configuration, and acquisition."""
+
 from __future__ import annotations
 
-import logging
 import sys
-from collections.abc import Callable
 from contextlib import suppress
-from enum import Enum
+from datetime import datetime
+from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast, overload
-from weakref import WeakValueDictionary
+from typing import TYPE_CHECKING, ClassVar, cast
 
-from pymmcore_plus import CMMCorePlus
-from pymmcore_widgets import ConfigWizard
-from superqt import QIconifyIcon
+from pymmcore_plus import CMMCorePlus, Keyword, find_micromanager
+from superqt.iconify import QIconifyIcon
 
-from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget, SideBarLocation
-from pymmcore_gui._qt.QtCore import Qt
-from pymmcore_gui._qt.QtGui import QAction, QCloseEvent, QGuiApplication, QIcon
+from pymmcore_gui._acquisition_loader import supports_path
+from pymmcore_gui._array_viewer import set_source_icon
+from pymmcore_gui._layouts import LAST_SESSION_LAYOUT_NAME, store_session_layout
+from pymmcore_gui._notification_manager import NotificationManager
+from pymmcore_gui._qt.QtCore import (
+    QEvent,
+    QRectF,
+    QSignalBlocker,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
+)
+from pymmcore_gui._qt.QtGui import (
+    QAction,
+    QCloseEvent,
+    QDragEnterEvent,
+    QDragLeaveEvent,
+    QDragMoveEvent,
+    QDropEvent,
+    QEnterEvent,
+    QFontMetricsF,
+    QIcon,
+    QKeySequence,
+    QMouseEvent,
+    QPainter,
+    QPaintEvent,
+    QShortcut,
+)
 from pymmcore_gui._qt.QtOpenGLWidgets import QOpenGLWidget
 from pymmcore_gui._qt.QtWidgets import (
     QApplication,
     QDialog,
+    QHBoxLayout,
+    QLabel,
     QMainWindow,
     QMenu,
-    QMenuBar,
+    QMessageBox,
     QPushButton,
-    QStatusBar,
+    QSizePolicy,
+    QStackedWidget,
     QToolBar,
     QWidget,
 )
-
-from ._ndv_viewers import NDVViewersManager
-from ._notification_manager import NotificationManager
-from ._settings import Settings
-from .actions import CoreAction, QCoreAction, WidgetAction, WidgetActionInfo
-from .actions._action_info import ActionInfo
-from .widgets._toolbars import OCToolBar
+from pymmcore_gui._settings import Settings
+from pymmcore_gui._theme import (
+    qcolor,
+    reset_zoom,
+    set_theme,
+    set_zoom_step,
+    theme,
+    ui_font,
+    zoom_factor,
+    zoom_in,
+    zoom_out,
+)
+from pymmcore_gui._theme._dark import DARK_THEME
+from pymmcore_gui._theme._light import LIGHT_THEME
+from pymmcore_gui.widgets._acquire import AcquirePage
+from pymmcore_gui.widgets._configurations import ConfigurationsPage
+from pymmcore_gui.widgets._hardware import HardwareSetupPage
+from pymmcore_gui.widgets._installation import InstallationPage
+from pymmcore_gui.widgets._mda_status import MDAStatusWidget
+from pymmcore_gui.widgets._panels import PanelKey
+from pymmcore_gui.widgets._startup import StartupChoice, StartupDialog
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Sequence
 
-    import ndv
-    from pymmcore_widgets import (
-        ConfigWizard,
-        GroupPresetTableWidget,
-        InstallWidget,
-        MDAWidget,
-        PixelConfigurationWidget,
-        PropertyBrowser,
-    )
-    from useq import MDASequence
-
-    from pymmcore_gui.widgets._about_widget import AboutWidget
+    from pymmcore_gui._app import MMQApplication
+    from pymmcore_gui._notification_manager import Notification
     from pymmcore_gui.widgets._exception_log import ExceptionLog
-    from pymmcore_gui.widgets._mm_console import MMConsole
-    from pymmcore_gui.widgets._stage_control import StagesControlWidget
 
-    from ._app import MMQApplication
-
-
-logger = logging.getLogger("pymmcore_gui")
 
 RESOURCES = Path(__file__).parent / "resources"
 ICON = RESOURCES / ("icon.ico" if sys.platform.startswith("win") else "logo.png")
 
 
-class Menu(str, Enum):
-    """Menu names."""
+def apply_saved_appearance() -> bool:
+    """Apply the user's saved theme/zoom, returning whether the theme is dark.
 
-    PYMM_GUI = "pymmcore-gui"
-    WINDOW = "Window"
-    DEVICE = "Devices"
-    HELP = "Help"
+    ``_app.create_mmgui`` already calls ``set_theme(DARK_THEME)`` before any
+    window exists, installing ``MicroscopeStyle``. This applies the user's preference
+    before the first widget is constructed and before the window is ever
+    shown (``show()`` happens in ``restore_state``), so there's no flash and
+    no risk of unconditionally clobbering a restored light theme.
 
-    def __str__(self) -> str:
-        return str(self.value)
-
-
-class Toolbar(str, Enum):
-    """Toolbar names."""
-
-    CAMERA_ACTIONS = "Camera Actions"
-    OPTICAL_CONFIGS = "Optical Configs"
-    WIDGETS = "Widgets"
-    SHUTTERS = "Shutters"
-
-    def __str__(self) -> str:
-        return str(self.value)
-
-
-ToolDictValue = list[str | None] | Callable[[CMMCorePlus, "MicroManagerGUI"], QToolBar]
-MenuDictValue = list[str | None] | Callable[[CMMCorePlus, "MicroManagerGUI"], QMenu]
-
-
-def _create_window_menu(mmc: CMMCorePlus, parent: MicroManagerGUI) -> QMenu:
+    Module-level rather than a ``MainWindow`` method because the startup
+    dialog is themed too and runs before any window exists. Calling it twice
+    (dialog, then window) is harmless -- it only ever re-applies the same
+    stored values.
     """
-    Create the Window menu, containing all WidgetActions not in other menus.
+    prefs = Settings.instance().modern_window
+    is_dark = prefs.theme != "light"
+    set_theme(DARK_THEME if is_dark else LIGHT_THEME)
+    if prefs.zoom is not None:
+        set_zoom_step(prefs.zoom)
+    return is_dark
 
-    This function assumes lazy evaluation, i.e. that all Actions that want to be on
-    other menus are already there.
+
+class ModeTab(QWidget):
+    """Single mode tab, custom-painted with optional active underline."""
+
+    _BASE_HEIGHT = 40
+
+    clicked = Signal()
+
+    def __init__(self, label: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._label = label
+        self._active = False
+        self._hovered = False
+
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMouseTracking(True)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+    def sizeHint(self) -> QSize:
+        t = theme()
+        fm = QFontMetricsF(ui_font())
+        w = int(fm.horizontalAdvance(self._label)) + t.sp_lg * 2
+        return QSize(w, t.scaled(self._BASE_HEIGHT))
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    @property
+    def active(self) -> bool:
+        return self._active
+
+    @active.setter
+    def active(self, val: bool) -> None:
+        self._active = val
+        self.update()
+
+    def paintEvent(self, a0: QPaintEvent | None) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        t = theme()
+        w, h = self.width(), self.height()
+        underline_h = t.scaled(3)
+
+        # Text
+        if not self.isEnabled():
+            text_color = qcolor(t.text_disabled)
+        elif self._active:
+            text_color = qcolor(t.accent)
+        elif self._hovered:
+            text_color = qcolor(t.text_primary)
+        else:
+            text_color = qcolor(t.text_secondary)
+
+        p.setFont(ui_font())
+        p.setPen(text_color)
+        p.drawText(
+            QRectF(0, 0, w, h - underline_h),
+            Qt.AlignmentFlag.AlignCenter,
+            self._label,
+        )
+
+        # Active underline
+        if self._active:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(qcolor(t.accent))
+            bar_w = w - t.sp_sm * 2
+            p.drawRoundedRect(
+                QRectF((w - bar_w) / 2, h - underline_h, bar_w, underline_h),
+                1.5,
+                1.5,
+            )
+
+        p.end()
+
+    def enterEvent(self, event: QEnterEvent | None) -> None:
+        self._hovered = True
+        self.update()
+
+    def leaveEvent(self, a0: QEvent | None) -> None:
+        self._hovered = False
+        self.update()
+
+    def mousePressEvent(self, a0: QMouseEvent | None) -> None:
+        if (
+            self.isEnabled()
+            and a0 is not None
+            and a0.button() == Qt.MouseButton.LeftButton
+        ):
+            self.clicked.emit()
+
+
+class ModeTabBar(QWidget):
+    """Horizontal bar of mode tabs; emits the selected index on click."""
+
+    current_changed = Signal(int)
+
+    def __init__(self, labels: Sequence[str], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(theme().sp_sm, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self._tabs: list[ModeTab] = []
+        for index, label in enumerate(labels):
+            tab = ModeTab(label)
+            tab.clicked.connect(lambda _i=index: self._select(_i))
+            layout.addWidget(tab)
+            self._tabs.append(tab)
+
+        layout.addStretch()
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        if self._tabs:
+            self._tabs[0].active = True
+
+    def _select(self, index: int) -> None:
+        if not 0 <= index < len(self._tabs) or not self._tabs[index].isEnabled():
+            return
+        for i, tab in enumerate(self._tabs):
+            tab.active = i == index
+        self.current_changed.emit(index)
+
+    def setTabEnabled(self, index: int, enabled: bool) -> None:
+        """Enable or disable a mode tab."""
+        if 0 <= index < len(self._tabs):
+            self._tabs[index].setEnabled(enabled)
+
+    def changeEvent(self, a0: QEvent | None) -> None:
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
+            t = theme()
+            if lay := self.layout():
+                lay.setContentsMargins(t.sp_sm, 0, 0, 0)
+        super().changeEvent(a0)
+
+
+class ThemeToggleButton(QPushButton):
+    """Light/dark toggle; its icon shows the theme a click switches *to*.
+
+    Same "text_secondary, rebuild on StyleChange" treatment as the other
+    small icon buttons elsewhere in the chrome (``PreferencesButton``,
+    ``NotificationBellButton``) -- previously a plain sun/moon emoji button,
+    which read as visually inconsistent next to those.
     """
-    all_actions = set(ActionInfo.widget_actions())
 
-    # Ignore those already in other menus
-    parented_actions: set[str] = set()
-    for other_menu in parent.MENUS.values():
-        if isinstance(other_menu, list):
-            parented_actions.update(str(action) for action in other_menu)
-    parentless_actions = all_actions - parented_actions
+    def __init__(self, *, is_dark: bool, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._is_dark = is_dark
+        self.setFlat(True)
+        self.setProperty("variant", "subtle")
+        self.setFixedSize(32, 32)
+        self.setToolTip("Toggle light/dark theme")
+        self._apply_icon()
 
-    # Create a new menu with the remaining parentless actions
-    menu = QMenu(Menu.WINDOW.value, parent)
-    for action in sorted(parentless_actions):
-        menu.addAction(parent.get_action(action))
-    return menu
+    def set_dark(self, is_dark: bool) -> None:
+        """Update the icon to match the app's current theme."""
+        self._is_dark = is_dark
+        self._apply_icon()
+
+    def _apply_icon(self) -> None:
+        name = (
+            "material-symbols:light-mode-rounded"
+            if self._is_dark
+            else "material-symbols:dark-mode-rounded"
+        )
+        color = qcolor(theme().text_secondary).name()
+        self.setIcon(QIconifyIcon(name, color=color))
+        size = theme().scaled(18)
+        self.setIconSize(QSize(size, size))
+
+    def changeEvent(self, e: QEvent | None) -> None:
+        if e is not None and e.type() == QEvent.Type.StyleChange:
+            self._apply_icon()
+        super().changeEvent(e)
+
+
+class NotificationBellButton(QPushButton):
+    """Status-bar bell that pops up recent notification history.
+
+    Chrome, not a state indicator -- same "text_secondary, rebuild on
+    StyleChange" treatment as ``SnapButton``/``LiveButton`` in
+    ``_acquire_toolbar``, except it turns ``status_red`` while notifications
+    are waiting to be looked at, resetting the moment the bell is clicked
+    open.
+    """
+
+    _ICON = "codicon:bell"
+    _MAX_HISTORY = 20
+    _SEVERITY_ICON: ClassVar[dict[str, tuple[str, str]]] = {
+        "error": ("codicon:error", "status_red"),
+        "warning": ("codicon:warning", "status_amber"),
+        "info": ("codicon:info", "accent"),
+    }
+
+    def __init__(
+        self, manager: NotificationManager, parent: QWidget | None = None
+    ) -> None:
+        super().__init__(parent)
+        self._manager = manager
+        self._unread = 0
+        self.setFlat(True)
+        self.setProperty("variant", "subtle")
+        self.setFixedSize(24, 24)
+        self.setToolTip("Notifications")
+        self.clicked.connect(self._popup)
+        manager.notificationAdded.connect(self._on_notification_added)
+        self._apply_icon()
+
+    def _on_notification_added(self, _notification: Notification) -> None:
+        self._unread += 1
+        self._apply_icon()
+
+    def _popup(self) -> None:
+        self._unread = 0
+        self._apply_icon()
+        self._build_menu().exec(self.mapToGlobal(self.rect().bottomLeft()))
+
+    def _build_menu(self) -> QMenu:
+        menu = QMenu(self)
+        history = list(self._manager.notifications())[-self._MAX_HISTORY :]
+        if not history:
+            empty = QAction("No notifications", menu)
+            empty.setEnabled(False)
+            menu.addAction(empty)
+            return menu
+        for notification in reversed(history):
+            icon_name, color_attr = self._SEVERITY_ICON.get(
+                notification.severity, self._SEVERITY_ICON["info"]
+            )
+            icon = QIconifyIcon(
+                icon_name, color=qcolor(getattr(theme(), color_attr)).name()
+            )
+            when = datetime.fromtimestamp(notification.timestamp).strftime("%H:%M:%S")
+            text = (notification.message.splitlines() or [""])[0]
+            if len(text) > 80:
+                text = text[:77] + "…"
+            action = QAction(icon, f"{when}   {text}", menu)
+            # Only notifications with a primary action (e.g. the exception
+            # toast's "See traceback") are actionable from here; plain info
+            # entries are just a read-only record of what happened.
+            if notification.actions and notification.on_action is not None:
+                action.triggered.connect(
+                    partial(notification.on_action, notification.actions[0])
+                )
+            else:
+                action.setEnabled(False)
+            menu.addAction(action)
+        return menu
+
+    def _apply_icon(self) -> None:
+        color = theme().status_red if self._unread else theme().text_secondary
+        set_source_icon(self, QIconifyIcon(self._ICON, color=qcolor(color).name()))
+        size = theme().scaled(16)
+        self.setIconSize(QSize(size, size))
+
+    def changeEvent(self, e: QEvent | None) -> None:
+        if e is not None and e.type() == QEvent.Type.StyleChange:
+            self._apply_icon()
+        super().changeEvent(e)
 
 
 class MicroManagerGUI(QMainWindow):
-    """Micro-Manager minimal GUI."""
+    """Microscope application with setup, configuration, and acquisition pages."""
 
-    # Toolbars are a mapping of strings to either a list of ActionKeys or a callable
-    # that takes a CMMCorePlus instance and QMainWindow and returns a QToolBar.
-    TOOLBARS: Mapping[str, ToolDictValue] = {
-        Toolbar.CAMERA_ACTIONS: [
-            CoreAction.SNAP,
-            CoreAction.TOGGLE_LIVE,
-        ],
-        Toolbar.OPTICAL_CONFIGS: OCToolBar,
-        # Toolbar.SHUTTERS: ShuttersToolbar,
-        Toolbar.WIDGETS: [
-            WidgetAction.CONSOLE,
-            WidgetAction.PROP_BROWSER,
-            WidgetAction.MDA_WIDGET,
-            WidgetAction.STAGE_CONTROL,
-        ],
-    }
-    # Menus are a mapping of strings to either a list of ActionKeys or a callable
-    # that takes a CMMCorePlus instance and QMainWindow and returns a QMenu.
-    MENUS: Mapping[str, MenuDictValue] = {
-        Menu.PYMM_GUI: [WidgetAction.ABOUT],
-        Menu.WINDOW: _create_window_menu,
-        Menu.DEVICE: [
-            WidgetAction.PROP_BROWSER,
-            WidgetAction.CONFIG_WIZARD,
-            None,
-            CoreAction.LOAD_CONFIG,
-            CoreAction.LOAD_DEMO,
-            CoreAction.SAVE_CONFIG,
-            None,
-            WidgetAction.INSTALL_DEVICES,
-        ],
-        Menu.HELP: [],
-    }
+    TAB_LABELS = ("Installation", "Hardware Setup", "Configurations", "Acquire")
 
     def __init__(self, *, mmcore: CMMCorePlus | None = None) -> None:
         super().__init__()
+
+        self._apply_saved_appearance()
+
+        self._mmc = mmcore or CMMCorePlus.instance()
+        self.setObjectName("pyMMGUI")
         self.setWindowTitle("pyMM")
         self.setWindowIcon(QIcon(str(ICON)))
-        self.setObjectName("MicroManagerGUI")
+        self.setWindowState(Qt.WindowState.WindowMaximized)
+        self.setAcceptDrops(True)
 
-        # Serves to cache created QAction objects so that they can be re-used
-        # when the same action is requested multiple times. This is useful to
-        # synchronize the state of actions that may appear in multiple menus or
-        # toolbars.
-        self._qactions = WeakValueDictionary[str, QAction]()
-        # widgets that are associated with a QAction
-        self._action_widgets = WeakValueDictionary[str, QWidget]()
-        # the wrapping QDockWidget for widgets that are associated with a QAction
-        self._dock_widgets = WeakValueDictionary[str, CDockWidget]()
+        # Set while a close is waiting for a cancelled acquisition to finish
+        # tearing down -- see closeEvent / _on_mda_running.
+        self._close_pending = False
 
-        # get global CMMCorePlus instance
-        self._mmc = mmcore or CMMCorePlus.instance()
-        self._mmc.events.systemConfigurationLoaded.connect(
-            self._on_system_config_loaded
-        )
+        # Openable acquisitions carried by the drag currently over this
+        # window -- resolved once in dragEnterEvent, see there.
+        self._drag_paths: list[Path] = []
 
-        self._viewers_manager = NDVViewersManager(self, self._mmc)
-        self._viewers_manager.mdaViewerCreated.connect(self._on_mda_viewer_created)
-        self._viewers_manager.previewViewerCreated.connect(self._on_previewer_created)
         self._notification_manager = NotificationManager(self)
+        self._bell_button = NotificationBellButton(self._notification_manager, self)
         if app := QApplication.instance():
             if hasattr(app, "exceptionRaised"):
                 cast("MMQApplication", app).exceptionRaised.connect(self._on_exception)
 
-        # Status bar -----------------------------------------
+        # ── top toolbar: mode tabs + theme toggle ───
+        self._toolbar = QToolBar()
+        self._toolbar.setMovable(False)
+        self._toolbar.setFloatable(False)
+        self._toolbar.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
 
-        self._status_bar = QStatusBar(self)
-        self._status_bar.setMaximumHeight(26)
-        self.setStatusBar(self._status_bar)
+        self._mode_tabs = ModeTabBar(self.TAB_LABELS)
+        self._toolbar.addWidget(self._mode_tabs)
 
-        self.bell_button = QPushButton(QIconifyIcon("codicon:bell"), None)
-        self.bell_button.setFixedWidth(20)
-        self.bell_button.setFlat(True)  # Make it blend nicely
-        self._status_bar.addPermanentWidget(self.bell_button)
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self._toolbar.addWidget(spacer)
 
-        # MENUS ====================================
-        # To add menus or menu items, add them to the MENUS dict above
+        self._theme_btn = ThemeToggleButton(is_dark=self._is_dark)
+        self._theme_btn.clicked.connect(self._toggle_theme)
+        self._toolbar.addWidget(self._theme_btn)
+        self._apply_toolbar_metrics()
 
-        for name, entry in self.MENUS.items():
-            self._add_menubar(name, entry)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._toolbar)
 
-        # TOOLBARS =================================
-        # To add toolbars or toolbar items, add them to the TOOLBARS dict above
-
-        for name, tb_entry in self.TOOLBARS.items():
-            self._add_toolbar(name, tb_entry)
-
-        # LAYOUT ======================================
-
-        # Create the dock manager. Because the parent parameter is a QMainWindow
-        # the dock manager registers itself as the central widget.
-        # It controls *all* widgets that are owned by the QMainWindow (both those that
-        # are docked and floating).
-        CDockManager.setConfigFlag(
-            CDockManager.eConfigFlag.DockAreaHasCloseButton, False
+        # ── central stack: one page per tab ───────────────────────
+        self._stack = QStackedWidget()
+        self._installation = InstallationPage()
+        self._installation.aboutToUninstall.connect(self._prepare_uninstall)
+        self._hardware = HardwareSetupPage(self._mmc)
+        self._configurations = ConfigurationsPage(self._mmc)
+        self._acquire = AcquirePage(self._mmc)
+        # A background open (see dropEvent) has no caller to raise into.
+        self._acquire.viewers.acquisitionOpenFailed.connect(
+            self._notification_manager.show_error_message
         )
-        CDockManager.setConfigFlag(CDockManager.eConfigFlag.OpaqueSplitterResize, True)
-        CDockManager.setAutoHideConfigFlag(
-            CDockManager.eAutoHideFlag.AutoHideFeatureEnabled, True
-        )
-        self.dock_manager = CDockManager(self)
-
-        self._central = CDockWidget(self.dock_manager, "Viewers", self)
-        self._central.setFeature(CDockWidget.DockWidgetFeature.NoTab, True)
-        blank = QWidget()
-        blank.setObjectName("blank")
-        blank.setStyleSheet(
-            "background-color: qlineargradient("
-            "x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #333, stop: 1 #111);"
-        )
-        self._central.setWidget(blank)
-        self._central_dock_area = self.dock_manager.setCentralWidget(self._central)
+        self._stack.addWidget(self._installation)
+        self._stack.addWidget(self._hardware)
+        self._stack.addWidget(self._configurations)
+        self._stack.addWidget(self._acquire)
+        self.setCentralWidget(self._stack)
 
         # Adding a QOpenGLWidget (e.g. ndv canvas) to a window that uses raster
         # rendering forces Qt to destroy and recreate the native window with an
         # OpenGL-compatible surface, causing a visible flash. Adding a zero-size
         # QOpenGLWidget before the first show() ensures the window is born with
-        # the right surface type, avoiding the flash.
+        # the right surface type, avoiding the flash. Without this, the first
+        # snap/MDA run -- whichever creates the first viewer canvas -- flickers.
         _gl = QOpenGLWidget(self)
         _gl.setFixedSize(0, 0)
         _gl.close()
 
-    # --------------------- Properties ----------------------
+        # The toolbar action commits its selected editor, then saves the whole
+        # configuration. Closing with unsaved changes still commits both.
+        self._configurations.saveToFileRequested.connect(
+            self._save_current_configuration
+        )
+        self._configurations.calibrationRunningChanged.connect(
+            self._on_pixel_calibration_running
+        )
+        self._configurations.pixelConfigurationsApplied.connect(
+            self._acquire.refresh_stage_explorer_pixel_geometry
+        )
+
+        self._acquire.mdaRunningChanged.connect(self._on_mda_running)
+        self._acquire.layoutReset.connect(self._on_acquire_layout_reset)
+        self._acquire.layoutNameChanged.connect(self._on_layout_name_changed)
+        self._mmc.events.systemConfigurationLoaded.connect(self._on_config_loaded)
+        self._installation.activeInstallChanged.connect(self._on_active_install_changed)
+
+        self._mode_tabs.current_changed.connect(self._on_mode_tab_changed)
+        self._select_startup_tab()
+
+        if status_bar := self.statusBar():
+            # A full-width permanent container keeps acquisition status on the
+            # left without letting temporary messages obscure it. Mirror native
+            # messages here so existing showMessage()/timeout callers still work.
+            content = QWidget(status_bar)
+            row = QHBoxLayout(content)
+            row.setContentsMargins(0, 0, 0, 0)
+            self._mda_status = MDAStatusWidget(self._mmc, content)
+            row.addWidget(self._mda_status)
+            self._status_message = QLabel(content)
+            self._status_message.setTextFormat(Qt.TextFormat.PlainText)
+            self._status_message.setMinimumWidth(0)
+            row.addWidget(self._status_message, 1)
+            status_bar.messageChanged.connect(self._status_message.setText)
+            status_bar.addPermanentWidget(content, 1)
+            status_bar.addPermanentWidget(self._bell_button)
+            self._stack.currentChanged.connect(self._update_mda_status_visibility)
+            self._update_mda_status_visibility()
+
+        # ── zoom shortcuts ────────────────────────────────────────
+        mods = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
+        QShortcut(QKeySequence(mods | Qt.Key.Key_Equal), self, zoom_in)  # type: ignore
+        QShortcut(QKeySequence(mods | Qt.Key.Key_Plus), self, zoom_in)  # type: ignore
+        QShortcut(QKeySequence(mods | Qt.Key.Key_Minus), self, zoom_out)  # type: ignore
+        QShortcut(QKeySequence(mods | Qt.Key.Key_0), self, reset_zoom)  # type: ignore
 
     @property
-    def nm(self) -> NotificationManager:
-        """A callable that can be used to show a message in the status bar."""
-        return self._notification_manager
+    def acquire(self) -> AcquirePage:
+        """Return the window's Acquire page."""
+        return self._acquire
 
-    @property
-    def mmcore(self) -> CMMCorePlus:
-        return self._mmc
+    def _apply_saved_appearance(self) -> None:
+        """Apply the saved theme/zoom before any widget exists, so nothing flashes."""
+        self._is_dark = apply_saved_appearance()
 
-    # --------------------- Public methods ----------------------
-    # -----------------------------------------------------------
+    @staticmethod
+    def prompt_startup_choices(layout: str | None = None) -> StartupChoice | None:
+        """Ask which layout and configuration to launch with.
 
-    def get_action(self, key: str, create: bool = True) -> QAction:
-        """Create a QAction from this key."""
-        if key not in self._qactions:
-            if not create:  # pragma: no cover
-                raise KeyError(
-                    f"Action {key} has not been created yet, and 'create' is False"
-                )
-            # create and cache it
-            info = ActionInfo.for_key(key)
-            self._qactions[key] = action = info.to_qaction(self._mmc, self)
-            # connect WidgetActions to toggle their widgets
-            if isinstance(info, WidgetActionInfo):
-                action.triggered.connect(self._toggle_action_widget)
-
-        return self._qactions[key]
-
-    # TODO: it's possible this could be expressed using Generics...
-    # which would avoid the need for the manual overloads
-    # fmt: off
-    @overload
-    def get_widget(self, key: Literal[WidgetAction.ABOUT], create: bool = ...) -> AboutWidget: ...  # noqa: E501
-    @overload
-    def get_widget(self, key: Literal[WidgetAction.CONFIG_GROUPS], create: bool = ...) -> GroupPresetTableWidget: ...  # noqa: E501
-    @overload
-    def get_widget(self, key: Literal[WidgetAction.CONFIG_WIZARD], create: bool = ...) -> ConfigWizard: ...  # noqa: E501
-    @overload
-    def get_widget(self, key: Literal[WidgetAction.CONSOLE], create: bool = ...) -> MMConsole: ...  # noqa: E501
-    @overload
-    def get_widget(self, key: Literal[WidgetAction.EXCEPTION_LOG], create: bool = ...) -> ExceptionLog: ...  # noqa: E501
-    @overload
-    def get_widget(self, key: Literal[WidgetAction.INSTALL_DEVICES], create: bool = ...) -> InstallWidget: ...  # noqa: E501
-    @overload
-    def get_widget(self, key: Literal[WidgetAction.MDA_WIDGET], create: bool = ...) -> MDAWidget: ...  # noqa: E501
-    @overload
-    def get_widget(self, key: Literal[WidgetAction.PIXEL_CONFIG], create: bool = ...) -> PixelConfigurationWidget: ...  # noqa: E501
-    @overload
-    def get_widget(self, key: Literal[WidgetAction.PROP_BROWSER], create: bool = ...) -> PropertyBrowser: ...  # noqa: E501
-    @overload
-    def get_widget(self, key: Literal[WidgetAction.STAGE_CONTROL], create: bool = ...) -> StagesControlWidget: ...  # noqa: E501
-    # generic fallback
-    @overload
-    def get_widget(self, key: str, create: bool = ...) -> QWidget: ...
-    # fmt: on
-    def get_widget(self, key: str, create: bool = True) -> QWidget:
-        """Get (or create) widget for `key` ensuring that it is linked to its QAction.
-
-        If the widget has been "closed" (hidden), it will be re-shown.
-
-        Note that all widgets created this way are singletons, so calling this method
-        multiple times will return the same widget instance.
-
-        Parameters
-        ----------
-        key : WidgetAction
-            The widget to get.
-        create : bool, optional
-            Whether to create the widget if it doesn't exist yet, by default True.
-
-        Raises
-        ------
-        KeyError
-            If the widget doesn't exist and `create` is False.
+        Called by ``_app.create_mmgui`` (via ``getattr``, like
+        :meth:`restore_state`) when no config was given on the command line,
+        *before* any window exists -- hence the staticmethod. *layout* is the
+        ``-l`` flag, which preselects the layout field rather than skipping
+        the dialog: it answers only half of what the dialog asks. Returns
+        None if the user chose to quit.
         """
-        if key not in self._action_widgets:
-            if not create:  # pragma: no cover
-                raise KeyError(
-                    f"Widget {key} has not been created yet, and 'create' is False"
-                )
-            info: WidgetActionInfo = WidgetActionInfo.for_key(key)
-            area = info.dock_area
-            widget = info.create_widget(self)
-            widget.setObjectName(info.key)
-            if isinstance(widget, QDialog):
-                widget.exec()
-                return widget
+        # The dialog is themed, and it's shown before MainWindow.__init__ has
+        # had a chance to apply the user's saved theme, so do that here.
+        apply_saved_appearance()
+        dialog = StartupDialog(preselect_layout=layout)
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return None
+            choice = dialog.value()
+        finally:
+            dialog.deleteLater()
 
-            self._action_widgets[key] = widget
-
-            action = self.get_action(key)
-            dock = CDockWidget(self.dock_manager, info.text, self)
-            dock.setWidget(widget, info.scroll_mode)
-            dock.setObjectName(f"docked_{info.key}")
-            dock.setToggleViewAction(action)
-            dock.setMinimumSize(widget.minimumSize())
-            dock.setIcon(action.icon())
-            dock.resize(widget.sizeHint())
-            if not info.floatable:
-                dock.setFeature(
-                    CDockWidget.DockWidgetFeature.DockWidgetFloatable, False
-                )
-            self._dock_widgets[key] = dock
-            if area is None:
-                self.dock_manager.addDockWidgetFloating(dock)
-            elif isinstance(area, SideBarLocation):
-                if container := self.dock_manager.addAutoHideDockWidget(area, dock):
-                    dock.toggleView(True)
-                    if area in {
-                        SideBarLocation.SideBarLeft,
-                        SideBarLocation.SideBarRight,
-                    }:
-                        size = widget.sizeHint().width()
-                    else:
-                        size = widget.sizeHint().height()
-                    container.setSize(size + 5)
-            else:
-                self.dock_manager.addDockWidget(area, dock)
-
-            # Set the action checked since the widget is now “open.”
-            action.setChecked(True)
-
-        return self._action_widgets[key]
-
-    def get_dock_widget(self, key: str) -> CDockWidget:
-        """Get the QDockWidget for `key`.
-
-        Note, you can also get the QDockWidget by calling `get_widget(key)`, and then
-        calling `widget.parent()`.  The parent will *either* be an instance of
-        `QDockWidget` (if it's actually a docked widget), or `MicroManagerGUI`, if
-        it's not docked.  You *should* use `isisinstance` in this case to check.
-
-        Parameters
-        ----------
-        key : WidgetAction
-            The key for the *inner* widget owned by the requested QDockWidget.
-
-        Raises
-        ------
-        KeyError
-            If the widget doesn't exist.
-        """
-        if key not in self._dock_widgets:
-            raise KeyError(  # pragma: no cover
-                f"Dock widget for {key} has not been created yet, "
-                "or it is not owned by a dock widget"
-            )
-        return self._dock_widgets[key]
-
-    # --------------------- Private methods ---------------------
-    # -----------------------------------------------------------
-
-    def _on_system_config_loaded(self) -> None:
         settings = Settings.instance()
-        if cfg := self._mmc.systemConfigurationFile():
-            settings.last_config = Path(cfg)
-        else:
-            settings.last_config = None
+        settings.modern_window.last_layout = choice.layout
         settings.flush()
+        return choice
 
-    def _add_toolbar(self, name: str, tb_entry: ToolDictValue) -> None:
-        if callable(tb_entry):
-            tb = tb_entry(self._mmc, self)
-            self.addToolBar(tb)
-        else:
-            tb = cast("QToolBar", self.addToolBar(name))
-            for action in tb_entry:
-                if action is None:
-                    tb.addSeparator()
-                else:
-                    tb.addAction(self.get_action(action))
-        tb.setObjectName(name)
+    def restore_state(self, *, show: bool = False, layout: str | None = None) -> None:
+        """Restore window geometry and an Acquire dock layout, then optionally show.
 
-    def _add_menubar(self, name: str, menu_entry: MenuDictValue) -> None:
-        mb = cast("QMenuBar", self.menuBar())
-        if callable(menu_entry):
-            menu = menu_entry(self._mmc, self)
-            mb.addMenu(menu)
-        else:
-            menu = cast("QMenu", mb.addMenu(name))
-            for action in menu_entry:
-                if action is None:
-                    menu.addSeparator()
-                else:
-                    menu.addAction(self.get_action(action))
+        Detected and called by ``_app.create_mmgui`` via ``hasattr`` --
+        adding this method means the app no longer calls ``show()`` directly,
+        so *this* method must, when ``show`` is True.
 
-    def closeEvent(self, a0: QCloseEvent | None) -> None:
-        self._save_state()
-        # Closing a QMainWindow does not send close events to its child widgets.
-        # Some action widgets own background resources that are released from
-        # their closeEvent implementations (notably the Stage Explorer poller
-        # and the IPython console kernel).  Close them explicitly before the
-        # dock hierarchy is torn down so those resources cannot outlive us.
-        for widget in tuple(self._action_widgets.values()):
-            with suppress(RuntimeError):
-                widget.close()
-        return super().closeEvent(a0)
-
-    def restore_state(self, *, show: bool = False) -> None:
-        """Restore the state of the window from settings (or load default state).
-
-        show is added as a convenience here because it may be a common use case to
-        restore the state in a single shot timer and (only) then show the window.
-        This avoids the window flashing on the screen before it is properly positioned.
+        *layout* is the name chosen in the startup dialog. When it's None --
+        no dialog ran, e.g. a ``-c`` launch or an embedding caller -- the
+        last-session arrangement is restored, which is what this always did.
         """
-        settings = Settings.instance()
-        open_widgets = settings.window.open_widgets
-        for widget in self._open_widgets():
-            if widget not in open_widgets:
-                # if the widget is not in the settings, close it
-                with suppress(KeyError):
-                    dw = self.get_dock_widget(widget)
-                    dw.toggleView(False)
-
-        # we need to create the widgets first, before calling restoreState.
-        for key in open_widgets:
-            try:
-                self.get_widget(key)
-            except KeyError:
-                self.nm.show_warning_message(
-                    f"Unable to reload widget key stored in settings: {key!r}",
-                )
-
-        # restore position and size of the main window
-        if geo := settings.window.geometry:
+        prefs = Settings.instance().modern_window
+        if geo := prefs.geometry:
             self.restoreGeometry(geo)
-        elif screen := QGuiApplication.primaryScreen():
-            # if no geometry is saved, center the window taking up 90% of the screen
-            percent = 0.9
-            ageo = screen.availableGeometry()
-            ageo.setSize(ageo.size() * percent)
-            margin = (1 - percent) / 2
-            ageo.translate(int(ageo.width() * margin), int(ageo.height() * margin))
-            self.setGeometry(ageo)
-
-        # restore state of toolbars and dockwidgets, but only after event loop start
-        # https://forum.qt.io/post/794120
-        if open_widgets and (state := settings.window.dock_manager_state):
-            self.dock_manager.restoreState(state)
-            for key in self._open_widgets():
-                self.get_action(key).setChecked(True)
-            if wdg := self.dock_manager.centralWidget():
-                self._central_dock_area = wdg.dockAreaWidget()
-
+        name = layout or LAST_SESSION_LAYOUT_NAME
+        self._acquire.select_layout(name)
         if show:
             self.show()
-            self.nm.reposition_notifications()
+            self._notification_manager.reposition_notifications()
+
+    def _on_acquire_layout_reset(self) -> None:
+        """Snapshot the just-reset arrangement into "Last session" right away.
+
+        ``_save_state`` would write it on a clean close anyway; doing it
+        immediately means an abnormal exit right after a reset still shows
+        the freshly-reset arrangement next launch, not whatever was on
+        screen before it -- and "Last session" stays in Preferences' Layout
+        list instead of dropping out until the next close. Scoped to the
+        layout keys only -- geometry, theme and zoom are preferences, not
+        layout. Named layouts are untouched: resetting the page is not
+        deleting anything the user saved.
+        """
+        settings = Settings.instance()
+        store_session_layout(self._acquire.current_layout())
+        settings.flush()
+
+    def _on_layout_name_changed(self, name: str) -> None:
+        """Remember which layout to preselect in the next startup dialog."""
+        settings = Settings.instance()
+        settings.modern_window.last_layout = name
+        settings.flush()
 
     def _save_state(self) -> None:
-        """Save the state of the window to settings."""
-        # save position and size of the main window
+        """Persist geometry, the "Last session" layout, theme, and zoom.
+
+        The live arrangement is always written to the reserved session slot,
+        never back into whichever named layout it came from -- a named layout
+        changes only when the user explicitly saves it.
+        """
         settings = Settings.instance()
-        settings.window.geometry = self.saveGeometry().data()
-        # remember which widgets are open, and preserve their state.
-        settings.window.open_widgets = open_ = self._open_widgets()
-        if open_:
-            # note that dock_manager.saveState mostly replaces QMainWindow.saveState
-            # the one thing it doesn't capture is the Toolbar state.
-            # so we will need to add that separately if that is desired.
-            settings.window.dock_manager_state = self.dock_manager.saveState().data()
-        else:
-            settings.window.dock_manager_state = None
-        # write to disk, blocking up to 5 seconds
+        prefs = settings.modern_window
+        prefs.geometry = self.saveGeometry().data()
+        store_session_layout(self._acquire.current_layout())
+        prefs.theme = "dark" if self._is_dark else "light"
+        prefs.zoom = zoom_factor()
         settings.flush(timeout=5000)
 
-    def _open_widgets(self) -> set[str]:
-        """Return the set of open widgets."""
-        return {
-            key
-            for key, widget in self._dock_widgets.items()
-            if (action := widget.toggleViewAction()) and action.isChecked()
-        }
+    def _on_config_loaded(self, *_: object) -> None:
+        """Offer whatever config the core just loaded in the next startup dialog.
 
-    def _toggle_action_widget(self, checked: bool) -> None:
-        """Callback that toggles the visibility of a widget.
-
-        This is connected to the triggered signal of WidgetAction QActions above in
-        `get_action`, so it is assumed that the sender is a QCoreAction with a
-        WidgetAction key.  Calling otherwise will do nothing.
+        Covers every route into the core -- the startup dialog, ``-c``, and
+        the Hardware page's own Load button -- since they all end in
+        ``loadSystemConfiguration``.
         """
-        if not (isinstance(action := self.sender(), QCoreAction)):
+        if cfg := self._mmc.systemConfigurationFile():
+            Settings.instance().remember_config(cfg)
+
+    def on_startup_configuration_loaded(self) -> None:
+        """Land on Acquire after the application loads its initial config."""
+        self._activate_acquire()
+        # Explicit -c loads finish before app.exec(). Repeat once the event loop
+        # starts so platform-specific window initialization cannot restore the
+        # initial Hardware selection afterward.
+        QTimer.singleShot(0, self._activate_acquire)
+
+    def _activate_acquire(self) -> None:
+        """Keep the mode tab and its stacked page on Acquire."""
+        idx = self._stack.indexOf(self._acquire)
+        if idx >= 0:
+            self._mode_tabs._select(idx)
+            self._stack.setCurrentIndex(idx)
+
+    def _select_startup_tab(self) -> None:
+        """Open on Hardware Setup — or on Installation if there's nothing to run.
+
+        Installation leads the tab order because it leads the workflow, but
+        it's a once-in-a-while errand: landing there every launch would put a
+        page nobody asked for (and the network fetch that fills it) in front of
+        the actual work. Without a Micro-Manager install, though, every other
+        tab is a dead end, so that's where the session starts.
+        """
+        found = find_micromanager(return_first=True)
+        index = self._stack.indexOf(self._hardware if found else self._installation)
+        self._mode_tabs._select(index)
+        self._stack.setCurrentIndex(index)
+
+    def _prepare_uninstall(self, paths: set[str]) -> None:
+        """Release a device adapter DLL before its install directory is deleted.
+
+        Windows keeps a still-loaded ``mmgr_dal_*.dll`` locked against deletion
+        until the process that loaded it lets go -- so uninstalling whichever
+        install is actively driving the connected hardware failed with
+        ``PermissionError: [WinError 5] Access is denied`` on that DLL, even
+        though the user had already confirmed the delete. Only unloads when
+        one of *paths* is actually the core's current adapter search path
+        (comparing resolved paths, since Windows paths are case-insensitive);
+        an unrelated, unused old install never touches the live session.
+        Best-effort, matching ``HardwareSetupPage._start_over``'s own
+        unconditional ``unloadAllDevices()`` before a search-path change.
+        """
+        core_device = Keyword.CoreDevice.value
+        if not [d for d in self._mmc.getLoadedDevices() if d != core_device]:
             return
+        current = {Path(p).resolve() for p in self._mmc.getDeviceAdapterSearchPaths()}
+        if not any(Path(p).resolve() in current for p in paths):
+            return
+        with suppress(Exception):
+            self._mmc.unloadAllDevices()
 
-        # if the widget is a dock widget, we want to toggle the dock widget
-        # rather than the inner widget
-        if action.key in self._dock_widgets:
-            widget: QWidget = self.get_dock_widget(action.key)
-        else:
-            # this will create the widget if it doesn't exist yet,
-            # e.g. for a click event on a Toolbutton that doesn't yet have a widget
-            widget = self.get_widget(action.key)
-        widget.setVisible(checked)
-        if checked:
-            widget.raise_()
+    def _on_active_install_changed(self, path: str) -> None:
+        """Follow a switch of the active Micro-Manager install, or defer it.
 
-    def _on_mda_viewer_created(
-        self, ndv_viewer: ndv.ArrayViewer, sequence: MDASequence
-    ) -> None:
-        q_viewer = cast("QWidget", ndv_viewer.widget())
+        ``use_micromanager`` (behind the Installation page's "Set Active")
+        writes a preference that every *future* session reads, but the running
+        core took its adapter search path at construction and keeps it. Rather
+        than let the two disagree silently, offer to restart this session's
+        hardware on the newly chosen install right away.
+        """
+        if not path:
+            # the last install was removed; there's nothing to point the core at
+            self._status("No Micro-Manager installation left.")
+            return
+        core_device = Keyword.CoreDevice.value
+        loaded = [d for d in self._mmc.getLoadedDevices() if d != core_device]
+        at_stake = (
+            bool(loaded) or self._hardware.is_dirty() or self._configurations.is_dirty()
+        )
+        if at_stake and not self._confirm_install_switch(path):
+            self._status(f"{Path(path).name} will be used the next time pyMM starts.")
+            return
+        self._hardware.use_adapter_path(path)
+        self._status(f"Now using the device adapters in {path}")
 
-        sha = str(sequence.uid)[:8]
-        q_viewer.setObjectName(f"ndv-{sha}")
-        q_viewer.setWindowTitle(f"MDA {sha}")
-        q_viewer.setWindowFlags(Qt.WindowType.Dialog)
+    def _confirm_install_switch(self, path: str) -> bool:
+        """Ask before tearing down a live session to change installs."""
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle("Switch Micro-Manager installation")
+        msg.setText(
+            f"Switching to {Path(path).name} unloads every device and discards "
+            "the current configuration, including any unsaved changes — the "
+            "loaded devices come from the installation being replaced.\n\n"
+            "Switch now, or keep this session and use it from the next launch?"
+        )
+        switch_btn = msg.addButton("Switch now", QMessageBox.ButtonRole.DestructiveRole)
+        keep_btn = msg.addButton("Keep this session", QMessageBox.ButtonRole.RejectRole)
+        for button, variant in ((switch_btn, "danger"), (keep_btn, "subtle")):
+            if button is not None:
+                button.setProperty("variant", variant)
+        msg.setDefaultButton(keep_btn)
+        msg.exec()
+        return msg.clickedButton() is switch_btn
 
-        dw = CDockWidget(self.dock_manager, f"ndv-{sha}", self)
-        # small hack ... we need to retain a pointer to the viewer
-        # otherwise the viewer will be garbage collected
-        dw._viewer = ndv_viewer  # type: ignore
-        dw.setWidget(q_viewer)
-        dw.setFeature(dw.DockWidgetFeature.DockWidgetFloatable, False)
-        self.dock_manager.addDockWidgetTabToArea(dw, self._central_dock_area)
+    def _status(self, message: str) -> None:
+        """Show a transient message in the status bar."""
+        if status_bar := self.statusBar():
+            status_bar.showMessage(message, 5000)
 
-    def _on_previewer_created(self, dock_widget: CDockWidget) -> None:
-        self.dock_manager.addDockWidgetTabToArea(dock_widget, self._central_dock_area)
+    def _update_mda_status_visibility(self, *_: object) -> None:
+        self._mda_status.set_idle_visible(self._stack.currentWidget() is self._acquire)
+
+    def _on_mode_tab_changed(self, index: int) -> None:
+        """Gate leaving Configurations with unsaved group/pixel edits.
+
+        ``ModeTabBar._select`` already flipped the clicked tab's visual state
+        (and emitted this signal) before this runs, so a cancelled switch has
+        to explicitly flip it back -- calling it again with the *current*
+        stack index does that and re-emits this signal, which is a no-op
+        next time since index == the (unchanged) current index by then.
+        """
+        current_index = self._stack.currentIndex()
+        if index == current_index:
+            return
+        configuration_index = self._stack.indexOf(self._configurations)
+        if current_index == configuration_index and self._configurations.is_dirty():
+            choice = self._prompt_unsaved_configuration_changes()
+            if choice == "cancel":
+                self._mode_tabs._select(current_index)
+                return
+            if choice == "save_core":
+                self._configurations.commit_current_to_core()
+            elif choice == "save_file" and not self._save_current_configuration():
+                # cancelled or failed (e.g. the file dialog was dismissed) —
+                # stay on Configurations rather than navigate away silently
+                self._mode_tabs._select(current_index)
+                return
+            elif choice == "discard":
+                self._configurations.discard_changes()
+        self._stack.setCurrentIndex(index)
+
+    def _prompt_unsaved_configuration_changes(self) -> str:
+        """Ask how to handle unsaved group/pixel edits before leaving the page.
+
+        Returns "save_core", "save_file", "discard", or "cancel".
+        """
+        dirty_parts = self._configurations.dirty_parts()
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle("Unsaved changes")
+        msg.setText(
+            f"There are unsaved changes in {' and '.join(dirty_parts)}.\n\n"
+            '"Save to core" applies them to the running session only. '
+            '"Save to file" also writes them to the .cfg file.'
+        )
+        save_core_btn = msg.addButton("Save to core", QMessageBox.ButtonRole.AcceptRole)
+        save_file_btn = msg.addButton(
+            "Save to file…", QMessageBox.ButtonRole.AcceptRole
+        )
+        discard_btn = msg.addButton(
+            "Discard changes and continue", QMessageBox.ButtonRole.DestructiveRole
+        )
+        cancel_btn = msg.addButton(QMessageBox.StandardButton.Cancel)
+        for button, variant in (
+            (save_core_btn, "subtle"),
+            (save_file_btn, "primary"),
+            (discard_btn, "danger"),
+            (cancel_btn, "subtle"),
+        ):
+            if button is not None:
+                button.setProperty("variant", variant)
+        msg.setDefaultButton(save_file_btn)
+        msg.exec()
+
+        clicked = msg.clickedButton()
+        if clicked is save_core_btn:
+            return "save_core"
+        if clicked is save_file_btn:
+            return "save_file"
+        if clicked is discard_btn:
+            return "discard"
+        return "cancel"
+
+    def _on_pixel_calibration_running(self, running: bool) -> None:
+        """Keep other microscope workflows unavailable during stage calibration."""
+        configuration_index = self._stack.indexOf(self._configurations)
+        for page in (self._installation, self._hardware, self._acquire):
+            self._mode_tabs.setTabEnabled(self._stack.indexOf(page), not running)
+        if running and configuration_index >= 0:
+            self._mode_tabs._select(configuration_index)
+            self._stack.setCurrentIndex(configuration_index)
+        if status_bar := self.statusBar():
+            status_bar.showMessage(
+                "Pixel calibration is controlling the camera and XY stage"
+                if running
+                else ""
+            )
+
+    def _on_mda_running(self, running: bool) -> None:
+        """Keep the whole window on Acquire, watching, for the duration of a run.
+
+        The other three modes all reconfigure the microscope (installing a
+        different Micro-Manager, loading devices, rewriting the configuration),
+        so none of them may be reached while an acquisition owns the hardware.
+        ``AcquirePage.set_mda_lock`` has already locked the Acquire page itself
+        by the time this runs; only the window chrome is left.
+
+        Switching to Acquire matters for runs that weren't started from there
+        (a script in the console, or ``mda.run()`` from anywhere else): a
+        disabled tab still leaves whatever page is showing fully interactive.
+        """
+        acquire_index = self._stack.indexOf(self._acquire)
+        for page in (self._installation, self._hardware, self._configurations):
+            self._mode_tabs.setTabEnabled(self._stack.indexOf(page), not running)
+        if running and acquire_index >= 0:
+            # Bypass _on_mode_tab_changed's unsaved-configuration prompt: a run
+            # is no time to ask, and its Cancel branch would strand the user on
+            # a Configurations page whose tab is now disabled. Pending edits
+            # stay pending -- the prompt still comes the next time the user
+            # leaves that page themselves.
+            with QSignalBlocker(self._mode_tabs):
+                self._mode_tabs._select(acquire_index)
+            self._stack.setCurrentIndex(acquire_index)
+        if not running and self._close_pending:
+            # The close this cancellation was requested for can now run its
+            # normal course. Deferred so the rest of the unlock (and the
+            # runner's own teardown handlers) finish first.
+            QTimer.singleShot(0, self.close)
+
+    def _ready_to_close_during_acquisition(self) -> bool:
+        """Return whether closing may proceed, cancelling a live run if asked to.
+
+        Closing mid-run is gated rather than forbidden: the hazard is tearing
+        the writer down halfway through, which leaves the data store on disk
+        incomplete, so the run is cancelled and allowed to finalize *first*.
+        The wait is asynchronous -- the close is dropped here and re-attempted
+        from ``_on_mda_running`` once the runner reports idle -- so no nested
+        event loop is needed and the "Cancelling acquisition…" overlay keeps
+        animating. Meanwhile the acquisition lock already prevents the user
+        from doing anything but watch.
+
+        Hitting close again during that wait offers a force quit: a wedged
+        writer must never be able to trap the user in an app they can't exit.
+        """
+        if self._mmc.mda.status.phase.value == "idle":
+            self._close_pending = False
+            return True
+
+        if self._close_pending:
+            return self._confirm_force_quit()
+
+        if not self._confirm(
+            "Acquisition running",
+            "An acquisition is still running.\n\n"
+            "Quitting cancels it. Frames already written to disk are kept and "
+            "properly closed, but the acquisition will be incomplete.",
+            accept="Cancel acquisition and quit",
+            reject="Keep acquiring",
+        ):
+            return False
+
+        self._close_pending = True
+        self._acquire.cancel_acquisition()
+        return False
+
+    def _confirm_force_quit(self) -> bool:
+        """Offer to quit without waiting for a run that isn't stopping."""
+        if not self._confirm(
+            "Still stopping",
+            "The acquisition has been cancelled but hasn't finished stopping "
+            "yet.\n\n"
+            "Quitting now may leave the data store on disk incomplete.",
+            accept="Quit anyway",
+            reject="Keep waiting",
+        ):
+            return False
+        self._close_pending = False
+        return True
+
+    def _confirm(self, title: str, text: str, *, accept: str, reject: str) -> bool:
+        """Ask a two-button question, defaulting to the safe (*reject*) answer."""
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle(title)
+        msg.setText(text)
+        accept_btn = msg.addButton(accept, QMessageBox.ButtonRole.DestructiveRole)
+        reject_btn = msg.addButton(reject, QMessageBox.ButtonRole.RejectRole)
+        for button, variant in ((accept_btn, "danger"), (reject_btn, "primary")):
+            if button is not None:
+                button.setProperty("variant", variant)
+        if reject_btn is not None:
+            msg.setDefaultButton(reject_btn)
+        msg.exec()
+        return msg.clickedButton() is accept_btn
+
+    def dragEnterEvent(self, a0: QDragEnterEvent | None) -> None:
+        """Accept a drag only if it carries at least one openable acquisition.
+
+        Anything else (unrelated file types, internal Qt/QtAds drag
+        operations, which don't use this MIME-based protocol at all) is left
+        untouched, so it keeps working exactly as before.
+        """
+        if a0 is None:
+            return
+        # Decided once per drag, not per mouse-move: recognizing an
+        # acquisition means opening the file and parsing its OME metadata,
+        # which costs milliseconds and grows with the position count. A
+        # drag's URLs cannot change between enter and drop, so dragMoveEvent
+        # and dropEvent reuse this answer.
+        self._drag_paths = self._dropped_acquisition_paths(a0)
+        if self._drag_paths:
+            a0.acceptProposedAction()
+
+    def dragMoveEvent(self, a0: QDragMoveEvent | None) -> None:
+        """Mirror dragEnterEvent's acceptance so Qt keeps offering the drop."""
+        if a0 is not None and self._drag_paths:
+            a0.acceptProposedAction()
+
+    def dragLeaveEvent(self, a0: QDragLeaveEvent | None) -> None:
+        self._drag_paths = []
+        super().dragLeaveEvent(a0)
+
+    def dropEvent(self, a0: QDropEvent | None) -> None:
+        """Open every supported dropped path, one viewer tab per dataset.
+
+        Each dataset is opened on a worker thread, so a large multi-file
+        acquisition cannot freeze the window between the drop and its tab
+        appearing. The Acquire page is raised straight away rather than once
+        the first tab arrives, so the drop visibly did something.
+        """
+        if a0 is None:
+            return
+        paths, self._drag_paths = self._drag_paths, []
+        if not paths:
+            return
+        a0.acceptProposedAction()
+
+        for path in paths:
+            self._acquire.viewers.open_acquisition_async(path)
+        self._activate_acquire()
+
+    @staticmethod
+    def _dropped_acquisition_paths(a0: QDragEnterEvent) -> list[Path]:
+        """Return this drag/drop event's local file/directory URLs that we can open."""
+        mime = a0.mimeData()
+        if mime is None or not mime.hasUrls():
+            return []
+        paths = (Path(url.toLocalFile()) for url in mime.urls() if url.isLocalFile())
+        return [p for p in paths if supports_path(p)]
+
+    def closeEvent(self, a0: QCloseEvent | None) -> None:
+        """Stop a running acquisition, then offer to save configuration edits."""
+        if not self._ready_to_close_during_acquisition():
+            if a0 is not None:
+                a0.ignore()
+            return
+        # Restoration is part of the calibration transaction.  Do not destroy
+        # its worker (or ask the user to save) until that transaction has ended.
+        self._configurations.shutdownCalibration()
+        if self._hardware.is_dirty() or self._configurations.is_dirty():
+            choice = QMessageBox.question(
+                self,
+                "Unsaved changes",
+                "There are unsaved changes to the configuration "
+                "(hardware, groups or pixel sizes).\n\n"
+                "Save them to a .cfg file before closing?",
+                QMessageBox.StandardButton.Save
+                | QMessageBox.StandardButton.Discard
+                | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Save,
+            )
+            if choice == QMessageBox.StandardButton.Cancel:
+                if a0 is not None:
+                    a0.ignore()
+                return
+            if choice == QMessageBox.StandardButton.Save and not self._save_all():
+                # save was cancelled or failed — don't close
+                if a0 is not None:
+                    a0.ignore()
+                return
+        self._save_state()
+        self._acquire.shutdown()
+        super().closeEvent(a0)
+
+    def _save_all(self) -> bool:
+        """Commit group/pixel edits to the core, then save everything to a .cfg.
+
+        Returns True if a file was written, False if cancelled or on error.
+        """
+        # Where to save is asked first: the commit below blocks the GUI thread,
+        # and on real hardware there is no reason to spend that time before
+        # learning the user meant to cancel.
+        if not (path := self._hardware.prompt_save_path()):
+            return False
+        self._configurations.commit_to_core()
+        if self._hardware.save_to(path):
+            self._configurations.mark_saved()
+            return True
+        return False
+
+    def _save_current_configuration(self) -> bool:
+        """Commit the selected configuration editor, then write the full .cfg."""
+        if not (path := self._hardware.prompt_save_path()):
+            return False
+        self._configurations.commit_current_to_core()
+        if self._hardware.save_to(path):
+            self._configurations.mark_current_saved()
+            return True
+        return False
+
+    def _apply_toolbar_metrics(self) -> None:
+        """Inset the toolbar's right edge to match a page's own toolbar.
+
+        `TabToolBar` insets its contents by ``sp_sm``; a bare `QToolBar` uses
+        the style's much smaller default, so the theme toggle would sit closer
+        to the window edge than the page toolbar buttons directly below it.
+        """
+        # StyleChange can arrive while the window is still being built.
+        toolbar = getattr(self, "_toolbar", None)
+        if toolbar is not None and (lay := toolbar.layout()) is not None:
+            left, top, _, bottom = lay.getContentsMargins()
+            lay.setContentsMargins(left, top, theme().sp_sm, bottom)
+
+    def changeEvent(self, a0: QEvent | None) -> None:
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
+            self._apply_toolbar_metrics()
+        super().changeEvent(a0)
+
+    def _toggle_theme(self) -> None:
+        self._is_dark = not self._is_dark
+        set_theme(DARK_THEME if self._is_dark else LIGHT_THEME)
+        self._theme_btn.set_dark(self._is_dark)
 
     def _on_exception(self, exc: BaseException) -> None:
-        """Show a notification when an exception is raised."""
+        """Show a toast notification when an unhandled exception is raised."""
         see_tb = "See traceback"
 
         def _open_traceback(choice: str | None) -> None:
-            if choice == see_tb:
-                log = self.get_widget(WidgetAction.EXCEPTION_LOG)
-                log.show_exception(exc)
-                log.show()
+            if choice != see_tb:
+                return
+            self._activate_acquire()
+            self._acquire.panel_button(PanelKey.EXCEPTION_LOG).setChecked(True)
+            log = cast(
+                "ExceptionLog", self._acquire.panel_widget(PanelKey.EXCEPTION_LOG)
+            )
+            log.show_exception(exc)
 
         self._notification_manager.show_error_message(
             str(exc), see_tb, on_action=_open_traceback
         )
+
+    @property
+    def nm(self) -> NotificationManager:
+        """Toast notification manager for this window."""
+        return self._notification_manager
+
+    @property
+    def mmcore(self) -> CMMCorePlus:
+        """Access to this window's microscope core."""
+        return self._mmc
+
+
+# Both names refer to the single built-in application window.
+MainWindow = MicroManagerGUI

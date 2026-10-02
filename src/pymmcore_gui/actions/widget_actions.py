@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Annotated, Protocol, TypeVar, cast
 
-from pymmcore_plus import CMMCorePlus
+from pymmcore_plus import CMMCorePlus, DeviceType
 
 from pymmcore_gui._qt.QtAds import CDockWidget, DockWidgetArea, SideBarLocation
 from pymmcore_gui._qt.QtCore import Qt
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from pymmcore_gui._qt.QtCore import QObject
     from pymmcore_gui.widgets._exception_log import ExceptionLog
     from pymmcore_gui.widgets._mm_console import MMConsole
-    from pymmcore_gui.widgets._stage_control import StagesControlWidget
+    from pymmcore_gui.widgets._stage_control import StagesPanel
 
 QWidgetType = Annotated[QWidget, _ensure_isinstance(QWidget)]
 
@@ -46,20 +46,15 @@ class WidgetAction(ActionKey):
 # ######################## Functions that create widgets #########################
 
 
-# The two application windows, by objectName: the classic dock-based
-# `MicroManagerGUI` and the modern `MainWindow`. Both must be recognized --
-# a widget built from the actions below can be hosted by either, and
-# resolving only the classic name left the modern GUI silently falling back
-# to the process-wide singleton core instead of its own.
+# The application uses pyMMGUI. Retain the older object name for custom hosts;
+# factories must prefer their owning window's core over the global singleton.
 _MAIN_WINDOW_NAMES = frozenset({"MicroManagerGUI", "pyMMGUI"})
 
 
 class _MainWindowLike(Protocol):
     """What these factories actually need from whichever window hosts them.
 
-    Deliberately narrower than `MicroManagerGUI`: the modern window is not
-    one, and has no `get_widget`, so anything beyond the core must not be
-    reached through here.
+    Factories need only the owning core, without coupling to a window controller.
     """
 
     @property
@@ -78,8 +73,7 @@ def _get_mm_main_window(obj: QObject) -> _MainWindowLike | None:
 
 
 def _get_core(obj: QObject) -> CMMCorePlus:
-    # `mmcore` is optional on the modern window, so a window with no core of
-    # its own still falls back to the singleton.
+    # A custom host without its own core falls back to the singleton.
     if (win := _get_mm_main_window(obj)) is not None and (core := win.mmcore):
         return core
     return CMMCorePlus.instance()
@@ -149,11 +143,18 @@ def create_exception_log(parent: QWidget) -> ExceptionLog:
     return wdg
 
 
-def create_stage_widget(parent: QWidget) -> StagesControlWidget:
-    """Create the Stage Control widget."""
-    from pymmcore_gui.widgets._stage_control import StagesControlWidget
+def create_stage_widget(parent: QWidget) -> StagesPanel:
+    """Create modern stage controls for every loaded XY and Z stage."""
+    from pymmcore_gui.widgets._stage_control import StagesPanel
 
-    return StagesControlWidget(parent=parent, mmcore=_get_core(parent))
+    core = _get_core(parent)
+    panel = StagesPanel(parent=parent, mmcore=core)
+    panel.add_stages(
+        device
+        for kind in (DeviceType.XYStage, DeviceType.Stage)
+        for device in core.getLoadedDevicesOfType(kind)
+    )
+    return panel
 
 
 def create_config_wizard(parent: QWidget) -> pmmw.ConfigWizard:

@@ -150,7 +150,11 @@ WidgetNames = Annotated[set[str], WrapSerializer(lambda v, h: sorted(h(v)))]
 
 
 class WindowSettingsV1(BaseMMSettings):
-    """Settings related to window positioning and geometry."""
+    """Passive legacy window data retained for settings-file compatibility.
+
+    The application uses ``ModernWindowSettingsV1``. These fields remain so
+    opening and saving existing settings does not erase the old window state.
+    """
 
     geometry: Base64Bytes | None = None
     """Position and size of the main window. Restored with .restoreGeometry()"""
@@ -175,11 +179,11 @@ class WindowSettingsV1(BaseMMSettings):
 
 
 class ModernWindowSettingsV1(BaseMMSettings):
-    """Persisted state for the modern GUI (``_modern_gui._main_win.MainWindow``).
+    """Persisted state for the modern GUI (``_main_window.MicroManagerGUI``).
 
-    Kept separate from ``WindowSettingsV1``: the two GUIs use different ADS
-    dock ``objectName``s (e.g. ``docked_pymmcore_gui.mda_widget`` vs.
-    ``acquire_mda``), so sharing one blob would collide.
+    The serialized section remains ``modern_window`` for compatibility.
+    Legacy ``WindowSettingsV1`` dock names do not match the acquisition page,
+    so its state must not be restored into this window.
     """
 
     geometry: Base64Bytes | None = None
@@ -187,7 +191,7 @@ class ModernWindowSettingsV1(BaseMMSettings):
     acquire_dock_state: Base64Bytes | None = None
     """State of the Acquire page's dock manager. Restored with .restoreState()"""
     acquire_panels: WidgetNames = Field(default_factory=set)
-    """Keys (see ``_modern_gui._panels.PanelKey``) of panels open on the Acquire page"""
+    """Keys (see ``widgets._panels.PanelKey``) of panels open on the Acquire page"""
     acquire_hidden_panels: WidgetNames = Field(default_factory=set)
     """Keys whose Acquire toolbar buttons the user hid from the customize menu.
 
@@ -195,7 +199,7 @@ class ModernWindowSettingsV1(BaseMMSettings):
     the registry in a later release shows up for existing users by default.
     """
     acquire_stage_devices: WidgetNames = Field(default_factory=set)
-    """Device names open in the Stages panel (see ``_modern_gui._acquire_stages``).
+    """Device names open in the Stages panel (see ``widgets._stage_control``).
 
     Not part of ``acquire_dock_state``: each open stage lives in the Stages
     panel's own nested dock manager, which ``CDockManager.saveState()`` on
@@ -204,12 +208,12 @@ class ModernWindowSettingsV1(BaseMMSettings):
     acquire_stage_kind: str = "xyz"
     """Which Stages-panel widget flavor was active.
 
-    See ``_modern_gui._panels.StageKind`` and ``AcquireLayout.stage_kind``.
+    See ``widgets._panels.StageKind`` and ``AcquireLayout.stage_kind``.
     """
     theme: Literal["dark", "light"] = "dark"
     """Active color theme."""
     zoom: float | None = None
-    """Active zoom step (one of ``_modern_gui._theme.ZOOM_STEPS``)."""
+    """Active zoom step (one of ``_theme.ZOOM_STEPS``)."""
     last_layout: str | None = None
     """Name of the layout chosen in the startup dialog last time.
 
@@ -274,8 +278,8 @@ class SettingsV1(BaseMMSettings):
     auto_load_last_config: bool | None = None
     """Load the last used config on startup. None means undecided.
 
-    Only the classic ``MicroManagerGUI`` still consults this; the modern GUI
-    asks up front in its startup dialog instead (see ``recent_configs``).
+    Retained for custom windows without a startup hook and settings-file
+    compatibility. The application asks in its startup dialog instead.
     """
     fallback_to_demo_config: bool = False
     """Load demo config if no config is found."""

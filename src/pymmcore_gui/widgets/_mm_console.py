@@ -97,10 +97,8 @@ class MMConsole(QtConsole):
             "np": numpy,
         }
         mmc = self._mmc
-        # Prefer the actual owning window.  The modern GUI is named ``pyMMGUI``
-        # (the legacy one is ``MicroManagerGUI``), so the old object-name-only
-        # search stopped injecting ``window`` when the console moved into the
-        # modern Acquire page.
+        # Prefer the actual owning window, including custom hosts. Keep the
+        # historical object name as a compatibility fallback.
         owner = QWidget.window(self)
         candidates = [owner, *QApplication.topLevelWidgets()]
         window = next(

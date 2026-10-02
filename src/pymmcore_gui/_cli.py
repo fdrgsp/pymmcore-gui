@@ -116,34 +116,23 @@ def run(
         "--no-telemetry",
         help="Disable telemetry.",
     ),
-    old: bool = typer.Option(
-        False,
-        "--old",
-        help="Use the old Micro-Manager GUI.",
-    ),
 ) -> None:
     """Run the Micro-Manager GUI (this is the default command)."""
     from pymmcore_gui import create_mmgui
 
-    window_cls: str | None
-    if old:
-        window_cls = None
-    else:
-        window_cls = "pymmcore_gui._modern_gui.MainWindow"
     if layout is not None:
-        _check_layout(layout, old=old)
+        _check_layout(layout)
     mm_config = "MMConfig_demo.cfg" if demo_config else config
     create_mmgui(
         mm_config=mm_config,
         layout=layout,
         exec_app=True,
         install_sentry=not no_telemetry,
-        window_cls=window_cls,
     )
     sys.exit(0)
 
 
-def _check_layout(layout: str, *, old: bool) -> None:
+def _check_layout(layout: str) -> None:
     """Warn about a `-l` that will not do what the user expects.
 
     Deliberately a warning rather than an error: an unknown name still opens
@@ -151,12 +140,6 @@ def _check_layout(layout: str, *, old: bool) -> None:
     """
     from pymmcore_gui._layouts import available_layouts
 
-    if old:
-        typer.secho(
-            "--layout only applies to the modern GUI; ignoring it.",
-            fg=typer.colors.YELLOW,
-        )
-        return
     if layout not in (names := available_layouts()):
         typer.secho(
             f"No layout named {layout!r}. Available: {', '.join(names)}.\n"

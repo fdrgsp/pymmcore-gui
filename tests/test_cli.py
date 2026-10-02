@@ -33,7 +33,7 @@ def test_settings(tmp_path: Path) -> None:
         mock_reset.assert_called_once()
 
 
-def test_default_command_forwards_config_to_modern_gui(tmp_path: Path) -> None:
+def test_default_command_forwards_config_to_default_gui(tmp_path: Path) -> None:
     config = tmp_path / "startup.cfg"
     config.touch()
     argv = ["mmgui", "-c", str(config)]
@@ -46,19 +46,17 @@ def test_default_command_forwards_config_to_modern_gui(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert mock_create.call_args.kwargs["mm_config"] == config.resolve()
-    # by default the modern GUI is used
-    assert (
-        mock_create.call_args.kwargs["window_cls"]
-        == "pymmcore_gui._modern_gui.MainWindow"
-    )
+    # The CLI uses the same default window as the Python API.
+    assert "window_cls" not in mock_create.call_args.kwargs
 
 
-def test_old_flag_uses_standard_gui() -> None:
+def test_old_flag_is_rejected() -> None:
     with patch("pymmcore_gui.create_mmgui") as mock_create:
         result = runner.invoke(app, ["run", "--old"])
 
-    assert result.exit_code == 0
-    assert mock_create.call_args.kwargs["window_cls"] is None
+    assert result.exit_code == 2
+    assert "No such option: --old" in result.output
+    mock_create.assert_not_called()
 
 
 def test_layout_flag_is_forwarded(tmp_path: Path) -> None:

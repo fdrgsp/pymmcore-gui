@@ -13,8 +13,6 @@ from superqt.iconify import QIconifyIcon
 from superqt.utils import signals_blocked
 
 from pymmcore_gui._light_sources import parse_light_source_comments
-from pymmcore_gui._modern_gui._acquire_toolbar import LiveButton, SnapButton
-from pymmcore_gui._modern_gui._theme import qcolor, theme
 from pymmcore_gui._pixel_calibration import (
     AffineFitResult,
     CalibrationCancelled,
@@ -52,6 +50,8 @@ from pymmcore_gui._qt.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from pymmcore_gui._theme import qcolor, theme
+from pymmcore_gui.widgets._toolbars import LiveButton, SnapButton
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
 
 if TYPE_CHECKING:

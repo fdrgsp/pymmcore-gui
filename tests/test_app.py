@@ -1,14 +1,22 @@
+from __future__ import annotations
+
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
 from pymmcore_plus import CMMCorePlus
 from pytest import MonkeyPatch
 
-from pymmcore_gui import __main__, _app
-from pymmcore_gui._qt.QtWidgets import QApplication, QMessageBox
-from pymmcore_gui._settings import Settings
+from pymmcore_gui import MicroManagerGUI, __main__, _app
+from pymmcore_gui._qt.QtWidgets import QApplication, QMainWindow, QMessageBox
+from pymmcore_gui.widgets._startup import StartupChoice
+
+if TYPE_CHECKING:
+    from pytestqt.qtbot import QtBot
+
+    from pymmcore_gui._settings import Settings
 
 
 @pytest.mark.order(0)
@@ -46,6 +54,13 @@ def test_failed_startup_config_load_shows_a_dialog(
 
     with (
         patch.object(mmcore, "loadSystemConfiguration", _raise),
+        patch.object(
+            MicroManagerGUI,
+            "prompt_startup_choices",
+            return_value=StartupChoice(
+                layout="Default", config=str(settings.last_config)
+            ),
+        ),
         patch.object(QMessageBox, "critical") as critical,
         pytest.warns(RuntimeWarning, match="boom"),
     ):
@@ -120,3 +135,66 @@ def test_config_error_text_explains_a_missing_micromanager(
     assert "No Micro-Manager installation was found" not in _app._config_error_text(
         "MMConfig_demo.cfg", exc
     )
+
+
+@pytest.mark.parametrize(
+    "window_cls",
+    [
+        None,
+        "pymmcore_gui._main_window.MicroManagerGUI",
+        "pymmcore_gui._main_window.MainWindow",
+    ],
+)
+def test_default_and_named_launch_use_the_same_window(
+    mmcore: CMMCorePlus, qtbot: QtBot, window_cls: str | None
+) -> None:
+    from pymmcore_gui._main_window import MainWindow
+
+    assert MainWindow is MicroManagerGUI
+    with patch.object(MicroManagerGUI, "prompt_startup_choices") as prompt:
+        window = _app.create_mmgui(
+            mm_config=False,
+            mmcore=mmcore,
+            window_cls=window_cls,
+            exec_app=False,
+            install_sys_excepthook=False,
+            install_sentry=False,
+        )
+    assert isinstance(window, MicroManagerGUI)
+    qtbot.addWidget(window)
+    assert window.mmcore is mmcore
+    assert window.objectName() == "pyMMGUI"
+    assert window.acquire.mda_widget is not None
+    prompt.assert_not_called()
+    qtbot.waitUntil(window.isVisible)
+
+
+def test_custom_window_can_restore_without_layout_keyword(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    class CustomWindow(QMainWindow):
+        def __init__(self, *, mmcore: CMMCorePlus | None = None) -> None:
+            super().__init__()
+            self._core = mmcore or CMMCorePlus.instance()
+
+        @property
+        def mmcore(self) -> CMMCorePlus:
+            return self._core
+
+        def restore_state(self, *, show: bool = False) -> None:
+            if show:
+                self.show()
+
+    window = _app.create_mmgui(
+        mm_config=False,
+        mmcore=mmcore,
+        window_cls=CustomWindow,
+        layout="Default",
+        exec_app=False,
+        install_sys_excepthook=False,
+        install_sentry=False,
+    )
+    assert isinstance(window, CustomWindow)
+    qtbot.addWidget(window)
+    qtbot.waitUntil(window.isVisible)
+    assert window.mmcore is mmcore

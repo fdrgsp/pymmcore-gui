@@ -9,8 +9,6 @@ import numpy as np
 import pytest
 from superqt.cmap import QColormapComboBox
 
-from pymmcore_gui._modern_gui._acquire_toolbar import LiveButton, SnapButton
-from pymmcore_gui._modern_gui._configurations import ConfigurationsPage
 from pymmcore_gui._pixel_calibration import (
     CalibrationCaptureSettings,
     CaptureStateTransaction,
@@ -25,6 +23,8 @@ from pymmcore_gui._qt.QtWidgets import (
     QFrame,
     QPushButton,
 )
+from pymmcore_gui.widgets._configurations import ConfigurationsPage
+from pymmcore_gui.widgets._toolbars import LiveButton, SnapButton
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus

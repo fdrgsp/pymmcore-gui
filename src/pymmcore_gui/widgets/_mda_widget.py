@@ -36,8 +36,6 @@ from pymmcore_gui._light_sources import (
     parse_light_source_comments,
     write_light_source_comments,
 )
-from pymmcore_gui._modern_gui._busy import BusyOverlay
-from pymmcore_gui._modern_gui._theme import qcolor, theme
 from pymmcore_gui._qt.QtCore import (
     QEvent,
     QModelIndex,
@@ -60,6 +58,8 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 from pymmcore_gui._settings import Settings
+from pymmcore_gui._theme import qcolor, theme
+from pymmcore_gui.widgets._busy import BusyOverlay
 
 from ._active_channel_table import (
     CURRENT_CHANNEL_COLUMN,

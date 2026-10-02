@@ -6,6 +6,43 @@
 4. [Application Bundle Creation](#creating-a-bundled-application)
 5. [Settings and Configuration](#settings-and-configuration)
 
+## Application structure
+
+The application has one built-in window, `MicroManagerGUI` in
+`src/pymmcore_gui/_main_window.py`. `MainWindow` in that module is an alias for
+the same class. The CLI and `create_mmgui()` both use it by default; callers
+can still pass a custom `window_cls`.
+
+- `widgets/` contains the Acquire, Installation, Configurations, and Hardware
+  Setup pages, startup/preferences dialogs, toolbars, and reusable controls.
+- `_theme/` contains the shared style, colors, fonts, and zoom support.
+- `_ndv_viewers.py` contains `AcquireViewersManager`, including live and reopened
+  acquisition viewers. `_camera_roi_sync.py` manages camera/viewer ROI sessions.
+- `_array_viewer.py`, `_acquisition_loader.py`, `_mda_export.py`, and the OME
+  wrapper modules handle shared presentation, reading, and saving.
+- `_pixel_calibration/` contains calibration primitives; its UI remains in
+  `widgets/_pixel_calibration_panel.py`.
+- `_qt/`, `actions/`, `_settings.py`, and `_layouts.py` retain their established
+  infrastructure roles.
+
+To add an Acquire tool, register a `PanelInfo` in `widgets/_panels.py`'s `PANELS`
+tuple before constructing the page. Its factory receives the parent and owning
+`CMMCorePlus`; the page creates the toolbar button and lazy dock. Use a unique,
+stable key. Keys and ADS object names are serialized, so changing them requires
+a layout migration. Keep `widgets/__init__.py` lightweight to avoid import cycles
+and to preserve lazy console construction.
+
+The private `_modern_gui` package, old window controller, automatic Window-menu
+integration, and `--old` option have been removed. The public action registry
+remains available as reusable infrastructure.
+
+Settings retain the `modern_window` JSON section and version `1.0`. `window`
+is passive legacy compatibility data; never restore its dock state into the
+Acquire page. Custom windows without a startup hook retain the older config
+fallback settings. See the
+[saving](docs/architecture/DATA_SAVING.md) and
+[calibration](docs/architecture/PIXEL_CALIBRATION.md) architecture notes.
+
 ## Setup with uv
 
 Dependencies are managed strictly using [uv](https://docs.astral.sh/uv/), and the

@@ -101,7 +101,7 @@ def test_center_cross_control_comes_from_ndv(qtbot: QtBot) -> None:
 
 
 def test_synthesize_record_from_stream_view(qtbot: QtBot) -> None:
-    """A live StreamView (the classic-GUI MDA fallback) keeps its real axis names."""
+    """A live StreamView keeps its real axis names."""
     settings = AcquisitionSettings(
         dimensions=tuple(
             dims_from_standard_axes({"t": 2, "c": ["DAPI"], "y": 8, "x": 8})

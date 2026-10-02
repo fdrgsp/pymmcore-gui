@@ -15,9 +15,9 @@ from pymmcore_gui._array_viewer import (
     set_source_icon,
     unstyle_widgets,
 )
-from pymmcore_gui._modern_gui._theme import qcolor, theme
 from pymmcore_gui._qt.QtCore import QEvent, QSize, QTimer, Signal
 from pymmcore_gui._qt.QtWidgets import QMessageBox, QToolButton
+from pymmcore_gui._theme import qcolor, theme
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus

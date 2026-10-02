@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING, Any, cast
 
 from superqt import QIconifyIcon
 
-from pymmcore_gui._modern_gui._theme import qcolor, theme
 from pymmcore_gui._qt.QtCore import QPoint, QPropertyAnimation, Qt, QTimer
 from pymmcore_gui._qt.QtWidgets import (
     QHBoxLayout,
@@ -14,6 +13,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from pymmcore_gui._theme import qcolor, theme
 
 if TYPE_CHECKING:
     from pymmcore_gui._notification_manager import Notification, NotificationManager

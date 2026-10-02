@@ -10,7 +10,8 @@ import useq
 from useq import MDASequence
 
 import pymmcore_gui._ndv_viewers as viewers_module
-from pymmcore_gui._ndv_viewers import NDVViewersManager, _StreamSignalBridge
+from pymmcore_gui._ndv_viewers import AcquireViewersManager, _StreamSignalBridge
+from pymmcore_gui._qt.QtAds import CDockManager
 from pymmcore_gui._qt.QtWidgets import QApplication, QWidget
 
 if TYPE_CHECKING:
@@ -90,9 +91,10 @@ def test_viewers_manager(
     """Use the ome-writers sink view and release it with the parent."""
     monkeypatch.setattr(viewers_module, "MMArrayViewer", _FakeViewer)
     dummy = QWidget()
-    manager = NDVViewersManager(dummy, mmcore)
+    dock_manager = CDockManager(dummy)
+    manager = AcquireViewersManager(dock_manager, mmcore, parent=dummy)
 
-    assert len(manager) == 0
+    assert not manager._records
     mmcore.mda.run(
         MDASequence(
             time_plan=useq.TIntervalLoops(
@@ -104,8 +106,8 @@ def test_viewers_manager(
     )
     qtbot.wait(20)
 
-    assert len(manager) == 1
-    viewer = next(manager.viewers())
+    qtbot.waitUntil(lambda: len(manager._records) == 1)
+    viewer = manager.active_viewer
     assert isinstance(viewer, _FakeViewer)
     assert viewer.data is not None
     assert viewer.display_model.current_index["t"] == 1
@@ -114,4 +116,6 @@ def test_viewers_manager(
     with qtbot.waitSignal(dummy.destroyed, timeout=1000):
         dummy.deleteLater()
     QApplication.processEvents()
-    assert manager._active_mda_viewer is None
+    assert manager.active_viewer is None
+    assert not manager._records
+    assert not manager._connected
