@@ -8,10 +8,10 @@
 
 ## Application structure
 
-The application has one built-in window, `MicroManagerGUI` in
+The application window is `MicroManagerGUI` in
 `src/pymmcore_gui/_main_window.py`. `MainWindow` in that module is an alias for
 the same class. The CLI and `create_mmgui()` both use it by default; callers
-can still pass a custom `window_cls`.
+can pass a custom `window_cls`.
 
 - `widgets/` contains the Acquire, Installation, Configurations, and Hardware
   Setup pages, startup/preferences dialogs, toolbars, and reusable controls.
@@ -22,8 +22,8 @@ can still pass a custom `window_cls`.
   wrapper modules handle shared presentation, reading, and saving.
 - `_pixel_calibration/` contains calibration primitives; its UI remains in
   `widgets/_pixel_calibration_panel.py`.
-- `_qt/`, `actions/`, `_settings.py`, and `_layouts.py` retain their established
-  infrastructure roles.
+- `_qt/`, `actions/`, `_settings.py`, and `_layouts.py` provide Qt bindings,
+  reusable actions, settings, and layout persistence.
 
 To add an Acquire tool, register a `PanelInfo` in `widgets/_panels.py`'s `PANELS`
 tuple before constructing the page. Its factory receives the parent and owning
@@ -32,14 +32,11 @@ stable key. Keys and ADS object names are serialized, so changing them requires
 a layout migration. Keep `widgets/__init__.py` lightweight to avoid import cycles
 and to preserve lazy console construction.
 
-The private `_modern_gui` package, old window controller, automatic Window-menu
-integration, and `--old` option have been removed. The public action registry
-remains available as reusable infrastructure.
+The public action registry provides reusable actions and widget factories.
 
-Settings retain the `modern_window` JSON section and version `1.0`. `window`
-is passive legacy compatibility data; never restore its dock state into the
-Acquire page. Custom windows without a startup hook retain the older config
-fallback settings. See the
+Window geometry, selected mode, and Acquire layout preferences are stored in
+the `modern_window` JSON section (version `1.0`). Custom windows without a
+startup hook use the configuration fallback settings. See the
 [saving](docs/architecture/DATA_SAVING.md) and
 [calibration](docs/architecture/PIXEL_CALIBRATION.md) architecture notes.
 
