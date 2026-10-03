@@ -72,6 +72,122 @@ built bundle still needs to be tried.
     later events. `frames.jsonl` also records `pixel_size_um`, which
     changes with the objective.
 
+## Part 2: move the engine to `pymmcore_plus.smart` (decided 2026-10-03)
+
+Status: **in progress.** Decided with the user:
+
+| Topic | Decision |
+|---|---|
+| What moves | The whole GUI-free engine. pymmcore-gui keeps the tab, a thin Qt bridge, `RunOwnership`, the viewer changes, per-script settings, and its templates. |
+| Entry point | **A + C:** `SmartRunner(core).run(...)`, plus a thin `core.run_smart(...)`. `MDARunner` stays untouched. |
+| Run folder | The writer lives in pymmcore-plus, **opt-in** (`run_dir=None` writes nothing). The GUI always passes a folder. |
+| Quality bar | Lives on the `cite` fork for now, but is written as if for upstream `main`: minimal public surface, private `_modules`, docs and tests in pymmcore-plus's style. |
+| Name | `pymmcore_plus.smart`: the established term, and pymmcore-plus's own guide already calls this "smart-microscopy". |
+| Examples / templates | Headless examples in pymmcore-plus `examples/smart_microscopy/`. GUI templates stay in pymmcore-gui. |
+| Stitching (survey template) | Simple placement by stage position, no registration. |
+
+### Layout in pymmcore-plus
+
+```text
+src/pymmcore_plus/smart/
+  __init__.py    public: FrameInfo, AnalysisContext, Response, STOP, ParamSpec,
+                 SystemInfo, PixelConfig, SmartRunner, SmartRunConfig,
+                 ScriptSpec, ScriptError, inspect_script
+  _api.py        script contract (+ SystemInfo, PixelConfig)
+  _loader.py     ast inspection
+  _worker.py     _ScriptHost + process entry points (Qt-free, cheap import)
+  _executors.py  thread / process; no psutil (pymmcore-plus does not depend
+                 on it): workers are terminated through multiprocessing
+  _scheduler.py  SmartEventIterator (+ after_base trigger)
+  _log.py        run folder writer (opt-in)
+  _runner.py     SmartRunner: psygnal SignalGroup `SmartSignaler`
+examples/smart_microscopy/   adaptive_exposure.py, survey_and_target.py,
+                             run_smart.py (headless runner usage)
+docs/guides/smart_microscopy.md, docs/api/smart.md
+tests/smart/ (or tests/test_smart_*.py, following pymmcore-plus's layout)
+```
+
+`SmartRunner` holds today's controller logic with psygnal signals:
+`frameAcquired`, `analysisQueued`, `analysisFinished`, `logMessage`,
+`analysisError`, `runStarted`, `runFinished`. The frame handler stays on the
+runner thread. When `core.mda.events` is a `QObject`, it connects with
+`DirectConnection`, importing Qt lazily only in that case. The GUI's
+`SmartController` becomes a thin `QObject` that re-emits these signals as Qt
+signals on the GUI thread.
+
+```python
+runner = SmartRunner(core)
+summary = runner.run(base_sequence, "script.py", execution="process",
+                     output="data.ome.zarr", run_dir="data_smart/")  # blocks
+thread = core.run_smart(base_sequence, "script.py")             # non-blocking
+```
+
+### API additions (script API v1, additive)
+
+1. **`after_base(ctx) -> Response | None`.** This optional hook is called once
+   all base events have been acquired and every analysis has finished. Its
+   response is queued. If it returns `None` and nothing else is pending, the
+   run ends. It supports the *survey → targeted acquisition* pattern.
+2. **`ctx.base_sequence`.** The `MDASequence` being run.
+3. **`ctx.system: SystemInfo`.** A read-only, picklable snapshot taken at run
+   start. It holds the image width and height, the pixel size and pixel
+   configuration at start, every pixel configuration (name, `pixel_size_um`,
+   and the properties that select it), and the start values of those
+   properties. Helpers: `pixel_config_for(properties)` and
+   `fov_um(pixel_config=None)`. Scripts still never touch the core.
+4. **`Response.events` may mix `MDAEvent`s and `MDASequence`s.** They are
+   expanded in order, so `[switch_objective, subgrid_sequence, switch_back]`
+   works.
+
+### Grid field of view and pixel-size guard
+
+Verified: a returned grid with no `fov_width`/`fov_height` is expanded by
+useq with tiles **1 µm apart**. The engine fills in the FOV only for the
+base sequence, in `setup_sequence`. Rules, applied while a response is
+expanded in the worker:
+
+- The pixel state starts from `ctx.system` (the state at run start) and
+  follows the `properties` of earlier events *in the same response*. A
+  response is assumed to start from the run-start state. Responses that
+  leave the objective switched break that assumption, and the docs say so.
+- A grid with no FOV gets one from the resolved pixel configuration
+  (`image size × pixel size`). If no pixel size is known (no matching
+  configuration, or its size is 0), the response is **refused** with a clear
+  error. That counts as an analysis error, handled by the on-error policy,
+  which stops by default.
+- An event that switches into a state with no pixel size, without any grid,
+  produces a **warning** (log and notification) but is not refused.
+- Runtime backstop: the first frame of a run whose `pixel_size_um` is 0 or
+  missing produces a warning.
+
+### Per-frame event in the data file
+
+ome-writers already stores arbitrary JSON per frame. In
+`OmeWritersSink.append`, for iterator-driven runs only (detected at
+`setup()`), add `"mda_event": event.model_dump(mode="json",
+exclude={"sequence"}, exclude_none=True)` to the frame metadata. Smart
+provenance (`event.metadata["pymmcore_gui_smart"]`, renamed
+`"pymmcore_plus_smart"`) travels with it. Normal sequence-shaped runs are
+unchanged, because their axes already encode this, and an OME-TIFF would
+grow by about 0.6 KB of OME-XML per frame. `frame_meta_to_ome()` gets an
+`include_event` flag, so the GUI's viewer export reproduces it.
+`frames.jsonl` remains as a convenience copy.
+
+### Order of work
+
+1. pymmcore-plus: move the engine, add `SmartRunner`/`core.run_smart`,
+   remove `psutil`, port the engine tests (no qtbot; both signal backends).
+2. pymmcore-plus: `after_base`, `ctx.system`, `ctx.base_sequence`, mixed
+   responses, the FOV fill and pixel-size guard, per-frame event metadata,
+   examples, guide and API docs.
+3. pymmcore-gui: replace `_smart/` and `smart/` with imports from
+   `pymmcore_plus.smart`, make the Qt bridge, have templates import
+   `pymmcore_plus.smart`, add a *Survey and target* template, pass
+   `ctx.system` to "Test on last image", and update the docs.
+4. The user commits and pushes the fork. Then `uv lock --upgrade-package
+   pymmcore-plus` in the GUI. Until then the GUI is developed against an
+   editable install (`uv run --no-sync`).
+
 The original plan follows, unchanged, for reference.
 
 This document is a self-contained handoff. An implementer should not need
