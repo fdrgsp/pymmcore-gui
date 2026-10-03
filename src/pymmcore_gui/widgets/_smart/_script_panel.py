@@ -6,6 +6,7 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from superqt import QElidingLabel
 from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._qt.QtCore import QEvent, Qt, Signal
@@ -88,15 +89,17 @@ class ScriptPanel(QWidget):
         status_row.setSpacing(4)
         status_row.addWidget(self._status_icon)
         status_row.addWidget(self._status_text)
-        header = QHBoxLayout()
-        header.addWidget(self._name, 1)
+        status_row.addStretch()
+        self._name.setWordWrap(True)
+        header = QVBoxLayout()
+        header.setSpacing(2)
+        header.addWidget(self._name)
         header.addWidget(status)
 
-        self._path_label = QLabel()
-        self._path_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
-        self._path_label.setWordWrap(True)
+        # Elided, not wrapped: a path has no spaces to wrap at, so a wrapping
+        # label would force the whole column as wide as the path.
+        self._path_label = QElidingLabel()
+        self._path_label.setElideMode(Qt.TextElideMode.ElideMiddle)
         self._description = QLabel(
             "Load a Python script that defines analyze(image, frame, ctx), or "
             "start from a template."
@@ -136,12 +139,14 @@ class ScriptPanel(QWidget):
         self._timeout.setDecimals(1)
         self._timeout.setSuffix(" s")
         self._timeout.setSpecialValueText("None")
+        self._timeout.setMinimumWidth(80)
         self._timeout.setToolTip(
             "Blocking mode only: stop the run if one analysis takes longer."
         )
         self._max_events = QSpinBox()
         self._max_events.setRange(1, 10_000_000)
         self._max_events.setValue(10_000)
+        self._max_events.setMinimumWidth(80)
         self._max_events.setToolTip(
             "Safety limit: the run stops after this many events in total."
         )
@@ -162,6 +167,7 @@ class ScriptPanel(QWidget):
         self._every_nth = QSpinBox()
         self._every_nth.setRange(1, 1_000_000)
         self._every_nth.setPrefix("every ")
+        self._every_nth.setMinimumWidth(80)
         self._every_nth.setToolTip("Analyze every Nth frame (by frame number).")
         self._origin_base = QCheckBox("Base acquisition")
         self._origin_analysis = QCheckBox("Requested by analysis")

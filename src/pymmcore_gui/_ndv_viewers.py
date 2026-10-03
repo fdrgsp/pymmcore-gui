@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from ndv.models import ChannelMode
 from ome_writers import ScratchFormat
 from pymmcore_plus.mda import OmeWritersSink, frame_meta_to_ome
 from pymmcore_plus.mda._generator_sequence import GeneratorMDASequence
@@ -415,7 +416,15 @@ class AcquireViewersManager(QObject):
             # supplying "memory" whenever file saving is disabled.
             return
 
-        viewer = MMArrayViewer(view, scales=_extract_scales(sequence, meta))
+        iterator_run = _is_iterator_run(sequence)
+        viewer = MMArrayViewer(
+            view,
+            scales=_extract_scales(sequence, meta),
+            # An iterator run's only non-spatial axis is t (frames in
+            # acquisition order, whatever their channel). Composite mode would
+            # take it for a channel axis and draw one LUT per frame.
+            **({"channel_mode": ChannelMode.GRAYSCALE} if iterator_run else {}),
+        )
         self._channel_luts.bind_live_mda(viewer, sequence)
         widget = viewer.widget()
         sha = str(sequence.uid)[:8]
@@ -431,7 +440,7 @@ class AcquireViewersManager(QObject):
         title = self._disk_backed_title(sink) or f"{prefix} {sha}"
 
         viewer.source_title = title
-        if _is_iterator_run(sequence):
+        if iterator_run:
             # An iterator-driven run (event-driven / "smart" acquisition, or
             # ``run_mda(iter(...))``) has no real sequence: the runner hands
             # out an empty placeholder and its sink stores every frame along

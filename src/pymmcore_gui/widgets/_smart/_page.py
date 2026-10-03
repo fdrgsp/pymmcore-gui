@@ -58,7 +58,7 @@ if TYPE_CHECKING:
 TEMPLATES_DIR: Final = Path(__file__).parents[2] / "resources" / "smart_templates"
 
 _MDA_COLUMN_WIDTH: Final = 560
-_SCRIPT_COLUMN_WIDTH: Final = 380
+_SCRIPT_COLUMN_WIDTH: Final = 420
 
 
 def open_in_editor(path: Path) -> None:
@@ -146,7 +146,10 @@ class SmartMicroscopyPage(TabPage):
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.script_panel)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setMinimumWidth(260)
+        # Wrap instead of scrolling sideways: a sideways scroll hid the
+        # status badge and clipped the description.
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setMinimumWidth(320)
 
         # ── right: live viewer above the monitor ────────────────────
         self._viewer_dock_manager = CDockManager()
@@ -164,6 +167,7 @@ class SmartMicroscopyPage(TabPage):
         )
         self._viewer_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._viewer_placeholder.setEnabled(False)
+        self._viewer_placeholder.setMinimumHeight(240)
         self._viewer_stack = QStackedWidget()
         self._viewer_stack.addWidget(self._viewer_placeholder)
         self._viewer_stack.addWidget(self._viewer_dock_manager)
@@ -176,6 +180,11 @@ class SmartMicroscopyPage(TabPage):
         right.addWidget(self.monitor)
         right.setStretchFactor(0, 3)
         right.setStretchFactor(1, 2)
+        right.setCollapsible(0, False)
+        # Explicit, or the (small) placeholder's size hint decides and the
+        # viewer opens as a thin strip above a tall monitor.
+        right.setSizes([600, 400])
+        self.monitor.setMinimumHeight(160)
 
         self._content_split = QSplitter(Qt.Orientation.Horizontal)
         self._content_split.addWidget(scroll)
@@ -183,7 +192,12 @@ class SmartMicroscopyPage(TabPage):
         self._content_split.setStretchFactor(0, 0)
         self._content_split.setStretchFactor(1, 1)
         self._content_split.setSizes([_SCRIPT_COLUMN_WIDTH, 900])
+        self._content_split.setCollapsible(0, False)
         self.add_content_widget(self._content_split)
+        # The editor is unusable when squeezed; the viewer's minimum width
+        # must be taken from the right-hand columns instead.
+        self.left.setMinimumWidth(480)
+        self._h_split.setCollapsible(0, False)
         self._h_split.setSizes([_MDA_COLUMN_WIDTH, 1300])
 
         # ── toolbar ─────────────────────────────────────────────────

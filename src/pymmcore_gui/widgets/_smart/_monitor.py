@@ -5,6 +5,8 @@ from __future__ import annotations
 import html
 from typing import TYPE_CHECKING, Any, Final
 
+from superqt import QElidingLabel
+
 from pymmcore_gui._qt.QtCore import (
     QAbstractTableModel,
     QModelIndex,
@@ -115,7 +117,7 @@ class FramesModel(QAbstractTableModel):
             str(record.get("origin", "")),
             str(channel),
             _position(record.get("position")),
-            "",
+            "—",  # not sent to analysis (yet), see set_queued
             "",
             "",
             "",
@@ -233,18 +235,15 @@ class SmartMonitor(QWidget):
         self.log.setFont(mono)
 
         self._summary = QLabel()
-        self._folder = QLabel()
-        self._folder.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
+        self._folder = QElidingLabel()
+        self._folder.setElideMode(Qt.TextElideMode.ElideMiddle)
         self._open_folder = QPushButton("Open run folder")
         self._open_folder.setProperty("variant", "subtle")
         self._open_folder.setEnabled(False)
         self._open_folder.clicked.connect(self._open_run_dir)
         footer = QHBoxLayout()
         footer.addWidget(self._summary)
-        footer.addStretch()
-        footer.addWidget(self._folder)
+        footer.addWidget(self._folder, 1)
         footer.addWidget(self._open_folder)
 
         split = QSplitter(Qt.Orientation.Vertical)

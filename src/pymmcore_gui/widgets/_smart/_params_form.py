@@ -127,6 +127,9 @@ class ParamsForm(QWidget):
             line.textChanged.connect(self.valuesChanged)
             editor = line
         editor.setObjectName(f"param_{param.name}")
+        # A spin box sizes itself to its range's longest value; an unbounded
+        # one (±1e12) would force the whole settings column wide.
+        editor.setMinimumWidth(80)
         return editor
 
     @staticmethod
