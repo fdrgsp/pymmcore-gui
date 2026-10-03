@@ -6943,3 +6943,143 @@ def test_all_mda_presentations_behave_identically(
     assert isinstance(output, AcquisitionSettings)
     assert isinstance(output.format, OmeTiffFormat)
     assert output.format.multi_file_metadata == "self-contained"
+
+
+def test_stage_explorer_disabled_without_pixel_size(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """No pixel calibration (pixel size 0) disables the Explorer instead of crashing.
+
+    The core reports an all-zero affine in that state; building a Vispy transform
+    from it used to raise ``LinAlgError: Singular matrix``.
+    """
+    set_theme(DARK_THEME)
+    explorer = ThemedStageExplorer(mmcore=mmcore)
+    qtbot.addWidget(explorer)
+    assert mmcore.getPixelSizeUm() > 0
+    assert explorer.isEnabled()
+
+    # An objective/resolution preset without calibration.
+    mmcore.deletePixelSizeConfig(mmcore.getCurrentPixelSizeConfig())
+    assert mmcore.getPixelSizeUm() == 0
+    mmcore.events.pixelSizeChanged.emit(0.0)
+    mmcore.events.pixelSizeAffineChanged.emit(*mmcore.getPixelSizeAffine())
+    assert not explorer.isEnabled()
+    assert explorer.toolTip()
+    assert explorer._no_pixel_banner.isVisibleTo(explorer)
+    assert not explorer._no_pixel_banner._icon.pixmap().isNull()
+
+    # Nothing that would apply the singular transform may raise.
+    explorer.refreshPixelGeometry()
+    explorer._update_stage_pos_marker(10.0, 20.0)
+    explorer._add_image_and_update_widget(np.zeros((8, 8), dtype=np.uint16), 0.0, 0.0)
+    assert not explorer._tiles
+
+    # Calibration back: the Explorer is usable again.
+    mmcore.definePixelSizeConfig("Res", "Objective", "Label", "Nikon 10X S Fluor")
+    mmcore.setPixelSizeUm("Res", 1.0)
+    mmcore.setPixelSizeConfig("Res")
+    assert mmcore.getPixelSizeUm() == 1.0
+    mmcore.events.pixelSizeChanged.emit(1.0)
+    assert explorer.isEnabled()
+    assert not explorer.toolTip()
+    assert not explorer._no_pixel_banner.isVisibleTo(explorer)
+
+
+def test_stage_explorer_follows_objective_pixel_size(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Switching objectives with/without a pixel size toggles the Explorer."""
+    set_theme(DARK_THEME)
+    mmc = mmcore
+    # An objective position that has no pixel-size preset.
+    mmc.defineConfig("Objective", "no-px", "Objective", "Label", "Objective-2")
+    explorer = ThemedStageExplorer(mmcore=mmc)
+    qtbot.addWidget(explorer)
+    explorer.show()
+
+    for preset in ("no-px", "20X", "no-px", "10X", "no-px"):
+        mmc.setConfig("Objective", preset)
+        expected = preset != "no-px"
+
+        def explorer_matches(expected: bool = expected) -> bool:
+            return explorer.isEnabled() == expected
+
+        qtbot.waitUntil(explorer_matches, timeout=2000)
+        assert (mmc.getPixelSizeUm() > 0) == expected
+
+
+@pytest.mark.parametrize(
+    "sequence, warns",
+    [
+        (useq.MDASequence(grid_plan=useq.GridRowsColumns(rows=2, columns=2)), True),
+        (useq.MDASequence(grid_plan=useq.GridWidthHeight(width=100, height=100)), True),
+        (
+            useq.MDASequence(
+                stage_positions=(
+                    useq.Position(
+                        x=0,
+                        y=0,
+                        sequence=useq.MDASequence(
+                            grid_plan=useq.GridRowsColumns(rows=2, columns=2)
+                        ),
+                    ),
+                )
+            ),
+            True,
+        ),
+        (
+            useq.MDASequence(
+                time_plan=useq.TIntervalLoops(interval=timedelta(0), loops=2)
+            ),
+            False,
+        ),
+    ],
+    ids=["rows_columns", "width_height", "position_subsequence", "no_grid"],
+)
+def test_run_without_pixel_size_warns_for_grid_plans(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+    sequence: useq.MDASequence,
+    warns: bool,
+) -> None:
+    """A grid needs the FOV (hence the pixel size): confirm before running one."""
+    from pymmcore_gui._qt.QtWidgets import QMessageBox
+
+    mda = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(mda)
+    mda.save_info.setChecked(False)
+    mda.setValue(sequence)
+
+    answers: list[QMessageBox.StandardButton] = []
+
+    def fake_warning(
+        parent: object,
+        title: str,
+        text: str,
+        buttons: object,
+        default: QMessageBox.StandardButton,
+    ) -> QMessageBox.StandardButton:
+        assert title == "No Pixel Size"
+        assert default == QMessageBox.StandardButton.Cancel
+        return answers.pop(0)
+
+    monkeypatch.setattr(QMessageBox, "warning", fake_warning)
+
+    # calibrated: never asks
+    assert mmcore.getPixelSizeUm() > 0
+    assert mda.prepare_mda() is not False
+
+    mmcore.deletePixelSizeConfig(mmcore.getCurrentPixelSizeConfig())
+    assert mmcore.getPixelSizeUm() == 0
+
+    if not warns:
+        assert mda.prepare_mda() is not False
+        return
+
+    answers.append(QMessageBox.StandardButton.Cancel)
+    assert mda.prepare_mda() is False
+    answers.append(QMessageBox.StandardButton.Ok)
+    assert mda.prepare_mda() is not False
+    assert not answers

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from contextlib import suppress
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from pymmcore_widgets import StageExplorer
 from superqt.iconify import QIconifyIcon
@@ -15,16 +15,106 @@ from pymmcore_gui._array_viewer import (
     set_source_icon,
     unstyle_widgets,
 )
-from pymmcore_gui._qt.QtCore import QEvent, QSize, QTimer, Signal
-from pymmcore_gui._qt.QtWidgets import QMessageBox, QToolButton
+from pymmcore_gui._qt.QtCore import QEvent, QSize, Qt, QTimer, Signal
+from pymmcore_gui._qt.QtGui import QColor, QPainter, QPalette, QPixmap
+from pymmcore_gui._qt.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 from pymmcore_gui._theme import qcolor, theme
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
     from vispy.app.canvas import MouseEvent
 
-    from pymmcore_gui._qt.QtGui import QAction
-    from pymmcore_gui._qt.QtWidgets import QWidget
+    from pymmcore_gui._qt.QtGui import QAction, QPaintEvent
+
+_NO_PIXEL_SIZE_MESSAGE = (
+    "The Stage Explorer is unavailable: the current objective/resolution preset "
+    "has no pixel size. Select a calibrated preset, or set a pixel size for this "
+    "one in Pixel Configuration (Configurations tab)."
+)
+
+
+class _PixmapWidget(QWidget):
+    """Paints a pixmap as-is; ``QLabel`` grays its pixmap while disabled."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._pixmap = QPixmap()
+
+    def setPixmap(self, pixmap: QPixmap) -> None:
+        self._pixmap = pixmap
+        self.setFixedSize(pixmap.size() / pixmap.devicePixelRatio())
+        self.update()
+
+    def pixmap(self) -> QPixmap:
+        return self._pixmap
+
+    def paintEvent(self, a0: QPaintEvent | None) -> None:
+        painter = QPainter(self)
+        painter.drawPixmap(0, 0, self._pixmap)
+
+
+class _NoPixelSizeBanner(QWidget):
+    """Warning shown in place of a usable Explorer when there is no pixel size.
+
+    Themed through the palette (all three color groups) rather than a
+    stylesheet: the Explorer is disabled while this is visible, which would
+    otherwise gray it out, and ``unstyle_widgets`` clears descendant stylesheets
+    on every style change anyway.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setAutoFillBackground(True)
+        self._icon = _PixmapWidget()
+        self._text = QLabel(_NO_PIXEL_SIZE_MESSAGE)
+        self._text.setWordWrap(True)
+
+        layout = QHBoxLayout(self)
+        margin = theme().sp_xs
+        layout.setContentsMargins(margin, margin // 2, margin, margin // 2)
+        layout.setSpacing(margin)
+        layout.addWidget(self._icon, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(self._text, 1)
+        self.apply_theme()
+
+    def apply_theme(self) -> None:
+        """Re-derive the warning colors from the active theme."""
+        amber = qcolor(theme().status_amber)
+        text = qcolor(theme().text_primary)
+        # Tint the explorer's background with the warning color, opaque so it
+        # needs no alpha blending against whatever is behind the banner.
+        parent = self.parentWidget()
+        base = (parent or self).palette().color(QPalette.ColorRole.Window)
+        tint = 0.18
+        background = QColor(
+            round(base.red() * (1 - tint) + amber.red() * tint),
+            round(base.green() * (1 - tint) + amber.green() * tint),
+            round(base.blue() * (1 - tint) + amber.blue() * tint),
+        )
+        palette = self.palette()
+        for group in (
+            QPalette.ColorGroup.Active,
+            QPalette.ColorGroup.Inactive,
+            QPalette.ColorGroup.Disabled,
+        ):
+            palette.setColor(group, QPalette.ColorRole.Window, background)
+            palette.setColor(group, QPalette.ColorRole.WindowText, text)
+        self.setPalette(palette)
+        size = theme().scaled(20)
+        # A pixmap, not the icon: the icon would be drawn in its Disabled mode.
+        pixmap = QIconifyIcon("mdi:alert").pixmap(QSize(size, size))
+        painter = QPainter(pixmap)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(pixmap.rect(), amber)
+        painter.end()
+        self._icon.setPixmap(pixmap)
 
 
 class ThemedStageExplorer(StageExplorer):
@@ -73,7 +163,39 @@ class ThemedStageExplorer(StageExplorer):
         # own reasons (e.g. ``_update_actions_enabled`` with no devices).
         self._pre_lock_action_states: dict[QAction, bool] = {}
 
+        self._no_pixel_banner = _NoPixelSizeBanner(self)
+        self._no_pixel_banner.setVisible(False)
+        if isinstance(layout := self.layout(), QVBoxLayout):
+            # Right under the toolbar, where the map's own banner sits.
+            layout.insertWidget(1, self._no_pixel_banner)
+
         self._normalize_style()
+        self._update_calibration_state()
+        # ``pixelSizeChanged`` is emitted from a core callback thread and can
+        # arrive late or out of order, so also re-check once ``configSet`` --
+        # emitted with the settled state -- reports a calibration change.
+        self._mmc.events.configSet.connect(self._on_config_set)
+
+    def _is_pixel_calibrated(self) -> bool:
+        """Return whether the current objective/resolution has a pixel size.
+
+        Without one the core reports a pixel size of 0 and an all-zero affine,
+        which the Explorer cannot turn into a stage-to-pixel transform: the
+        resulting matrix is singular and crashes Vispy.
+        """
+        return self._mmc.getPixelSizeUm() > 0
+
+    def _update_calibration_state(self) -> None:
+        """Disable the whole Explorer while there is no pixel calibration."""
+        calibrated = self._is_pixel_calibrated()
+        self.setEnabled(calibrated)
+        self.setToolTip("" if calibrated else _NO_PIXEL_SIZE_MESSAGE)
+        self._no_pixel_banner.setVisible(not calibrated)
+
+    def _on_config_set(self, group: str, preset: str) -> None:
+        del group, preset
+        if self._is_pixel_calibrated() != self.isEnabled():
+            self.refreshPixelGeometry()
 
     def _fov_w_h(self) -> tuple[float, float]:
         """Return camera-axis FOV dimensions from the active affine transform."""
@@ -89,12 +211,19 @@ class ThemedStageExplorer(StageExplorer):
 
     def _on_roi_changed(self) -> None:
         """Refresh ROI tiling with affine-aware FOV dimensions."""
+        if not self._is_pixel_calibrated():
+            return
         super()._on_roi_changed()
         if self._mmc.getImageWidth() and self._mmc.getImageHeight():
             self.roi_manager.update_fovs(self._fov_w_h())
 
     def refreshPixelGeometry(self) -> None:
         """Recompute every Stage Explorer visual derived from pixel calibration."""
+        self._update_calibration_state()
+        if not self._is_pixel_calibrated():
+            # Keep the last good geometry: refreshing from a missing
+            # calibration would build a singular transform.
+            return
         self._affine_state.refresh()
         self._on_roi_changed()
 
@@ -122,6 +251,24 @@ class ThemedStageExplorer(StageExplorer):
 
     def _on_pixel_size_affine_changed(self) -> None:
         self.refreshPixelGeometry()
+
+    def _on_sys_config_loaded(self) -> None:
+        # Upstream refreshes the affine and rebuilds the marker unconditionally;
+        # the singular matrix only reaches Vispy once something applies it, and
+        # every path that does is guarded below.
+        super()._on_sys_config_loaded()
+        self._update_calibration_state()
+
+    def _update_stage_pos_marker(self, stage_x: float, stage_y: float) -> None:
+        if self._is_pixel_calibrated():
+            super()._update_stage_pos_marker(stage_x, stage_y)
+        else:
+            self._stage_pos_label.setText(f"X: {stage_x:.2f} µm  Y: {stage_y:.2f} µm")
+
+    def _add_image_and_update_widget(self, *args: Any, **kwargs: Any) -> None:
+        """Drop snapped and MDA frames that cannot be placed without a pixel size."""
+        if self._is_pixel_calibrated():
+            super()._add_image_and_update_widget(*args, **kwargs)
 
     def setMdaLocked(self, locked: bool) -> None:
         """Restrict the Explorer to viewing while an acquisition is running.
@@ -216,6 +363,8 @@ class ThemedStageExplorer(StageExplorer):
                 ensure_visible_icon(button)
 
         self._apply_themed_icons()
+        if banner := getattr(self, "_no_pixel_banner", None):
+            banner.apply_theme()
 
     def _reposition_contrast_labels(self) -> None:
         slider = getattr(getattr(self, "_contrast_slider", None), "_slider", None)
