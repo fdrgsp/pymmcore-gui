@@ -4,7 +4,67 @@
 <!-- Long lines are kept in code signatures and tables. -->
 
 Branch: `smart-microscopy`, created from `modern-gui-only` at `2f2c705`.
-Status: **plan only — nothing is implemented yet.**
+
+## Implementation status (2026-10-03)
+
+Phases 0–5 are implemented on this branch. User and developer documentation
+is in `docs/architecture/SMART_MICROSCOPY.md`.
+
+| Commit | Content |
+|---|---|
+| `3af45e9` | Phase 0: lazy package exports, `freeze_support`, `RunOwnership`, viewer gating and iterator-run following |
+| `e60edca` | Phase 1: headless engine (`smart/`, `_smart/`), four templates |
+| `c421bdd` | Phases 2–4: the tab, window integration, monitor, templates menu, editor, file watcher, "Test on last image", per-script settings |
+| `024c2bf` | Layout and viewer fixes found by running the tab with the demo config |
+
+Verified: the full suite (`pytest -n auto`), mypy, pyright, and every
+pre-commit hook pass. The tab was run with the demo configuration and its
+screenshots were checked.
+
+**Not verified:** a frozen (PyInstaller) build. It was not built. The spec
+now collects the templates, which was checked with `collect_data_files`,
+and the entry point calls `freeze_support()`. A process-mode run from a
+built bundle still needs to be tried.
+
+### Deviations from the plan below (deliberate)
+
+1. **Relative timing is rebased when an event is handed out, per segment,
+   not when it is injected** (§3.5, §5.4). useq marks every time block with
+   `reset_event_timer`, so a returned multi-position time-lapse would be
+   mistimed by a single injection-time offset. Passing the flag through
+   would reset the clock the base events depend on. The iterator consumes
+   the flag and re-anchors only that response's events.
+2. **The analysis timeout always stops the run** (§5.5). One worker runs
+   analyses in order, so "skip" could not help: everything queued behind a
+   hung call would also time out.
+3. **Process workers are terminated by the PIDs the pool reports**, read
+   from `ProcessPoolExecutor._processes` because there is no public API.
+   They are not killed by a PID the child reports. A child hung while
+   importing the script could never report one, and the leftover process
+   blocked interpreter exit.
+4. **Scripts are compiled from the inspected source text** rather than
+   imported with the normal loader (§5.2). The bytecode cache keys on
+   whole-second mtimes plus size, so a same-length edit saved within a
+   second ran the old code. This also guarantees that `script.py` is the
+   code that ran.
+5. **An empty base sequence is refused**, in both the page and the
+   controller. `useq.MDASequence()` with no axes yields zero events.
+6. **The run status also reads the runner's own `finish_reason`.** A cancel
+   that arrives while an event is being acquired ends the run at the event
+   boundary without asking the iterator again. With the G3 fix that value
+   is reliable.
+7. **Viewers of iterator runs open in grayscale.** ndv took the single `t`
+   axis for a channel axis and drew one LUT per frame.
+8. **Settings are per script only** (§6.4): `last_script`,
+   `recent_scripts`, and `script_settings[path]`. There are no global
+   execution/sync defaults. A script's own `EXECUTION`/`SYNC` apply the
+   first time it is loaded.
+9. **Tests live at `tests/test_smart_*.py`** rather than `tests/smart/`,
+   matching the existing `tests/*.py` lint configuration.
+10. **The plan's Phase 3 and Phase 4 items were folded into the Phase 2
+    commit**, apart from the later layout fixes.
+
+The original plan follows, unchanged, for reference.
 
 This document is a self-contained handoff. An implementer should not need
 the conversation that produced it. Each claim about existing behaviour cites

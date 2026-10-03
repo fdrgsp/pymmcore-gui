@@ -283,3 +283,15 @@ def test_console_run_still_switches_to_acquire(
     qtbot.waitUntil(lambda: _tab(gui, gui.smart).isEnabled(), timeout=5000)
     assert len(gui.acquire.viewers._records) == 1
     assert not gui.smart.viewers._records
+
+
+def test_process_mode_run_from_editor(
+    page: SmartMicroscopyPage, qtbot: QtBot, script: Path
+) -> None:
+    assert page.load_script(script)
+    page.script_panel._execution.set_value("process")
+    summary = _run(qtbot, page)
+    assert summary["status"] == "completed"
+    assert summary["analyses"] == 3
+    records = (page.monitor.run_dir / "analysis.jsonl").read_text()  # type: ignore[operator]
+    assert '"call": "teardown"' in records
