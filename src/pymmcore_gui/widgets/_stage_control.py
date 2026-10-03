@@ -29,7 +29,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 from pymmcore_gui._theme import dock_chrome_stylesheet, qcolor, theme
-from pymmcore_gui.widgets._panels import create_stage_widget
+from pymmcore_gui.widgets._panels import create_device_stage_widget
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -141,7 +141,7 @@ class StagesPanel(QWidget):
     def _add_stage(self, device: str) -> None:
         if device in self._docks:
             return
-        widget = create_stage_widget(self, self._core, device)
+        widget = create_device_stage_widget(self, self._core, device)
         unstyle_widgets(widget)
 
         dock = CDockWidget(self._dock_manager, device, self)

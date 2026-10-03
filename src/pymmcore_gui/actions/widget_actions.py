@@ -46,9 +46,8 @@ class WidgetAction(ActionKey):
 # ######################## Functions that create widgets #########################
 
 
-# The application uses pyMMGUI. Retain the older object name for custom hosts;
-# factories must prefer their owning window's core over the global singleton.
-_MAIN_WINDOW_NAMES = frozenset({"MicroManagerGUI", "pyMMGUI"})
+# Factories must prefer their owning window's core over the global singleton.
+_MAIN_WINDOW_NAME = "pyMMGUI"
 
 
 class _MainWindowLike(Protocol):
@@ -62,11 +61,11 @@ class _MainWindowLike(Protocol):
 
 
 def _get_mm_main_window(obj: QObject) -> _MainWindowLike | None:
-    if obj.objectName() in _MAIN_WINDOW_NAMES:
+    if obj.objectName() == _MAIN_WINDOW_NAME:
         return cast("_MainWindowLike", obj)
     parent = obj.parent()
     while parent is not None:
-        if parent.objectName() in _MAIN_WINDOW_NAMES:
+        if parent.objectName() == _MAIN_WINDOW_NAME:
             return cast("_MainWindowLike", parent)
         parent = parent.parent()
     return None

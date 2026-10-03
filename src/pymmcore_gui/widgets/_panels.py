@@ -16,10 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from pymmcore_gui._qt.QtAds import DockWidgetArea
-from pymmcore_gui.actions.widget_actions import (
-    create_exception_log,
-    create_property_browser,
-)
+from pymmcore_gui.actions.widget_actions import create_exception_log
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
@@ -116,13 +113,24 @@ def _create_presets(_parent: QWidget, core: CMMCorePlus) -> QWidget:
     return AcquisitionPresetSelector(mmcore=core)
 
 
+def _create_property_browser(parent: QWidget, core: CMMCorePlus) -> QWidget:
+    from pymmcore_widgets import PropertyBrowser
+
+    # Built with the page's own core: ``widget_actions.create_property_browser``
+    # resolves the core from the parent chain, which falls back to the global
+    # singleton whenever no ``pyMMGUI`` window hosts the page.
+    return PropertyBrowser(parent=parent, mmcore=core)
+
+
 def _create_stage_explorer(parent: QWidget, core: CMMCorePlus) -> QWidget:
     from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 
     return ThemedStageExplorer(parent=parent, mmcore=core)
 
 
-def create_stage_widget(parent: QWidget, core: CMMCorePlus, device: str) -> QWidget:
+def create_device_stage_widget(
+    parent: QWidget, core: CMMCorePlus, device: str
+) -> QWidget:
     """Build the panel content for one XY or Z stage device.
 
     Shared by every stage a user adds through the Stages panel's "Add Stage"
@@ -248,7 +256,7 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
         title="Properties",
         icon="hugeicons:property-edit",
         tooltip="Properties — open the device property browser panel",
-        create=_ignoring_core(create_property_browser),
+        create=_create_property_browser,
         unstyle=True,
         refresh=_refresh_property_browser,
     ),

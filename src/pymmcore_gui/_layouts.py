@@ -25,12 +25,9 @@ import warnings
 from base64 import b64decode, b64encode
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import Any, Final
 
 from ._settings import USER_DATA_DIR, Settings
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable
 
 DEFAULT_LAYOUT_NAME: Final = "Default"
 """The built-in arrangement. Selecting it means "reset", not "restore"."""
@@ -205,12 +202,6 @@ def save_layout(name: str, layout: AcquireLayout) -> Path:
 def delete_layout(name: str) -> None:
     """Remove *name*'s file if it exists."""
     layout_path(name).unlink(missing_ok=True)
-
-
-def existing_layouts(names: Iterable[str]) -> list[str]:
-    """Filter *names* down to the layouts that still exist on disk."""
-    available = set(list_layouts())
-    return [n for n in names if n in available]
 
 
 # ----------------------- the two reserved layouts -----------------------

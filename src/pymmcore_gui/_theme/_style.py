@@ -1499,9 +1499,3 @@ def set_variant(widget: QWidget, variant: str) -> None:
         raise ValueError(f"Unknown variant: {variant!r}")
     widget.setProperty("variant", variant)
     widget.update()
-
-
-def set_accent(widget: QWidget, color: QColor) -> None:
-    """Set a custom accent color for a specific widget."""
-    widget.setProperty("accent", color)
-    widget.update()

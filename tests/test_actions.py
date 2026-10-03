@@ -6,7 +6,7 @@ from pymmcore_gui._qt.QtWidgets import QWidget
 from pymmcore_gui.actions import ActionInfo, CoreAction, WidgetAction, WidgetActionInfo
 from pymmcore_gui.actions.widget_actions import _get_core, create_stage_widget
 from pymmcore_gui.widgets._acquire import AcquirePage
-from pymmcore_gui.widgets._panels import PANELS, PanelInfo
+from pymmcore_gui.widgets._panels import PANELS, PanelInfo, PanelKey
 
 
 def test_action_registry() -> None:
@@ -48,14 +48,13 @@ def test_custom_panel_registration(
     page.shutdown()
 
 
-@pytest.mark.parametrize("window_name", ["MicroManagerGUI", "pyMMGUI"])
 def test_get_core_uses_the_hosting_window_core(
-    mmcore: CMMCorePlus, qtbot: QtBot, window_name: str
+    mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    """Widgets resolve the core of whichever window hosts them.
+    """Widgets resolve the core of the window that hosts them.
 
-    The application and custom hosts using its historical object name both
-    resolve their own core instead of accidentally using the global singleton.
+    A window named like the application's resolves its own core instead of
+    accidentally using the global singleton.
     """
     own_core = CMMCorePlus()
     assert own_core is not CMMCorePlus.instance()  # a real, distinguishable core
@@ -66,7 +65,7 @@ def test_get_core_uses_the_hosting_window_core(
             return own_core
 
     win = _Window()
-    win.setObjectName(window_name)
+    win.setObjectName("pyMMGUI")
     qtbot.addWidget(win)
     child = QWidget(win)
     grandchild = QWidget(child)
@@ -103,3 +102,17 @@ def test_stage_action_factory_uses_modern_controls(
         for device in mmcore.getLoadedDevicesOfType(kind)
     }
     assert panel.open_devices() == expected
+
+
+def test_properties_panel_uses_the_pages_own_core(qtbot: QtBot) -> None:
+    """Panels get the core their page was given, not the global singleton."""
+    own_core = CMMCorePlus()
+    assert own_core is not CMMCorePlus.instance()
+
+    page = AcquirePage(mmcore=own_core)
+    qtbot.addWidget(page)
+    page.panel_button(PanelKey.PROPERTIES).click()
+    browser = page.panel_widget(PanelKey.PROPERTIES)
+    assert browser is not None
+    assert browser._mmc is own_core  # type: ignore[attr-defined]
+    page.shutdown()

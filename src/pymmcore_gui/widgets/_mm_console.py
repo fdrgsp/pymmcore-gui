@@ -97,8 +97,7 @@ class MMConsole(QtConsole):
             "np": numpy,
         }
         mmc = self._mmc
-        # Prefer the actual owning window, including custom hosts. Keep the
-        # historical object name as a compatibility fallback.
+        # Prefer the actual owning window, including custom hosts.
         owner = QWidget.window(self)
         candidates = [owner, *QApplication.topLevelWidgets()]
         window = next(
@@ -107,10 +106,7 @@ class MMConsole(QtConsole):
                 for wdg in candidates
                 if wdg is not None
                 and wdg is not self
-                and (
-                    wdg.objectName() in {"MicroManagerGUI", "pyMMGUI"}
-                    or hasattr(wdg, "mmcore")
-                )
+                and (wdg.objectName() == "pyMMGUI" or hasattr(wdg, "mmcore"))
             ),
             None,
         )
