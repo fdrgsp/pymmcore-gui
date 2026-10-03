@@ -1271,8 +1271,38 @@ class MemoryMDAWidgetBase(_MixinBase):
             raise ValueError(f"Unknown OME-TIFF layout {mode!r}")
         self._tiff_layout_combo.setCurrentIndex(idx)
 
+    def _sequence_uses_grid(self) -> bool:
+        """Whether the sequence to run has a grid plan, global or per position."""
+        sequence = self.value()
+        return sequence.grid_plan is not None or any(
+            pos.sequence is not None and pos.sequence.grid_plan is not None
+            for pos in sequence.stage_positions
+        )
+
+    def _confirm_missing_pixel_size(self) -> bool:
+        """Ask before running a grid plan that has no pixel size to scale it."""
+        response = QMessageBox.warning(
+            self,
+            "No Pixel Size",
+            "The current objective/resolution preset has no pixel size, but this "
+            "sequence uses a grid plan. A grid's spacing and overlap come from the "
+            "camera's field of view, which needs the pixel size, so the tiles would "
+            "not be placed correctly. Set a pixel size in Pixel Configuration "
+            "(Configurations tab) first."
+            "\n\nRun anyway?",
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return bool(response == QMessageBox.StandardButton.Ok)
+
     def prepare_mda(self) -> bool | SingleOutput | None:
         """Return a disk path or a scratch sink that supports live viewing."""
+        if (
+            self._mmc.getPixelSizeUm() <= 0
+            and self._sequence_uses_grid()
+            and not self._confirm_missing_pixel_size()
+        ):
+            return False
         output = super().prepare_mda()
         if isinstance(output, bool):
             return output
