@@ -68,9 +68,11 @@ are identical to pymmcore-plus's `examples/smart_microscopy/` scripts.
   switches to Acquire and opens its viewer there. Closing the window
   cancels the run and stops the analysis worker.
 - **Pixel sizes:** a script that returns a grid needs the pixel size where
-  that grid runs (for example after switching objective). If it isn't
-  calibrated, the response is refused and the run stops with an
-  explanation. Calibrate it under *Configurations → Pixel Configuration*.
+  that grid runs. The grid is sized the moment it is about to be acquired,
+  so an objective switched earlier in the run is taken into account. If the
+  pixel size there isn't calibrated, the run stops with an explanation
+  (or skips that grid, with *On error: skip*). Calibrate it under
+  *Configurations → Pixel Configuration*.
 
 ## 4. For developers: the GUI side
 
@@ -120,6 +122,3 @@ in pymmcore-plus, under `tests/smart/`.
   external interpreter for scripts needing libraries the app does not bundle.
 - **Throughput:** parallel workers for stateless scripts, and GPU-friendly
   batching.
-- **Pixel-state tracking across responses:** a returned grid's field of view
-  assumes each response starts from the run-start state. Responses that leave
-  the objective switched break that assumption.
