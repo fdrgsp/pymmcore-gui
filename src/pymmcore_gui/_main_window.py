@@ -56,6 +56,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QToolBar,
     QWidget,
 )
+from pymmcore_gui._run_owner import RunOwner, RunOwnership
 from pymmcore_gui._settings import Settings
 from pymmcore_gui._theme import (
     qcolor,
@@ -76,6 +77,7 @@ from pymmcore_gui.widgets._hardware import HardwareSetupPage
 from pymmcore_gui.widgets._installation import InstallationPage
 from pymmcore_gui.widgets._mda_status import MDAStatusWidget
 from pymmcore_gui.widgets._panels import PanelKey
+from pymmcore_gui.widgets._smart import SmartMicroscopyPage
 from pymmcore_gui.widgets._startup import StartupChoice, StartupDialog
 
 if TYPE_CHECKING:
@@ -374,7 +376,13 @@ class NotificationBellButton(QPushButton):
 class MicroManagerGUI(QMainWindow):
     """Microscope application with setup, configuration, and acquisition pages."""
 
-    TAB_LABELS = ("Installation", "Hardware Setup", "Configurations", "Acquire")
+    TAB_LABELS = (
+        "Installation",
+        "Hardware Setup",
+        "Configurations",
+        "Acquire",
+        "Smart Microscopy",
+    )
 
     def __init__(self, *, mmcore: CMMCorePlus | None = None) -> None:
         super().__init__()
@@ -423,12 +431,17 @@ class MicroManagerGUI(QMainWindow):
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._toolbar)
 
         # ── central stack: one page per tab ───────────────────────
+        # Which page started the current run: decides which page the window
+        # keeps on screen during it, and which page's viewers display it.
+        self._run_ownership = RunOwnership(self._mmc, self)
         self._stack = QStackedWidget()
         self._installation = InstallationPage()
         self._installation.aboutToUninstall.connect(self._prepare_uninstall)
         self._hardware = HardwareSetupPage(self._mmc)
         self._configurations = ConfigurationsPage(self._mmc)
-        self._acquire = AcquirePage(self._mmc)
+        self._acquire = AcquirePage(self._mmc, run_ownership=self._run_ownership)
+        self._smart = SmartMicroscopyPage(self._mmc, run_ownership=self._run_ownership)
+        self._smart.analysisError.connect(self._notification_manager.show_error_message)
         # A background open (see dropEvent) has no caller to raise into.
         self._acquire.viewers.acquisitionOpenFailed.connect(
             self._notification_manager.show_error_message
@@ -437,6 +450,7 @@ class MicroManagerGUI(QMainWindow):
         self._stack.addWidget(self._hardware)
         self._stack.addWidget(self._configurations)
         self._stack.addWidget(self._acquire)
+        self._stack.addWidget(self._smart)
         self.setCentralWidget(self._stack)
 
         # Adding a QOpenGLWidget (e.g. ndv canvas) to a window that uses raster
@@ -462,6 +476,9 @@ class MicroManagerGUI(QMainWindow):
         )
 
         self._acquire.mdaRunningChanged.connect(self._on_mda_running)
+        # Both pages' MDA editors observe every run, so both relay the lock;
+        # _on_mda_running is idempotent.
+        self._smart.mdaRunningChanged.connect(self._on_mda_running)
         self._acquire.layoutReset.connect(self._on_acquire_layout_reset)
         self._acquire.layoutNameChanged.connect(self._on_layout_name_changed)
         self._mmc.events.systemConfigurationLoaded.connect(self._on_config_loaded)
@@ -500,6 +517,11 @@ class MicroManagerGUI(QMainWindow):
     def acquire(self) -> AcquirePage:
         """Return the window's Acquire page."""
         return self._acquire
+
+    @property
+    def smart(self) -> SmartMicroscopyPage:
+        """Return the window's Smart Microscopy page."""
+        return self._smart
 
     def _apply_saved_appearance(self) -> None:
         """Apply the saved theme/zoom before any widget exists, so nothing flashes."""
@@ -701,7 +723,9 @@ class MicroManagerGUI(QMainWindow):
             status_bar.showMessage(message, 5000)
 
     def _update_mda_status_visibility(self, *_: object) -> None:
-        self._mda_status.set_idle_visible(self._stack.currentWidget() is self._acquire)
+        self._mda_status.set_idle_visible(
+            self._stack.currentWidget() in (self._acquire, self._smart)
+        )
 
     def _on_mode_tab_changed(self, index: int) -> None:
         """Gate leaving Configurations with unsaved group/pixel edits.
@@ -777,7 +801,7 @@ class MicroManagerGUI(QMainWindow):
     def _on_pixel_calibration_running(self, running: bool) -> None:
         """Keep other microscope workflows unavailable during stage calibration."""
         configuration_index = self._stack.indexOf(self._configurations)
-        for page in (self._installation, self._hardware, self._acquire):
+        for page in (self._installation, self._hardware, self._acquire, self._smart):
             self._mode_tabs.setTabEnabled(self._stack.indexOf(page), not running)
         if running and configuration_index >= 0:
             self._mode_tabs._select(configuration_index)
@@ -790,30 +814,41 @@ class MicroManagerGUI(QMainWindow):
             )
 
     def _on_mda_running(self, running: bool) -> None:
-        """Keep the whole window on Acquire, watching, for the duration of a run.
+        """Keep the whole window on the run's page, watching, for its duration.
 
-        The other three modes all reconfigure the microscope (installing a
+        The setup modes all reconfigure the microscope (installing a
         different Micro-Manager, loading devices, rewriting the configuration),
         so none of them may be reached while an acquisition owns the hardware.
-        ``AcquirePage.set_mda_lock`` has already locked the Acquire page itself
-        by the time this runs; only the window chrome is left.
+        Nor may the *other* acquisition page: its editor is locked anyway, and
+        its viewers do not show this run. The pages lock themselves (see
+        ``AcquirePage.set_mda_lock``); only the window chrome is left.
 
-        Switching to Acquire matters for runs that weren't started from there
-        (a script in the console, or ``mda.run()`` from anywhere else): a
-        disabled tab still leaves whatever page is showing fully interactive.
+        The run's page is the one that claimed it in `RunOwnership` -- Smart
+        Microscopy for its own runs, Acquire for everything else. Switching
+        matters for runs that weren't started from the page showing (a script
+        in the console, or ``mda.run()`` from anywhere else): a disabled tab
+        still leaves whatever page is showing fully interactive.
         """
-        acquire_index = self._stack.indexOf(self._acquire)
-        for page in (self._installation, self._hardware, self._configurations):
-            self._mode_tabs.setTabEnabled(self._stack.indexOf(page), not running)
-        if running and acquire_index >= 0:
+        owner_page = self._run_owner_page()
+        for page in (
+            self._installation,
+            self._hardware,
+            self._configurations,
+            self._acquire,
+            self._smart,
+        ):
+            enabled = not running or page is owner_page
+            self._mode_tabs.setTabEnabled(self._stack.indexOf(page), enabled)
+        owner_index = self._stack.indexOf(owner_page)
+        if running and owner_index >= 0:
             # Bypass _on_mode_tab_changed's unsaved-configuration prompt: a run
             # is no time to ask, and its Cancel branch would strand the user on
             # a Configurations page whose tab is now disabled. Pending edits
             # stay pending -- the prompt still comes the next time the user
             # leaves that page themselves.
             with QSignalBlocker(self._mode_tabs):
-                self._mode_tabs._select(acquire_index)
-            self._stack.setCurrentIndex(acquire_index)
+                self._mode_tabs._select(owner_index)
+            self._stack.setCurrentIndex(owner_index)
         if not running and self._close_pending:
             # The close this cancellation was requested for can now run its
             # normal course. Deferred so the rest of the unlock (and the
@@ -853,8 +888,14 @@ class MicroManagerGUI(QMainWindow):
             return False
 
         self._close_pending = True
-        self._acquire.cancel_acquisition()
+        self._run_owner_page().cancel_acquisition()
         return False
+
+    def _run_owner_page(self) -> AcquirePage | SmartMicroscopyPage:
+        """The page showing the current (or pending) run."""
+        if self._run_ownership.owner is RunOwner.SMART:
+            return self._smart
+        return self._acquire
 
     def _confirm_force_quit(self) -> bool:
         """Offer to quit without waiting for a run that isn't stopping."""
@@ -972,6 +1013,9 @@ class MicroManagerGUI(QMainWindow):
                     a0.ignore()
                 return
         self._save_state()
+        # Stops the analysis worker too: a spawned analysis process must not
+        # outlive the window.
+        self._smart.shutdown()
         self._acquire.shutdown()
         super().closeEvent(a0)
 

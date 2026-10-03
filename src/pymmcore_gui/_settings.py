@@ -255,6 +255,43 @@ class ScratchSettingsV1(BaseMMSettings):
     """Parent folder for spilled data. None means the system temp folder."""
 
 
+class SmartMicroscopySettingsV1(BaseMMSettings):
+    """Persisted state of the Smart Microscopy tab."""
+
+    last_script: Path | None = None
+    """Script loaded when the tab was last used; reloaded at startup."""
+    recent_scripts: list[Path] = Field(default_factory=list)
+    """Scripts the user has loaded, most-recent-first."""
+    script_settings: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    """Per script path: parameter values and run settings the user chose.
+
+    A script's own ``EXECUTION``/``SYNC``/``ANALYZE``/``PARAMETERS`` are
+    only the defaults the first time it is loaded; after that, the user's
+    choices win (values a later edit made invalid fall back to defaults).
+    """
+
+    MAX_RECENT_SCRIPTS: ClassVar[int] = 10
+
+    def remember_script(self, path: Path | str, settings: dict[str, Any]) -> None:
+        """Record *path* as the current script, with the user's *settings*."""
+        resolved = Path(path).expanduser()
+        with suppress(OSError):
+            resolved = resolved.resolve()
+        self.last_script = resolved
+        self.recent_scripts = [
+            resolved,
+            *(p for p in self.recent_scripts if p != resolved),
+        ][: self.MAX_RECENT_SCRIPTS]
+        self.script_settings[str(resolved)] = settings
+
+    def settings_for(self, path: Path | str) -> dict[str, Any]:
+        """The remembered settings of *path* (empty if none)."""
+        resolved = Path(path).expanduser()
+        with suppress(OSError):
+            resolved = resolved.resolve()
+        return dict(self.script_settings.get(str(resolved), {}))
+
+
 class SettingsV1(BaseMMSettings):
     """Global settings for the PyMMCore GUI."""
 
@@ -269,6 +306,9 @@ class SettingsV1(BaseMMSettings):
         default_factory=ModernWindowSettingsV1
     )
     scratch: ScratchSettingsV1 = Field(default_factory=ScratchSettingsV1)
+    smart_microscopy: SmartMicroscopySettingsV1 = Field(
+        default_factory=SmartMicroscopySettingsV1
+    )
 
     send_error_reports: bool | None = None
     """Whether to send error reports to the developers, None means undecided."""

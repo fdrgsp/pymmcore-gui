@@ -509,8 +509,12 @@ class SmartController(QObject):
             # FINISHING without a stop of ours: cancelled from elsewhere (the
             # Acquire page's Cancel button, a script in the console...).
             return "cancelled"
-        finish_reason = self._mmc.mda.status.finish_reason
-        if finish_reason is not None and str(finish_reason) == "errored":
+        finish_reason = str(self._mmc.mda.status.finish_reason or "")
+        if finish_reason == "canceled" and reason in (None, StopReason.COMPLETED):
+            # Cancelled from elsewhere while an event was being acquired: the
+            # runner stopped at the event boundary without asking us again.
+            return "cancelled"
+        if finish_reason == "errored":
             return "error"
         return reason or StopReason.COMPLETED
 
