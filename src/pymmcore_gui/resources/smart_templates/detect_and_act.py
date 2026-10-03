@@ -25,8 +25,7 @@ from typing import Any
 
 import numpy as np
 import useq
-
-from pymmcore_gui.smart import AnalysisContext, FrameInfo, Response
+from pymmcore_plus.smart import AnalysisContext, FrameInfo, Response
 
 API_VERSION = 1
 NAME = "Detect and act"

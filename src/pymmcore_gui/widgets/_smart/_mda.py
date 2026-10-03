@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
-
-from ome_writers import AcquisitionSettings, ScratchFormat
 
 from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
 
@@ -19,17 +16,6 @@ if TYPE_CHECKING:
     from pymmcore_gui._qt.QtWidgets import QWidget
 
     Launcher = Callable[[useq.MDASequence, SingleOutput | None], None]
-
-
-def output_data_path(output: object) -> Path | None:
-    """Where *output* writes to disk, or None for an in-memory (scratch) run."""
-    if isinstance(output, (str, Path)):
-        return Path(output)
-    if isinstance(output, AcquisitionSettings):
-        if isinstance(output.format, ScratchFormat):
-            return None
-        return Path(output.root_path)
-    return None
 
 
 class SmartMDAWidget(MemoryMDAWidget):

@@ -6,8 +6,7 @@ below ``min_change`` (nothing is happening any more), the run stops early.
 """
 
 import numpy as np
-
-from pymmcore_gui.smart import STOP, AnalysisContext, FrameInfo, Response
+from pymmcore_plus.smart import STOP, AnalysisContext, FrameInfo, Response
 
 API_VERSION = 1
 NAME = "Stop when idle"

@@ -6,8 +6,7 @@ here ``None``, so the base acquisition runs unchanged.
 """
 
 import numpy as np
-
-from pymmcore_gui.smart import AnalysisContext, FrameInfo
+from pymmcore_plus.smart import AnalysisContext, FrameInfo
 
 API_VERSION = 1
 NAME = "Minimal (measure only)"

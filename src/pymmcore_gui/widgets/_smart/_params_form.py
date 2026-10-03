@@ -19,7 +19,7 @@ from pymmcore_gui._qt.QtWidgets import (
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from pymmcore_gui._smart._loader import ParamDef
+    from pymmcore_plus.smart import ParamDef
 
 _INT_LIMIT = 2**31 - 1
 _FLOAT_LIMIT = 1e12

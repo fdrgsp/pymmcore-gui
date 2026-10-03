@@ -508,7 +508,13 @@ class AcquireViewersManager(QObject):
         if (dw := self._active_dock) is not None:
             record = self._records.get(dw)
             if record is not None and record.acquisition is not None:
-                record.acquisition.frame_meta.append(frame_meta_to_ome(meta))
+                # Iterator-driven runs keep each frame's event in its metadata
+                # (their single t axis cannot say which event a frame came
+                # from), so the viewer's Save must carry it over too.
+                include_event = bool(getattr(record.sink, "stores_events", False))
+                record.acquisition.frame_meta.append(
+                    frame_meta_to_ome(meta, include_event=include_event)
+                )
 
         # Counted before the follow-lock check, like the metadata above, so
         # re-enabling follow jumps to the true latest frame.

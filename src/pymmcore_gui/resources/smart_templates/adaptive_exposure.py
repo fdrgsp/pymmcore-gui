@@ -10,8 +10,7 @@ Blocking mode guarantees each new exposure is decided from the previous frame.
 
 import numpy as np
 import useq
-
-from pymmcore_gui.smart import STOP, AnalysisContext, FrameInfo, Response
+from pymmcore_plus.smart import STOP, AnalysisContext, FrameInfo, Response
 
 API_VERSION = 1
 NAME = "Adaptive exposure"

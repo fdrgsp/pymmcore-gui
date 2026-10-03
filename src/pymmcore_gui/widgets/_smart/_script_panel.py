@@ -4,8 +4,14 @@ from __future__ import annotations
 
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
+from pymmcore_plus.smart import (
+    AnalyzeFilter,
+    ScriptError,
+    SmartRunConfig,
+    inspect_script,
+)
 from superqt import QElidingLabel
 from superqt.iconify import QIconifyIcon
 
@@ -27,15 +33,11 @@ from pymmcore_gui._qt.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from pymmcore_gui._smart._controller import SmartRunConfig
-from pymmcore_gui._smart._loader import AnalyzeFilter, ScriptError, inspect_script
 from pymmcore_gui._theme import qcolor, theme
 from pymmcore_gui.widgets._smart._params_form import ParamsForm
 
 if TYPE_CHECKING:
-    from pymmcore_gui._smart._controller import OnError
-    from pymmcore_gui._smart._loader import ScriptSpec
-    from pymmcore_gui.smart._api import ExecutionMode, Origin, SyncMode
+    from pymmcore_plus.smart import ExecutionMode, ScriptSpec, SyncMode
 
 EXECUTION_HELP: Final = {
     "thread": (
@@ -277,7 +279,7 @@ class ScriptPanel(QWidget):
             execution=cast("ExecutionMode", self._execution.value()),
             sync=cast("SyncMode", self._sync.value()),
             filter=self._filter(),
-            on_error=cast("OnError", self._on_error.currentData()),
+            on_error=self._on_error.currentData(),
             analysis_timeout_s=timeout or None,
             max_total_events=self._max_events.value(),
         )
@@ -365,7 +367,7 @@ class ScriptPanel(QWidget):
         channels = tuple(
             c.strip() for c in self._channels.text().split(",") if c.strip()
         )
-        origins: set[Origin] = set()
+        origins: set[Literal["base", "analysis"]] = set()
         if self._origin_base.isChecked():
             origins.add("base")
         if self._origin_analysis.isChecked():
@@ -395,7 +397,7 @@ def _filter_from(data: object) -> AnalyzeFilter | None:
         return AnalyzeFilter(
             channels=tuple(channels) if channels else None,
             every_nth=max(1, int(data.get("every_nth", 1))),
-            origins=cast("frozenset[Origin]", origins),
+            origins=cast("frozenset[Literal['base', 'analysis']]", origins),
         )
     except (TypeError, ValueError):
         return None

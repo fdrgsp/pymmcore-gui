@@ -160,15 +160,21 @@ def test_settings_locked_during_run(
         "def analyze(image, frame, ctx):\n    time.sleep(0.2)\n"
     )
     assert page.load_script(slow)
-    page.mda.setValue(BASE)
+    # Long enough that only "Stop after current" can end it (no race with
+    # the run finishing on its own under load).
+    page.mda.setValue(
+        BASE.replace(time_plan=useq.TIntervalLoops(interval=0, loops=500))
+    )
     with qtbot.waitSignal(page.mdaRunningChanged, timeout=10_000) as blocker:
         page.mda.run_mda()
     assert blocker.args == [True]
     assert not page._load_btn.isEnabled()
     assert not page.script_panel._settings_boxes[0].isEnabled()
     assert page._stop_btn.isEnabled()
-    with qtbot.waitSignal(page.controller.runFinished, timeout=15_000):
+    with qtbot.waitSignal(page.controller.runFinished, timeout=15_000) as finished:
         page._stop_btn.click()
+    assert finished.args is not None
+    assert finished.args[0]["status"] == "stopped_by_user"
     qtbot.waitUntil(lambda: page._load_btn.isEnabled(), timeout=5000)
     assert not page._stop_btn.isEnabled()
 

@@ -12,7 +12,7 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
-import useq
+from pymmcore_plus.smart import ScriptError, SmartRunError, dry_run, inspect_script
 from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import set_source_icon
@@ -34,13 +34,9 @@ from pymmcore_gui._qt.QtWidgets import (
 )
 from pymmcore_gui._run_owner import RunOwner, RunOwnership
 from pymmcore_gui._settings import Settings
-from pymmcore_gui._smart._controller import SmartController, SmartRunError
-from pymmcore_gui._smart._executors import ExecutorStartError, create_executor
-from pymmcore_gui._smart._loader import ScriptError, inspect_script
-from pymmcore_gui._smart._log import run_dir_for_output
 from pymmcore_gui._theme import qcolor, theme
-from pymmcore_gui.smart._api import FrameInfo
-from pymmcore_gui.widgets._smart._mda import SmartMDAWidget, output_data_path
+from pymmcore_gui.widgets._smart._bridge import SmartController
+from pymmcore_gui.widgets._smart._mda import SmartMDAWidget
 from pymmcore_gui.widgets._smart._monitor import SmartMonitor
 from pymmcore_gui.widgets._smart._script_panel import ScriptPanel
 from pymmcore_gui.widgets._tab_page import TabPage
@@ -49,11 +45,10 @@ from pymmcore_gui.widgets._toolbars import toolbar_separator
 if TYPE_CHECKING:
     import ndv
     import numpy as np
+    import useq
     from pymmcore_plus import CMMCorePlus
     from pymmcore_plus.mda import SingleOutput
-
-    from pymmcore_gui._smart._controller import SmartRunConfig
-    from pymmcore_gui._smart._worker import WorkerResult
+    from pymmcore_plus.smart import HookResult
 
 TEMPLATES_DIR: Final = Path(__file__).parents[2] / "resources" / "smart_templates"
 
@@ -364,14 +359,6 @@ class SmartMicroscopyPage(TabPage):
             return
 
         config = self.script_panel.run_config()
-        data_path = output_data_path(output)
-        try:
-            run_dir = run_dir_for_output(data_path)
-        except OSError as e:
-            self.mda.launch_failed()
-            QMessageBox.critical(self, "Cannot create run folder", str(e))
-            return
-
         self._starting = True
         self._update_controls()
         self.mda.show_busy(
@@ -383,23 +370,23 @@ class SmartMicroscopyPage(TabPage):
 
         def _prepare() -> None:
             try:
-                self.controller.prepare(config, run_dir)
+                self.controller.prepare(sequence, config, output=output)
                 outcome: object = None
             except Exception as e:  # reported on the GUI thread
                 outcome = e
-            self._prepared.emit((outcome, sequence, output, data_path))
+            self._prepared.emit((outcome, sequence))
 
         threading.Thread(target=_prepare, name="smart-prepare", daemon=True).start()
 
     def _on_prepared(self, payload: tuple[Any, ...]) -> None:
-        error, sequence, output, data_path = payload
+        error, sequence = payload
         self._starting = False
         self.mda.hide_busy()
         if error is None:
             try:
                 self._ownership.claim(RunOwner.SMART)
                 self._base_sequence = sequence
-                self.controller.start(sequence, output, data_path=data_path)
+                self.controller.start()
             except (SmartRunError, RuntimeError) as e:
                 self._ownership.release()
                 self.controller.abandon()
@@ -446,16 +433,21 @@ class SmartMicroscopyPage(TabPage):
             return
         self.reload_script()
         config = self.script_panel.run_config()
-        frame = self._synthetic_frame()
         self._test_btn.setEnabled(False)
         self.mda.show_busy("Testing the script…")
+        core = self._mmc
 
         def _run() -> None:
-            self._tested.emit(_test_once(config, image, frame))
+            # Never raises: the outcome is shown on the GUI thread.
+            try:
+                outcome: HookResult | str = dry_run(config, image, core=core)
+            except Exception as e:
+                outcome = f"The test did not complete: {e}"
+            self._tested.emit(outcome)
 
         threading.Thread(target=_run, name="smart-test", daemon=True).start()
 
-    def _on_tested(self, outcome: WorkerResult | str) -> None:
+    def _on_tested(self, outcome: HookResult | str) -> None:
         self.mda.hide_busy()
         self._update_controls()
         box = QMessageBox(self)
@@ -487,39 +479,6 @@ class SmartMicroscopyPage(TabPage):
                 if image is not None and image.size:
                     return image
         return None
-
-    def _synthetic_frame(self) -> FrameInfo:
-        """What the current hardware state would report for a frame."""
-        core = self._mmc
-        channel: dict[str, str] | None = None
-        with suppress(Exception):
-            if (group := core.getChannelGroup()) and (
-                preset := core.getCurrentConfig(group)
-            ):
-                channel = {"config": preset, "group": group}
-        x = y = z = None
-        with suppress(Exception):
-            x, y = core.getXPosition(), core.getYPosition()
-        with suppress(Exception):
-            z = core.getPosition()
-        # Validated from plain data: an event's channel is its own type, not
-        # the `useq.Channel` a sequence takes.
-        event = useq.MDAEvent.model_validate(
-            {
-                "channel": channel,
-                "exposure": core.getExposure(),
-                "x_pos": x,
-                "y_pos": y,
-                "z_pos": z,
-            }
-        )
-        metadata = {
-            "pixel_size_um": core.getPixelSizeUm(),
-            "exposure_ms": core.getExposure(),
-            "camera_device": core.getCameraDevice(),
-            "position": {"x": x, "y": y, "z": z},
-        }
-        return FrameInfo(frame_id=0, event=event, metadata=metadata)
 
     # ------------------------------------------------------------- viewers
 
@@ -625,36 +584,7 @@ class SmartMicroscopyPage(TabPage):
         super().changeEvent(a0)
 
 
-def _test_once(
-    config: SmartRunConfig, image: np.ndarray, frame: FrameInfo
-) -> WorkerResult | str:
-    """Setup -> analyze -> teardown in a throwaway executor; never raises."""
-    import tempfile
-
-    executor = create_executor(config.execution)
-    with tempfile.TemporaryDirectory(prefix="pymmgui-smart-test-") as run_dir:
-        try:
-            setup = executor.start(
-                config.spec.path,
-                config.params,
-                Path(run_dir),
-                source=config.spec.source,
-                timeout=config.setup_timeout_s,
-            )
-        except ExecutorStartError as e:
-            executor.stop(timeout=1)
-            return str(e)
-        try:
-            if not setup.ok:
-                return f"The script failed to load or set up:\n\n{setup.error}"
-            return executor.submit(image, frame).result(timeout=120)
-        except Exception as e:
-            return f"The test did not complete: {e}"
-        finally:
-            executor.stop(timeout=10)
-
-
-def _describe_test_result(result: WorkerResult) -> str:
+def _describe_test_result(result: HookResult) -> str:
     lines = [f"analyze() finished in {result.duration_ms:.1f} ms."]
     response = result.response
     if response is None or (not response.events and not response.stop):

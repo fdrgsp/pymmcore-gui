@@ -3388,8 +3388,8 @@ test = [
 
 [[package]]
 name = "pymmcore-plus"
-version = "0.17.3.dev72+g5ff067a1c"
-source = { git = "https://github.com/fdrgsp/pymmcore-plus?rev=cite#5ff067a1c3350052c9d52c16507ce95390482671" }
+version = "0.17.3.dev73+g23925f738"
+source = { git = "https://github.com/fdrgsp/pymmcore-plus?rev=cite#23925f738bbbfb9cba0dbbb2f23178de2754145a" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },

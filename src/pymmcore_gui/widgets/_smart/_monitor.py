@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 from superqt import QElidingLabel
@@ -30,10 +31,7 @@ from pymmcore_gui._qt.QtWidgets import (
 from pymmcore_gui._theme import qcolor, theme
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
-    from pymmcore_gui._smart._controller import SmartController
-    from pymmcore_gui._smart._log import SmartRunLog
+    from pymmcore_gui.widgets._smart._bridge import SmartController
 
 _ROOT: Final = QModelIndex()
 
@@ -287,14 +285,15 @@ class SmartMonitor(QWidget):
 
     # ---------------------------------------------------------------- slots
 
-    def _on_run_started(self, run_log: SmartRunLog) -> None:
+    def _on_run_started(self, info: dict[str, Any]) -> None:
         self.model.clear()
         self.log.clear()
         self._counts = dict.fromkeys(self._counts, 0)
-        self._run_dir = run_log.run_dir
-        self._folder.setText(str(run_log.run_dir))
-        self._folder.setToolTip(str(run_log.run_dir))
-        self._open_folder.setEnabled(True)
+        run_dir = info.get("run_dir")
+        self._run_dir = None if run_dir is None else Path(run_dir)
+        self._folder.setText("" if run_dir is None else str(run_dir))
+        self._folder.setToolTip("" if run_dir is None else str(run_dir))
+        self._open_folder.setEnabled(run_dir is not None)
         self._update_summary("running")
 
     def _on_frame(self, record: dict[str, Any]) -> None:

@@ -1,8 +1,8 @@
-"""Qt-free modules must stay cheap to import (see SMART_MICROSCOPY_PLAN.md, G8).
+"""Qt-free modules must stay cheap to import.
 
-User analysis scripts import ``pymmcore_gui.smart`` inside a spawned worker
-process; if that dragged in Qt and the whole window, every process-mode run
-would pay for it at startup and carry the GUI's libraries for nothing.
+Anything spawned from this application (e.g. a smart-microscopy analysis
+process) may import ``pymmcore_gui`` submodules; if that dragged in Qt and the
+whole window, every such process would pay for it at startup.
 Checked in a fresh interpreter, since this test session has Qt loaded already.
 """
 
@@ -15,15 +15,8 @@ import pytest
 
 HEAVY = ("PyQt6", "PySide6", "qtpy", "pymmcore_widgets", "ndv", "vispy")
 
-QT_FREE_MODULES = [
-    "pymmcore_gui",
-    "pymmcore_gui.smart",
-    "pymmcore_gui._smart._worker",
-    "pymmcore_gui._smart._executors",
-    "pymmcore_gui._smart._scheduler",
-    "pymmcore_gui._smart._loader",
-    "pymmcore_gui._smart._log",
-]
+# The smart-microscopy engine (pymmcore_plus.smart) checks its own imports.
+QT_FREE_MODULES = ["pymmcore_gui"]
 
 
 @pytest.mark.parametrize("module", QT_FREE_MODULES)
