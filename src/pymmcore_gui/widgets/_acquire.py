@@ -50,6 +50,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QSplitter,
     QWidget,
 )
+from pymmcore_gui._run_owner import RunOwner
 from pymmcore_gui._theme import dock_chrome_stylesheet, qcolor, theme
 from pymmcore_gui.widgets._panels import (
     MDA_WIDGET_FACTORIES,
@@ -79,6 +80,7 @@ if TYPE_CHECKING:
 
     from pymmcore_gui._qt.QtAds import CDockAreaWidget
     from pymmcore_gui._qt.QtGui import QCloseEvent, QResizeEvent, QShowEvent
+    from pymmcore_gui._run_owner import RunOwnership
     from pymmcore_gui.widgets._mda_widget import MemoryMDAWidgetBase
     from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 
@@ -197,7 +199,11 @@ class AcquirePage(TabPage):
     """
 
     def __init__(
-        self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
+        self,
+        mmcore: CMMCorePlus | None = None,
+        parent: QWidget | None = None,
+        *,
+        run_ownership: RunOwnership | None = None,
     ) -> None:
         super().__init__(parent)
         self._core = mmcore or CMMCorePlus.instance()
@@ -250,10 +256,19 @@ class AcquirePage(TabPage):
         self._central_dock_area = central_dock_area
         self._apply_dock_style()
 
+        # With a shared RunOwnership, runs another page started (Smart
+        # Microscopy) open their viewer on that page instead. Without one --
+        # this page used on its own -- every run is displayed here.
+        accepts_run = (
+            None
+            if run_ownership is None
+            else partial(run_ownership.accepts, RunOwner.ACQUIRE)
+        )
         self._viewers = AcquireViewersManager(
             self._viewer_dock_manager,
             self._core,
             parent=self,
+            accepts_run=accepts_run,
         )
         # Connect before the Camera ROI panel constructs CameraRoiWidget. Its
         # roiSet handler performs Auto Snap synchronously, so a lazy Preview

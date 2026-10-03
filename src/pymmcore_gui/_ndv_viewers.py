@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from ome_writers import ScratchFormat
 from pymmcore_plus.mda import OmeWritersSink, frame_meta_to_ome
+from pymmcore_plus.mda._generator_sequence import GeneratorMDASequence
 
 from pymmcore_gui._acquisition_loader import open_acquisition as _open_acquisition
 from pymmcore_gui._array_viewer import MMArrayViewer
@@ -154,9 +155,22 @@ class AcquireViewersManager(QObject):
         dock_manager: CDockManager,
         mmcore: CMMCorePlus,
         parent: QWidget | None = None,
+        *,
+        accepts_run: Callable[[], bool] | None = None,
+        title_prefix: str | Callable[[], str] = "MDA",
     ) -> None:
         super().__init__(parent)
         self._parent_widget = parent
+        # Asked at each sequenceStarted whether this manager displays that
+        # run. More than one page can own a viewer workspace (Acquire, Smart
+        # Microscopy), and each run must open a viewer in exactly one of them.
+        # None displays every run, as when this was the only manager.
+        self._accepts_run = accepts_run
+        # Tab-title prefix for runs without a disk destination ("MDA 1a2b3c4d").
+        self._title_prefix = title_prefix
+        # Frames received so far in an iterator-driven run, else None. See
+        # _on_sequence_started for why such runs are followed by count.
+        self._generator_frames: int | None = None
         self._dock_manager = dock_manager
         self._core = mmcore
         self._channel_luts = ChannelLUTMemory()
@@ -391,6 +405,9 @@ class AcquireViewersManager(QObject):
         self._active_viewer = None
         self._active_dock = None
         self._shot_indices = {}
+        self._generator_frames = None
+        if self._accepts_run is not None and not self._accepts_run():
+            return
         view = self._core.mda.get_view()
         if view is None:
             # Runs without a path, AcquisitionSettings, or "memory" output have
@@ -409,13 +426,25 @@ class AcquireViewersManager(QObject):
         # filename from the start, not just "MDA <sha>" until someone
         # manually saves it -- see _on_saved below for that latter case.
         sink = _runner_sink(self._core.mda)
-        title = self._disk_backed_title(sink) or f"MDA {sha}"
+        prefix = self._title_prefix
+        prefix = prefix if isinstance(prefix, str) else prefix()
+        title = self._disk_backed_title(sink) or f"{prefix} {sha}"
 
-        viewer.mda_sequence = sequence
         viewer.source_title = title
-        viewer._reuse_mda_callback = lambda: self.reuseMDARequested.emit(
-            sequence, title
-        )
+        if _is_iterator_run(sequence):
+            # An iterator-driven run (event-driven / "smart" acquisition, or
+            # ``run_mda(iter(...))``) has no real sequence: the runner hands
+            # out an empty placeholder and its sink stores every frame along
+            # a single unbounded ``t`` axis, in acquisition order. Its frames
+            # are followed by count (see _on_frame_ready), and "Re-use MDA…"
+            # stays absent -- the placeholder would load an empty sequence.
+            # The page that started the run may attach its own sequence.
+            self._generator_frames = 0
+        else:
+            viewer.mda_sequence = sequence
+            viewer._reuse_mda_callback = lambda: self.reuseMDARequested.emit(
+                sequence, title
+            )
 
         record = _ViewerRecord(viewer, is_live=True)
         # Snapshot the sink's resolved settings + summary metadata now: the
@@ -472,6 +501,12 @@ class AcquireViewersManager(QObject):
             if record is not None and record.acquisition is not None:
                 record.acquisition.frame_meta.append(frame_meta_to_ome(meta))
 
+        # Counted before the follow-lock check, like the metadata above, so
+        # re-enabling follow jumps to the true latest frame.
+        frame_number = self._generator_frames
+        if frame_number is not None:
+            self._generator_frames = frame_number + 1
+
         viewer = self._active_viewer
         if viewer is None or not self._follow_acquisition:
             return
@@ -479,7 +514,11 @@ class AcquireViewersManager(QObject):
         current_index = viewer.display_model.current_index
         wrapper = viewer.data_wrapper
         index = {str(axis): value for axis, value in event.index.items()}
-        if "p" in index or "g" in index:
+        if frame_number is not None:
+            # The sink's only non-spatial axis is ``t`` (frame number); the
+            # event's own index keys (c, p, z...) don't exist in that view.
+            index = {"t": frame_number}
+        elif "p" in index or "g" in index:
             # A position's own grid sub-sequence yields both "p" (the real
             # position) and "g" (the tile within it) on the same event.
             # Naively renaming "g" -> "p" clobbered the real position value
@@ -654,6 +693,11 @@ def _add_follow_lock_button(ndv_viewer: ndv.ArrayViewer, manager: Any) -> None:
 
     btn.toggled.connect(_toggled)
     btn_layout.addWidget(btn)
+
+
+def _is_iterator_run(sequence: MDASequence) -> bool:
+    """Whether *sequence* is the runner's placeholder for an iterator-driven run."""
+    return isinstance(sequence, GeneratorMDASequence)
 
 
 def _extract_scales(

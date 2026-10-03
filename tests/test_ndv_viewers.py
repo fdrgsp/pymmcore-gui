@@ -119,3 +119,58 @@ def test_viewers_manager(
     assert manager.active_viewer is None
     assert not manager._records
     assert not manager._connected
+
+
+def test_iterator_run_follows_frame_count(
+    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An iterator-driven run is stored along one ``t`` axis; follow it by count.
+
+    The events' own index keys (here ``c`` and ``p``) do not exist in that
+    view, so following them would leave the slider on the first frame.
+    """
+    monkeypatch.setattr(viewers_module, "MMArrayViewer", _FakeViewer)
+    dummy = QWidget()
+    qtbot.addWidget(dummy)
+    manager = AcquireViewersManager(CDockManager(dummy), mmcore, parent=dummy)
+
+    events = [
+        useq.MDAEvent(channel="DAPI", index={"c": 0}),  # pyright: ignore
+        useq.MDAEvent(channel="FITC", index={"c": 1}),  # pyright: ignore
+        useq.MDAEvent(index={"p": 3}),  # pyright: ignore
+    ]
+    mmcore.mda.run(iter(events), output="memory")
+
+    qtbot.waitUntil(lambda: len(manager._records) == 1)
+    viewer = manager.active_viewer
+    assert isinstance(viewer, _FakeViewer)
+    qtbot.waitUntil(lambda: viewer.display_model.current_index.get("t") == 2)
+    assert set(viewer.display_model.current_index) == {"t"}
+    # The runner's empty placeholder sequence must not be offered for re-use.
+    assert getattr(viewer, "mda_sequence", None) is None
+
+
+def test_viewers_manager_skips_runs_it_does_not_accept(
+    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run owned by another page's viewer workspace opens no viewer here."""
+    monkeypatch.setattr(viewers_module, "MMArrayViewer", _FakeViewer)
+    dummy = QWidget()
+    qtbot.addWidget(dummy)
+    accepted = AcquireViewersManager(
+        CDockManager(dummy), mmcore, parent=dummy, title_prefix=lambda: "Smart"
+    )
+    other = QWidget()
+    qtbot.addWidget(other)
+    refused = AcquireViewersManager(
+        CDockManager(other), mmcore, parent=other, accepts_run=lambda: False
+    )
+
+    mmcore.mda.run(iter([useq.MDAEvent(), useq.MDAEvent()]), output="memory")
+
+    qtbot.waitUntil(lambda: len(accepted._records) == 1)
+    QApplication.processEvents()
+    assert not refused._records
+    assert refused.active_viewer is None
+    (record,) = accepted._records.values()
+    assert str(getattr(record.viewer, "source_title", "")).startswith("Smart ")

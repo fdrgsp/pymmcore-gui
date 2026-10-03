@@ -2,7 +2,9 @@
 
 import os
 import sys
+from importlib import import_module
 from importlib.metadata import PackageNotFoundError, version
+from typing import TYPE_CHECKING, Any
 
 try:
     __version__: str = version("pymmcore-gui")
@@ -50,9 +52,35 @@ if sys.platform == "win32":
         with contextlib.suppress(OSError):
             ctypes.WinDLL(dll)
 
-from ._app import create_mmgui
-from ._main_window import MicroManagerGUI
-from .actions import ActionInfo, CoreAction, WidgetAction
+if TYPE_CHECKING:
+    from ._app import create_mmgui
+    from ._main_window import MicroManagerGUI
+    from .actions import ActionInfo, CoreAction, WidgetAction
+
+# Resolved on first access rather than imported here: importing *any*
+# submodule runs this file first, and these pull in Qt and the whole window.
+# Qt-free submodules (e.g. ``pymmcore_gui.smart``, imported by user analysis
+# scripts in a spawned process) must stay cheap to import.
+_LAZY_EXPORTS: dict[str, str] = {
+    "create_mmgui": "._app",
+    "MicroManagerGUI": "._main_window",
+    "ActionInfo": ".actions",
+    "CoreAction": ".actions",
+    "WidgetAction": ".actions",
+}
+
+
+def __getattr__(name: str) -> Any:
+    if (module_name := _LAZY_EXPORTS.get(name)) is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module_name, __name__), name)
+    globals()[name] = value  # cache: later lookups bypass __getattr__
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted({*globals(), *_LAZY_EXPORTS})
+
 
 __all__ = [
     "ActionInfo",
