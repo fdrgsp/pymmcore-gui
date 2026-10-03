@@ -131,6 +131,15 @@ At most 1000 events per response are accepted. The whole run is capped by
   script run in a separate process. Device settings an event can carry:
   `channel`, `exposure`, `x_pos`/`y_pos`/`z_pos`, `properties`, `roi`,
   `slm_image`.
+- **Device settings an event applies stay applied** for every event after
+  it, including the remaining base events. A follow-up that changes the
+  objective, a filter, or a light source must change it back at the end.
+- To change settings **without taking an image**, give the event
+  `action=useq.CustomAction(name=...)`. It still moves the stage and applies
+  `properties`, but acquires nothing. The *Detect and act* template uses
+  this to switch objective before a follow-up and back after it.
+- Changing objective also changes the pixel size: `frame.metadata` reports
+  the one in effect, and so does `frames.jsonl`.
 - Injected stage moves are **not** checked against any safe region. Check
   coordinates in your script if your stage needs it.
 - A `useq.Channel` in an `MDASequence` is a different type from an event's
@@ -196,7 +205,7 @@ The run folder records what each frame was:
 | File | Contents |
 |---|---|
 | `run.json` | Settings, parameters, base sequence, versions, start and end times, status, counts. |
-| `frames.jsonl` | One line per frame: `frame_id` (== `t` index), origin, parent frame, the full event, position, exposure, time. |
+| `frames.jsonl` | One line per frame: `frame_id` (== `t` index), origin, parent frame, the full event, position, exposure, pixel size, time. |
 | `analysis.jsonl` | One line per call (`setup`/`analyze`/`teardown`): duration, records, logs, the response, errors. |
 | `script.py` | The exact code that ran. |
 

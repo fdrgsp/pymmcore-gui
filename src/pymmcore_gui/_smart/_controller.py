@@ -365,6 +365,7 @@ class SmartController(QObject):
             "runner_time_ms": meta.get("runner_time_ms"),
             "camera": meta.get("camera_device"),
             "exposure_ms": meta.get("exposure_ms"),
+            "pixel_size_um": meta.get("pixel_size_um"),
             "position": meta.get("position"),
         }
         log.write_frame(record)

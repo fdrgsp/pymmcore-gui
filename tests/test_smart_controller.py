@@ -113,21 +113,30 @@ def test_adaptive_exposure_is_purely_reactive(
     assert all("mean" in a["records"] for a in analyze_records)
 
 
+SCAN = useq.MDASequence(
+    stage_positions=[(0, 0, 0), (100, 100, 0), (200, 200, 0)],
+    channels=["DAPI"],
+)
+
+
 @pytest.mark.parametrize("mode", MODES)
-def test_detect_and_zstack_inserts_follow_up(
+def test_detect_and_act_z_stack_follow_up(
     mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path, mode: str
 ) -> None:
     controller = SmartController(mmcore)
     config = _config(
-        TEMPLATES / "detect_and_zstack.py",
+        TEMPLATES / "detect_and_act.py",
         execution=mode,
-        params={"threshold": 0.0, "max_stacks": 1, "z_range_um": 2.0, "z_step_um": 1.0},
+        params={
+            "action": "Z-stack",
+            "threshold": 0.0,
+            "max_followups": 1,
+            "center_on_hit": False,
+            "z_range_um": 2.0,
+            "z_step_um": 1.0,
+        },
     )
-    base = useq.MDASequence(
-        stage_positions=[(0, 0, 0), (100, 100, 0), (200, 200, 0)],
-        channels=["DAPI"],
-    )
-    summary = _run(qtbot, controller, config, base, tmp_path / "run")
+    summary = _run(qtbot, controller, config, SCAN, tmp_path / "run")
 
     assert summary["status"] == "completed"
     frames = _lines(tmp_path / "run" / "frames.jsonl")
@@ -137,6 +146,72 @@ def test_detect_and_zstack_inserts_follow_up(
     stack = [f for f in frames if f["origin"] == "analysis"]
     assert {f["parent_frame_id"] for f in stack} == {0}
     assert sorted(f["event"]["z_pos"] for f in stack) == [-1.0, 0.0, 1.0]
+
+
+def test_detect_and_act_zoom_restores_scan_objective(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    """The objective switch is image-less, and the scan resumes at low mag."""
+    mmcore.setProperty("Objective", "Label", "Nikon 10X S Fluor")
+    scan_px = mmcore.getPixelSizeUm()
+    controller = SmartController(mmcore)
+    config = _config(
+        TEMPLATES / "detect_and_act.py",
+        params={
+            "action": "Higher magnification + z-stack",
+            "threshold": 0.0,
+            "max_followups": 1,
+            "center_on_hit": False,
+            "z_range_um": 2.0,
+            "z_step_um": 1.0,
+            "scan_objective": "Nikon 10X S Fluor",
+            "zoom_objective": "Nikon 40X Plan Fluor ELWD",
+        },
+        sync="blocking",  # deterministic order: follow-up right after frame 0
+    )
+    summary = _run(qtbot, controller, config, SCAN, tmp_path / "run")
+
+    assert summary["status"] == "completed"
+    frames = _lines(tmp_path / "run" / "frames.jsonl")
+    # the two objective-switch events took no image
+    assert [f["origin"] for f in frames] == [
+        "base",
+        "analysis",
+        "analysis",
+        "analysis",
+        "base",
+        "base",
+    ]
+    pixel_sizes = [f["pixel_size_um"] for f in frames]
+    zoom_px = pixel_sizes[1]
+    assert zoom_px < scan_px
+    assert pixel_sizes == [scan_px, zoom_px, zoom_px, zoom_px, scan_px, scan_px]
+    assert mmcore.getProperty("Objective", "Label") == "Nikon 10X S Fluor"
+
+
+def test_detect_and_act_center_on_hit() -> None:
+    """Pixel offsets from the image center become stage offsets."""
+    import importlib.util
+
+    import numpy as np
+
+    from pymmcore_gui.smart import FrameInfo
+
+    spec = importlib.util.spec_from_file_location(
+        "detect_and_act", TEMPLATES / "detect_and_act.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    image = np.zeros((100, 200))
+    frame = FrameInfo(
+        frame_id=0, event=useq.MDAEvent(), metadata={"pixel_size_um": 0.5}
+    )
+    assert module.center_on(image, frame, 50, 150, 10.0, 20.0) == (35.0, 20.0)
+    assert module.center_on(image, frame, 0, 100, 10.0, 20.0) == (10.0, -5.0)
+    no_px = FrameInfo(frame_id=0, event=useq.MDAEvent(), metadata={})
+    assert module.center_on(image, no_px, 0, 0, 10.0, 20.0) == (10.0, 20.0)
 
 
 @pytest.mark.parametrize("mode", MODES)

@@ -63,6 +63,14 @@ built bundle still needs to be tried.
    matching the existing `tests/*.py` lint configuration.
 10. **The plan's Phase 3 and Phase 4 items were folded into the Phase 2
     commit**, apart from the later layout fixes.
+11. **`detect_and_zstack.py` became `detect_and_act.py`** (§7). It is one
+    detect → follow-up template whose action is a parameter: z-stack, an
+    image at higher magnification, or both. It is built from reusable blocks
+    (`center_on`, `switch_objective`, `snap`, `z_stack`). An objective
+    switch is an image-less `CustomAction` event, and the scan objective is
+    restored after each follow-up, because device settings persist for
+    later events. `frames.jsonl` also records `pixel_size_um`, which
+    changes with the objective.
 
 The original plan follows, unchanged, for reference.
 

@@ -191,8 +191,8 @@ def test_test_on_last_image_acquires_nothing(
     mmcore: CMMCorePlus,
     _no_dialogs: list[tuple[str, str]],
 ) -> None:
-    path = tmp_path / "zstack.py"
-    shutil.copyfile(TEMPLATES_DIR / "detect_and_zstack.py", path)
+    path = tmp_path / "detect.py"
+    shutil.copyfile(TEMPLATES_DIR / "detect_and_act.py", path)
     assert page.load_script(path)
     page.script_panel.params.editor("threshold").setValue(0.0)  # type: ignore[attr-defined]
 
@@ -204,7 +204,7 @@ def test_test_on_last_image_acquires_nothing(
         page.test_on_last_image()
     text = _no_dialogs[-1][1]
     assert "requested" in text and "event(s)" in text
-    assert "hit=True" in text
+    assert "hits=1" in text
     assert not mmcore.mda.is_running()
 
 
