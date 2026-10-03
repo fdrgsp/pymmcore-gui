@@ -123,5 +123,3 @@ in pymmcore-plus, under `tests/smart/`.
 - **Pixel-state tracking across responses:** a returned grid's field of view
   assumes each response starts from the run-start state. Responses that leave
   the objective switched break that assumption.
-- **Upstream:** move `pymmcore_plus.smart` from the `cite` fork to pymmcore-plus
-  `main`, together with the `MDARunner` cancel fix and the sink change.
