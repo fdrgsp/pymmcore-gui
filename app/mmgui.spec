@@ -91,7 +91,14 @@ def _get_win_version() -> "vi.VSVersionInfo":
 a = Analysis(
     [PACKAGE / "__main__.py"],
     binaries=[],
-    datas=collect_data_files("pymmcore_gui"),
+    # Smart Microscopy templates are .py files that are copied for the user to
+    # edit, never imported -- collect_data_files skips .py files by default.
+    datas=collect_data_files("pymmcore_gui")
+    + collect_data_files(
+        "pymmcore_gui",
+        include_py_files=True,
+        includes=["resources/smart_templates/*.py"],
+    ),
     # An optional list of additional (hidden) modules to include.
     hiddenimports=["pdb"],
     # An optional list of additional paths to search for hooks.
