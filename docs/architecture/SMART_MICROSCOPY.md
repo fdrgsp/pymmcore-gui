@@ -50,10 +50,17 @@ are identical to pymmcore-plus's `examples/smart_microscopy/` scripts.
 - **Script column:** the script's name and status (*Ready*, an error with
   its line number, or *Modified*: changes apply at the next run). It also
   holds the parameter form (from `PARAMETERS`) and the run settings:
-  thread or process, blocking or async, what to do on an error, the
-  analysis timeout, the max events, and which frames to analyze. Settings
-  are remembered **per script**. The script's own `EXECUTION`, `SYNC` and
-  `ANALYZE` apply only the first time it is loaded.
+  thread or process, blocking or async, hardware sequencing, what to do on
+  an error, the analysis timeout, the max events, and which frames to
+  analyze. Settings are remembered **per script**. The script's own
+  `EXECUTION`, `SYNC`, `SEQUENCING` and `ANALYZE` apply only the first time
+  it is loaded.
+- **Hardware sequencing** pre-triggers the camera so a run of events is
+  acquired at full speed. Events a script returns together are always
+  sequenced; base events are sequenced with *Async* timing, and with
+  *Blocking* only if you choose "Also base events when blocking" (blocking
+  otherwise means each frame's analysis gates the next acquisition). See
+  the pymmcore-plus guide for the full rules.
 - **Viewer:** the run's live viewer opens on this tab. A smart run is
   stored along one `t` axis, so the viewer shows a single `t` slider in
   grayscale. **Re-use MDA…** loads the run's *base* sequence back into the

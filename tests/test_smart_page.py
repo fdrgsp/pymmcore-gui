@@ -301,3 +301,27 @@ def test_process_mode_run_from_editor(
     assert summary["analyses"] == 3
     records = (page.monitor.run_dir / "analysis.jsonl").read_text()  # type: ignore[operator]
     assert '"call": "teardown"' in records
+
+
+def test_sequencing_setting_is_exposed_and_remembered(
+    page: SmartMicroscopyPage, script: Path, settings: Settings
+) -> None:
+    assert page.load_script(script)
+    combo = page.script_panel._sequencing
+    assert page.script_panel.run_config().sequencing == "safe"  # the default
+    combo.setCurrentIndex(combo.findData("always"))
+    assert page.script_panel.run_config().sequencing == "always"
+    assert settings.smart_microscopy.settings_for(script)["sequencing"] == "always"
+
+
+def test_script_sequencing_default_is_used(
+    qtbot: QtBot, mmcore: CMMCorePlus, tmp_path: Path
+) -> None:
+    script = tmp_path / "noseq.py"
+    script.write_text(
+        'API_VERSION = 1\nSEQUENCING = "off"\ndef analyze(i, f, c): ...\n'
+    )
+    page = SmartMicroscopyPage(mmcore)
+    qtbot.addWidget(page)
+    assert page.load_script(script)
+    assert page.script_panel.run_config().sequencing == "off"

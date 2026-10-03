@@ -132,6 +132,18 @@ class ScriptPanel(QWidget):
             {"thread": "Thread", "process": "Process"}, EXECUTION_HELP
         )
         self._sync = _RadioChoice({"blocking": "Blocking", "async": "Async"}, SYNC_HELP)
+        self._sequencing = QComboBox()
+        self._sequencing.addItem("Where feedback allows", "safe")
+        self._sequencing.addItem("Also base events when blocking", "always")
+        self._sequencing.addItem("Never", "off")
+        self._sequencing.setToolTip(
+            "Hardware sequencing pre-triggers the camera for a run of events, so "
+            "they are acquired as fast as the hardware allows.\n\n"
+            "Events a script returns together are always sequenced. Base events "
+            "are sequenced with Async timing; with Blocking timing each frame's "
+            "analysis gates the next acquisition, so sequencing them has to be "
+            "chosen explicitly."
+        )
         self._on_error = QComboBox()
         self._on_error.addItem("Stop the run", "stop")
         self._on_error.addItem("Skip the frame and continue", "skip")
@@ -156,6 +168,7 @@ class ScriptPanel(QWidget):
         exec_form = QFormLayout(exec_box)
         exec_form.addRow("Run analysis in", self._execution)
         exec_form.addRow("Timing", self._sync)
+        exec_form.addRow("Hardware sequencing", self._sequencing)
         exec_form.addRow("On error", self._on_error)
         exec_form.addRow("Analysis timeout", self._timeout)
         exec_form.addRow("Max events", self._max_events)
@@ -188,6 +201,7 @@ class ScriptPanel(QWidget):
         for signal in (
             self._execution.changed,
             self._sync.changed,
+            self._sequencing.currentIndexChanged,
             self._on_error.currentIndexChanged,
             self._timeout.valueChanged,
             self._max_events.valueChanged,
@@ -261,6 +275,7 @@ class ScriptPanel(QWidget):
             "params": self.params.values() if self._spec else {},
             "execution": self._execution.value(),
             "sync": self._sync.value(),
+            "sequencing": self._sequencing.currentData(),
             "on_error": self._on_error.currentData(),
             "analysis_timeout_s": self._timeout.value(),
             "max_total_events": self._max_events.value(),
@@ -279,6 +294,7 @@ class ScriptPanel(QWidget):
             execution=cast("ExecutionMode", self._execution.value()),
             sync=cast("SyncMode", self._sync.value()),
             filter=self._filter(),
+            sequencing=self._sequencing.currentData(),
             on_error=self._on_error.currentData(),
             analysis_timeout_s=timeout or None,
             max_total_events=self._max_events.value(),
@@ -303,6 +319,9 @@ class ScriptPanel(QWidget):
         self._reset_params.setVisible(bool(spec.params))
         self._execution.set_value(saved.get("execution", spec.execution))
         self._sync.set_value(saved.get("sync", spec.sync))
+        self._sequencing.setCurrentIndex(
+            max(self._sequencing.findData(saved.get("sequencing", spec.sequencing)), 0)
+        )
         self._on_error.setCurrentIndex(
             max(self._on_error.findData(saved.get("on_error", "stop")), 0)
         )
