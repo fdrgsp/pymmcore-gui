@@ -100,7 +100,7 @@ from pymmcore_gui.widgets._mda_widget import (
     TiffLayout,
     TopbarMemoryMDAWidget,
 )
-from pymmcore_gui.widgets._panels import PANELS, PanelKey, StageKind
+from pymmcore_gui.widgets._panels import PANELS, MdaKind, PanelKey, StageKind
 from pymmcore_gui.widgets._preferences import PreferencesDialog
 from pymmcore_gui.widgets._stage_control import StagesPanel
 from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
@@ -1149,7 +1149,7 @@ def test_acquire_console_dock_is_lazy(
     assert page.panel_widget(PanelKey.CONSOLE) is console  # not rebuilt
 
 
-def test_console_exposes_window_acquire_mda_widget_and_panels(
+def test_console_exposes_window_acquire_and_panels(
     mmcore: CMMCorePlus,
     qtbot: QtBot,
     monkeypatch: pytest.MonkeyPatch,
@@ -1167,9 +1167,24 @@ def test_console_exposes_window_acquire_mda_widget_and_panels(
     assert window.mmcore is mmcore
     assert namespace["window"] is window
     assert namespace["acquire"] is window.acquire
-    assert namespace["mdawidget"] is window.acquire.mda_widget
-    assert namespace["mda_widget"] is window.acquire.mda_widget
     assert namespace["panels"].console is console
+    assert namespace["panels"].mda is window.acquire.mda_widget
+    assert "mdawidget" not in namespace
+
+
+def test_panels_mda_follows_the_mda_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    from pymmcore_gui.widgets._mda_widget import TopbarMemoryMDAWidget
+
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    panels = page.panels
+    collapsible = panels.mda
+
+    page._set_mda_kind(MdaKind.TOPBAR)
+
+    assert isinstance(panels.mda, TopbarMemoryMDAWidget)
+    assert panels.mda is page.mda_widget
+    assert panels.mda is not collapsible
 
 
 def test_panels_accessor_opens_a_panel_and_returns_its_widget(
