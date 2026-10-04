@@ -1287,8 +1287,8 @@ class MemoryMDAWidgetBase(_MixinBase):
             "The current objective/resolution preset has no pixel size, but this "
             "sequence uses a grid plan. A grid's spacing and overlap come from the "
             "camera's field of view, which needs the pixel size, so the tiles would "
-            "not be placed correctly. Set a pixel size in Pixel Configuration "
-            "(Configurations tab) first."
+            "not be placed correctly. Set a pixel size in the Pixel Configuration "
+            "Editor (Configurations tab) first."
             "\n\nRun anyway?",
             QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,

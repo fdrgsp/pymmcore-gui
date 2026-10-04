@@ -25,8 +25,9 @@ with an encoderless stage it reported a holdout RMS of 4.408 px against a
 same microscope and returned 0.1085 µm/px, which is 6.5/60 to within 0.2%. An
 RMS of 4.408 px is inside the 5 px tolerance used here.
 
-The calibration controls live in the modern GUI's **Pixel Configuration** tab;
-the numerical pipeline lives in the separate `_pixel_calibration` package.
+The calibration controls live in the **Pixel Configuration Editor** tab of the
+Configurations page; the numerical pipeline lives in the separate
+`_pixel_calibration` package.
 
 Bracketed notes mark where this implementation departs from the Java source.
 Everything not marked follows it.
@@ -93,7 +94,7 @@ first save, provided its property bindings match the hardware.
 The panel stops its own live preview before starting the worker. Calibration
 rejects a running camera sequence or MDA acquisition. While the worker owns the
 hardware, the GUI disables capture inputs, resolution edits, configuration
-save actions, and the configuration-group tab.
+save actions, and the Group and Preset Editor tab.
 
 Snap uses the temporary capture transaction and returns a preview frame; it
 does not execute calibration or establish that the sample will calibrate.

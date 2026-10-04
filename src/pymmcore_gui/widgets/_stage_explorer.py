@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 _NO_PIXEL_SIZE_MESSAGE = (
     "The Stage Explorer is unavailable: the current objective/resolution preset "
     "has no pixel size. Select a calibrated preset, or set a pixel size for this "
-    "one in Pixel Configuration (Configurations tab)."
+    "one in the Pixel Configuration Editor (Configurations tab)."
 )
 
 
