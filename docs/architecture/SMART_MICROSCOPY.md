@@ -45,6 +45,11 @@ scripts also run headless from Python. This tab is a front end for it.
 The *Adaptive exposure*, *Detect and act* and *Survey and target* templates
 are identical to pymmcore-plus's `examples/smart_microscopy/` scripts.
 
+A script may hold its hooks as plain functions (as the templates do) or as
+the methods of one class, optionally subclassing
+`pymmcore_plus.smart.SmartAnalyzer`; the tab handles both. See the
+pymmcore-plus guide for which to choose.
+
 ## 3. The tab
 
 - **Script column:** the script's name and status (*Ready*, an error with
