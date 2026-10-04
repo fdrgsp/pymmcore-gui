@@ -194,12 +194,12 @@ class InstallationPage(TabPage):
     aboutToUninstall = Signal(set)
     """Emitted with the selected paths right before ``_uninstall`` deletes them.
 
-    MainWindow (which owns the core) connects this to release any device
+    MicroManagerGUI (which owns the core) connects this to release any device
     adapter DLL one of these paths is about to delete out from under a still-
     loaded device -- see the note on ``_uninstall``. A signal rather than a
     plain callable attribute so the connection's lifetime is Qt's to manage
     (tied to both endpoints' C++ objects) instead of a bound method sitting in
-    a Python attribute, which -- since ``MainWindow`` back-references this
+    a Python attribute, which -- since ``MicroManagerGUI`` back-references this
     page as one of its own attributes -- would otherwise close a reference
     cycle over ``self`` that only the GC's (non-deterministic) cycle collector
     breaks, not the deterministic ``deleteLater``/``close`` teardown every

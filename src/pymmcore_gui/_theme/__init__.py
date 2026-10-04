@@ -196,7 +196,7 @@ def set_zoom(factor: float) -> None:
         if layout := win.layout():
             layout.activate()
 
-    # zoom is persisted by MainWindow._save_state(), not here -- this is
+    # zoom is persisted by MicroManagerGUI._save_state(), not here -- this is
     # called on every set_theme()/set_style(), which is the wrong hook.
 
 

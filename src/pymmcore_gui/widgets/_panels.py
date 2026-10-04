@@ -16,7 +16,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from pymmcore_gui._qt.QtAds import DockWidgetArea
-from pymmcore_gui.actions.widget_actions import create_exception_log
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
@@ -72,15 +71,6 @@ class StageKind:
     """StagesPanel -- add-on-demand, one StageWidget per chosen device."""
 
 
-def _ignoring_core(fn: Callable[[QWidget], QWidget]) -> PanelFactory:
-    """Adapt a ``widget_actions`` factory, which resolves the core itself."""
-
-    def _create(parent: QWidget, _core: CMMCorePlus) -> QWidget:
-        return fn(parent)
-
-    return _create
-
-
 def _create_mda(_parent: QWidget, core: CMMCorePlus) -> QWidget:
     from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
 
@@ -116,9 +106,9 @@ def _create_presets(_parent: QWidget, core: CMMCorePlus) -> QWidget:
 def _create_property_browser(parent: QWidget, core: CMMCorePlus) -> QWidget:
     from pymmcore_widgets import PropertyBrowser
 
-    # Built with the page's own core: ``widget_actions.create_property_browser``
-    # resolves the core from the parent chain, which falls back to the global
-    # singleton whenever no ``pyMMGUI`` window hosts the page.
+    # Built with the page's own core, never one resolved from the parent chain,
+    # which falls back to the global singleton when no ``pyMMGUI`` window hosts
+    # the page.
     return PropertyBrowser(parent=parent, mmcore=core)
 
 
@@ -134,7 +124,7 @@ def create_device_stage_widget(
     """Build the panel content for one XY or Z stage device.
 
     Shared by every stage a user adds through the Stages panel's "Add Stage"
-    picker (see ``_acquire_stages.StagesPanel``), so they all look alike.
+    picker (see ``widgets._stage_control.StagesPanel``), so they all look alike.
     """
     from pymmcore_widgets import StageWidget
 
@@ -170,7 +160,7 @@ STAGE_KIND_FACTORIES: Final[Mapping[str, tuple[PanelFactory, bool]]] = {
     # XYZStageWidget's move/halt buttons are plain QPushButtons with no
     # "variant" set, so without unstyling they render in Qt's default style
     # -- unlike StagesPanel, which already runs the same button classes
-    # through unstyle_widgets() itself, per added device (_acquire_stages.py)
+    # through unstyle_widgets() itself, per added device (_stage_control.py)
     # -- and the hover highlight the app's QSS gives "subtle" buttons is easy
     # to miss under that default.
     StageKind.XYZ: (_create_stage_xyz, True),
@@ -184,6 +174,18 @@ def _create_console(parent: QWidget, core: CMMCorePlus) -> QWidget:
     from pymmcore_gui.widgets._mm_console import MMConsole
 
     return MMConsole(parent=parent, mmcore=core)
+
+
+def _create_exception_log(parent: QWidget, _core: CMMCorePlus) -> QWidget:
+    from pymmcore_gui._qt.QtCore import Qt
+    from pymmcore_gui.widgets._exception_log import ExceptionLog
+
+    # Window flags for standalone use (``widget_actions.create_exception_log``);
+    # docking reparents the widget, which clears them.
+    widget = ExceptionLog(parent=parent)
+    widget.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Window)
+    widget.resize(800, 400)
+    return widget
 
 
 def _refresh_mda(widget: QWidget) -> None:
@@ -303,7 +305,7 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
         title="Exception Log",
         icon="si:alert-line",
         tooltip="Exception Log — show or hide the exception log panel",
-        create=_ignoring_core(create_exception_log),
+        create=_create_exception_log,
         unstyle=True,
     ),
 )

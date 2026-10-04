@@ -23,7 +23,7 @@ from pymmcore_gui._layouts import (
     save_layout,
     store_session_layout,
 )
-from pymmcore_gui._main_window import MainWindow
+from pymmcore_gui._main_window import MicroManagerGUI
 from pymmcore_gui._qt.QtCore import Qt
 from pymmcore_gui._qt.QtWidgets import (
     QDialog,
@@ -234,7 +234,7 @@ def test_quitting_the_dialog_exits_without_building_a_window(
             install_sys_excepthook=False,
             install_sentry=False,
             exec_app=False,
-            window_cls=cast("type[WindowProtocol]", MainWindow),
+            window_cls=cast("type[WindowProtocol]", MicroManagerGUI),
         )
 
 
@@ -250,10 +250,10 @@ def test_an_explicit_config_skips_the_dialog_entirely(
             install_sys_excepthook=False,
             install_sentry=False,
             exec_app=False,
-            window_cls=cast("type[WindowProtocol]", MainWindow),
+            window_cls=cast("type[WindowProtocol]", MicroManagerGUI),
         )
     never.assert_not_called()
-    assert isinstance(window, MainWindow)
+    assert isinstance(window, MicroManagerGUI)
     qtbot.addWidget(window)
     qtbot.waitUntil(window.isVisible)
     assert window._acquire.layout_name == DEFAULT_LAYOUT_NAME
@@ -286,10 +286,10 @@ def test_choosing_no_configuration_skips_loading_one(
             install_sys_excepthook=False,
             install_sentry=False,
             exec_app=False,
-            window_cls=cast("type[WindowProtocol]", MainWindow),
+            window_cls=cast("type[WindowProtocol]", MicroManagerGUI),
         )
     load.assert_not_called()
-    assert isinstance(window, MainWindow)
+    assert isinstance(window, MicroManagerGUI)
     qtbot.addWidget(window)
     window.close()
 
@@ -316,9 +316,9 @@ def test_the_chosen_layout_is_remembered_for_next_time(
             install_sys_excepthook=False,
             install_sentry=False,
             exec_app=False,
-            window_cls=cast("type[WindowProtocol]", MainWindow),
+            window_cls=cast("type[WindowProtocol]", MicroManagerGUI),
         )
-    assert isinstance(window, MainWindow)
+    assert isinstance(window, MicroManagerGUI)
     qtbot.addWidget(window)
     assert settings.modern_window.last_layout == "My rig"
     window.close()
@@ -334,7 +334,7 @@ def test_loading_a_config_records_it_as_recent(
     ``loadSystemConfiguration`` -- hence waitUntil, not a bare assert.
     """
     config = Path(__file__).with_name("test_config.cfg")
-    window = MainWindow(mmcore=mmcore)
+    window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
 
     mmcore.loadSystemConfiguration(str(config))

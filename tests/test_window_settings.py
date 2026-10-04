@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 from pymmcore_gui._app import create_mmgui
-from pymmcore_gui._main_window import MainWindow
+from pymmcore_gui._main_window import MicroManagerGUI
 from pymmcore_gui._theme import zoom_factor, zoom_in
 from pymmcore_gui.widgets._panels import PanelKey
 
@@ -28,7 +28,7 @@ def test_modern_window_save_restore_state(
     mmcore: CMMCorePlus, qtbot: QtBot, settings: Settings
 ) -> None:
     """geometry/theme/zoom/dock-layout round-trip through Settings, across windows."""
-    win1 = MainWindow(mmcore=mmcore)
+    win1 = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(win1)
     # MDA + Groups and Presets are the defaults, so open a third panel to get
     # an arrangement that differs from the built-in one.
@@ -48,7 +48,7 @@ def test_modern_window_save_restore_state(
     assert prefs.zoom == zoom_factor()
     win1.close()
 
-    win2 = MainWindow(mmcore=mmcore)
+    win2 = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(win2)
     # Applied in __init__ (_apply_saved_appearance), before restore_state is
     # even called -- so the theme/zoom preference is already live here.
@@ -76,7 +76,7 @@ def test_restore_state_on_fresh_settings_opens_only_defaults(
     dock buried. It also poisoned the *next* launch, since the resulting
     state was then persisted on close.
     """
-    win = MainWindow(mmcore=mmcore)
+    win = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(win)
     win.restore_state(show=True)
 
@@ -104,7 +104,7 @@ def test_restored_layout_has_real_column_widths_on_second_launch(
     permanently -- the lock is deliberately immune to later layout passes, so
     nothing could ever widen it again and the panel rendered as empty space.
     """
-    win1 = MainWindow(mmcore=mmcore)
+    win1 = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(win1)
     win1.resize(1400, 900)
     win1.show()
@@ -121,7 +121,7 @@ def test_restored_layout_has_real_column_widths_on_second_launch(
 
     # Second launch, in _app's order: build, restore (window never shown yet),
     # and only then show.
-    win2 = MainWindow(mmcore=mmcore)
+    win2 = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(win2)
     win2.resize(1400, 900)
     win2.restore_state(show=True)
@@ -143,7 +143,7 @@ def test_modern_window_persists_hidden_panel_buttons(
     mmcore: CMMCorePlus, qtbot: QtBot, settings: Settings
 ) -> None:
     """Buttons hidden via the ⋯ customize menu stay hidden across restarts."""
-    win1 = MainWindow(mmcore=mmcore)
+    win1 = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(win1)
     win1._acquire.apply_hidden_panels({PanelKey.CONSOLE, PanelKey.EXCEPTION_LOG})
     win1._save_state()
@@ -153,7 +153,7 @@ def test_modern_window_persists_hidden_panel_buttons(
     }
     win1.close()
 
-    win2 = MainWindow(mmcore=mmcore)
+    win2 = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(win2)
     win2.restore_state()
     assert win2._acquire.hidden_panels() == {PanelKey.CONSOLE, PanelKey.EXCEPTION_LOG}
@@ -179,9 +179,9 @@ def test_reset_layout_snapshots_the_reset_arrangement_as_last_session(
     Uses a hidden button rather than an open side panel to trigger a
     non-default state: resetting an open panel would empty its dock area,
     which is fatal under the offscreen test platform (see ``_configure_ads``).
-    The dock-level reset behaviour is covered in ``test_new_gui.py``.
+    The dock-level reset behaviour is covered in ``test_gui.py``.
     """
-    win = MainWindow(mmcore=mmcore)
+    win = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(win)
     win._acquire.apply_hidden_panels({PanelKey.CONSOLE})
     win._toggle_theme()  # dark -> light
@@ -216,7 +216,7 @@ def test_modern_window_does_not_touch_classic_window_settings(
     ``docked_pymmcore_gui.mda_widget``), so sharing one settings blob would
     collide -- ``ModernWindowSettingsV1`` must be a separate section.
     """
-    win = MainWindow(mmcore=mmcore)
+    win = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(win)
     win._save_state()
     win.close()
@@ -228,20 +228,20 @@ def test_modern_window_does_not_touch_classic_window_settings(
 def test_restore_state_shows_the_window(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     """create_mmgui's ``hasattr(win, "restore_state")`` branch actually shows it.
 
-    Adding ``restore_state`` opts ``MainWindow`` out of ``create_mmgui``'s
+    Adding ``restore_state`` opts ``MicroManagerGUI`` out of ``create_mmgui``'s
     direct ``win.show()`` call (see ``_app.py``) in favor of a deferred
     ``QTimer.singleShot(0, lambda: win.restore_state(show=True))`` -- this
     guards that the window still ends up visible.
     """
     window = cast(
-        "MainWindow",
+        "MicroManagerGUI",
         create_mmgui(
             mm_config=False,
             mmcore=mmcore,
             install_sys_excepthook=False,
             install_sentry=False,
             exec_app=False,
-            window_cls=cast("type[WindowProtocol]", MainWindow),
+            window_cls=cast("type[WindowProtocol]", MicroManagerGUI),
         ),
     )
     qtbot.addWidget(window)

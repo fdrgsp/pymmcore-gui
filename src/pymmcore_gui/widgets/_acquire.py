@@ -193,7 +193,7 @@ class AcquirePage(TabPage):
     """Emitted True while an acquisition owns the hardware, False once it's idle.
 
     Relays ``MemoryMDAWidget.mdaLockChanged`` after this page has locked
-    itself, so ``MainWindow`` can lock the window chrome it owns.
+    itself, so ``MicroManagerGUI`` can lock the window chrome it owns.
     """
 
     def __init__(
@@ -277,7 +277,7 @@ class AcquirePage(TabPage):
         # reset). See ``_pin_dock_widths_for_epoch``.
         self._layout_epoch = 0
         # Debounced rather than a plain one-shot on the first showEvent:
-        # MainWindow requests WindowMaximized before it's ever shown, and on
+        # MicroManagerGUI requests WindowMaximized before it's ever shown, and on
         # real window managers that maximize is applied asynchronously --
         # often *after* this tab has already been switched to and gotten its
         # first showEvent. Locking immediately there can freeze the columns
@@ -721,7 +721,7 @@ class AcquirePage(TabPage):
             row.add_stretch()
             self.add_toolbar_row(row)
 
-        Moving it into ``MainWindow`` as a draggable ``QToolBar`` is the same
+        Moving it into ``MicroManagerGUI`` as a draggable ``QToolBar`` is the same
         shape: the bar itself needs no changes, only a different host.
 
         Preferences sits right after the panel buttons, no separator --
@@ -864,7 +864,7 @@ class AcquirePage(TabPage):
 
     def _create_panel(self, panel: _Panel) -> None:
         # Some upstream factories return a QDialog (PropertyBrowser) or set
-        # always-on-top window flags (create_exception_log) meant for
+        # always-on-top window flags (_create_exception_log) meant for
         # standalone use. Nothing is done about that here on purpose:
         # ``_add_dock``'s ``dock.setWidget()`` reparents the widget, and
         # QWidget.setParent() clears window flags -- which is exactly how
@@ -1620,7 +1620,7 @@ class AcquirePage(TabPage):
         dock = CDockWidget(self._dock_manager, title, self)
         dock.setObjectName(name)
         dock.setWidget(widget, CDockWidget.eInsertMode.ForceNoScrollArea)
-        # AcquirePage lives inside MainWindow's QStackedWidget; an ADS floating
+        # AcquirePage lives inside MicroManagerGUI's QStackedWidget; an ADS floating
         # container is a top-level window that would linger after switching
         # to another mode tab, so none of these docks may float.
         dock.setFeature(CDockWidget.DockWidgetFeature.DockWidgetFloatable, False)
@@ -1845,7 +1845,7 @@ class AcquirePage(TabPage):
         # ranged-property columns can't learn about those edits any other way.
         super().showEvent(a0)
         if not self._mda_width_locked_at_real_size:
-            # AcquirePage is constructed eagerly in MainWindow.__init__, before
+            # AcquirePage is constructed eagerly in MicroManagerGUI.__init__, before
             # the window has been shown/resized to its real on-screen geometry
             # -- so the one-time initial pin (and the width lock installed
             # right after it) may have captured too small a width. Schedule

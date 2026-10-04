@@ -142,15 +142,11 @@ def test_config_error_text_explains_a_missing_micromanager(
     [
         None,
         "pymmcore_gui._main_window.MicroManagerGUI",
-        "pymmcore_gui._main_window.MainWindow",
     ],
 )
 def test_default_and_named_launch_use_the_same_window(
     mmcore: CMMCorePlus, qtbot: QtBot, window_cls: str | None
 ) -> None:
-    from pymmcore_gui._main_window import MainWindow
-
-    assert MainWindow is MicroManagerGUI
     with patch.object(MicroManagerGUI, "prompt_startup_choices") as prompt:
         window = _app.create_mmgui(
             mm_config=False,

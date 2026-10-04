@@ -103,7 +103,7 @@ class PreferencesButton(QPushButton):
         color = qcolor(theme().text_secondary).name()
         self.setIcon(QIconifyIcon(self._ICON, color=color))
         # Same size as the other Acquire toolbar icon buttons
-        # (``_acquire_toolbar._icon_size``); kept in sync manually since
+        # (``widgets._toolbars._icon_size``); kept in sync manually since
         # importing that private helper across modules isn't worth it here.
         size = theme().scaled(20)
         self.setIconSize(QSize(size, size))

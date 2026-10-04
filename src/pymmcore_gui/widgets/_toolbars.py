@@ -322,7 +322,7 @@ class PanelButtonBar(QWidget):
     A self-contained content strip: no background painting, no assumptions
     about its parent. That's what makes it relocatable -- today it shares the
     Acquire toolbar row (see ``AcquirePage._place_panel_bar``), but it could
-    just as easily be dropped onto a second row or into ``MainWindow`` as its
+    just as easily be dropped onto a second row or into ``MicroManagerGUI`` as its
     own ``QToolBar`` without changing anything here.
     """
 

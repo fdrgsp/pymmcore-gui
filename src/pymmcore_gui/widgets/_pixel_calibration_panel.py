@@ -774,7 +774,7 @@ class PixelCalibrationPanel(QWidget):
         ``QIconifyIcon`` bakes its color in at construction, so it must be
         rebuilt (not just re-tinted) on every theme change -- see
         ``changeEvent`` below, and ``SnapButton``/``LiveButton`` in
-        ``_acquire_toolbar.py`` for the same pattern.
+        ``widgets/_toolbars.py`` for the same pattern.
         """
         green = qcolor(theme().status_green).name()
         red = qcolor(theme().status_red).name()

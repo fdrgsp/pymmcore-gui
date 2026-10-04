@@ -164,7 +164,7 @@ dependencies. Just download and extract the archive, then run the application.
 > The bundled application does *not* include Micro-Manager device adapters,
 > these must be installed separately. This may be done by:
 >
-> - Using the `Devices > Install Devices ...` menu in the GUI
+> - Using the **Installation** tab in the GUI
 > - Running `uv run --with pymmcore-plus mmcore install` from the command line  
 >   *this requires [having uv
 >   installed](https://docs.astral.sh/uv/getting-started/installation/)*
@@ -176,12 +176,13 @@ dependencies. Just download and extract the archive, then run the application.
 ### Launching the GUI (Standalone)
 
 If you installed the bundled app, simply double-click the application to launch
-it. You should see the main window appear, which includes menus and panels for
-device control, configuration, live view, etc. By default, if no configuration
-is loaded, the GUI will use Micro-Manager’s Demo devices (so you can try it even
-without real hardware). You can then load a different hardware configuration
-(from the "Devices" menu) or use the Hardware Config Wizard to connect to
-hardware.
+it. A startup dialog asks which hardware configuration to load (a recent file,
+the Micro-Manager Demo configuration -- so you can try it without real
+hardware -- none, or a file to browse for) and which window layout to open.
+The main window then shows four tabs: **Installation** (Micro-Manager device
+adapters), **Hardware Setup** (build or edit a configuration),
+**Configurations** (device properties, config groups and pixel sizes), and
+**Acquire** (live view, MDA and the dockable tool panels).
 
 ### Launching via Python (CLI)
 
@@ -243,8 +244,8 @@ will create a new instance.
 The console provides `window`, `acquire`, `mdawidget` (also `mda_widget`), and
 `mmc`/`core`/`mmcore` for the owning window's core. From Python, use
 `window.acquire.mda_widget` and `window.acquire.viewers` to access acquisition
-controls and viewers. Custom tools are registered through `PanelInfo` and
-`PANELS`.
+controls and viewers. To add your own tool to the Acquire page, see
+[Adding a panel](docs/architecture/PANELS.md).
 
 ## Prior Work
 

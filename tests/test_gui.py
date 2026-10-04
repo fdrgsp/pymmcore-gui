@@ -29,7 +29,7 @@ from pymmcore_gui._layouts import (
     LAST_SESSION_LAYOUT_NAME,
     available_layouts,
 )
-from pymmcore_gui._main_window import MainWindow
+from pymmcore_gui._main_window import MicroManagerGUI
 from pymmcore_gui._qt.QtAds import (
     CDockManager,
     CDockWidget,
@@ -167,9 +167,9 @@ def test_accepting_startup_config_selects_acquire(
             install_sys_excepthook=False,
             install_sentry=False,
             exec_app=False,
-            window_cls=cast("type[WindowProtocol]", MainWindow),
+            window_cls=cast("type[WindowProtocol]", MicroManagerGUI),
         )
-    assert isinstance(window, MainWindow)
+    assert isinstance(window, MicroManagerGUI)
     qtbot.addWidget(window)
 
     assert window._stack.currentWidget() is window._acquire
@@ -192,9 +192,9 @@ def test_explicit_startup_config_selects_acquire(
         install_sys_excepthook=False,
         install_sentry=False,
         exec_app=False,
-        window_cls=cast("type[WindowProtocol]", MainWindow),
+        window_cls=cast("type[WindowProtocol]", MicroManagerGUI),
     )
-    assert isinstance(window, MainWindow)
+    assert isinstance(window, MicroManagerGUI)
     qtbot.addWidget(window)
 
     # `-c` reaches create_mmgui as an explicit mm_config before app.exec().
@@ -207,7 +207,7 @@ def test_pixel_calibration_locks_other_main_window_modes(
     mmcore: CMMCorePlus,
     qtbot: QtBot,
 ) -> None:
-    window = MainWindow(mmcore=mmcore)
+    window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
     config_index = window._stack.indexOf(window._configurations)
     install_index = window._stack.indexOf(window._installation)
@@ -462,7 +462,7 @@ def test_uninstall_emits_about_to_uninstall_before_deleting(
     Regression test: nothing released a still-loaded device adapter DLL before
     an uninstall attempted to delete it, so a Windows session uninstalling
     whichever install was actively driving the connected hardware failed with
-    a file-lock error. See MainWindow._prepare_uninstall.
+    a file-lock error. See MicroManagerGUI._prepare_uninstall.
     """
     page = InstallationPage()
     qtbot.addWidget(page)
@@ -494,7 +494,7 @@ def test_uninstall_emits_about_to_uninstall_before_deleting(
 
 
 def test_window_opens_on_hardware_setup(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
-    window = MainWindow(mmcore=mmcore)
+    window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
     assert window._stack.currentWidget() is window._hardware
     # Installation leads the tab order but is not built until it's opened.
@@ -506,7 +506,7 @@ def test_window_without_micromanager_opens_on_installation(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
     with patch("pymmcore_gui._main_window.find_micromanager", return_value=None):
-        window = MainWindow(mmcore=mmcore)
+        window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
     assert window._stack.currentWidget() is window._installation
     assert window._mode_tabs._tabs[0].active
@@ -515,7 +515,7 @@ def test_window_without_micromanager_opens_on_installation(
 def test_switching_active_install_repoints_the_running_core(
     mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
 ) -> None:
-    window = MainWindow(mmcore=mmcore)
+    window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
     assert [d for d in mmcore.getLoadedDevices() if d != "Core"]
 
@@ -535,7 +535,7 @@ def test_switching_active_install_repoints_the_running_core(
 def test_declining_an_install_switch_keeps_the_session(
     mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
 ) -> None:
-    window = MainWindow(mmcore=mmcore)
+    window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
     loaded = list(mmcore.getLoadedDevices())
     paths = list(mmcore.getDeviceAdapterSearchPaths())
@@ -559,7 +559,7 @@ def test_uninstalling_the_active_install_unloads_devices_first(
     active install failed with ``PermissionError: [WinError 5] Access is
     denied`` even after the user confirmed the delete.
     """
-    window = MainWindow(mmcore=mmcore)
+    window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
     assert [d for d in mmcore.getLoadedDevices() if d != "Core"]
 
@@ -575,7 +575,7 @@ def test_uninstalling_an_unrelated_install_leaves_devices_loaded(
     mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
 ) -> None:
     """Deleting an install that isn't in use must not disturb a live session."""
-    window = MainWindow(mmcore=mmcore)
+    window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
     loaded_before = list(mmcore.getLoadedDevices())
     assert [d for d in loaded_before if d != "Core"]
@@ -593,7 +593,7 @@ def test_uninstalling_an_unrelated_install_leaves_devices_loaded(
 def test_install_switch_prompt_uses_button_variants(
     mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
 ) -> None:
-    window = MainWindow(mmcore=mmcore)
+    window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
     messages: list[QMessageBox] = []
 
@@ -614,7 +614,7 @@ def test_install_switch_prompt_uses_button_variants(
 def test_unsaved_configuration_prompt_uses_button_variants(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    window = MainWindow(mmcore=mmcore)
+    window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
     messages: list[QMessageBox] = []
 
@@ -639,7 +639,7 @@ def test_unsaved_configuration_prompt_uses_button_variants(
 def test_discarding_configuration_changes_before_switching_cleans_page(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    window = MainWindow(mmcore=mmcore)
+    window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
     configurations = window._configurations
     configurations_index = window._stack.indexOf(configurations)
@@ -679,7 +679,7 @@ def test_discarding_configuration_changes_before_switching_cleans_page(
     assert not configurations.is_dirty()
 
 
-def test_new_gui_uses_one_application_font(
+def test_gui_uses_one_application_font(
     mmcore: CMMCorePlus,
     qtbot: QtBot,
 ) -> None:
@@ -1156,7 +1156,7 @@ def test_modern_console_exposes_window_acquire_and_mda_widget(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("IPYTHONDIR", str(tmp_path / "ipython"))
-    window = MainWindow(mmcore=mmcore)
+    window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
 
     window.acquire.panel_button(PanelKey.CONSOLE).click()
@@ -1499,7 +1499,7 @@ def test_mda_lock_locks_other_main_window_modes(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
     """A run confines the window to Acquire, whichever page it was started from."""
-    window = MainWindow(mmcore=mmcore)
+    window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
     install_index = window._stack.indexOf(window._installation)
     hardware_index = window._stack.indexOf(window._hardware)
@@ -1556,7 +1556,7 @@ def test_close_during_acquisition_can_be_declined(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
     """ "Keep acquiring" leaves both the run and the window alone."""
-    window = MainWindow(mmcore=mmcore)
+    window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
     event = QCloseEvent()
 
@@ -1576,7 +1576,7 @@ def test_close_during_acquisition_cancels_and_waits(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
     """The close is deferred until the cancelled run has finished tearing down."""
-    window = MainWindow(mmcore=mmcore)
+    window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
     event = QCloseEvent()
 
@@ -1593,7 +1593,7 @@ def test_close_during_acquisition_cancels_and_waits(
     assert window._close_pending
 
     # ... and closes itself once the runner reports idle.
-    with patch.object(MainWindow, "close") as close:
+    with patch.object(MicroManagerGUI, "close") as close:
         window._acquire.set_mda_lock(True)
         window._acquire.set_mda_lock(False)
         qtbot.waitUntil(lambda: close.called)
@@ -1603,7 +1603,7 @@ def test_close_while_still_stopping_offers_a_force_quit(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
     """A writer that never finishes must not trap the user in the app."""
-    window = MainWindow(mmcore=mmcore)
+    window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
     window._close_pending = True
 
@@ -1630,7 +1630,7 @@ def test_close_while_still_stopping_offers_a_force_quit(
 def test_close_when_idle_asks_nothing_about_acquisitions(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    window = MainWindow(mmcore=mmcore)
+    window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
     event = QCloseEvent()
 
@@ -1856,7 +1856,7 @@ def test_acquire_docked_panels_are_reparented_not_windows(
 ) -> None:
     """Docking reparents every panel widget, clearing any standalone window flags.
 
-    ``PropertyBrowser`` is a QDialog upstream and ``create_exception_log``
+    ``PropertyBrowser`` is a QDialog upstream and ``_create_exception_log``
     sets ``WindowStaysOnTopHint | Window``. ``dock.setWidget()`` reparents
     them, and ``QWidget.setParent()`` clears window flags -- this must keep
     working *without* a pre-emptive ``setWindowFlags()`` call, which Qt
@@ -2039,7 +2039,7 @@ def test_selecting_default_keeps_last_session_in_the_layout_list(
     """ "Last session" must not disappear from Preferences' Layout list the
     moment "Default" is clicked.
 
-    Regression test: ``MainWindow._on_acquire_layout_reset`` used to wipe
+    Regression test: ``MicroManagerGUI._on_acquire_layout_reset`` used to wipe
     "Last session" to an empty ``AcquireLayout()`` so a crash right after a
     reset couldn't resurrect the pre-reset arrangement on next launch. That
     made the row disappear from the list immediately, which reads as data
@@ -2048,7 +2048,7 @@ def test_selecting_default_keeps_last_session_in_the_layout_list(
     still protects against the same crash, since what's stored is always the
     freshly-reset state, never stale.
     """
-    window = MainWindow(mmcore=mmcore)
+    window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
 
     window._acquire.panel_button(PanelKey.EXCEPTION_LOG).setChecked(True)
@@ -2138,7 +2138,7 @@ def test_acquire_camera_roi_is_a_panel_and_exception_log_panel_opens(
     log_dock = page.panel_dock(PanelKey.EXCEPTION_LOG)
     assert isinstance(log_widget, ExceptionLog)
     assert log_dock is not None and not log_dock.isClosed()
-    # create_exception_log sets WindowStaysOnTopHint | Window upstream --
+    # _create_exception_log sets WindowStaysOnTopHint | Window upstream --
     # every registry panel must be normalized to a plain docked child.
     assert not log_widget.isWindow()
 
@@ -3506,7 +3506,7 @@ def test_preferences_dialog_cancel_does_not_persist(
 
 
 def test_preferences_button_opens_dialog(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
-    win = MainWindow(mmcore=mmcore)
+    win = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(win)
 
     opened: list[PreferencesDialog] = []
@@ -3531,7 +3531,7 @@ def test_theme_toggle_button_matches_other_toolbar_icon_buttons(
     and re-tint on every toggle.
     """
     set_theme(DARK_THEME)
-    win = MainWindow(mmcore=mmcore)
+    win = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(win)
 
     assert win._theme_btn.property("variant") == "subtle"
@@ -5416,7 +5416,7 @@ def test_acquire_restore_does_not_repin_column_widths(
     state, keys = saved.dock_state, saved.panels
     assert state is not None
 
-    # Mirrors MainWindow.restore_state(): geometry is applied, then the dock
+    # Mirrors MicroManagerGUI.restore_state(): geometry is applied, then the dock
     # layout is restored, then the window is shown.
     page_b = AcquirePage(mmcore)
     qtbot.addWidget(page_b)
@@ -5879,7 +5879,7 @@ def test_stage_explorer_refreshes_all_pixel_dependent_geometry(
 def test_pixel_config_commit_refreshes_open_stage_explorer(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    window = MainWindow(mmcore=mmcore)
+    window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
     window._acquire.panel_button(PanelKey.STAGE_EXPLORER).click()
     explorer = window._acquire.panel_widget(PanelKey.STAGE_EXPLORER)
@@ -6385,7 +6385,7 @@ def test_save_to_file_asks_where_before_committing_to_core() -> None:
         _hardware=_recording_hardware(calls),
     )
 
-    assert MainWindow._save_all(window)  # type: ignore[arg-type]
+    assert MicroManagerGUI._save_all(window)  # type: ignore[arg-type]
     # the dialog comes first (committing blocks the GUI thread for seconds on
     # real hardware), and the core is still written before the file
     assert calls == ["ask", "core", "file", "clean"]
@@ -6402,15 +6402,15 @@ def test_toolbar_save_asks_where_before_committing_selected_tab() -> None:
         _hardware=_recording_hardware(calls),
     )
 
-    assert MainWindow._save_current_configuration(window)  # type: ignore[arg-type]
+    assert MicroManagerGUI._save_current_configuration(window)  # type: ignore[arg-type]
     assert calls == ["ask", "selected", "file", "clean-selected"]
 
 
 @pytest.mark.parametrize(
     "method, commit",
     [
-        (MainWindow._save_all, "commit_to_core"),
-        (MainWindow._save_current_configuration, "commit_current_to_core"),
+        (MicroManagerGUI._save_all, "commit_to_core"),
+        (MicroManagerGUI._save_current_configuration, "commit_current_to_core"),
     ],
 )
 def test_cancelling_the_save_dialog_leaves_the_core_untouched(
@@ -6435,9 +6435,9 @@ def test_acquire_width_settle_waits_out_a_late_resize(
 
     Regression test for a bug where the Acquire tab's dock layout became
     permanently un-resizable after a restart. ``AcquirePage`` lives inside
-    ``MainWindow``'s ``QStackedWidget`` and isn't the initially-active page,
+    ``MicroManagerGUI``'s ``QStackedWidget`` and isn't the initially-active page,
     so it only gets its first real ``showEvent`` once the app switches to it
-    -- by which point ``MainWindow`` has already requested
+    -- by which point ``MicroManagerGUI`` has already requested
     ``WindowMaximized``. On a real window manager that maximize is applied
     *asynchronously*, often completing just after this tab's first
     showEvent. The old one-shot ``showEvent`` handler locked the MDA/right
