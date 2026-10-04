@@ -122,12 +122,8 @@ class MMConsole(QtConsole):
                 acquire = getattr(window, "_acquire", None)
             if acquire is not None:
                 default_vars["acquire"] = acquire
-                mda_widget = getattr(acquire, "mda_widget", None)
-                if mda_widget is None:
-                    mda_widget = getattr(acquire, "_mda", None)
-                if mda_widget is not None:
-                    default_vars["mdawidget"] = mda_widget
-                    default_vars["mda_widget"] = mda_widget
+                # Looked up on each access, so ``panels.mda`` is always the
+                # editor on screen (the MDA layout can be switched).
                 if (panels := getattr(acquire, "panels", None)) is not None:
                     default_vars["panels"] = panels
 
@@ -150,14 +146,12 @@ class MMConsole(QtConsole):
                 "Use \033[1;33mwindow\033[0m to interact with the main window."
             )
         if "acquire" in self.shell.user_ns:
-            lines.append(
-                "Use \033[1;33macquire\033[0m for the Acquire page and "
-                "\033[1;33mmdawidget\033[0m for its MDA controls."
-            )
+            lines.append("Use \033[1;33macquire\033[0m for the Acquire page.")
         if "panels" in self.shell.user_ns:
             lines.append(
                 "Use \033[1;33mpanels\033[0m for its panels, e.g. "
-                "\033[1;33mpanels.stage_explorer\033[0m (opens the panel if needed)."
+                "\033[1;33mpanels.mda\033[0m or \033[1;33mpanels.stage_explorer\033[0m"
+                " (opens the panel if needed)."
             )
         return "\n".join(lines)
 
