@@ -157,8 +157,9 @@ time), and a `WidgetActionInfo` tying the two together.
 
 ## Adding a top-level tab
 
-The window's tabs (Installation, Hardware Setup, Configurations, Acquire) are
-pages in a `QStackedWidget`, built in `MicroManagerGUI.__init__` in
+The window's tabs (Installation, Hardware Setup, Configurations, Acquire,
+Smart Microscopy) are pages in a `QStackedWidget`, built in
+`MicroManagerGUI.__init__` in
 [`_main_window.py`](../../src/pymmcore_gui/_main_window.py). To add one:
 
 1. Subclass `TabPage` ([`widgets/_tab_page.py`](../../src/pymmcore_gui/widgets/_tab_page.py)),
@@ -167,7 +168,15 @@ pages in a `QStackedWidget`, built in `MicroManagerGUI.__init__` in
 2. In `MicroManagerGUI.__init__`, create it with `self._mmc` and add it to
    `self._stack`. Add its label to `TAB_LABELS` at the same position: the
    tab index is the stack index.
-3. If the page can change hardware state, add it to the pages disabled in
-   `_on_mda_running` and `_on_pixel_calibration_running`.
-4. If it owns timers, threads or workers, stop them from
-   `MicroManagerGUI.closeEvent`, as `self._acquire.shutdown()` does.
+3. Add it to the pages listed in `_on_mda_running`, which disables every
+   tab except the one running the acquisition, and, if it can change
+   hardware state, to those in `_on_pixel_calibration_running`.
+4. If the page starts its own acquisitions, add a `RunOwner` member in
+   [`_run_owner.py`](../../src/pymmcore_gui/_run_owner.py), call
+   `RunOwnership.claim()` with it just before starting a run (as the Smart
+   Microscopy page does), and return the page for it from
+   `MicroManagerGUI._run_owner_page`. The window then keeps the user on that
+   page during the run, and other pages' viewers ignore it.
+5. If it owns timers, threads or workers, stop them from
+   `MicroManagerGUI.closeEvent`, as `self._acquire.shutdown()` and
+   `self._smart.shutdown()` do.

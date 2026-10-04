@@ -12,8 +12,10 @@ The application window is `MicroManagerGUI` in
 `src/pymmcore_gui/_main_window.py`. The CLI and `create_mmgui()` both use it by
 default; callers can pass a custom `window_cls`.
 
-- `widgets/` contains the Acquire, Installation, Configurations, and Hardware
-  Setup pages, startup/preferences dialogs, toolbars, and reusable controls.
+- `widgets/` contains the Acquire, Installation, Configurations, Hardware
+  Setup, and Smart Microscopy (`widgets/_smart/`) pages, startup/preferences
+  dialogs, toolbars, and reusable controls. `_run_owner.py` records which page
+  started the current acquisition.
 - `_theme/` contains the shared style, colors, fonts, and zoom support.
 - `_ndv_viewers.py` contains `AcquireViewersManager`, including live and reopened
   acquisition viewers. `_camera_roi_sync.py` manages camera/viewer ROI sessions.
@@ -39,8 +41,9 @@ Window geometry, theme, zoom, and Acquire layout preferences are stored in
 the `modern_window` JSON section (version `1.0`). Custom windows without a
 startup hook use the configuration fallback settings. See the
 [saving](docs/architecture/DATA_SAVING.md),
-[calibration](docs/architecture/PIXEL_CALIBRATION.md) and
-[panels](docs/architecture/PANELS.md) architecture notes.
+[calibration](docs/architecture/PIXEL_CALIBRATION.md),
+[panels](docs/architecture/PANELS.md) and
+[smart microscopy](docs/architecture/SMART_MICROSCOPY.md) architecture notes.
 
 ## Setup with uv
 

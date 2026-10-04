@@ -179,10 +179,12 @@ If you installed the bundled app, simply double-click the application to launch
 it. A startup dialog asks which hardware configuration to load (a recent file,
 the Micro-Manager Demo configuration -- so you can try it without real
 hardware -- none, or a file to browse for) and which window layout to open.
-The main window then shows four tabs: **Installation** (Micro-Manager device
+The main window then shows five tabs: **Installation** (Micro-Manager device
 adapters), **Hardware Setup** (build or edit a configuration),
-**Configurations** (device properties, config groups and pixel sizes), and
-**Acquire** (live view, MDA and the dockable tool panels).
+**Configurations** (device properties, config groups and pixel sizes),
+**Acquire** (live view, MDA and the dockable tool panels), and **Smart
+Microscopy** (acquisitions steered by a Python analysis script; see the
+[guide](docs/architecture/SMART_MICROSCOPY.md)).
 
 ### Launching via Python (CLI)
 
@@ -207,10 +209,11 @@ create_mmgui()
 
 This will initialize the application and show the main GUI window.
 
-Python launches, `mmgui`, and the bundled application all use the same interface,
-with Installation, Hardware Setup, Configurations, and Acquire pages. Startup
-asks which configuration and layout to open. An explicit configuration skips
-that dialog; use `mm_config=False` to keep an already configured core unchanged.
+Python launches, `mmgui`, and the bundled application all use the same
+interface, with Installation, Hardware Setup, Configurations, Acquire, and
+Smart Microscopy pages. Startup asks which configuration and layout to open. An
+explicit configuration skips that dialog; use `mm_config=False` to keep an
+already configured core unchanged.
 
 The public window class is `pymmcore_gui.MicroManagerGUI`. The package structure
 is described in

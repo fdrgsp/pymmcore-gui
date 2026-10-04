@@ -59,8 +59,8 @@ if TYPE_CHECKING:
 
 # Resolved on first access rather than imported here: importing *any*
 # submodule runs this file first, and these pull in Qt and the whole window.
-# Qt-free submodules (e.g. ``pymmcore_gui.smart``, imported by user analysis
-# scripts in a spawned process) must stay cheap to import.
+# Processes spawned by the app (e.g. a Smart Microscopy analysis worker)
+# re-import its entry module, so this package must stay cheap to import.
 _LAZY_EXPORTS: dict[str, str] = {
     "create_mmgui": "._app",
     "MicroManagerGUI": "._main_window",
