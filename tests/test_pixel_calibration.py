@@ -383,7 +383,12 @@ def test_calibration_recovers_the_synthetic_matrix() -> None:
     assert result.algorithm_version == "v1"
     # Four corners are fitted, and there is no holdout stage at all.
     assert len(result.observations) == 4
-    assert [obs.label for obs in result.observations] == ["1", "2", "3", "4"]
+    assert [obs.label for obs in result.observations] == [
+        "bottom right",
+        "top right",
+        "top left",
+        "bottom left",
+    ]
     assert all(obs.residual_px is not None for obs in result.observations)
     # Two probe measurements plus the four corners are reported during acquisition.
     assert len(observations) == 6
@@ -398,6 +403,31 @@ def test_calibration_recovers_the_synthetic_matrix() -> None:
     # Nothing is persisted by the routine itself.
     assert core.stored_size == stored_size
     assert core.stored_affine == stored_affine
+
+
+def test_test_position_names_say_where_the_feature_appeared() -> None:
+    """Each test position is named after where the sample moved in the image.
+
+    Located in the frame the synthetic camera actually produced at that stage
+    position, by cross-correlating it with the unshifted field, so the check
+    does not rely on the routine's (Java) sign convention.
+    """
+    core = _SyntheticCore()
+    result = run_pixel_calibration(core, _fast_options(), resolution_id="Resolution")
+
+    height, width = core.base_image.shape
+    reference = np.fft.fft2(core.base_image)
+    for observation in result.observations:
+        core.position[:] = observation.stage_position_um
+        frame = core.getImage()
+        correlation = np.real(np.fft.ifft2(np.fft.fft2(frame) * np.conj(reference)))
+        row, col = np.unravel_index(int(np.argmax(correlation)), correlation.shape)
+        # Unwrap the circular shift: content moved by (row, col) pixels.
+        row = row - height if row > height // 2 else row
+        col = col - width if col > width // 2 else col
+        vertical = "top" if row < 0 else "bottom"
+        horizontal = "left" if col < 0 else "right"
+        assert observation.label == f"{vertical} {horizontal}"
 
 
 def test_calibration_pixel_size_matches_the_true_field() -> None:

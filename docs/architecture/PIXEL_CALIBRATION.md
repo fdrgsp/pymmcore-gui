@@ -271,6 +271,12 @@ same corner coordinate is the prediction that selects the tracked patch. The
 corners are visited in sequence without returning to the origin, so the
 longest single move is roughly twice a corner offset.
 
+The GUI calls these measurements *test positions* and names each one after
+where the tracked feature appears in the camera image (`TEST_POSITION_NAMES`):
+bottom right, top right, top left, bottom left, in acquisition order. The
+corner coordinates use the Java sign, the negative of the features' apparent
+motion, so `(-ax, -ay)` puts the feature right of and below the centre.
+
 On a 2048 px camera at 0.1085 µm/px the corners sit about 79 µm from the
 origin, so the panel's 100 µm default safe radius is enough there but not at
 low magnification.
@@ -377,8 +383,9 @@ restoration rather than terminating the worker abruptly.
 
 The diagnostic graph counts observations during acquisition, then becomes a
 pixel-residual bar chart once the four-corner affine exists. Its header shows
-the exact translation-aware corner RMS beside the run's acceptance limit. Each
-corner row gives the residual magnitude and `(dx, dy)` components; green bars
+the exact translation-aware RMS beside the run's acceptance limit. Each row is
+one test position ("Test position — top left", and so on, drawn in reading
+order) and gives the residual magnitude and `(dx, dy)` components; green bars
 are within the limit and magenta bars exceed it. A dashed line marks the RMS
 limit.
 

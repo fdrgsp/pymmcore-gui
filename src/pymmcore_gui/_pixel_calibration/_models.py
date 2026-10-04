@@ -94,7 +94,8 @@ class CalibrationObservation:
     shift. It stays ``None`` on observations emitted live during acquisition,
     because no matrix exists yet to measure them against.
 
-    ``label`` is the corner number drawn by the diagnostics graph.
+    ``label`` names a corner measurement by where the tracked feature appeared
+    in the image (see ``TEST_POSITION_NAMES``); the diagnostics graph shows it.
     """
 
     stage_position_um: tuple[float, float]

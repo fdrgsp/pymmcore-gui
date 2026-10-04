@@ -14,6 +14,7 @@ from superqt.utils import signals_blocked
 
 from pymmcore_gui._light_sources import parse_light_source_comments
 from pymmcore_gui._pixel_calibration import (
+    TEST_POSITION_NAMES,
     AffineFitResult,
     CalibrationCancelled,
     CalibrationCaptureSettings,
@@ -101,7 +102,7 @@ def _measurement_lines(fit: AffineFitResult) -> list[str]:
 
 def _scatter_line(fit: AffineFitResult) -> str:
     return (
-        f"Corner scatter: RMS {fit.rms_residual_px:.4f} px "
+        f"Test-position scatter: RMS {fit.rms_residual_px:.4f} px "
         f"(worst {fit.max_residual_px:.4f} px)"
     )
 
@@ -125,7 +126,7 @@ PHASE_LABELS = {
     "probe-x": "Finding a useful X-stage displacement",
     "probe-y": "Finding a useful Y-stage displacement",
     "probe": "Doubling the stage step to find a usable displacement",
-    "measure": "Measuring the four corners",
+    "measure": "Measuring the four test positions",
     "finalize": "Fitting and converting to storage units",
     "complete": "Calibration complete",
 }
@@ -160,8 +161,25 @@ class _CalibrationDisplayState:
     rejected_result: PixelCalibrationResult | None
 
 
+_READING_ORDER = ("top left", "top right", "bottom left", "bottom right")
+
+
+def _position_name(index: int) -> str:
+    """Name of the test position measured *index*-th (see TEST_POSITION_NAMES)."""
+    if index < len(TEST_POSITION_NAMES):
+        return TEST_POSITION_NAMES[index]
+    return str(index + 1)
+
+
+def _reading_order(name: str) -> int:
+    """Sort key putting test positions in reading order; unknown names last."""
+    if name in _READING_ORDER:
+        return _READING_ORDER.index(name)
+    return len(_READING_ORDER)
+
+
 class CalibrationDiagnosticsWidget(QWidget):
-    """Show the pixel residuals used to judge the four-corner affine fit."""
+    """Show the pixel residuals used to judge the four-test-position affine fit."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -170,13 +188,17 @@ class CalibrationDiagnosticsWidget(QWidget):
         self._observations: list[tuple[CalibrationObservation, str]] = []
         self.setMinimumHeight(190)
         self.setToolTip(
-            "Each bar is one corner's residual: how far its measured stage "
-            "position falls from where the fitted transform predicts it, in "
-            "camera pixels. Green is within the RMS limit that accepts the fit, "
-            "magenta is beyond it. Values in parentheses are the residual's "
-            "(dx, dy). A single bad measurement is spread across all four "
-            "corners rather than isolated at its source, so the bars show how "
-            "much the corners disagree with the fit, not which one went wrong."
+            "Each bar is one test position's residual. The calibration measures "
+            "four test positions, moving the stage so the tracked sample "
+            "feature appears near each corner of the camera image (top left, "
+            "top right, bottom left, bottom right). The residual is how far "
+            "that measured stage position falls from where the fitted "
+            "transform predicts it, in camera pixels. Green is within the RMS "
+            "limit that accepts the fit, magenta is beyond it. Values in "
+            "parentheses are the residual's (dx, dy). A single bad measurement "
+            "is spread across all four test positions rather than isolated at "
+            "its source, so the bars show how much they disagree with the fit, "
+            "not which one went wrong."
         )
 
     def setResult(self, result: PixelCalibrationResult | None) -> None:
@@ -196,7 +218,7 @@ class CalibrationDiagnosticsWidget(QWidget):
         self.update()
 
     def setFit(self, fit: object) -> None:
-        """Show corner residuals as soon as the affine fit becomes available."""
+        """Show test-position residuals as soon as the affine fit is available."""
         if not isinstance(fit, AffineFitResult):
             return
         self._result = None
@@ -215,7 +237,7 @@ class CalibrationDiagnosticsWidget(QWidget):
         self.update()
 
     def _residual_rows(self) -> list[tuple[str, np.ndarray]]:
-        """Return labelled corner residual vectors for painting."""
+        """Return labelled test-position residual vectors, in reading order."""
         rows: list[tuple[str, np.ndarray]] = []
         if self._result is not None:
             for index, observation in enumerate(self._result.observations):
@@ -225,16 +247,17 @@ class CalibrationDiagnosticsWidget(QWidget):
                 if residual is not None:
                     rows.append(
                         (
-                            f"Corner {observation.label or index + 1}",
+                            observation.label or _position_name(index),
                             np.asarray(residual, dtype=np.float64),
                         )
                     )
         elif self._fit is not None:
             rows.extend(
-                (f"Corner {index + 1}", np.asarray(residual))
+                (_position_name(index), np.asarray(residual))
                 for index, residual in enumerate(self._fit.residuals_px)
             )
-        return rows
+        rows.sort(key=lambda row: _reading_order(row[0]))
+        return [(f"Test position — {name}", vector) for name, vector in rows]
 
     def _draw_residuals(self, painter: QPainter, rect: QRectF) -> None:
         rows = self._residual_rows()
@@ -242,9 +265,9 @@ class CalibrationDiagnosticsWidget(QWidget):
             acquired = len(self._observations)
             message = (
                 f"{acquired}/6 measurements acquired\n"
-                "Residuals appear after the four-corner fit"
+                "Residuals appear after the test positions are fitted"
                 if acquired
-                else "Corner residual diagnostics will appear here"
+                else "Test-position residuals will appear here"
             )
             painter.setPen(self.palette().text().color())
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, message)
@@ -262,7 +285,7 @@ class CalibrationDiagnosticsWidget(QWidget):
         painter.drawText(
             rect.adjusted(8, 3, -8, -3),
             Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter,
-            f"Corner fit RMS {rms:.2f} px / {limit:.2f} px limit",
+            f"Fit RMS {rms:.2f} px / {limit:.2f} px limit",
         )
 
         content = rect.adjusted(8, 27, -8, -20)
@@ -314,7 +337,7 @@ class CalibrationDiagnosticsWidget(QWidget):
             painter.setPen(text_color)
             painter.drawText(
                 QRectF(row.left(), row.top(), label_width, row.height()),
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                 label,
             )
             color = QColor("#3fb950" if norm <= limit else "#d65ad1")
@@ -1437,7 +1460,7 @@ class PixelCalibrationPanel(QWidget):
         self._diagnostics.addObservation(observation, kind)
 
     def _on_fit(self, fit: object) -> None:
-        """Show the four translation-aware corner residuals once fitted."""
+        """Show the four translation-aware test-position residuals once fitted."""
         self._diagnostics.setFit(fit)
 
     def _on_preview_ready(self) -> None:
@@ -1519,7 +1542,7 @@ class PixelCalibrationPanel(QWidget):
             f"XScale {x_scale:.4f} · YScale {y_scale:.4f} · "
             f"Rotation {rotation_deg:.2f}° · Shear {shear:.4f} · "
             f"{'mirrored' if fit.determinant < 0 else 'not mirrored'}",
-            f"Quality warning: corner RMS {fit.rms_residual_px:.4f} px; "
+            f"Quality warning: test-position RMS {fit.rms_residual_px:.4f} px; "
             f"acceptance limit {result.max_rms_px:.4f} px",
             "",
             f"Applied to {target.resolution_id!r}. Use 'Save to core' to update "
@@ -1542,7 +1565,7 @@ class PixelCalibrationPanel(QWidget):
         ``diagnostics``, supplied only by the worker's ``failed`` signal for
         an actual calibration/test-frame attempt, replaces the diagnostics
         graph with whatever fit that run produced (or clears it to blank if
-        none) -- so a run whose corners scattered past the tolerance still
+        none) -- so a run whose test positions scattered past the tolerance still
         shows the residuals that explain why. Direct
         callers reporting an unrelated failure (e.g. live-preview setup)
         omit it and leave the graph showing whatever the last calibration
@@ -1566,7 +1589,7 @@ class PixelCalibrationPanel(QWidget):
                 "",
                 *_measurement_lines(fit),
                 "",
-                "Not applied: the four corner measurements disagree with the "
+                "Not applied: the four test-position measurements disagree with the "
                 "fitted transform, so this pixel size may be unreliable.",
             ]
             self._set_result_message(

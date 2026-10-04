@@ -289,16 +289,16 @@ def test_error_and_success_summary_use_same_information_area(
 
     panel._on_result(_result_for_selected_resolution(page))
     assert panel._result_text is result_field
-    assert "Corner scatter" in result_field.text()
+    assert "Test-position scatter" in result_field.text()
     assert panel._info_splitter.widget(0) is panel._result_widget
     assert panel._info_splitter.widget(1) is panel._diagnostics
     panel._diagnostics.resize(500, 240)
     assert not panel._diagnostics.grab().isNull()
-    assert "one corner's residual" in panel._diagnostics.toolTip()
+    assert "one test position's residual" in panel._diagnostics.toolTip()
     assert "(dx, dy)" in panel._diagnostics.toolTip()
 
 
-def test_corner_residual_diagnostics_are_shown_after_fitting(
+def test_test_position_residuals_are_shown_after_fitting(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
     page = ConfigurationsPage(mmcore)
@@ -317,11 +317,13 @@ def test_corner_residual_diagnostics_are_shown_after_fitting(
     panel._on_fit(result.fit)
     assert panel._diagnostics._fit is result.fit
     rows = panel._diagnostics._residual_rows()
+    # Measured bottom right, top right, top left, bottom left; drawn in
+    # reading order.
     assert [label for label, _vector in rows] == [
-        "Corner 1",
-        "Corner 2",
-        "Corner 3",
-        "Corner 4",
+        "Test position — top left",
+        "Test position — top right",
+        "Test position — bottom left",
+        "Test position — bottom right",
     ]
     assert all(np.linalg.norm(vector) == 0 for _label, vector in rows)
     panel._on_observation(result.observations[1], "fit")
@@ -342,11 +344,19 @@ def test_corner_residual_diagnostics_are_shown_after_fitting(
         observations=observations,
     )
     panel._diagnostics.setResult(diagnostics)
-    norms = [
-        float(np.linalg.norm(vector))
-        for _label, vector in panel._diagnostics._residual_rows()
-    ]
-    assert norms == pytest.approx([6.0, 2.0, 2.0, 2.0])
+    norms = {
+        label: float(np.linalg.norm(vector))
+        for label, vector in panel._diagnostics._residual_rows()
+    }
+    # The first measurement (bottom right) carries the large residual.
+    assert norms == pytest.approx(
+        {
+            "Test position — top left": 2.0,
+            "Test position — top right": 2.0,
+            "Test position — bottom left": 2.0,
+            "Test position — bottom right": 6.0,
+        }
+    )
 
 
 def test_failed_calibration_shows_estimate_without_applying_it(
@@ -390,7 +400,7 @@ def test_failed_calibration_shows_estimate_without_applying_it(
     # Binning and the magnification factor are both 1 here, so the stored raw
     # size equals the measured one and must not be printed twice.
     assert "stored raw" not in summary
-    assert "Corner scatter: RMS 5.0000 px (worst 5.0000 px)" in summary
+    assert "Test-position scatter: RMS 5.0000 px (worst 5.0000 px)" in summary
     # The same four numbers the Java dialog reports, plus handedness, are shown
     # for a rejected run too, so the measurement can still be judged by eye.
     assert "XScale" in summary
@@ -398,7 +408,7 @@ def test_failed_calibration_shows_estimate_without_applying_it(
     assert "Shear" in summary
     assert "Mirrored: yes" in summary
     assert "Point mapping scatter exceeds tolerance" in summary
-    assert "four corner measurements disagree" in summary
+    assert "four test-position measurements disagree" in summary
     assert "pixel size may be unreliable" in summary
     assert preset.pixel_size_um == original_size
     assert panel._diagnostics._result is diagnostics

@@ -15,6 +15,7 @@ from ._models import (
 )
 from ._persistence import commit_pixel_calibration
 from ._routine import (
+    TEST_POSITION_NAMES,
     CalibrationOptions,
     affine_to_measurements,
     cross_correlate,
@@ -25,6 +26,7 @@ from ._routine import (
 )
 
 __all__ = [
+    "TEST_POSITION_NAMES",
     "AffineFitResult",
     "CalibrationCancelled",
     "CalibrationCaptureSettings",

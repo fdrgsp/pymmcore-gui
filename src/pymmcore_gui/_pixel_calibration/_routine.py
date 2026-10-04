@@ -303,6 +303,16 @@ def _as_float_image(image: ArrayLike) -> NDArray[np.float32]:
 
 ALGORITHM_VERSION = "v1"
 
+TEST_POSITION_NAMES = ("bottom right", "top right", "top left", "bottom left")
+"""Where the tracked sample feature appears in the camera image at each of the
+four corner measurements, in acquisition order.
+
+The corner targets use Java's sign convention -- the negative of the
+features' apparent motion -- so the first one, ``(-ax, -ay)``, puts the
+feature right of and below the image centre. These names label the
+measurements for users; the routine itself only knows the corner offsets.
+"""
+
 
 @dataclass(frozen=True)
 class CalibrationOptions:
@@ -873,14 +883,16 @@ def _run_calibration(
     ay = tracker.height // 2 - tracker.side
     if ax <= 0 or ay <= 0:
         raise PixelCalibrationError(
-            "The camera image is too small to place the corner measurements "
+            "The camera image is too small to place the test positions "
             "outside the tracked region."
         )
     corners = [(-ax, -ay), (-ax, ay), (ax, ay), (ax, -ay)]
 
     corner_shifts: list[NDArray[np.float64]] = []
     corner_positions: list[NDArray[np.float64]] = []
-    for index, corner in enumerate(corners):
+    for index, (corner, name) in enumerate(
+        zip(corners, TEST_POSITION_NAMES, strict=True)
+    ):
         _notify(progress, "measure", 0.65 + 0.3 * index / len(corners))
         expected = np.asarray(corner, dtype=np.float64)
         predicted_stage = first_approx @ np.asarray([expected[0], expected[1], 1.0])
@@ -890,7 +902,7 @@ def _run_calibration(
         corner_positions.append(actual)
         _notify_observation(
             observation_callback,
-            _observation(measured, actual, origin, str(index + 1)),
+            _observation(measured, actual, origin, name),
             "corner",
         )
 
@@ -910,9 +922,13 @@ def _run_calibration(
         matrix, binning=fingerprint.binning, magnification=fingerprint.magnification
     )
     observations = tuple(
-        _observation(shift, position, origin, str(index + 1), residual)
-        for index, (shift, position, residual) in enumerate(
-            zip(corner_shifts, corner_positions, residuals_px, strict=True)
+        _observation(shift, position, origin, name, residual)
+        for shift, position, residual, name in zip(
+            corner_shifts,
+            corner_positions,
+            residuals_px,
+            TEST_POSITION_NAMES,
+            strict=True,
         )
     )
     result = PixelCalibrationResult(
