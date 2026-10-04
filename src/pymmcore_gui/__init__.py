@@ -52,13 +52,9 @@ if sys.platform == "win32":
 
 from ._app import create_mmgui
 from ._main_window import MicroManagerGUI
-from .actions import ActionInfo, CoreAction, WidgetAction
 
 __all__ = [
-    "ActionInfo",
-    "CoreAction",
     "MicroManagerGUI",
-    "WidgetAction",
     "__version__",
     "create_mmgui",
 ]

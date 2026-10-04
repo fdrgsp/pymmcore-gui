@@ -71,7 +71,6 @@ from pymmcore_gui._theme import (
 )
 from pymmcore_gui._theme._dark import DARK_THEME
 from pymmcore_gui._theme._light import LIGHT_THEME
-from pymmcore_gui.actions import ActionInfo, WidgetAction
 from pymmcore_gui.widgets._acquire import AcquirePage
 from pymmcore_gui.widgets._configurations import ConfigurationsPage
 from pymmcore_gui.widgets._hardware import HardwareSetupPage
@@ -514,16 +513,17 @@ class MicroManagerGUI(QMainWindow):
         """
         file_menu = cast("QMenu", cast("QMenuBar", self.menuBar()).addMenu("&File"))
 
-        about = ActionInfo.for_key(WidgetAction.ABOUT).to_qaction(self._mmc, self)
+        about = QAction("About pymmcore-gui…", self)
+        about.setMenuRole(QAction.MenuRole.AboutRole)
         about.triggered.connect(self._show_about)
         file_menu.addAction(about)
 
     def _show_about(self) -> None:
         """Show the About dialog, creating it on first use."""
         if self._about is None:
-            from pymmcore_gui.actions.widget_actions import create_about_widget
+            from pymmcore_gui.widgets._about_widget import AboutWidget
 
-            self._about = cast("QDialog", create_about_widget(self))
+            self._about = AboutWidget(parent=self)
         self._about.show()
         self._about.raise_()
         self._about.activateWindow()

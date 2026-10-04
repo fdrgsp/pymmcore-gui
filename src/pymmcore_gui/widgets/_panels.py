@@ -106,9 +106,6 @@ def _create_presets(_parent: QWidget, core: CMMCorePlus) -> QWidget:
 def _create_property_browser(parent: QWidget, core: CMMCorePlus) -> QWidget:
     from pymmcore_widgets import PropertyBrowser
 
-    # Built with the page's own core, never one resolved from the parent chain,
-    # which falls back to the global singleton when no ``pyMMGUI`` window hosts
-    # the page.
     return PropertyBrowser(parent=parent, mmcore=core)
 
 
@@ -177,15 +174,9 @@ def _create_console(parent: QWidget, core: CMMCorePlus) -> QWidget:
 
 
 def _create_exception_log(parent: QWidget, _core: CMMCorePlus) -> QWidget:
-    from pymmcore_gui._qt.QtCore import Qt
     from pymmcore_gui.widgets._exception_log import ExceptionLog
 
-    # Window flags for standalone use (``widget_actions.create_exception_log``);
-    # docking reparents the widget, which clears them.
-    widget = ExceptionLog(parent=parent)
-    widget.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Window)
-    widget.resize(800, 400)
-    return widget
+    return ExceptionLog(parent=parent)
 
 
 def _refresh_mda(widget: QWidget) -> None:

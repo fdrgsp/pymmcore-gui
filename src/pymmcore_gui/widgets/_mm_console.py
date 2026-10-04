@@ -128,6 +128,8 @@ class MMConsole(QtConsole):
                 if mda_widget is not None:
                     default_vars["mdawidget"] = mda_widget
                     default_vars["mda_widget"] = mda_widget
+                if (panels := getattr(acquire, "panels", None)) is not None:
+                    default_vars["panels"] = panels
 
         mmc = mmc or pymmcore_plus.CMMCorePlus.instance()
         default_vars.update({"mmc": mmc, "core": mmc, "mmcore": mmc, "mda": mmc.mda})
@@ -151,6 +153,11 @@ class MMConsole(QtConsole):
             lines.append(
                 "Use \033[1;33macquire\033[0m for the Acquire page and "
                 "\033[1;33mmdawidget\033[0m for its MDA controls."
+            )
+        if "panels" in self.shell.user_ns:
+            lines.append(
+                "Use \033[1;33mpanels\033[0m for its panels, e.g. "
+                "\033[1;33mpanels.stage_explorer\033[0m (opens the panel if needed)."
             )
         return "\n".join(lines)
 

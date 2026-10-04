@@ -1149,7 +1149,7 @@ def test_acquire_console_dock_is_lazy(
     assert page.panel_widget(PanelKey.CONSOLE) is console  # not rebuilt
 
 
-def test_modern_console_exposes_window_acquire_and_mda_widget(
+def test_console_exposes_window_acquire_mda_widget_and_panels(
     mmcore: CMMCorePlus,
     qtbot: QtBot,
     monkeypatch: pytest.MonkeyPatch,
@@ -1169,6 +1169,51 @@ def test_modern_console_exposes_window_acquire_and_mda_widget(
     assert namespace["acquire"] is window.acquire
     assert namespace["mdawidget"] is window.acquire.mda_widget
     assert namespace["mda_widget"] is window.acquire.mda_widget
+    assert namespace["panels"].console is console
+
+
+def test_panels_accessor_opens_a_panel_and_returns_its_widget(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    panels = page.panels
+
+    assert dir(panels) == sorted(info.key for info in PANELS)
+    assert page.panel_widget(PanelKey.STAGE_EXPLORER) is None
+
+    explorer = panels.stage_explorer
+    assert isinstance(explorer, ThemedStageExplorer)
+    assert explorer is page.panel_widget(PanelKey.STAGE_EXPLORER)
+    assert PanelKey.STAGE_EXPLORER in page.open_panels()
+    assert page.panel_button(PanelKey.STAGE_EXPLORER).isChecked()
+    assert "stage_explorer (open)" in repr(panels)
+
+    # A closed panel reopens; reading an open one is a plain lookup.
+    page.panel_button(PanelKey.STAGE_EXPLORER).setChecked(False)
+    assert panels.stage_explorer is explorer
+    assert PanelKey.STAGE_EXPLORER in page.open_panels()
+
+    with pytest.raises(AttributeError, match="No panel 'not_a_panel'"):
+        _ = panels.not_a_panel
+
+
+def test_panels_accessor_builds_no_new_panel_during_an_acquisition(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    explorer = page.panels.stage_explorer
+
+    page.set_mda_lock(True)
+    try:
+        with pytest.raises(RuntimeError, match="while an acquisition is running"):
+            _ = page.panels.camera_roi
+        assert page.panel_widget(PanelKey.CAMERA_ROI) is None
+        # Panels that already exist are still reachable.
+        assert page.panels.stage_explorer is explorer
+    finally:
+        page.set_mda_lock(False)
 
 
 def test_acquire_stage_explorer_is_a_lazy_toolbar_dock(
@@ -1856,9 +1901,8 @@ def test_acquire_docked_panels_are_reparented_not_windows(
 ) -> None:
     """Docking reparents every panel widget, clearing any standalone window flags.
 
-    ``PropertyBrowser`` is a QDialog upstream and ``_create_exception_log``
-    sets ``WindowStaysOnTopHint | Window``. ``dock.setWidget()`` reparents
-    them, and ``QWidget.setParent()`` clears window flags -- this must keep
+    ``PropertyBrowser`` is a QDialog upstream. ``dock.setWidget()`` reparents
+    it, and ``QWidget.setParent()`` clears window flags -- this must keep
     working *without* a pre-emptive ``setWindowFlags()`` call, which Qt
     documents as hiding the widget.
     """
@@ -2138,8 +2182,7 @@ def test_acquire_camera_roi_is_a_panel_and_exception_log_panel_opens(
     log_dock = page.panel_dock(PanelKey.EXCEPTION_LOG)
     assert isinstance(log_widget, ExceptionLog)
     assert log_dock is not None and not log_dock.isClosed()
-    # _create_exception_log sets WindowStaysOnTopHint | Window upstream --
-    # every registry panel must be normalized to a plain docked child.
+    # Every registry panel must be a plain docked child.
     assert not log_widget.isWindow()
 
     assert log_dock.dockAreaWidget() is not page._mda_dock.dockAreaWidget()

@@ -241,10 +241,13 @@ can pass it to `create_mmgui(mmcore=my_core)`. By default the GUI will first
 check if there is a global singleton (`CMMCorePlus.instance()`), and if not, it
 will create a new instance.
 
-The console provides `window`, `acquire`, `mdawidget` (also `mda_widget`), and
-`mmc`/`core`/`mmcore` for the owning window's core. From Python, use
-`window.acquire.mda_widget` and `window.acquire.viewers` to access acquisition
-controls and viewers. To add your own tool to the Acquire page, see
+The console provides `window`, `acquire`, `mdawidget` (also `mda_widget`),
+`panels`, and `mmc`/`core`/`mmcore` for the owning window's core. `panels`
+gives each Acquire-page panel's widget by key, opening the panel if it isn't
+open yet: `panels.stage_explorer`, `panels.properties`, `panels.camera_roi`,
+and so on (`dir(panels)` lists them). From Python, the same are
+`window.acquire.mda_widget`, `window.acquire.panels` and
+`window.acquire.viewers`. To add your own tool to the Acquire page, see
 [Adding a panel](docs/architecture/PANELS.md).
 
 ## Prior Work

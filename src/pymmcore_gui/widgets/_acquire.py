@@ -171,6 +171,36 @@ class _Panel:
     """
 
 
+class PanelWidgets:
+    """The Acquire page's panel widgets, by key: ``panels.stage_explorer``.
+
+    Meant for the console. Reading a panel opens it first if it isn't open,
+    exactly as clicking its toolbar button would (see
+    :meth:`AcquirePage.open_panel`), so what comes back is always the live,
+    docked widget. ``dir(panels)`` lists the keys (the ``PanelKey`` values).
+    To look a panel up without opening it, use
+    :meth:`AcquirePage.panel_widget`.
+    """
+
+    def __init__(self, page: AcquirePage) -> None:
+        self._page = page
+
+    def __getattr__(self, key: str) -> QWidget:
+        if key.startswith("_") or key not in self._page._panels:
+            raise AttributeError(
+                f"No panel {key!r}. Available: {', '.join(self.__dir__())}"
+            )
+        return self._page.open_panel(key)
+
+    def __dir__(self) -> list[str]:
+        return sorted(self._page._panels)
+
+    def __repr__(self) -> str:
+        open_keys = self._page.open_panels()
+        keys = (f"{k} (open)" if k in open_keys else k for k in self.__dir__())
+        return f"<panels: {', '.join(keys)}>"
+
+
 class AcquirePage(TabPage):
     """Acquisition controls with a dockable MDA/tools layout and image viewers.
 
@@ -742,6 +772,28 @@ class AcquirePage(TabPage):
         """Return the panel's widget, or None if it hasn't been created yet."""
         return self._panels[key].widget
 
+    def open_panel(self, key: str) -> QWidget:
+        """Open *key*'s panel, as clicking its toolbar button would; return its widget.
+
+        A panel not built yet can't be opened while an acquisition runs:
+        building it queries the core, which is why the toolbar's panel
+        buttons are disabled for the run too.
+        """
+        panel = self._panels[key]
+        if panel.widget is None and self._mda_locked:
+            raise RuntimeError(
+                f"The {panel.info.title} panel can't be opened for the first time "
+                "while an acquisition is running."
+            )
+        panel.button.setChecked(True)
+        assert panel.widget is not None
+        return panel.widget
+
+    @property
+    def panels(self) -> PanelWidgets:
+        """The panel widgets by key, opening a panel on access: ``panels.console``."""
+        return PanelWidgets(self)
+
     def panel_dock(self, key: str) -> CDockWidget | None:
         """Return the panel's dock, or None if it hasn't been created yet."""
         return self._panels[key].dock
@@ -863,8 +915,7 @@ class AcquirePage(TabPage):
             QTimer.singleShot(0, pin)
 
     def _create_panel(self, panel: _Panel) -> None:
-        # Some upstream factories return a QDialog (PropertyBrowser) or set
-        # always-on-top window flags (_create_exception_log) meant for
+        # Some upstream widgets are a QDialog (PropertyBrowser), meant for
         # standalone use. Nothing is done about that here on purpose:
         # ``_add_dock``'s ``dock.setWidget()`` reparents the widget, and
         # QWidget.setParent() clears window flags -- which is exactly how
