@@ -81,6 +81,11 @@ are identical to pymmcore-plus's `examples/smart_microscopy/` scripts.
   (or skips that grid, with *On error: skip*). Calibrate it under
   *Configurations → Pixel Configuration*.
 
+- **Steering a run by hand:** from the console panel,
+  `window.smart.controller.runner.request(...)` adds events to the run in
+  progress (see the pymmcore-plus guide). Such frames show up in the
+  monitor with origin *external*.
+
 ## 4. For developers: the GUI side
 
 ```text
