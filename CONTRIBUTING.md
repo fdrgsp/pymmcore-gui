@@ -9,9 +9,8 @@
 ## Application structure
 
 The application window is `MicroManagerGUI` in
-`src/pymmcore_gui/_main_window.py`. `MainWindow` in that module is an alias for
-the same class. The CLI and `create_mmgui()` both use it by default; callers
-can pass a custom `window_cls`.
+`src/pymmcore_gui/_main_window.py`. The CLI and `create_mmgui()` both use it by
+default; callers can pass a custom `window_cls`.
 
 - `widgets/` contains the Acquire, Installation, Configurations, and Hardware
   Setup pages, startup/preferences dialogs, toolbars, and reusable controls.
@@ -25,20 +24,23 @@ can pass a custom `window_cls`.
 - `_qt/`, `actions/`, `_settings.py`, and `_layouts.py` provide Qt bindings,
   reusable actions, settings, and layout persistence.
 
-To add an Acquire tool, register a `PanelInfo` in `widgets/_panels.py`'s `PANELS`
-tuple before constructing the page. Its factory receives the parent and owning
-`CMMCorePlus`; the page creates the toolbar button and lazy dock. Use a unique,
-stable key. Keys and ADS object names are serialized, so changing them requires
-a layout migration. Keep `widgets/__init__.py` lightweight to avoid import cycles
-and to preserve lazy console construction.
+To add a tool to the Acquire page, register a `PanelInfo` in the `PANELS`
+tuple of `widgets/_panels.py`; the page builds its toolbar button, dock and
+layout persistence from that entry. [Adding a panel](docs/architecture/PANELS.md)
+walks through it, and also covers adding a top-level tab. Keep
+`widgets/__init__.py` lightweight to avoid import cycles and to preserve lazy
+console construction.
 
-The public action registry provides reusable actions and widget factories.
+The public action registry (`actions/`) provides reusable actions and widget
+factories. Factories for widgets that are also Acquire panels call the panel
+factories in `widgets/_panels.py`, so each widget is built in one place.
 
-Window geometry, selected mode, and Acquire layout preferences are stored in
+Window geometry, theme, zoom, and Acquire layout preferences are stored in
 the `modern_window` JSON section (version `1.0`). Custom windows without a
 startup hook use the configuration fallback settings. See the
-[saving](docs/architecture/DATA_SAVING.md) and
-[calibration](docs/architecture/PIXEL_CALIBRATION.md) architecture notes.
+[saving](docs/architecture/DATA_SAVING.md),
+[calibration](docs/architecture/PIXEL_CALIBRATION.md) and
+[panels](docs/architecture/PANELS.md) architecture notes.
 
 ## Setup with uv
 

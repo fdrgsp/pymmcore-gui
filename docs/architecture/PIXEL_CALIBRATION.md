@@ -503,24 +503,28 @@ not calibrate the user's physical microscope.
 
 ## Source map
 
-Paths below are relative links from this document's `TEMP_MD` directory.
+Paths below are relative links from this document's `docs/architecture`
+directory.
 
-- [Panel and worker](../../widgets/_pixel_calibration_panel.py): capture form,
-  preview, thread lifecycle, progress, and diagnostic presentation.
-- [Pixel configuration widget](../../widgets/_pixel_configuration.py):
+- [Panel and worker](../../src/pymmcore_gui/widgets/_pixel_calibration_panel.py):
+  capture form, preview, thread lifecycle, progress, and diagnostic
+  presentation.
+- [Pixel configuration widget](../../src/pymmcore_gui/widgets/_pixel_configuration.py):
   resolution binding and application of results to the editor.
-- [Configuration page](../_configurations.py): save actions and edit locking.
-- [Main window](../_main_win.py): configuration file save orchestration.
-- [Capture transaction](../../_pixel_calibration/_capture.py): temporary
-  camera/channel/exposure/light state and restoration.
-- [Calibration routine](../../_pixel_calibration/_routine.py): the ported Java
-  calibrator, its correlation and bicubic peak numerics, the
+- [Configuration page](../../src/pymmcore_gui/widgets/_configurations.py):
+  save actions and edit locking.
+- [Main window](../../src/pymmcore_gui/_main_window.py): configuration file
+  save orchestration.
+- [Capture transaction](../../src/pymmcore_gui/_pixel_calibration/_capture.py):
+  temporary camera/channel/exposure/light state and restoration.
+- [Calibration routine](../../src/pymmcore_gui/_pixel_calibration/_routine.py):
+  the ported Java calibrator, its correlation and bicubic peak numerics, the
   `AffineUtils` conversions, stage motion, and restoration.
-- [Storage units](../../_pixel_calibration/_fit.py): conversion to MMCore raw
-  units and the geometric warnings.
-- [Models and defaults](../../_pixel_calibration/_models.py): result types,
-  options, warnings, fingerprint, and error classes.
-- [Programmatic commit](../../_pixel_calibration/_persistence.py): direct
-  MMCore write, verification, and rollback helper.
-- [Numerical tests](../../../../tests/test_pixel_calibration.py) and
-  [GUI tests](../../../../tests/test_pixel_configuration_calibration.py).
+- [Storage units](../../src/pymmcore_gui/_pixel_calibration/_fit.py):
+  conversion to MMCore raw units and the geometric warnings.
+- [Models and defaults](../../src/pymmcore_gui/_pixel_calibration/_models.py):
+  result types, options, warnings, fingerprint, and error classes.
+- [Programmatic commit](../../src/pymmcore_gui/_pixel_calibration/_persistence.py):
+  direct MMCore write, verification, and rollback helper.
+- [Numerical tests](../../tests/test_pixel_calibration.py) and
+  [GUI tests](../../tests/test_pixel_configuration_calibration.py).

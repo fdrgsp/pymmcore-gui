@@ -78,18 +78,23 @@ def _get_core(obj: QObject) -> CMMCorePlus:
     return CMMCorePlus.instance()
 
 
+# Widgets that are also Acquire-page panels are built by the panel factories
+# in ``widgets._panels``, so each has a single implementation.
+
+
 def create_property_browser(parent: QWidget) -> pmmw.PropertyBrowser:
     """Create a Property Browser widget."""
-    from pymmcore_widgets import PropertyBrowser
+    from pymmcore_gui.widgets._panels import _create_property_browser
 
-    return PropertyBrowser(parent=parent, mmcore=_get_core(parent))
+    widget = _create_property_browser(parent, _get_core(parent))
+    return cast("pmmw.PropertyBrowser", widget)
 
 
 def create_mm_console(parent: QWidget) -> MMConsole:
     """Create a console widget."""
-    from pymmcore_gui.widgets._mm_console import MMConsole
+    from pymmcore_gui.widgets._panels import _create_console
 
-    return MMConsole(parent=parent)
+    return cast("MMConsole", _create_console(parent, _get_core(parent)))
 
 
 def create_install_widgets(parent: QWidget) -> QDialog:
@@ -113,9 +118,12 @@ def create_install_widgets(parent: QWidget) -> QDialog:
 
 def create_mda_widget(parent: QWidget) -> pmmw.MDAWidget:
     """Create the MDA widget."""
-    from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget
+    from pymmcore_gui.widgets._panels import _create_mda
 
-    return MemoryMDAWidget(parent=parent, mmcore=_get_core(parent))
+    # The panel factory sets no parent (AcquirePage docks the editor).
+    widget = _create_mda(parent, _get_core(parent))
+    widget.setParent(parent)
+    return cast("pmmw.MDAWidget", widget)
 
 
 def create_config_groups(parent: QWidget) -> pmmw.GroupPresetTableWidget:
@@ -134,20 +142,17 @@ def create_pixel_config(parent: QWidget) -> pmmw.PixelConfigurationWidget:
 
 def create_exception_log(parent: QWidget) -> ExceptionLog:
     """Create the Exception Log widget."""
-    from pymmcore_gui.widgets._exception_log import ExceptionLog
+    from pymmcore_gui.widgets._panels import _create_exception_log
 
-    wdg = ExceptionLog(parent=parent)
-    wdg.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Window)
-    wdg.resize(800, 400)
-    return wdg
+    return cast("ExceptionLog", _create_exception_log(parent, _get_core(parent)))
 
 
 def create_stage_widget(parent: QWidget) -> StagesPanel:
-    """Create modern stage controls for every loaded XY and Z stage."""
-    from pymmcore_gui.widgets._stage_control import StagesPanel
+    """Create stage controls for every loaded XY and Z stage."""
+    from pymmcore_gui.widgets._panels import _create_stages
 
     core = _get_core(parent)
-    panel = StagesPanel(parent=parent, mmcore=core)
+    panel = cast("StagesPanel", _create_stages(parent, core))
     panel.add_stages(
         device
         for kind in (DeviceType.XYStage, DeviceType.Stage)
@@ -167,12 +172,10 @@ def create_config_wizard(parent: QWidget) -> pmmw.ConfigWizard:
 
 def create_stage_explorer_widget(parent: QWidget) -> pmmw.StageExplorer:
     """Create the Stage Explorer widget."""
-    from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
+    from pymmcore_gui.widgets._panels import _create_stage_explorer
 
-    return ThemedStageExplorer(parent=parent, mmcore=_get_core(parent))
-
-
-# ######################## WidgetAction Enum #########################
+    widget = _create_stage_explorer(parent, _get_core(parent))
+    return cast("pmmw.StageExplorer", widget)
 
 
 # ######################## WidgetActionInfos #########################

@@ -145,7 +145,7 @@ class StagesPanel(QWidget):
         unstyle_widgets(widget)
 
         dock = CDockWidget(self._dock_manager, device, self)
-        # This panel lives inside AcquirePage, itself inside MainWindow's
+        # This panel lives inside AcquirePage, itself inside MicroManagerGUI's
         # QStackedWidget -- a floating dock would be a top-level window that
         # lingers after switching to another mode tab, same reason every
         # other panel dock disallows it (see AcquirePage._add_dock).

@@ -20,7 +20,7 @@ from ome_writers import (
 from pymmcore_widgets.useq_widgets import PYMMCW_METADATA_KEY
 
 import pymmcore_gui._ndv_viewers as acquire_viewers_module
-from pymmcore_gui._main_window import MainWindow
+from pymmcore_gui._main_window import MicroManagerGUI
 from pymmcore_gui._qt.QtCore import QThread
 from pymmcore_gui._qt.QtWidgets import QFileDialog, QMenu, QMessageBox
 from pymmcore_gui.widgets._acquire import AcquirePage
@@ -121,13 +121,13 @@ def test_dropped_paths_accepts_supported_and_rejects_the_rest(
     bad_file.write_text("hello")
 
     event = _FakeDropEvent([good, bad_dir, bad_file])
-    paths = MainWindow._dropped_acquisition_paths(event)  # type: ignore[arg-type]
+    paths = MicroManagerGUI._dropped_acquisition_paths(event)  # type: ignore[arg-type]
     assert paths == [good]
 
 
 def test_dropped_paths_empty_for_no_urls() -> None:
     event = _FakeDropEvent([])
-    assert MainWindow._dropped_acquisition_paths(event) == []  # type: ignore[arg-type]
+    assert MicroManagerGUI._dropped_acquisition_paths(event) == []  # type: ignore[arg-type]
 
 
 # --------------------------- AcquireViewersManager.open_acquisition ---------
@@ -587,7 +587,7 @@ def test_drag_enter_resolves_paths_once_for_the_whole_drag(
     and re-parse each dropped dataset's OME metadata dozens of times a
     second.
     """
-    win = MainWindow(mmcore=mmcore)
+    win = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(win)
     path = _write_acquisition(
         useq.MDASequence(channels=_ch("DAPI")), tmp_path / "drag.ome.tiff"
@@ -595,7 +595,9 @@ def test_drag_enter_resolves_paths_once_for_the_whole_drag(
     event = _FakeDropEvent([path])
 
     probe = Mock(return_value=[path])
-    with patch.object(MainWindow, "_dropped_acquisition_paths", staticmethod(probe)):
+    with patch.object(
+        MicroManagerGUI, "_dropped_acquisition_paths", staticmethod(probe)
+    ):
         win.dragEnterEvent(event)  # type: ignore[arg-type]
         assert event.accepted
         for _ in range(10):

@@ -345,7 +345,7 @@ class ThemedStageExplorer(StageExplorer):
         toolbar.setMovable(False)
         toolbar.setContentsMargins(0, 0, theme().sp_xs, 0)
         # Match the rest of the app's action buttons (Snap/Live/etc, see
-        # _acquire_toolbar.py's _icon_size()) rather than the native QStyle's
+        # widgets/_toolbars.py's _icon_size()) rather than the native QStyle's
         # PM_ToolBarIconSize, which renders noticeably larger (30px vs 20px).
         # Scaled with the theme -- this is re-applied on every StyleChange
         # (below), which is also when the app's zoom pass would otherwise

@@ -101,7 +101,7 @@ def apply_saved_appearance() -> bool:
     shown (``show()`` happens in ``restore_state``), so there's no flash and
     no risk of unconditionally clobbering a restored light theme.
 
-    Module-level rather than a ``MainWindow`` method because the startup
+    Module-level rather than a ``MicroManagerGUI`` method because the startup
     dialog is themed too and runs before any window exists. Calling it twice
     (dialog, then window) is harmless -- it only ever re-applies the same
     stored values.
@@ -293,7 +293,7 @@ class NotificationBellButton(QPushButton):
 
     Chrome, not a state indicator -- same "text_secondary, rebuild on
     StyleChange" treatment as ``SnapButton``/``LiveButton`` in
-    ``_acquire_toolbar``, except it turns ``status_red`` while notifications
+    ``widgets._toolbars``, except it turns ``status_red`` while notifications
     are waiting to be looked at, resetting the moment the bell is clicked
     open.
     """
@@ -538,7 +538,7 @@ class MicroManagerGUI(QMainWindow):
         the dialog: it answers only half of what the dialog asks. Returns
         None if the user chose to quit.
         """
-        # The dialog is themed, and it's shown before MainWindow.__init__ has
+        # The dialog is themed, and it's shown before MicroManagerGUI.__init__ has
         # had a chance to apply the user's saved theme, so do that here.
         apply_saved_appearance()
         dialog = StartupDialog(preselect_layout=layout)
@@ -1095,7 +1095,3 @@ class MicroManagerGUI(QMainWindow):
     def mmcore(self) -> CMMCorePlus:
         """Access to this window's microscope core."""
         return self._mmc
-
-
-# Both names refer to the single built-in application window.
-MainWindow = MicroManagerGUI

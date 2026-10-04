@@ -144,7 +144,9 @@ class MMConsole(QtConsole):
             "Use \033[1;33mmda\033[0m to access the pymmcore_plus.MDARunner.",
         ]
         if "window" in self.shell.user_ns:
-            lines.append("Use \033[1;33mwindow\033[0m to interact with the MainWindow.")
+            lines.append(
+                "Use \033[1;33mwindow\033[0m to interact with the main window."
+            )
         if "acquire" in self.shell.user_ns:
             lines.append(
                 "Use \033[1;33macquire\033[0m for the Acquire page and "

@@ -163,9 +163,9 @@ def test_mda_status_preserves_a_transient_status_bar_message(
 def test_main_window_left_status_and_idle_visibility(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    from pymmcore_gui._main_window import MainWindow
+    from pymmcore_gui._main_window import MicroManagerGUI
 
-    window = MainWindow(mmcore=mmcore)
+    window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
     window.resize(1200, 700)
     window.show()
