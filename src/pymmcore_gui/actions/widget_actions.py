@@ -190,7 +190,7 @@ def create_about_widget(parent: QWidget) -> QWidget:
 
 show_about = WidgetActionInfo(
     key=WidgetAction.ABOUT,
-    text="About Pymmcore Gui...",
+    text="About pymmcore-gui…",
     create_widget=create_about_widget,
     dock_area=None,
     checkable=False,

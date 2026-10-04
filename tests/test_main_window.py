@@ -11,7 +11,8 @@ import useq
 from pymmcore_gui import MicroManagerGUI
 from pymmcore_gui._app import MMQApplication
 from pymmcore_gui._notification_manager import NotificationManager
-from pymmcore_gui._qt.QtWidgets import QApplication
+from pymmcore_gui._qt.QtGui import QAction
+from pymmcore_gui._qt.QtWidgets import QApplication, QMenu
 from pymmcore_gui.widgets._panels import PanelKey
 from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 
@@ -42,6 +43,36 @@ def test_main_window_close_stops_stage_explorer(gui: MicroManagerGUI) -> None:
     gui.close()
 
     assert not explorer._stage_poller.isRunning()
+
+
+def _file_menu_actions(gui: MicroManagerGUI) -> dict[str, QAction]:
+    menu_bar = gui.menuBar()
+    assert menu_bar is not None
+    (file_action,) = [a for a in menu_bar.actions() if a.text() == "&File"]
+    file_menu = file_action.menu()
+    assert isinstance(file_menu, QMenu)
+    return {a.text(): a for a in file_menu.actions() if not a.isSeparator()}
+
+
+def test_file_menu_has_about(gui: MicroManagerGUI) -> None:
+    actions = _file_menu_actions(gui)
+    assert list(actions) == ["About pymmcore-gui…"]
+    assert actions["About pymmcore-gui…"].menuRole() == QAction.MenuRole.AboutRole
+
+
+def test_file_menu_about_shows_one_dialog(gui: MicroManagerGUI, qtbot: QtBot) -> None:
+    from pymmcore_gui.widgets._about_widget import AboutWidget
+
+    about = _file_menu_actions(gui)["About pymmcore-gui…"]
+    about.trigger()
+    dialog = gui._about
+    assert isinstance(dialog, AboutWidget)
+    qtbot.waitUntil(dialog.isVisible)
+
+    dialog.close()
+    about.trigger()
+    assert gui._about is dialog
+    qtbot.waitUntil(dialog.isVisible)
 
 
 @pytest.mark.filterwarnings("ignore:No device with label")

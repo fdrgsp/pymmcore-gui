@@ -49,6 +49,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QLabel,
     QMainWindow,
     QMenu,
+    QMenuBar,
     QMessageBox,
     QPushButton,
     QSizePolicy,
@@ -70,6 +71,7 @@ from pymmcore_gui._theme import (
 )
 from pymmcore_gui._theme._dark import DARK_THEME
 from pymmcore_gui._theme._light import LIGHT_THEME
+from pymmcore_gui.actions import ActionInfo, WidgetAction
 from pymmcore_gui.widgets._acquire import AcquirePage
 from pymmcore_gui.widgets._configurations import ConfigurationsPage
 from pymmcore_gui.widgets._hardware import HardwareSetupPage
@@ -421,6 +423,8 @@ class MicroManagerGUI(QMainWindow):
         self._apply_toolbar_metrics()
 
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._toolbar)
+        self._about: QDialog | None = None
+        self._add_menu_bar()
 
         # ── central stack: one page per tab ───────────────────────
         self._stack = QStackedWidget()
@@ -500,6 +504,29 @@ class MicroManagerGUI(QMainWindow):
     def acquire(self) -> AcquirePage:
         """Return the window's Acquire page."""
         return self._acquire
+
+    def _add_menu_bar(self) -> None:
+        """Build the application menu bar.
+
+        About carries ``AboutRole``, so on macOS Qt moves it into the
+        application menu (next to the system Quit item) and hides the then
+        empty File menu; elsewhere it stays under File.
+        """
+        file_menu = cast("QMenu", cast("QMenuBar", self.menuBar()).addMenu("&File"))
+
+        about = ActionInfo.for_key(WidgetAction.ABOUT).to_qaction(self._mmc, self)
+        about.triggered.connect(self._show_about)
+        file_menu.addAction(about)
+
+    def _show_about(self) -> None:
+        """Show the About dialog, creating it on first use."""
+        if self._about is None:
+            from pymmcore_gui.actions.widget_actions import create_about_widget
+
+            self._about = cast("QDialog", create_about_widget(self))
+        self._about.show()
+        self._about.raise_()
+        self._about.activateWindow()
 
     def _apply_saved_appearance(self) -> None:
         """Apply the saved theme/zoom before any widget exists, so nothing flashes."""
