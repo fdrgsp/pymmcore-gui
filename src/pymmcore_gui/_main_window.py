@@ -49,6 +49,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QLabel,
     QMainWindow,
     QMenu,
+    QMenuBar,
     QMessageBox,
     QPushButton,
     QSizePolicy,
@@ -429,6 +430,8 @@ class MicroManagerGUI(QMainWindow):
         self._apply_toolbar_metrics()
 
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._toolbar)
+        self._about: QDialog | None = None
+        self._add_menu_bar()
 
         # ── central stack: one page per tab ───────────────────────
         # Which page started the current run: decides which page the window
@@ -522,6 +525,30 @@ class MicroManagerGUI(QMainWindow):
     def smart(self) -> SmartMicroscopyPage:
         """Return the window's Smart Microscopy page."""
         return self._smart
+
+    def _add_menu_bar(self) -> None:
+        """Build the application menu bar.
+
+        About carries ``AboutRole``, so on macOS Qt moves it into the
+        application menu (next to the system Quit item) and hides the then
+        empty File menu; elsewhere it stays under File.
+        """
+        file_menu = cast("QMenu", cast("QMenuBar", self.menuBar()).addMenu("&File"))
+
+        about = QAction("About pymmcore-gui…", self)
+        about.setMenuRole(QAction.MenuRole.AboutRole)
+        about.triggered.connect(self._show_about)
+        file_menu.addAction(about)
+
+    def _show_about(self) -> None:
+        """Show the About dialog, creating it on first use."""
+        if self._about is None:
+            from pymmcore_gui.widgets._about_widget import AboutWidget
+
+            self._about = AboutWidget(parent=self)
+        self._about.show()
+        self._about.raise_()
+        self._about.activateWindow()
 
     def _apply_saved_appearance(self) -> None:
         """Apply the saved theme/zoom before any widget exists, so nothing flashes."""

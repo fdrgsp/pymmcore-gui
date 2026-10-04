@@ -1,4 +1,4 @@
-"""Configurations tab: property browser, group editor and pixel configuration.
+"""Configurations tab: Group and Preset Editor and Pixel Configuration Editor.
 
 These are the upstream ``pymmcore_widgets`` editors; this module only arranges
 them as sub-tabs and keeps them in step with the core.
@@ -90,8 +90,9 @@ class _GroupEditorTab(QWidget):
                 btn.hide()
         # It also has its own status icon/label next to that button ("Unsaved
         # changes" / "No changes") -- redundant with our own toolbar dirty
-        # label, which already covers this editor and Pixel Configuration
-        # together. Hide both (guarded in case of a future rename upstream).
+        # label, which already covers this editor and the Pixel Configuration
+        # Editor together. Hide both (guarded in case of a future rename
+        # upstream).
         for attr in ("_status_icon", "_status_label"):
             if (w := getattr(self.editor, attr, None)) is not None:
                 w.hide()
@@ -124,7 +125,7 @@ class _GroupEditorTab(QWidget):
         super().changeEvent(a0)
 
     def _apply_themed_action_icons(self) -> None:
-        """Color constructive/destructive Group Editor actions semantically."""
+        """Color constructive/destructive Group and Preset Editor actions."""
         green = qcolor(theme().status_green).name()
         red = qcolor(theme().status_red).name()
         glyphs = {
@@ -317,8 +318,8 @@ class ConfigurationsPage(TabPage):
         self._pixel_config = _EmbeddedPixelConfig(mmcore=self._core)
 
         self._tabs = QTabWidget()
-        self._tabs.addTab(self._group_tab, "Group Editor")
-        self._tabs.addTab(self._pixel_config, "Pixel Configuration")
+        self._tabs.addTab(self._group_tab, "Group and Preset Editor")
+        self._tabs.addTab(self._pixel_config, "Pixel Configuration Editor")
 
         self.add_content_widget(self._tabs)
         # these editors fill the page; the left dock would only crowd them
@@ -362,12 +363,13 @@ class ConfigurationsPage(TabPage):
         # Track the editors independently: saving the selected tab must not
         # silently mark changes in the other tab as persisted.
         #
-        # Both editors expose the same clean-state interface — the group
-        # editor backs it with a QUndoStack, Pixel Configuration with a
-        # baseline snapshot — so each reports dirtiness accurately, including
-        # going clean again when an edit is reverted rather than saved. Neither
-        # marks itself clean on *our* save (the group editor's was the hidden
-        # "Apply" button's job), so `mark_saved`/`mark_current_saved` do that.
+        # Both editors expose the same clean-state interface — the Group and
+        # Preset Editor backs it with a QUndoStack, the Pixel Configuration
+        # Editor with a baseline snapshot — so each reports dirtiness accurately,
+        # including going clean again when an edit is reverted rather than
+        # saved. Neither marks itself clean on *our* save (the group editor's
+        # was the hidden "Apply" button's job), so `mark_saved` /
+        # `mark_current_saved` do that.
         self._group_dirty = False
         self._pixel_dirty = False
         # guards against a second commit starting while one is in flight
@@ -392,9 +394,9 @@ class ConfigurationsPage(TabPage):
         """Names of the editors that currently have unsaved edits."""
         parts = []
         if self._group_dirty:
-            parts.append("Group Editor")
+            parts.append("Group and Preset Editor")
         if self._pixel_dirty:
-            parts.append("Pixel Configuration")
+            parts.append("Pixel Configuration Editor")
         return parts
 
     def mark_saved(self) -> None:

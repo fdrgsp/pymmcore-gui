@@ -24,8 +24,6 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
-from pymmcore_gui.actions.widget_actions import WidgetAction
-
 APP_NAME = "pymmcore-gui"
 USER_DATA_DIR = Path(user_data_dir(appname=APP_NAME))
 USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -141,8 +139,8 @@ def _good_data_only(
 
 
 def _default_widgets() -> set[str]:
-    """The default set widgets that open on launch."""
-    return {WidgetAction.CONFIG_GROUPS, WidgetAction.MDA_WIDGET}
+    """The legacy window's default open widgets, kept for settings compatibility."""
+    return {"pymmcore_gui.config_groups_widget", "pymmcore_gui.mda_widget"}
 
 
 # set of widgets that are sorted when serialized

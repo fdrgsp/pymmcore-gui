@@ -38,6 +38,6 @@ def test_lazy_exports_still_resolve() -> None:
 
     assert pymmcore_gui.MicroManagerGUI.__name__ == "MicroManagerGUI"
     assert callable(pymmcore_gui.create_mmgui)
-    assert {"MicroManagerGUI", "create_mmgui", "CoreAction"} <= set(dir(pymmcore_gui))
+    assert {"MicroManagerGUI", "create_mmgui"} <= set(dir(pymmcore_gui))
     with pytest.raises(AttributeError):
         _ = pymmcore_gui.not_a_thing

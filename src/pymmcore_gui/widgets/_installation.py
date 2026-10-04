@@ -111,7 +111,7 @@ def _test_adapters_note() -> str:
 class InstallReleaseDialog(QDialog):
     """Choose a Micro-Manager release to download.
 
-    Shaped like the Group Editor's "Edit Properties" sheet -- modal and
+    Shaped like the Group and Preset Editor's "Edit Properties" sheet -- modal and
     frameless, content over a button box -- so the two read as the same kind
     of decision.
     """

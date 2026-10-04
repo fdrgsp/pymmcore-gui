@@ -145,15 +145,20 @@ A panel added in a new release appears for existing users with its button
 visible and the panel closed, until they open it. Saved layouts that predate
 it are unaffected.
 
-## Using the widget outside the Acquire page
+## Reaching a panel from code and the console
 
-`pymmcore_gui.actions.widget_actions` provides public `create_*` factories
-(exposed through `pymmcore_gui.WidgetAction`) for some of the same widgets.
-Factories for widgets that are also panels call the panel factory with the
-core of the window that hosts the parent. To expose a new panel the same way,
-add a `WidgetAction` member, a `create_*` function that calls your panel
-factory with `_get_core(parent)` (instead of building the widget a second
-time), and a `WidgetActionInfo` tying the two together.
+`AcquirePage.panels` returns each panel's widget by key, opening the panel
+first if it isn't open, just as clicking its button would. The console
+exposes it as `panels`, so a new panel is reachable there with no extra code:
+
+```python
+panels.focus_monitor          # opens the panel if needed, returns the widget
+dir(panels)                   # every panel key
+acquire.panel_widget("focus_monitor")  # the widget, or None, without opening
+```
+
+While an acquisition runs, `panels` returns panels that already exist but
+refuses to build a new one, since building a panel queries the core.
 
 ## Adding a top-level tab
 

@@ -55,7 +55,6 @@ if sys.platform == "win32":
 if TYPE_CHECKING:
     from ._app import create_mmgui
     from ._main_window import MicroManagerGUI
-    from .actions import ActionInfo, CoreAction, WidgetAction
 
 # Resolved on first access rather than imported here: importing *any*
 # submodule runs this file first, and these pull in Qt and the whole window.
@@ -64,9 +63,6 @@ if TYPE_CHECKING:
 _LAZY_EXPORTS: dict[str, str] = {
     "create_mmgui": "._app",
     "MicroManagerGUI": "._main_window",
-    "ActionInfo": ".actions",
-    "CoreAction": ".actions",
-    "WidgetAction": ".actions",
 }
 
 
@@ -83,10 +79,7 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
-    "ActionInfo",
-    "CoreAction",
     "MicroManagerGUI",
-    "WidgetAction",
     "__version__",
     "create_mmgui",
 ]
