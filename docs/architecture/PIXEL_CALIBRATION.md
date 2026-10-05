@@ -14,16 +14,6 @@ with `ImageUtils.crossCorrelate`,
 reports its algorithm version as `v1`.
 
 The port reproduces the Java routine's strategy *and its acceptance criteria*.
-There is deliberately no repeat-capture agreement, no drift correction, no
-per-image confidence metric and no independent holdout stage: a result that
-passes the scatter check is returned for the user to accept or discard, the
-way the Java dialog asks. A stricter pipeline with all of those checks used to
-live here and was removed, because it rejected measurements that the Java
-tolerance accepts on hardware that calibrates correctly. On a 60x objective
-with an encoderless stage it reported a holdout RMS of 4.408 px against a
-1.568 px limit and refused the result, while the Java calibrator accepted the
-same microscope and returned 0.1085 µm/px, which is 6.5/60 to within 0.2%. An
-RMS of 4.408 px is inside the 5 px tolerance used here.
 
 The calibration controls live in the **Pixel Configuration Editor** tab of the
 Configurations page; the numerical pipeline lives in the separate
