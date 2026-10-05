@@ -121,7 +121,7 @@ def run(
     from pymmcore_gui import create_mmgui
 
     if layout is not None:
-        _check_layout(layout)
+        layout = _resolve_layout(layout)
     mm_config = "MMConfig_demo.cfg" if demo_config else config
     create_mmgui(
         mm_config=mm_config,
@@ -132,20 +132,33 @@ def run(
     sys.exit(0)
 
 
-def _check_layout(layout: str) -> None:
-    """Warn about a `-l` that will not do what the user expects.
+def _resolve_layout(layout: str) -> str:
+    """Return how *layout* is actually spelled, warning if it was typed otherwise.
 
-    Deliberately a warning rather than an error: an unknown name still opens
-    the app, on the default layout.
+    Matching ignores case, so `-l start` finds a layout saved as "Start", and
+    the canonical spelling is what gets handed on -- the window then reports
+    the name the layout list shows. A spelling that had to be corrected is
+    still worth saying out loud, so that a typo in a launch script doesn't
+    quietly open some *other* layout.
+
+    Either way this only warns, never errors: an unknown name still opens the
+    app, on the default layout.
     """
-    from pymmcore_gui._layouts import available_layouts
+    from pymmcore_gui._layouts import available_layouts, canonical_layout_name
 
-    if layout not in (names := available_layouts()):
-        typer.secho(
-            f"No layout named {layout!r}. Available: {', '.join(names)}.\n"
-            "Starting with the default layout.",
-            fg=typer.colors.YELLOW,
+    if (name := canonical_layout_name(layout)) is None:
+        message = (
+            f"No layout named {layout!r}. "
+            f"Available: {', '.join(available_layouts())}.\n"
+            "Starting with the default layout."
         )
+    elif name != layout:
+        message = f"No layout named {layout!r}. Starting with {name!r}."
+        layout = name
+    else:
+        return layout
+    typer.secho(message, fg=typer.colors.YELLOW)
+    return layout
 
 
 @app.command()

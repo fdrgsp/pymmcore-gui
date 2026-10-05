@@ -67,6 +67,36 @@ def test_layout_flag_is_forwarded(tmp_path: Path) -> None:
     assert mock_create.call_args.kwargs["layout"] == "My rig"
 
 
+def test_layout_flag_matches_a_saved_name_case_insensitively() -> None:
+    """`-l start` must open "Start", and say so rather than claim a default."""
+    from pymmcore_gui._layouts import AcquireLayout, save_layout
+
+    save_layout("Start", AcquireLayout(dock_state=b"ads", panels=frozenset({"mda"})))
+
+    with patch("pymmcore_gui.create_mmgui") as mock_create:
+        result = runner.invoke(app, ["run", "-l", "start"])
+
+    assert result.exit_code == 0
+    # the corrected spelling is still reported, but as what actually happens
+    assert "No layout named 'start'. Starting with 'Start'." in result.stdout
+    assert "default layout" not in result.stdout
+    # and the canonical spelling is forwarded, so the window reports it too
+    assert mock_create.call_args.kwargs["layout"] == "Start"
+
+
+def test_an_exactly_spelled_layout_is_forwarded_silently() -> None:
+    from pymmcore_gui._layouts import AcquireLayout, save_layout
+
+    save_layout("Start", AcquireLayout(dock_state=b"ads", panels=frozenset({"mda"})))
+
+    with patch("pymmcore_gui.create_mmgui") as mock_create:
+        result = runner.invoke(app, ["run", "-l", "Start"])
+
+    assert result.exit_code == 0
+    assert "No layout named" not in result.stdout
+    assert mock_create.call_args.kwargs["layout"] == "Start"
+
+
 def test_unknown_layout_warns_but_still_launches() -> None:
     """A stale `-l` should open the app on the default layout, not refuse to start."""
     with patch("pymmcore_gui.create_mmgui") as mock_create:

@@ -7,6 +7,7 @@ so the autouse ``layouts_dir`` fixture in ``conftest.py`` redirects
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 import pytest
@@ -16,6 +17,7 @@ from pymmcore_gui._layouts import (
     LAST_SESSION_LAYOUT_NAME,
     AcquireLayout,
     available_layouts,
+    canonical_layout_name,
     delete_layout,
     is_valid_layout_name,
     layout_path,
@@ -58,6 +60,34 @@ def test_layout_names_survive_filesystem_unsafe_characters() -> None:
 
     assert list_layouts() == ["Rig #2: 60x/oil"]
     assert load_layout("Rig #2: 60x/oil") == _layout()
+
+
+def test_a_layout_is_found_by_its_stored_name_not_its_filename() -> None:
+    """A file's stem can drift from the name inside it, which is what listings show.
+
+    Saving "Start" where ``start.json`` already exists keeps the old filename
+    on a case-insensitive filesystem, so a lookup that went through
+    ``layout_path`` would miss the layout by its own listed name.
+    """
+    path = save_layout("start", _layout())
+    path.write_text(json.dumps(_layout().to_dict("Start")))
+
+    assert list_layouts() == ["Start"]
+    assert load_layout("Start") == _layout()
+
+
+@pytest.mark.parametrize("typed", ["Start", "start", "START", "  start  "])
+def test_layout_names_match_regardless_of_case(typed: str) -> None:
+    """`-l start` must find the layout the user saved as "Start"."""
+    save_layout("Start", _layout())
+
+    assert canonical_layout_name(typed) == "Start"
+    assert resolve_layout(canonical_layout_name(typed) or typed) == _layout()
+
+
+def test_canonical_layout_name_covers_the_reserved_names() -> None:
+    assert canonical_layout_name("default") == DEFAULT_LAYOUT_NAME
+    assert canonical_layout_name("nope") is None
 
 
 def test_deleting_a_layout_stops_offering_it() -> None:

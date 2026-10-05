@@ -162,28 +162,39 @@ def is_valid_layout_name(name: str) -> bool:
     return bool(name.strip()) and name.strip() not in RESERVED_LAYOUT_NAMES
 
 
-def list_layouts() -> list[str]:
-    """Return the names of every saved layout, sorted, case-insensitively.
+def _saved_layout_paths() -> dict[str, Path]:
+    """Map every saved layout's display name to the file holding it.
+
+    Lookups go through the name stored *inside* each file -- the one listings
+    report -- rather than through :func:`layout_path`, because a file's stem
+    can drift from it: saving "Start" where ``start.json`` already exists
+    keeps the old filename on a case-insensitive filesystem, which would then
+    make the layout unloadable by its own listed name anywhere else.
 
     Unreadable or malformed files are skipped rather than raising: a corrupt
     layout must never stop the application from launching.
     """
-    names: list[str] = []
+    paths: dict[str, Path] = {}
     try:
-        paths = sorted(layouts_dir().glob(f"*{_SUFFIX}"))
+        files = sorted(layouts_dir().glob(f"*{_SUFFIX}"))
     except OSError:  # pragma: no cover -- unreadable user data dir
-        return names
-    for path in paths:
+        return paths
+    for path in files:
         if (data := _read(path)) is not None:
             name = data.get("name")
-            names.append(str(name) if name else path.stem)
-    return sorted(set(names), key=str.casefold)
+            paths[str(name) if name else path.stem] = path
+    return paths
+
+
+def list_layouts() -> list[str]:
+    """Return the names of every saved layout, sorted, case-insensitively."""
+    return sorted(_saved_layout_paths(), key=str.casefold)
 
 
 def load_layout(name: str) -> AcquireLayout | None:
     """Return the layout saved under *name*, or None if it's gone or invalid."""
-    data = _read(layout_path(name))
-    if data is None:
+    path = _saved_layout_paths().get(name)
+    if path is None or (data := _read(path)) is None:
         return None
     try:
         return AcquireLayout.from_dict(data)
@@ -242,6 +253,20 @@ def available_layouts() -> list[str]:
     if Settings.instance().modern_window.has_last_session_layout:
         names.insert(0, LAST_SESSION_LAYOUT_NAME)
     return names
+
+
+def canonical_layout_name(name: str) -> str | None:
+    """Return the offered layout name that *name* refers to, ignoring case.
+
+    Layout names are typed by hand -- at the ``--layout`` flag above all --
+    so matching them exactly would turn `start` into "no such layout" for a
+    layout saved as "Start". None means nothing matches.
+    """
+    folded = name.strip().casefold()
+    for candidate in available_layouts():
+        if candidate.casefold() == folded:
+            return candidate
+    return None
 
 
 def resolve_layout(name: str) -> AcquireLayout | None:

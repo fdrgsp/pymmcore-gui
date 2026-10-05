@@ -21,6 +21,7 @@ from pymmcore_gui._layouts import (
     DEFAULT_LAYOUT_NAME,
     RESERVED_LAYOUT_NAMES,
     AcquireLayout,
+    canonical_layout_name,
     delete_layout,
     is_valid_layout_name,
     list_layouts,
@@ -1092,8 +1093,10 @@ class AcquirePage(TabPage):
 
         An unknown or vanished name resolves to the built-in arrangement
         rather than doing nothing, so a layout deleted outside the app can't
-        leave the Layout list pointing at something unreachable.
+        leave the Layout list pointing at something unreachable. A name that
+        differs only in case is a match, not an unknown name.
         """
+        name = canonical_layout_name(name) or name
         layout = resolve_layout(name)
         if layout is None or layout.is_empty():
             self.reset_layout()
