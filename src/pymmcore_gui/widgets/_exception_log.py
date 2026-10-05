@@ -29,9 +29,7 @@ from pymmcore_gui._settings import Settings
 
 if TYPE_CHECKING:
     from types import TracebackType
-    from typing import TypeAlias
-
-    from typing_extensions import Never
+    from typing import Never, TypeAlias
 
     ExcInfo: TypeAlias = tuple[type[BaseException], BaseException, TracebackType | None]
 
