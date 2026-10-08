@@ -1465,6 +1465,61 @@ def test_a_snap_after_an_acquisition_brings_the_preview_back_to_the_front(
     assert preview_dock.isVisible()
 
 
+def test_a_routine_asked_to_show_its_images_gets_the_preview_and_gives_it_back(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """`show_images` is a deliberate "let me watch this", so the Preview comes up.
+
+    And goes away again: what the user wants in front for the rest of the run
+    is the acquisition, not the focus search.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.show()
+    qtbot.waitExposed(page)
+    viewers = page._viewers
+
+    sequence = useq.MDASequence(
+        time_plan=useq.TIntervalLoops(interval=timedelta(0), loops=2)
+    )
+    with qtbot.waitSignal(mmcore.mda.events.sequenceFinished, timeout=10000):
+        mmcore.run_mda(sequence, output="memory")
+    mda_dock = viewers._active_dock
+    assert mda_dock is not None and mda_dock.isCurrentTab()
+
+    watched = useq.MDAEvent(
+        action=useq.SoftwareAutofocus(
+            method="oughtafocus", settings={"show_images": True}
+        )
+    )
+    viewers._on_event_started(watched)
+    preview_dock = viewers._preview_dock
+    assert preview_dock is not None  # opened for the occasion
+    assert preview_dock.isCurrentTab()
+
+    viewers._on_autofocus_finished(watched)
+    assert mda_dock.isCurrentTab()
+
+    # a routine that was not asked to show anything leaves the tabs alone
+    quiet = useq.MDAEvent(action=useq.SoftwareAutofocus(method="oughtafocus"))
+    viewers._on_event_started(quiet)
+    assert mda_dock.isCurrentTab()
+
+    # ... and `duo`, which carries a routine under each of its two steps
+    duo = useq.MDAEvent(
+        action=useq.SoftwareAutofocus(
+            method="duo",
+            settings={"second": {"method": "jaf", "settings": {"show_images": True}}},
+        )
+    )
+    viewers._on_event_started(duo)
+    assert preview_dock.isCurrentTab()
+
+    # a cancel mid-search never reports, so the run ending restores the tab
+    viewers._on_sequence_finished(sequence)
+    assert mda_dock.isCurrentTab()
+
+
 def test_per_device_stage_widget_snap_checkbox_still_ensures_preview(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:

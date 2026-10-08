@@ -5,6 +5,7 @@ from __future__ import annotations
 import gc
 import hashlib
 import weakref
+from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,7 @@ from pymmcore_gui._mda_export import AcquisitionRecord
 from pymmcore_gui._qt.QtAds import CDockWidget, DockWidgetArea
 from pymmcore_gui._qt.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal
 from pymmcore_gui._qt.QtWidgets import QSplitter
+from pymmcore_gui._utils import autofocus_kind
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
 
 if TYPE_CHECKING:
@@ -139,6 +141,8 @@ class AcquireViewersManager(QObject):
     _sequenceStarted = Signal(object, object)
     _frameReady = Signal(object, object, object)
     _sequenceFinished = Signal(object)
+    _eventStarted = Signal(object)
+    _autofocusFinished = Signal(object)
     previewCreated = Signal(object)
     previewClosed = Signal()
     mdaViewerCreated = Signal(object)
@@ -168,6 +172,9 @@ class AcquireViewersManager(QObject):
         # {(p, g): flattened "p"-slider slot}, reset per sequence -- see
         # _on_frame_ready for why this exists.
         self._shot_indices: dict[tuple[object, object], int] = {}
+        # The tab to go back to once an autofocus routine that was asked to
+        # show its images is done -- see _on_event_started.
+        self._dock_before_autofocus: CDockWidget | None = None
         # Set when a still-running run's viewer is closed: release_sink()
         # refuses to drop a sink while it's being written to, so the release
         # is retried once sequenceFinished confirms the run is done.
@@ -194,14 +201,25 @@ class AcquireViewersManager(QObject):
         self._sequenceStarted.connect(self._on_sequence_started)
         self._frameReady.connect(self._on_frame_ready)
         self._sequenceFinished.connect(self._on_sequence_finished)
+        self._eventStarted.connect(self._on_event_started)
+        self._autofocusFinished.connect(self._on_autofocus_finished)
         self._sequence_started_callback = self._sequenceStarted.emit
         self._frame_ready_callback = self._frameReady.emit
         self._sequence_finished_callback = self._sequenceFinished.emit
+        self._event_started_callback = self._eventStarted.emit
+        self._autofocus_finished_callback = lambda event, _result: (
+            self._autofocusFinished.emit(event)
+        )
 
         events = self._core.mda.events
         events.sequenceStarted.connect(self._sequence_started_callback)
         events.frameReady.connect(self._frame_ready_callback)
         events.sequenceFinished.connect(self._sequence_finished_callback)
+        events.eventStarted.connect(self._event_started_callback)
+        # ``autofocusFinished`` is newer than the rest of the runner's signals.
+        self._af_finished_signal = getattr(events, "autofocusFinished", None)
+        if self._af_finished_signal is not None:
+            self._af_finished_signal.connect(self._autofocus_finished_callback)
         # A bound slot on this QObject may not run during its own destruction.
         # The owner's destroyed signal arrives before Qt deletes its children,
         # while this manager can still disconnect runner callbacks safely.
@@ -293,6 +311,32 @@ class AcquireViewersManager(QObject):
         self._preview_dock.setAsCurrentTab()
         assert self.preview is not None
         return self.preview
+
+    def _on_event_started(self, event: MDAEvent) -> None:
+        """Bring the Preview up for a routine that was asked to show its images.
+
+        Asking to see them is a deliberate "let me watch this", so the Preview
+        is opened if it is not even there yet and brought to the front -- and
+        the tab that was in front goes back there afterwards, since what the
+        user wants to watch for the rest of the run is the acquisition.
+        """
+        if autofocus_kind(event) != "software":
+            return
+        if not _shows_images(getattr(event.action, "settings", None)):
+            return
+        area = dock.dockAreaWidget() if (dock := self._preview_dock) else None
+        with suppress(RuntimeError):
+            current = area.currentDockWidget() if area is not None else None
+            self._dock_before_autofocus = current or self._active_dock
+        # The Preview may be created right here, after the event that opened
+        # the autofocus window, so tell it where we are.
+        self.ensure_preview().set_autofocus_running(True)
+
+    def _on_autofocus_finished(self, _event: MDAEvent | None = None) -> None:
+        dock, self._dock_before_autofocus = self._dock_before_autofocus, None
+        if dock is not None and dock is not self._preview_dock:
+            with suppress(RuntimeError):  # the dock may have been closed
+                dock.setAsCurrentTab()
 
     def _raise_preview(self) -> None:
         """Bring the Preview tab to the front, if it is still open."""
@@ -521,6 +565,8 @@ class AcquireViewersManager(QObject):
 
     def _on_sequence_finished(self, sequence: MDASequence) -> None:
         """Retry releasing a just-finished run's data if its viewer already closed."""
+        # a cancel mid-search means autofocusFinished may never arrive
+        self._on_autofocus_finished()
         if (sink := self._pending_release) is not None:
             self._pending_release = None
             self._release_sink(sink)
@@ -590,6 +636,11 @@ class AcquireViewersManager(QObject):
             events.frameReady.disconnect(self._frame_ready_callback)
         with suppress(Exception):
             events.sequenceFinished.disconnect(self._sequence_finished_callback)
+        with suppress(Exception):
+            events.eventStarted.disconnect(self._event_started_callback)
+        if self._af_finished_signal is not None:
+            with suppress(Exception):
+                self._af_finished_signal.disconnect(self._autofocus_finished_callback)
         for record in self._records.values():
             self.mdaViewerClosed.emit(record.viewer)
             record.disconnect()
@@ -600,6 +651,19 @@ class AcquireViewersManager(QObject):
         if self.preview is not None:
             self.preview.detach()
             self.preview = None
+
+
+def _shows_images(settings: object) -> bool:
+    """Whether `settings` asks a routine to show the images it scores.
+
+    Walks nested settings, because `duo` carries a routine of its own under
+    each of its two steps and either may be the one being watched.
+    """
+    if not isinstance(settings, Mapping):
+        return False
+    if settings.get("show_images"):
+        return True
+    return any(_shows_images(value) for value in settings.values())
 
 
 class _StreamSignalBridge(QObject):

@@ -178,11 +178,19 @@ default because a preview flickering through a search rarely is.
 For those images to actually be seen, the gui's Preview makes an exception to
 its rule of ignoring snaps during an acquisition: between an autofocus event's
 `eventStarted` and its `autofocusFinished`, a snapped image is a routine's
-diagnostic image rather than acquisition data, and is displayed. It does not
-raise the Preview tab, though — it is not worth pulling the user off the viewer
-of the run in progress. The image is read from the camera on the thread that
-snapped and handed to the GUI thread, because the next one in the search is
-already on the way (`widgets/image_preview/_preview_base.py`).
+diagnostic image rather than acquisition data, and is displayed. The image is
+read from the camera on the thread that snapped and handed to the GUI thread,
+because the next one in the search is already on the way
+(`widgets/image_preview/_preview_base.py`).
+
+Asking for the images is a deliberate "let me watch this", so the viewer manager
+brings the Preview up for the search — opening it if it is not even there — and
+puts the tab that was in front back afterwards, since what the user wants in
+front for the rest of the run is the acquisition. A routine that was *not* asked
+to show anything never moves a tab. `duo` counts if either of its two steps asks.
+The GUI reacts when the acquisition thread's events reach it, so on a very fast
+run the search can be over before the Preview is up; a search on real hardware
+lasts long enough to watch.
 
 On failure or cancellation a routine puts the focus device back where it found
 it. A failed autofocus must not leave the sample somewhere else.

@@ -68,6 +68,9 @@ class ImagePreviewBase(QWidget):
         ev.systemConfigurationLoaded.connect(self._on_system_config_loaded)
         ev.roiSet.connect(self._on_roi_set)
         ev.propertyChanged.connect(self._on_property_changed)
+        # A preview created mid-run missed sequenceStarted, and without this
+        # would take every frame of the acquisition for an ordinary snap.
+        self._is_mda_running = core.mda.is_running()
         self._mda_started_callback = lambda: setattr(self, "_is_mda_running", True)
         self._mda_finished_callback = self._on_mda_finished
         core.mda.events.sequenceStarted.connect(self._mda_started_callback)
@@ -166,6 +169,14 @@ class ImagePreviewBase(QWidget):
         self.append(image)
         if not during_mda:
             self.snapShown.emit()
+
+    def set_autofocus_running(self, running: bool) -> None:
+        """Say that an autofocus event is in progress.
+
+        For a preview created *during* one, which missed its `eventStarted`;
+        `autofocusFinished` clears it as usual.
+        """
+        self._autofocus_running = running
 
     def _on_mda_event_started(self, event: object) -> None:
         # Autofocus images are the only snaps worth showing mid-acquisition; the

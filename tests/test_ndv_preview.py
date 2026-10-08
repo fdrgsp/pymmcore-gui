@@ -242,3 +242,32 @@ def test_a_snap_from_the_acquisition_thread_is_displayed_on_the_gui_thread(
     qtbot.waitUntil(lambda: bool(threads))
 
     assert threads == [threading.get_ident()]
+
+
+def test_a_preview_created_mid_run_does_not_mirror_the_acquisition(
+    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It missed `sequenceStarted`, and the engine snaps every frame it acquires.
+
+    So without asking the runner where things stand, such a preview took the
+    whole acquisition for a series of ordinary snaps -- displaying every frame
+    and, since a snap brings the Preview to the front, doing it there.
+    """
+    appended: list[np.ndarray] = []
+    monkeypatch.setattr(NDVPreview, "append", lambda _self, data: appended.append(data))
+    monkeypatch.setattr(type(mmcore.mda), "is_running", lambda _self: True)
+
+    preview = NDVPreview(mmcore)
+    qtbot.addWidget(preview)
+    assert preview._is_mda_running
+
+    mmcore.snapImage()
+    qtbot.wait(0)
+    assert not appended
+
+    # an autofocus routine's images are still shown: a preview created during
+    # an autofocus event is told so, since it missed that event too
+    preview.set_autofocus_running(True)
+    mmcore.snapImage()
+    qtbot.wait(0)
+    assert len(appended) == 1
