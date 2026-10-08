@@ -221,6 +221,8 @@ ignore = [".pre-commit-config.yaml", ".ruff_cache/**/*", "tests/**/*"]
 
 [tool.typos.default]
 extend-ignore-identifiers-re = ["(?i)nd2?.*", "(?i)ome"]
+# short git SHAs in backticks (e.g. `ba0f638`) in Markdown docs
+extend-ignore-re = ["`[0-9a-f]{7,40}`"]
 
 [tool.typos.files]
 extend-exclude = ["*.spec", "hooks/"]
