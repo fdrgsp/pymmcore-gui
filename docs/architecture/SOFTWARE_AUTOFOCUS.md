@@ -273,6 +273,17 @@ A software plan naming a routine this installation does not have is kept as-is,
 so opening someone else's sequence does not silently change which routine it
 uses.
 
+**Trying it out.** Settings are guesswork until they have been tried on the
+sample, so the dialog has a **Test** button: it runs the routine on the current
+position with the settings as edited, in a worker thread, and reports where
+focus landed — the drive is left where the routine put it, exactly as in a run.
+It goes through `run_software_autofocus()`, the same call the engine makes, so
+what is tested is what will run. Closing the dialog abandons a search still in
+flight, and a run in progress refuses the test rather than fighting it for the
+stage. Driving a microscope takes a core, which `useq_widgets` has none of: the
+MDA widget supplies the runner through `AutofocusAxis.setTestRunner`, and
+without one the button is not offered at all.
+
 With the card unchecked there is no autofocus to configure, so the modes and
 their options are disabled — Qt re-enables a checkable group box's children
 wholesale when it is checked, so each control's own state is reapplied on top of
