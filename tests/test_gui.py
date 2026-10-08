@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import threading
 from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
@@ -13,6 +14,7 @@ import pytest
 import useq
 from cmap import Colormap
 from pymmcore_plus import PropertyType
+from pymmcore_plus.autofocus import AutofocusResult
 from pymmcore_plus.mda import MDARunner
 from pymmcore_widgets import CameraRoiWidget, StageWidget, XYZStageWidget
 from pymmcore_widgets import MDAWidget as UpstreamMDAWidget
@@ -97,6 +99,7 @@ from pymmcore_gui.widgets._installation import (
 )
 from pymmcore_gui.widgets._mda_widget import (
     MemoryMDAWidget,
+    MemoryMDAWidgetBase,
     TiffLayout,
     TopbarMemoryMDAWidget,
 )
@@ -1518,6 +1521,164 @@ def test_a_routine_asked_to_show_its_images_gets_the_preview_and_gives_it_back(
     # a cancel mid-search never reports, so the run ending restores the tab
     viewers._on_sequence_finished(sequence)
     assert mda_dock.isCurrentTab()
+
+
+class _AutofocusPreview(QWidget):
+    """Small Preview stand-in for autofocus/threading tests."""
+
+    snapShown = Signal()
+
+    def __init__(self, mmcore: CMMCorePlus, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._core = mmcore
+        self._autofocus_running = False
+        self.frames: list[np.ndarray] = []
+        self.positions: list[float] = []
+        mmcore.events.imageSnapped.connect(self._on_image_snapped)
+
+    def _on_image_snapped(self) -> None:
+        self.append(self._core.getImage())
+        self.positions.append(self._core.getZPosition())
+
+    def append(self, image: np.ndarray) -> None:
+        self.frames.append(image)
+
+    def set_autofocus_running(self, running: bool) -> None:
+        self._autofocus_running = running
+
+    def detach(self) -> None:
+        self._core.events.imageSnapped.disconnect(self._on_image_snapped)
+
+
+def test_fast_autofocus_images_open_the_preview_without_a_manual_preview(
+    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Frames snapped before the GUI handles eventStarted must not be lost."""
+    monkeypatch.setattr(acquire_viewers_module, "NDVPreview", _AutofocusPreview)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    viewers = page._viewers
+    assert viewers.preview is None
+
+    event = useq.MDAEvent(
+        action=useq.SoftwareAutofocus(
+            method="oughtafocus", settings={"show_images": True}
+        )
+    )
+    failed = AutofocusResult(
+        kind="software",
+        method="oughtafocus",
+        focus_device=mmcore.getFocusDevice(),
+        z_before=0,
+        z_after=0,
+        succeeded=False,
+    )
+
+    # Do the whole (deliberately tiny) routine while the GUI thread is blocked.
+    # Previously, every snap was over before its queued eventStarted was handled.
+    def _fast_autofocus() -> None:
+        mmcore.mda.events.eventStarted.emit(event)
+        mmcore.snapImage()
+        mmcore.snapImage()
+        mmcore.mda.events.autofocusFinished.emit(event, failed)
+
+    worker = threading.Thread(target=_fast_autofocus)
+    worker.start()
+    worker.join()
+
+    qtbot.waitUntil(
+        lambda: (
+            isinstance(viewers.preview, _AutofocusPreview)
+            and len(viewers.preview.frames) == 2
+        )
+    )
+    assert isinstance(viewers.preview, _AutofocusPreview)
+    assert len(viewers.preview.frames) == 2
+    assert not viewers.preview._autofocus_running
+
+
+def test_successful_visible_autofocus_snaps_at_the_reported_position(
+    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The final Preview frame represents the focus position, not a sample."""
+    monkeypatch.setattr(acquire_viewers_module, "NDVPreview", _AutofocusPreview)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    event = useq.MDAEvent(
+        action=useq.SoftwareAutofocus(
+            method="oughtafocus", settings={"show_images": True}
+        )
+    )
+    z_after = mmcore.getZPosition()
+    result = AutofocusResult(
+        kind="software",
+        method="oughtafocus",
+        focus_device=mmcore.getFocusDevice(),
+        z_before=z_after - 1,
+        z_after=z_after,
+        succeeded=True,
+    )
+
+    mmcore.mda.events.eventStarted.emit(event)
+    qtbot.waitUntil(lambda: page._viewers.preview is not None)
+    preview = page._viewers.preview
+    assert isinstance(preview, _AutofocusPreview)
+    assert not preview.frames
+
+    worker = threading.Thread(
+        target=lambda: mmcore.mda.events.autofocusFinished.emit(event, result)
+    )
+    worker.start()
+    worker.join()
+    qtbot.waitUntil(lambda: len(preview.frames) == 1)
+    assert preview.positions == [z_after]
+    assert not preview._autofocus_running
+
+
+def test_autofocus_test_opens_preview_before_snapping(
+    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The settings dialog's Test has no MDA events to open Preview for it."""
+    monkeypatch.setattr(acquire_viewers_module, "NDVPreview", _AutofocusPreview)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    assert page._viewers.preview is None
+
+    def run_method(
+        core: CMMCorePlus, method: str, settings: dict[str, object], **_: object
+    ) -> AutofocusResult:
+        assert method == "oughtafocus"
+        assert settings["show_images"] is True
+        core.snapImage()
+        core.snapImage()
+        z = core.getZPosition()
+        return AutofocusResult(
+            kind="software",
+            method=method,
+            focus_device=core.getFocusDevice(),
+            z_before=z,
+            z_after=z,
+            succeeded=True,
+        )
+
+    monkeypatch.setattr(acquire_viewers_module, "run_software_autofocus", run_method)
+    runner = page._mda.af_axis._test_runner
+    assert runner is not None
+    results: list[AutofocusResult] = []
+    worker = threading.Thread(
+        target=lambda: results.append(
+            runner("oughtafocus", {"show_images": True}, lambda: False)
+        )
+    )
+    worker.start()
+    qtbot.waitUntil(lambda: not worker.is_alive())
+    worker.join()
+
+    preview = page._viewers.preview
+    assert isinstance(preview, _AutofocusPreview)
+    qtbot.waitUntil(lambda: len(preview.frames) == 3)
+    assert results[0].succeeded
+    assert preview.positions[-1] == results[0].z_after
 
 
 def test_per_device_stage_widget_snap_checkbox_still_ensures_preview(
@@ -3228,7 +3389,7 @@ def _declared_mda(
     return mda
 
 
-def _light_source_of(mda: MemoryMDAWidget, row: int) -> tuple[str, float]:
+def _light_source_of(mda: MemoryMDAWidgetBase, row: int) -> tuple[str, float]:
     """Return the (label, intensity) shown in ``row``'s light source columns."""
     channels = mda.channels
     table = channels.table()
@@ -3237,6 +3398,115 @@ def _light_source_of(mda: MemoryMDAWidget, row: int) -> tuple[str, float]:
     label = channels._light_source_column.get_cell_data(table, row, ls_col)
     intensity = channels.INTENSITY.get_cell_data(table, row, int_col)
     return str(label["light_source"]), float(intensity["intensity"])
+
+
+@pytest.mark.parametrize("widget_type", [MemoryMDAWidget, TopbarMemoryMDAWidget])
+def test_readded_channel_recalls_exposure_and_light_intensity(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    tmp_path: Path,
+    widget_type: type[MemoryMDAWidget] | type[TopbarMemoryMDAWidget],
+) -> None:
+    _load_cfg_with_light_sources(
+        mmcore,
+        tmp_path,
+        [
+            ("DAPI", "Camera", "TestProperty1", 0.05),
+            ("FITC", "Camera", "TestProperty1", 0.1),
+        ],
+    )
+    mda = widget_type(mmcore)
+    qtbot.addWidget(mda)
+    mda.setValue(
+        useq.MDASequence(
+            channels=(
+                useq.Channel(group="Channel", config="DAPI", exposure=10),
+                useq.Channel(group="Channel", config="FITC", exposure=20),
+            )
+        )
+    )
+    channels = mda.channels
+    table = channels.table()
+    source = next(
+        label
+        for label, pairs in channels.lightSources().items()
+        if pairs == [("Camera", "TestProperty1")]
+    )
+    source_col = table.indexOf(channels._light_source_column)
+    intensity_col = table.indexOf(channels.INTENSITY)
+    for row, exposure, intensity in ((0, 11.0, 0.04), (1, 37.5, 0.08)):
+        table.setRowData(row, {"exposure": exposure, "light_source": source})
+        channels.INTENSITY.set_cell_data(table, row, intensity_col, intensity)
+
+    table.selectRow(1)
+    channels.act_remove_row.trigger()
+    assert [channel.config for channel in channels.value()] == ["DAPI"]
+
+    channels.act_add_row.trigger()
+    config_col = table.indexOf(channels._config_column)
+    config_cell = table.cellWidget(1, config_col)
+    assert config_cell is not None
+    combo = config_cell.findChild(QComboBox)
+    assert combo is not None
+    combo.setCurrentText("FITC")
+    combo.activated.emit(combo.currentIndex())
+    assert [channel.config for channel in channels.value()] == ["DAPI", "FITC"]
+    assert [channel.exposure for channel in channels.value()] == [11.0, 37.5]
+    assert [
+        channels._light_source_column.get_cell_data(table, row, source_col)[
+            "light_source"
+        ]
+        for row in range(2)
+    ] == [source, source]
+    assert [
+        channels.INTENSITY.get_cell_data(table, row, intensity_col)["intensity"]
+        for row in range(2)
+    ] == pytest.approx([0.04, 0.08])
+
+
+@pytest.mark.parametrize("widget_type", [MemoryMDAWidget, TopbarMemoryMDAWidget])
+def test_duplicate_channel_copies_current_exposure_and_light_intensity(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    tmp_path: Path,
+    widget_type: type[MemoryMDAWidget] | type[TopbarMemoryMDAWidget],
+) -> None:
+    _load_cfg_with_light_sources(
+        mmcore, tmp_path, [("Cy5", "Camera", "TestProperty1", 0.1)]
+    )
+    mda = widget_type(mmcore)
+    qtbot.addWidget(mda)
+    mda.setValue(
+        useq.MDASequence(
+            channels=(useq.Channel(group="Channel", config="Cy5", exposure=11),)
+        )
+    )
+    channels = mda.channels
+    table = channels.table()
+    source = next(
+        label
+        for label, pairs in channels.lightSources().items()
+        if pairs == [("Camera", "TestProperty1")]
+    )
+    table.setRowData(0, {"exposure": 11.0, "light_source": source})
+    intensity_col = table.indexOf(channels.INTENSITY)
+    channels.INTENSITY.set_cell_data(table, 0, intensity_col, 0.02)
+
+    channels.act_add_row.trigger()
+    config_col = table.indexOf(channels._config_column)
+    config_cell = table.cellWidget(1, config_col)
+    assert config_cell is not None
+    combo = config_cell.findChild(QComboBox)
+    assert combo is not None
+    combo.setCurrentText("Cy5")
+    combo.activated.emit(combo.currentIndex())
+
+    assert [channel.config for channel in channels.value()] == ["Cy5", "Cy5"]
+    assert [channel.exposure for channel in channels.value()] == [11.0, 11.0]
+    assert [_light_source_of(mda, row) for row in range(2)] == [
+        (source, 0.02),
+        (source, 0.02),
+    ]
 
 
 def test_light_source_declarations_are_invisible_to_the_core(
@@ -7084,7 +7354,6 @@ def test_all_mda_presentations_behave_identically(
     """Whatever the layout, the app-level behaviour must be the same."""
     from ome_writers import AcquisitionSettings, OmeTiffFormat
 
-    from pymmcore_gui.widgets._mda_widget import MemoryMDAWidgetBase
     from pymmcore_gui.widgets._panels import MDA_WIDGET_FACTORIES
 
     set_theme(DARK_THEME)

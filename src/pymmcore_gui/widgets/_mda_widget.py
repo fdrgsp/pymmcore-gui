@@ -358,6 +358,7 @@ class MemoryMDAWidgetBase(_MixinBase):
             model = table_widget.table().model()
             if model is not None:
                 model.rowsInserted.connect(self._on_table_rows_inserted)
+        self.channels.channelAdded.connect(self._on_channel_added)
 
         # Upstream replaces Pause/Resume icons whenever acquisition state
         # changes. Re-apply our semantic colors after those runtime swaps.
@@ -520,15 +521,23 @@ class MemoryMDAWidgetBase(_MixinBase):
             )
         super()._disconnect()
 
-    def _on_table_rows_inserted(self, *_: object) -> None:
-        """Theme cell widgets that are constructed only when a row is added."""
+    def _on_table_rows_inserted(
+        self, _parent: QModelIndex, first: int, last: int
+    ) -> None:
+        """Theme new cells and initialize only the newly added channel rows."""
         unstyle_widgets(self)
         self._collapsible_tabs().apply_save_body_style()
         self._install_channel_editor_filters()
         self._connect_position_icon_updates()
         self._apply_themed_icons()
-        self._apply_light_source_declarations()
+        if self.sender() is self.channels.table().model():
+            self._apply_light_source_declarations(range(first, last + 1))
         self.channels.apply_theme_metrics()
+
+    def _on_channel_added(self, row: int, restored: bool) -> None:
+        """Apply the chosen preset's declaration after its row is initialized."""
+        if not restored:
+            self._apply_light_source_declarations([row], clear_missing=True)
 
     def setValue(self, value: useq.MDASequence) -> None:
         """Restore an MDA sequence without applying a selected row to the core."""
@@ -844,7 +853,7 @@ class MemoryMDAWidgetBase(_MixinBase):
         self._on_channel_row_selected(index)
 
     def _on_channel_config_activated(self, *_: object) -> None:
-        """Follow the new preset's light source declaration for the edited row.
+        """Restore matching settings or the new preset's light declaration.
 
         Unlike _on_channel_combo_activated this applies to *any* row, not just the
         active one: the row now holds a different channel, so its light source
@@ -852,7 +861,8 @@ class MemoryMDAWidgetBase(_MixinBase):
         """
         index = self._channel_index_for_editor(self.sender())
         if index.isValid():
-            self._apply_light_source_declarations([index.row()], clear_missing=True)
+            if not self.channels.restoreChannelSettings(index.row()):
+                self._apply_light_source_declarations([index.row()], clear_missing=True)
 
     def _on_channel_cell_clicked(self, index: QModelIndex) -> None:
         """Apply a channel to the microscope only when the ● column is clicked."""

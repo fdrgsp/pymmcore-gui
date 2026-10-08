@@ -188,9 +188,12 @@ brings the Preview up for the search — opening it if it is not even there — 
 puts the tab that was in front back afterwards, since what the user wants in
 front for the rest of the run is the acquisition. A routine that was *not* asked
 to show anything never moves a tab. `duo` counts if either of its two steps asks.
-The GUI reacts when the acquisition thread's events reach it, so on a very fast
-run the search can be over before the Preview is up; a search on real hardware
-lasts long enough to watch.
+Until that lazy Preview exists, the viewer manager reads each announced image on
+the acquisition thread and relays the array to the GUI thread. Thus even a fast
+routine cannot finish and overwrite its camera buffer before the Preview is up.
+When a routine reports a successful, finite final Z, the manager takes one last
+image there so the final Preview frame is the position that autofocus selected,
+not merely the last position sampled by the optimizer.
 
 On failure or cancellation a routine puts the focus device back where it found
 it. A failed autofocus must not leave the sample somewhere else.
@@ -283,6 +286,9 @@ flight, and a run in progress refuses the test rather than fighting it for the
 stage. Driving a microscope takes a core, which `useq_widgets` has none of: the
 MDA widget supplies the runner through `AutofocusAxis.setTestRunner`, and
 without one the button is not offered at all.
+In this GUI, that runner opens Preview before the worker starts when **Show
+images** is selected, including when Preview has never been opened manually.
+After a successful test it snaps once more at the reported focus position.
 
 With the card unchecked there is no autofocus to configure, so the modes and
 their options are disabled — Qt re-enables a checkable group box's children

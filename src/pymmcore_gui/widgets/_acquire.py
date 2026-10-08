@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import weakref
 from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
@@ -73,9 +74,10 @@ from pymmcore_gui.widgets._toolbars import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable, Mapping
 
     import useq
+    from pymmcore_plus.autofocus import AutofocusResult
     from pymmcore_widgets import CameraRoiWidget
 
     from pymmcore_gui._qt.QtAds import CDockAreaWidget
@@ -555,6 +557,18 @@ class AcquirePage(TabPage):
         rather than hunting for connections scattered through ``_build``.
         """
         self._mda = widget
+        viewers_ref = weakref.ref(self._viewers)
+
+        def run_autofocus_test(
+            method: str,
+            settings: Mapping[str, object],
+            should_cancel: Callable[[], bool],
+        ) -> AutofocusResult:
+            if (viewers := viewers_ref()) is None:
+                raise RuntimeError("The acquisition page has closed.")
+            return viewers.run_software_autofocus_test(method, settings, should_cancel)
+
+        widget.af_axis.setTestRunner(run_autofocus_test)
         widget.mdaLockChanged.connect(self.set_mda_lock)
         self._snap_btn.snapRequested.connect(widget.apply_active_channel_for_capture)
         self._live_btn.liveStartedRequested.connect(

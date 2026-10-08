@@ -21,7 +21,7 @@ from pymmcore_gui._array_viewer import (
     set_source_icon,
     unstyle_widgets,
 )
-from pymmcore_gui._qt.QtCore import QEvent, QObject, QPointF, Qt
+from pymmcore_gui._qt.QtCore import QEvent, QObject, QPointF, Qt, Signal
 from pymmcore_gui._qt.QtGui import QBrush, QPainter, QPen
 from pymmcore_gui._qt.QtWidgets import (
     QApplication,
@@ -137,6 +137,8 @@ class ActiveChannelTable(CoreConnectedChannelTable):
     ``MemoryMDAWidget`` for the wiring).
     """
 
+    channelAdded = Signal(int, bool)  # row, whether preset values were restored
+
     def __init__(
         self,
         rows: int = 0,
@@ -144,6 +146,7 @@ class ActiveChannelTable(CoreConnectedChannelTable):
         parent: QWidget | None = None,
     ) -> None:
         self._active_row: int = -1
+        self._removed_settings: dict[tuple[str, str], tuple[float, str, float]] = {}
         super().__init__(rows, mmcore, parent)
         # Prepend the active-channel indicator at the leftmost position.
         table = self.table()
@@ -154,6 +157,71 @@ class ActiveChannelTable(CoreConnectedChannelTable):
         if header_item := table.horizontalHeaderItem(0):
             header_item.setToolTip("Channel currently active on the microscope")
         self.apply_theme_metrics()
+
+    def _remember_rows(self, rows: list[int]) -> None:
+        table = self.table()
+        for row in rows:
+            record = table.rowData(row)
+            if config := str(record.get("config") or ""):
+                key = (str(record.get("group") or ""), config)
+                self._removed_settings[key] = (
+                    float(record.get("exposure") or 0),
+                    str(record.get("light_source") or ""),
+                    float(record.get("intensity") or 0),
+                )
+
+    def _remove_selected(self) -> None:
+        self._remember_rows(self._selected_rows())
+        super()._remove_selected()
+
+    def _remove_all(self) -> None:
+        self._remember_rows(list(range(self.table().rowCount())))
+        super()._remove_all()
+
+    def _add_row(self) -> None:
+        table = self.table()
+        count = table.rowCount()
+        super()._add_row()
+        if table.rowCount() == count:
+            return
+        row = count
+        restored = self.restoreChannelSettings(row)
+        self.channelAdded.emit(row, restored)
+
+    def restoreChannelSettings(self, row: int) -> bool:
+        """Copy a matching row's values, or recall the last removed values."""
+        table = self.table()
+        record = table.rowData(row)
+        key = (str(record.get("group") or ""), str(record.get("config") or ""))
+        if not key[1]:
+            return False
+        remembered = self._removed_settings.get(key)
+        for other_row in reversed(range(table.rowCount())):
+            if other_row == row:
+                continue
+            other = table.rowData(other_row)
+            if (str(other.get("group") or ""), str(other.get("config") or "")) == key:
+                remembered = (
+                    float(other.get("exposure") or 0),
+                    str(other.get("light_source") or ""),
+                    float(other.get("intensity") or 0),
+                )
+                break
+        if remembered is None:
+            return False
+        exposure, source, intensity = remembered
+        source_available = source == "" or source in self.lightSources()
+        with signals_blocked(self), signals_blocked(table):
+            exposure_col = table.indexOf(self.EXPOSURE)
+            self.EXPOSURE.set_cell_data(table, row, exposure_col, exposure)
+            if source_available:
+                source_col = table.indexOf(self._light_source_column)
+                intensity_col = table.indexOf(self.INTENSITY)
+                self._light_source_column.set_cell_data(table, row, source_col, source)
+                self._configure_intensity_widget(row, intensity_col, source)
+                self.INTENSITY.set_cell_data(table, row, intensity_col, intensity)
+        self.valueChanged.emit()
+        return source_available
 
     def apply_theme_metrics(self) -> None:
         """Zoom-scale the Current column's width.
