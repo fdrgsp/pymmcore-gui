@@ -228,8 +228,8 @@ The MDA widget's **Autofocus** card is a checkable group containing:
 - the axes that trigger it,
 - a **Hardware / Software** mode pair,
 - for hardware, the search range,
-- for software, the method picker, its **Settings…** dialog, and
-  "every N time points".
+- for software, the method picker, its settings dialog (the gear), and
+  "Run every N time points".
 
 The hardware search starts at zero in both directions: enabling autofocus must
 not commit the objective to travelling. Entering a range fills in a step, since
@@ -252,6 +252,21 @@ later.
 A software plan naming a routine this installation does not have is kept as-is,
 so opening someone else's sequence does not silently change which routine it
 uses.
+
+With the card unchecked there is no autofocus to configure, so the modes and
+their options are disabled — Qt re-enables a checkable group box's children
+wholesale when it is checked, so each control's own state is reapplied on top of
+that, from one place. During an acquisition the whole section is disabled with
+every other editor, and the enablement logic steps aside rather than fighting
+it.
+
+**While it runs.** The main window's status bar reads *Autofocusing (method)…*
+for as long as an autofocus event lasts: it is set from `eventStarted` when the
+event carries an autofocus action, and cleared by `autofocusFinished` (or by the
+next event, for a runner that never reports one). A routine can hold the
+acquisition for dozens of images, during which the bar would otherwise sit on
+the previous frame and read as a stalled run. See
+`src/pymmcore_gui/widgets/_mda_status.py`.
 
 ## 9. Departures from Micro-Manager
 
@@ -331,6 +346,10 @@ In `pymmcore-widgets`:
 - `src/pymmcore_widgets/useq_widgets/_autofocus_settings.py` — the generated
   settings form
 - `src/pymmcore_widgets/mda/_core_mda.py` — which modes the microscope can run
+
+In `pymmcore-gui`:
+
+- `src/pymmcore_gui/widgets/_mda_status.py` — "Autofocusing…" in the status bar
 
 Pixel calibration, a separate routine that also drives the stage, is described
 in [PIXEL_CALIBRATION.md](PIXEL_CALIBRATION.md).

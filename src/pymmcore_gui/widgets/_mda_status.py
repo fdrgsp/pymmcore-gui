@@ -96,6 +96,23 @@ def _format_event(event: MDAEvent, sizes: Mapping[str, int]) -> str:
     return "  ·  ".join(parts)
 
 
+def _autofocus_label(event: MDAEvent) -> str | None:
+    """Describe `event` if it is an autofocus event, else return None.
+
+    Matched on the action's ``type`` string rather than the useq classes, so
+    this keeps working against a useq that predates software autofocus.
+    """
+    action = event.action
+    kind = getattr(action, "type", "")
+    if kind == "hardware_autofocus":
+        return "Autofocusing…"
+    if kind == "software_autofocus":
+        # The routine name is the one thing the user cannot infer from the run.
+        method = str(getattr(action, "method", "") or "")
+        return f"Autofocusing ({_shorten(method)})…" if method else "Autofocusing…"
+    return None
+
+
 def _event_tooltip(event: MDAEvent) -> str:
     details: list[str] = []
     if event.x_pos is not None:
@@ -116,6 +133,7 @@ class MDAStatusWidget(QWidget):
     _awaitingEvent = Signal(object, float)
     _eventStarted = Signal(object)
     _frameObserved = Signal(object)
+    _autofocusFinished = Signal(object)
     _pauseToggled = Signal()
     _sequenceCanceled = Signal()
     _sequenceFinished = Signal(object, object)
@@ -129,6 +147,10 @@ class MDAStatusWidget(QWidget):
         self._current_event: MDAEvent | None = None
         self._next_event: MDAEvent | None = None
         self._next_event_remaining: float | None = None
+        # set while an autofocus event is in flight: its label, and the event
+        # itself so the details can say where the routine is focusing.
+        self._autofocus: str | None = None
+        self._autofocus_event: MDAEvent | None = None
         self._cancel_seen = False
         self._result: str | None = None
         self._result_kind = "green"
@@ -175,6 +197,7 @@ class MDAStatusWidget(QWidget):
         self._awaitingEvent.connect(self._on_awaiting_event)
         self._eventStarted.connect(self._on_event_started)
         self._frameObserved.connect(self._on_frame_observed)
+        self._autofocusFinished.connect(self._on_autofocus_finished)
         self._pauseToggled.connect(self._render)
         self._sequenceCanceled.connect(self._on_sequence_canceled)
         self._sequenceFinished.connect(self._on_sequence_finished)
@@ -184,6 +207,9 @@ class MDAStatusWidget(QWidget):
         self._awaiting_event_callback = self._relay_awaiting_event
         self._event_started_callback = self._eventStarted.emit
         self._frame_ready_callback = self._relay_frame_ready
+        # Older pymmcore-plus runners do not report autofocus at all.
+        self._autofocus_finished_signal = getattr(events, "autofocusFinished", None)
+        self._autofocus_finished_callback = self._relay_autofocus_finished
         self._pause_toggled_callback = self._relay_pause_toggled
         self._sequence_canceled_callback = self._relay_sequence_canceled
         self._sequence_finished_callback = self._relay_sequence_finished
@@ -191,6 +217,8 @@ class MDAStatusWidget(QWidget):
         events.awaitingEvent.connect(self._awaiting_event_callback)
         events.eventStarted.connect(self._event_started_callback)
         events.frameReady.connect(self._frame_ready_callback)
+        if self._autofocus_finished_signal is not None:
+            self._autofocus_finished_signal.connect(self._autofocus_finished_callback)
         events.sequencePauseToggled.connect(self._pause_toggled_callback)
         events.sequenceCanceled.connect(self._sequence_canceled_callback)
         events.sequenceFinished.connect(self._sequence_finished_callback)
@@ -209,6 +237,9 @@ class MDAStatusWidget(QWidget):
     ) -> None:
         # Do not send the potentially large image through a second Qt event queue.
         self._frameObserved.emit(event)
+
+    def _relay_autofocus_finished(self, event: MDAEvent, _result: object) -> None:
+        self._autofocusFinished.emit(event)
 
     def _relay_pause_toggled(self, _paused: bool) -> None:
         self._pauseToggled.emit()
@@ -230,6 +261,7 @@ class MDAStatusWidget(QWidget):
         self._current_event = None
         self._next_event = None
         self._next_event_remaining = None
+        self._clear_autofocus()
         self._cancel_seen = False
         self.show()
 
@@ -257,11 +289,28 @@ class MDAStatusWidget(QWidget):
         self._current_event = event
         self._next_event = None
         self._next_event_remaining = None
+        # An autofocus event produces no frame, so autofocusFinished is what
+        # normally ends this -- but clear it here too, in case a runner never
+        # reports it and the next event would otherwise stay mislabelled.
+        if (label := _autofocus_label(event)) is not None:
+            self._autofocus = label
+            self._autofocus_event = event
+            self._render()
+        else:
+            self._clear_autofocus()
 
     def _on_frame_observed(self, event: MDAEvent) -> None:
         self._last_event = event
         self._next_event = None
         self._next_event_remaining = None
+
+    def _on_autofocus_finished(self, _event: MDAEvent) -> None:
+        self._clear_autofocus()
+        self._render()
+
+    def _clear_autofocus(self) -> None:
+        self._autofocus = None
+        self._autofocus_event = None
 
     def _on_sequence_canceled(self) -> None:
         self._cancel_seen = True
@@ -284,6 +333,7 @@ class MDAStatusWidget(QWidget):
         else:
             self._result = "Acquisition complete"
             self._result_kind = "green"
+        self._clear_autofocus()
         self._sequence = None
         self._result_timer.start()
         self._render()
@@ -312,6 +362,10 @@ class MDAStatusWidget(QWidget):
             return "Cancelling…", "red"
         if status.pause_requested:
             return "Pausing…", "amber"
+        if self._autofocus:
+            # A software routine can hold the run for many images; saying so
+            # beats a status bar that looks stuck on the previous frame.
+            return self._autofocus, "amber"
         if phase == RunState.PREPARING.value:
             return "Preparing…", "green"
         if phase == RunState.PAUSED.value:
@@ -344,6 +398,8 @@ class MDAStatusWidget(QWidget):
         event = None
         if idle and self._result is None:
             pass
+        elif self._autofocus_event is not None and not idle:
+            prefix, event = " |  At: ", self._autofocus_event
         elif self._next_event is not None and not idle:
             prefix, event = " |  Next: ", self._next_event
         elif self._last_event is not None:
@@ -385,7 +441,7 @@ class MDAStatusWidget(QWidget):
 
     def _disconnect(self) -> None:
         events = self._runner.events
-        callbacks = (
+        callbacks: list[tuple[Any, Any]] = [
             (events.sequenceStarted, self._sequence_started_callback),
             (events.awaitingEvent, self._awaiting_event_callback),
             (events.eventStarted, self._event_started_callback),
@@ -393,7 +449,11 @@ class MDAStatusWidget(QWidget):
             (events.sequencePauseToggled, self._pause_toggled_callback),
             (events.sequenceCanceled, self._sequence_canceled_callback),
             (events.sequenceFinished, self._sequence_finished_callback),
-        )
+        ]
+        if self._autofocus_finished_signal is not None:
+            callbacks.append(
+                (self._autofocus_finished_signal, self._autofocus_finished_callback)
+            )
         for signal, callback in callbacks:
             with suppress(Exception):
                 signal.disconnect(callback)

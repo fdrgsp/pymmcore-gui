@@ -4,8 +4,17 @@ from datetime import timedelta
 from typing import TYPE_CHECKING
 
 import numpy as np
+from pymmcore_plus.autofocus import AutofocusResult
 from pymmcore_plus.mda import FinishReason, RunState
-from useq import Channel, MDASequence, Position, TIntervalLoops, ZRangeAround
+from useq import (
+    Channel,
+    HardwareAutofocus,
+    MDASequence,
+    Position,
+    SoftwareAutofocus,
+    TIntervalLoops,
+    ZRangeAround,
+)
 
 from pymmcore_gui.widgets._mda_status import (
     MDAStatusWidget,
@@ -203,3 +212,56 @@ def test_main_window_left_status_and_idle_visibility(
     widget._poll_status()
     assert widget._state_label.text() == "MDA idle"
     assert widget._details_label.text() == ""
+
+
+def test_mda_status_reports_an_autofocus_in_progress(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    widget = MDAStatusWidget(mmcore)
+    qtbot.addWidget(widget)
+    runner = mmcore.mda
+    sequence = MDASequence(stage_positions=(Position(x=0, y=0, name="A1"),))
+    widget._on_sequence_started(sequence)
+    runner._state = RunState.ACQUIRING
+
+    frame = next(iter(sequence))
+    runner.events.frameReady.emit(np.zeros((1, 1)), frame, {})
+    qtbot.waitUntil(lambda: widget._last_event is frame)
+    widget._render()
+    assert widget._state_label.text() == "Acquiring"
+
+    # A software routine can hold the run for dozens of images, during which the
+    # bar would otherwise still read "Acquiring / Last: <the previous frame>".
+    af_event = frame.replace(action=SoftwareAutofocus(method="oughtafocus"))
+    runner.events.eventStarted.emit(af_event)
+    qtbot.waitUntil(lambda: widget._autofocus is not None)
+    widget._render()
+    assert widget._state_label.text() == "Autofocusing (oughtafocus)…"
+    assert widget._details_label.text() == " |  At: P 1/1 (A1)"
+
+    result = AutofocusResult(
+        kind="software",
+        method="oughtafocus",
+        focus_device="Z",
+        z_before=0.0,
+        z_after=1.0,
+        succeeded=True,
+    )
+    runner.events.autofocusFinished.emit(af_event, result)
+    qtbot.waitUntil(lambda: widget._autofocus is None)
+    widget._render()
+    assert widget._state_label.text() == "Acquiring"
+    assert widget._details_label.text().startswith(" |  Last: P 1/1 (A1)")
+
+    # Hardware autofocus is reported too, without a routine name to give.
+    hardware = frame.replace(action=HardwareAutofocus(autofocus_motor_offset=0))
+    runner.events.eventStarted.emit(hardware)
+    qtbot.waitUntil(lambda: widget._autofocus is not None)
+    widget._render()
+    assert widget._state_label.text() == "Autofocusing…"
+
+    # A runner that never reports the end still recovers at the next event.
+    runner.events.eventStarted.emit(frame)
+    qtbot.waitUntil(lambda: widget._autofocus is None)
+    widget._render()
+    assert widget._state_label.text() == "Acquiring"
