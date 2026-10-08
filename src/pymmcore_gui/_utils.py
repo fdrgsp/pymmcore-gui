@@ -1,12 +1,32 @@
+from __future__ import annotations
+
 import urllib.error
 import urllib.request
 from functools import cache
+from typing import TYPE_CHECKING
 
 import psutil
+
+if TYPE_CHECKING:
+    from useq import MDAEvent
 
 GH_REPO_URL = "http://github.com/pymmcore-plus/pymmcore-gui"
 
 _BYTES_PER_GB = 1024**3
+
+_AUTOFOCUS_ACTIONS = {
+    "hardware_autofocus": "hardware",
+    "software_autofocus": "software",
+}
+
+
+def autofocus_kind(event: MDAEvent) -> str | None:
+    """Return `"hardware"` or `"software"` if `event` is an autofocus event, else None.
+
+    Matched on the action's ``type`` string rather than the useq classes, so this
+    keeps working against a useq that predates software autofocus.
+    """
+    return _AUTOFOCUS_ACTIONS.get(str(getattr(event.action, "type", "")))
 
 
 def system_memory_gb() -> tuple[float, float]:

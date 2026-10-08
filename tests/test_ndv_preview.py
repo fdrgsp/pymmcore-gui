@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
 import numpy as np
 import pytest
+import useq
 from cmap import Colormap
 from ndv.models import ChannelMode, LUTModel, RingBuffer
 
@@ -165,3 +167,78 @@ def test_preview_lut_uses_current_channel_name() -> None:
     core.getCurrentConfig.return_value = "DAPI"
     NDVPreview._update_channel_name(preview)  # type: ignore[arg-type]
     assert lut.name == "DAPI"
+
+
+def test_autofocus_images_are_shown_during_an_acquisition(
+    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A routine's `show_images` is pointless if the preview drops the images.
+
+    Acquisition frames go to the run's own viewer, which is why the preview
+    ignores snaps during a run -- but an autofocus routine's images have nowhere
+    else to go, and asking to see them is the only reason they are announced.
+    """
+    appended: list[np.ndarray] = []
+    monkeypatch.setattr(NDVPreview, "append", lambda _self, data: appended.append(data))
+    shown = Mock()
+    preview = NDVPreview(mmcore)
+    qtbot.addWidget(preview)
+    preview.snapShown.connect(shown)
+
+    events = mmcore.mda.events
+    af_event = useq.MDAEvent(action=useq.SoftwareAutofocus(method="oughtafocus"))
+
+    # during a run, an ordinary snap is somebody else's business ...
+    preview._is_mda_running = True
+    mmcore.snapImage()
+    qtbot.wait(0)
+    assert not appended
+
+    # ... but the images of an autofocus event are shown
+    events.eventStarted.emit(af_event)
+    mmcore.snapImage()
+    qtbot.wait(0)
+    assert len(appended) == 1
+    # without pulling the user off the viewer of the run in progress
+    shown.assert_not_called()
+
+    # the window closes when the routine reports, and again at the next event
+    events.autofocusFinished.emit(af_event, Mock())
+    mmcore.snapImage()
+    qtbot.wait(0)
+    assert len(appended) == 1
+
+    events.eventStarted.emit(af_event)
+    events.eventStarted.emit(useq.MDAEvent())
+    mmcore.snapImage()
+    qtbot.wait(0)
+    assert len(appended) == 1
+
+    # outside a run, every snap is shown, and is worth bringing to the front
+    preview._is_mda_running = False
+    mmcore.snapImage()
+    qtbot.wait(0)
+    assert len(appended) == 2
+    shown.assert_called_once()
+
+
+def test_a_snap_from_the_acquisition_thread_is_displayed_on_the_gui_thread(
+    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`append` drives the GPU canvas, so it must not run on the runner thread."""
+    threads: list[int] = []
+    monkeypatch.setattr(
+        NDVPreview, "append", lambda _self, _data: threads.append(threading.get_ident())
+    )
+    preview = NDVPreview(mmcore)
+    qtbot.addWidget(preview)
+
+    def _snap_off_thread() -> None:
+        mmcore.snapImage()
+
+    worker = threading.Thread(target=_snap_off_thread)
+    worker.start()
+    worker.join()
+    qtbot.waitUntil(lambda: bool(threads))
+
+    assert threads == [threading.get_ident()]

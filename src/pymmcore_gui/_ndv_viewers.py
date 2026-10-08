@@ -284,11 +284,21 @@ class AcquireViewersManager(QObject):
             dw.setWidget(preview, CDockWidget.eInsertMode.ForceNoScrollArea)
             dw.closed.connect(self._on_preview_closed)
             self._preview_dock = dw
+            # Each run's viewer is tabbed over the Preview and takes the tab, so
+            # without this a snap after an acquisition -- a stage move with "Snap"
+            # checked, say -- would land in a Preview hidden behind it.
+            preview.snapShown.connect(self._raise_preview)
             self.previewCreated.emit(preview)
         assert self._preview_dock is not None
         self._preview_dock.setAsCurrentTab()
         assert self.preview is not None
         return self.preview
+
+    def _raise_preview(self) -> None:
+        """Bring the Preview tab to the front, if it is still open."""
+        if (dock := self._preview_dock) is not None:
+            with suppress(RuntimeError):  # the dock may have been closed meanwhile
+                dock.setAsCurrentTab()
 
     def _on_preview_closed(self) -> None:
         if (preview := self.preview) is not None:

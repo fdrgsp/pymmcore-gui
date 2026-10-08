@@ -11,6 +11,7 @@ from pymmcore_plus.mda import FinishReason, RunState
 from pymmcore_gui._qt.QtCore import QEvent, Qt, QTimer, Signal
 from pymmcore_gui._qt.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QWidget
 from pymmcore_gui._theme import qcolor, theme
+from pymmcore_gui._utils import autofocus_kind
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -97,20 +98,15 @@ def _format_event(event: MDAEvent, sizes: Mapping[str, int]) -> str:
 
 
 def _autofocus_label(event: MDAEvent) -> str | None:
-    """Describe `event` if it is an autofocus event, else return None.
-
-    Matched on the action's ``type`` string rather than the useq classes, so
-    this keeps working against a useq that predates software autofocus.
-    """
-    action = event.action
-    kind = getattr(action, "type", "")
-    if kind == "hardware_autofocus":
-        return "Autofocusing…"
-    if kind == "software_autofocus":
+    """Describe `event` if it is an autofocus event, else return None."""
+    if (kind := autofocus_kind(event)) is None:
+        return None
+    if kind == "software":
         # The routine name is the one thing the user cannot infer from the run.
-        method = str(getattr(action, "method", "") or "")
-        return f"Autofocusing ({_shorten(method)})…" if method else "Autofocusing…"
-    return None
+        method = str(getattr(event.action, "method", "") or "")
+        if method:
+            return f"Autofocusing ({_shorten(method)})…"
+    return "Autofocusing…"
 
 
 def _event_tooltip(event: MDAEvent) -> str:

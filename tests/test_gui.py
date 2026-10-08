@@ -36,7 +36,7 @@ from pymmcore_gui._qt.QtAds import (
     DockWidgetArea,
     SideBarLocation,
 )
-from pymmcore_gui._qt.QtCore import QPoint, QRect, QSize, Qt
+from pymmcore_gui._qt.QtCore import QPoint, QRect, QSize, Qt, Signal
 from pymmcore_gui._qt.QtGui import (
     QAction,
     QCloseEvent,
@@ -1430,6 +1430,41 @@ def test_xyz_stage_widget_snap_checkbox_ensures_preview(
     ensure_preview.assert_called_once()
 
 
+def test_a_snap_after_an_acquisition_brings_the_preview_back_to_the_front(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Regression test: each run's viewer is tabbed over the Preview.
+
+    So with "Snap" checked on a stage, moving it after a run snapped into a
+    Preview hidden behind that run's viewer -- the image was there, but there
+    was no sign of it.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.show()
+    qtbot.waitExposed(page)
+    page.panel_button(PanelKey.STAGES).click()
+    stage = page.panel_widget(PanelKey.STAGES)
+    assert isinstance(stage, XYZStageWidget)
+    stage.snap_checkbox.setChecked(True)
+    preview_dock = page._viewers._preview_dock
+    assert preview_dock is not None
+    assert preview_dock.isCurrentTab()
+
+    # "memory" output is what the embedded MDA widget supplies, and is what
+    # gives the run a viewer of its own to be tabbed over the Preview.
+    sequence = useq.MDASequence(
+        time_plan=useq.TIntervalLoops(interval=timedelta(0), loops=2)
+    )
+    with qtbot.waitSignal(mmcore.mda.events.sequenceFinished, timeout=10000):
+        mmcore.run_mda(sequence, output="memory")
+    qtbot.waitUntil(lambda: not preview_dock.isCurrentTab())
+
+    mmcore.snapImage()  # as a stage move with Snap checked would
+    qtbot.waitUntil(preview_dock.isCurrentTab)
+    assert preview_dock.isVisible()
+
+
 def test_per_device_stage_widget_snap_checkbox_still_ensures_preview(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
@@ -2725,6 +2760,10 @@ def test_snap_opens_closable_preview(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakePreview(QWidget):
+        # the real preview announces a snap it displayed; AcquireViewersManager
+        # connects to it to bring the Preview tab back to the front
+        snapShown = Signal()
+
         def __init__(
             self,
             mmcore: CMMCorePlus,
@@ -3788,11 +3827,12 @@ def test_collapsible_mda_preserves_per_position_af_offsets(
     assert mda.stage_positions.af_per_position.isChecked()
     restored = mda.value().stage_positions
     assert restored == positions
+    # `autofocus_plan` is a union now; only the hardware kind carries an offset
     seq0 = restored[0].sequence
-    assert seq0 is not None and seq0.autofocus_plan is not None
+    assert seq0 is not None and isinstance(seq0.autofocus_plan, useq.AxesBasedAF)
     assert seq0.autofocus_plan.autofocus_motor_offset == 42.0
     seq1 = restored[1].sequence
-    assert seq1 is not None and seq1.autofocus_plan is not None
+    assert seq1 is not None and isinstance(seq1.autofocus_plan, useq.AxesBasedAF)
     assert seq1.autofocus_plan.autofocus_motor_offset == -13.0
 
 
@@ -4082,6 +4122,10 @@ def test_live_opens_preview_before_streaming(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakePreview(QWidget):
+        # the real preview announces a snap it displayed; AcquireViewersManager
+        # connects to it to bring the Preview tab back to the front
+        snapShown = Signal()
+
         def __init__(
             self,
             mmcore: CMMCorePlus,
@@ -4125,6 +4169,10 @@ def test_snap_and_live_apply_the_active_channel_capture_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakePreview(QWidget):
+        # the real preview announces a snap it displayed; AcquireViewersManager
+        # connects to it to bring the Preview tab back to the front
+        snapShown = Signal()
+
         def __init__(
             self,
             mmcore: CMMCorePlus,
@@ -4228,6 +4276,10 @@ def test_switching_channel_rows_during_live_applies_all_capture_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakePreview(QWidget):
+        # the real preview announces a snap it displayed; AcquireViewersManager
+        # connects to it to bring the Preview tab back to the front
+        snapShown = Signal()
+
         def __init__(
             self,
             mmcore: CMMCorePlus,
@@ -5569,6 +5621,8 @@ def test_acquire_restore_preserves_nested_viewer_manager(
     """Restoring the outer tools layout leaves the inner viewer tree intact."""
 
     class FakePreview(QWidget):
+        snapShown = Signal()
+
         def __init__(self, mmcore: CMMCorePlus, parent: QWidget | None = None) -> None:
             super().__init__(parent)
             self._core = mmcore

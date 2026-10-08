@@ -175,6 +175,15 @@ and `jaf` sends them through `CMMCorePlus.snapImage` instead, so the search can
 be watched while it happens — useful when setting a routine up, and off by
 default because a preview flickering through a search rarely is.
 
+For those images to actually be seen, the gui's Preview makes an exception to
+its rule of ignoring snaps during an acquisition: between an autofocus event's
+`eventStarted` and its `autofocusFinished`, a snapped image is a routine's
+diagnostic image rather than acquisition data, and is displayed. It does not
+raise the Preview tab, though — it is not worth pulling the user off the viewer
+of the run in progress. The image is read from the camera on the thread that
+snapped and handed to the GUI thread, because the next one in the search is
+already on the way (`widgets/image_preview/_preview_base.py`).
+
 On failure or cancellation a routine puts the focus device back where it found
 it. A failed autofocus must not leave the sample somewhere else.
 
