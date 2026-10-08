@@ -193,7 +193,9 @@ the acquisition thread and relays the array to the GUI thread. Thus even a fast
 routine cannot finish and overwrite its camera buffer before the Preview is up.
 When a routine reports a successful, finite final Z, the manager takes one last
 image there so the final Preview frame is the position that autofocus selected,
-not merely the last position sampled by the optimizer.
+not merely the last position sampled by the optimizer. That snap temporarily uses
+the channel and exposure of the final search pass (the fine pass for `jaf`, the
+second step for `duo`), then restores the pre-autofocus camera settings.
 
 On failure or cancellation a routine puts the focus device back where it found
 it. A failed autofocus must not leave the sample somewhere else.
@@ -289,6 +291,8 @@ without one the button is not offered at all.
 In this GUI, that runner opens Preview before the worker starts when **Show
 images** is selected, including when Preview has never been opened manually.
 After a successful test it snaps once more at the reported focus position.
+That final image also uses the routine's channel and exposure, without leaving
+those settings applied to the microscope afterward.
 
 With the card unchecked there is no autofocus to configure, so the modes and
 their options are disabled — Qt re-enables a checkable group box's children

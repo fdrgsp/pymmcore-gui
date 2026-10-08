@@ -14,7 +14,7 @@ import pytest
 import useq
 from cmap import Colormap
 from pymmcore_plus import PropertyType
-from pymmcore_plus.autofocus import AutofocusResult
+from pymmcore_plus.autofocus import AutofocusResult, CaptureSettings, capture_state
 from pymmcore_plus.mda import MDARunner
 from pymmcore_widgets import CameraRoiWidget, StageWidget, XYZStageWidget
 from pymmcore_widgets import MDAWidget as UpstreamMDAWidget
@@ -1597,22 +1597,65 @@ def test_fast_autofocus_images_open_the_preview_without_a_manual_preview(
     assert not viewers.preview._autofocus_running
 
 
+@pytest.mark.parametrize(
+    ("method", "settings"),
+    [
+        ("oughtafocus", {"channel": "Cy5", "exposure_ms": 11, "show_images": True}),
+        (
+            "jaf",
+            {
+                "channel": "FITC",
+                "fine_channel": "Cy5",
+                "exposure_ms": 11,
+                "show_images": True,
+            },
+        ),
+        (
+            "duo",
+            {
+                "second": {
+                    "method": "jaf",
+                    "settings": {
+                        "channel": "FITC",
+                        "fine_channel": "Cy5",
+                        "exposure_ms": 11,
+                        "show_images": True,
+                    },
+                }
+            },
+        ),
+    ],
+)
 def test_successful_visible_autofocus_snaps_at_the_reported_position(
-    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    settings: dict[str, Any],
 ) -> None:
-    """The final Preview frame represents the focus position, not a sample."""
+    """The focused frame uses the final AF channel/exposure, then restores them."""
     monkeypatch.setattr(acquire_viewers_module, "NDVPreview", _AutofocusPreview)
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
-    event = useq.MDAEvent(
-        action=useq.SoftwareAutofocus(
-            method="oughtafocus", settings={"show_images": True}
+    mmcore.setConfig("Channel", "DAPI")
+    mmcore.setExposure(33)
+    snapped_settings: list[tuple[str, float]] = []
+    original_snap = mmcore.snapImage
+
+    def record_snap() -> None:
+        snapped_settings.append(
+            (mmcore.getCurrentConfig("Channel"), mmcore.getExposure())
         )
+        original_snap()
+
+    monkeypatch.setattr(mmcore, "snapImage", record_snap)
+    event = useq.MDAEvent(
+        action=useq.SoftwareAutofocus(method=method, settings=settings)
     )
     z_after = mmcore.getZPosition()
     result = AutofocusResult(
         kind="software",
-        method="oughtafocus",
+        method=method,
         focus_device=mmcore.getFocusDevice(),
         z_before=z_after - 1,
         z_after=z_after,
@@ -1633,6 +1676,9 @@ def test_successful_visible_autofocus_snaps_at_the_reported_position(
     qtbot.waitUntil(lambda: len(preview.frames) == 1)
     assert preview.positions == [z_after]
     assert not preview._autofocus_running
+    assert snapped_settings == [("Cy5", 11.0)]
+    assert mmcore.getCurrentConfig("Channel") == "DAPI"
+    assert mmcore.getExposure() == pytest.approx(33)
 
 
 def test_autofocus_test_opens_preview_before_snapping(
@@ -1643,14 +1689,30 @@ def test_autofocus_test_opens_preview_before_snapping(
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
     assert page._viewers.preview is None
+    mmcore.setConfig("Channel", "DAPI")
+    mmcore.setExposure(33)
+    snapped_settings: list[tuple[str, float]] = []
+    original_snap = mmcore.snapImage
+
+    def record_snap() -> None:
+        snapped_settings.append(
+            (mmcore.getCurrentConfig("Channel"), mmcore.getExposure())
+        )
+        original_snap()
+
+    monkeypatch.setattr(mmcore, "snapImage", record_snap)
 
     def run_method(
         core: CMMCorePlus, method: str, settings: dict[str, object], **_: object
     ) -> AutofocusResult:
         assert method == "oughtafocus"
         assert settings["show_images"] is True
-        core.snapImage()
-        core.snapImage()
+        with capture_state(
+            core,
+            CaptureSettings(channel_group="Channel", channel="Cy5", exposure_ms=11),
+        ):
+            core.snapImage()
+            core.snapImage()
         z = core.getZPosition()
         return AutofocusResult(
             kind="software",
@@ -1667,7 +1729,16 @@ def test_autofocus_test_opens_preview_before_snapping(
     results: list[AutofocusResult] = []
     worker = threading.Thread(
         target=lambda: results.append(
-            runner("oughtafocus", {"show_images": True}, lambda: False)
+            runner(
+                "oughtafocus",
+                {
+                    "show_images": True,
+                    "channel_group": "Channel",
+                    "channel": "Cy5",
+                    "exposure_ms": 11,
+                },
+                lambda: False,
+            )
         )
     )
     worker.start()
@@ -1679,6 +1750,9 @@ def test_autofocus_test_opens_preview_before_snapping(
     qtbot.waitUntil(lambda: len(preview.frames) == 3)
     assert results[0].succeeded
     assert preview.positions[-1] == results[0].z_after
+    assert snapped_settings == [("Cy5", 11.0)] * 3
+    assert mmcore.getCurrentConfig("Channel") == "DAPI"
+    assert mmcore.getExposure() == pytest.approx(33)
 
 
 def test_per_device_stage_widget_snap_checkbox_still_ensures_preview(

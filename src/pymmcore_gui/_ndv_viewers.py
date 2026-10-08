@@ -13,8 +13,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from ome_writers import ScratchFormat
-from pymmcore_plus.autofocus import run_software_autofocus
+from pymmcore_plus.autofocus import (
+    CaptureSettings,
+    DuoSettings,
+    capture_state,
+    run_software_autofocus,
+)
 from pymmcore_plus.mda import OmeWritersSink, frame_meta_to_ome
+from useq import SoftwareAutofocus
 
 from pymmcore_gui._acquisition_loader import open_acquisition as _open_acquisition
 from pymmcore_gui._array_viewer import MMArrayViewer
@@ -383,7 +389,8 @@ class AcquireViewersManager(QObject):
             and math.isfinite(result.z_after)
             and not should_cancel()
         ):
-            self._core.snapImage()
+            with capture_state(self._core, _final_focus_capture(method, settings)):
+                self._core.snapImage()
         return result
 
     def _on_event_started(self, event: MDAEvent) -> None:
@@ -432,11 +439,16 @@ class AcquireViewersManager(QObject):
             and getattr(result, "kind", None) == "software"
             and getattr(result, "succeeded", False)
             and math.isfinite(getattr(result, "z_after", math.nan))
+            and isinstance(event.action, SoftwareAutofocus)
         ):
             # The routine has already moved the stage to result.z_after.  Snap
             # before closing the autofocus window so the Preview accepts it.
             with suppress(Exception):
-                self._core.snapImage()
+                with capture_state(
+                    self._core,
+                    _final_focus_capture(event.action.method, event.action.settings),
+                ):
+                    self._core.snapImage()
         self._showing_autofocus_images = False
         self._autofocusFinished.emit(event, result)
 
@@ -781,6 +793,23 @@ def _shows_images(settings: object) -> bool:
     if settings.get("show_images"):
         return True
     return any(_shows_images(value) for value in settings.values())
+
+
+def _final_focus_capture(method: str, settings: Mapping[str, Any]) -> CaptureSettings:
+    """Use the final search pass's channel and exposure for its focused image."""
+    while method == "duo":
+        last = settings.get("second", DuoSettings().second)
+        if not isinstance(last, Mapping):
+            break
+        method = str(last.get("method") or "")
+        nested = last.get("settings")
+        settings = nested if isinstance(nested, Mapping) else {}
+    channel = settings.get("fine_channel") if method == "jaf" else None
+    return CaptureSettings(
+        channel_group=cast("str | None", settings.get("channel_group")),
+        channel=cast("str | None", channel or settings.get("channel")),
+        exposure_ms=cast("float | None", settings.get("exposure_ms")),
+    )
 
 
 class _StreamSignalBridge(QObject):
