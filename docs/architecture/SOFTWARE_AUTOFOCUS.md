@@ -231,13 +231,19 @@ The MDA widget's **Autofocus** card is a checkable group containing:
 - for software, the method picker, its **Settings…** dialog, and
   "every N time points".
 
+The hardware search starts at zero in both directions: enabling autofocus must
+not commit the objective to travelling. Entering a range fills in a step, since
+a range without one is not a search and the schema refuses to build it.
+
 Only the options belonging to the selected mode are shown. A mode the
 microscope cannot run is disabled: hardware needs an autofocus device, software
 needs a camera and a focus stage, and an absolute Z plan rules out both. A
 disabled mode yields *no plan* — the mode is deliberately never switched for the
 user, because a sequence that asks for one kind must not quietly run the other.
 
-The settings dialog is generated from the routine's settings dataclass, so a
+The method picker reads the routines straight from `pymmcore_plus`, so the
+section works without wiring; `setSoftwareMethods` overrides that set. The
+settings dialog is generated from the routine's settings dataclass, so a
 routine registered by a user gets a form too. Field types the form cannot edit
 are preserved untouched rather than dropped, and only settings that differ from
 the routine's defaults are carried, so a routine is free to change its defaults
