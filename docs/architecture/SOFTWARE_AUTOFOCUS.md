@@ -168,9 +168,12 @@ it is restored exactly once on the way out, including when the routine fails
 partway — and if *applying* it fails partway, the part already applied is rolled
 back.
 
-Autofocus images are acquired through the base `CMMCore.snapImage`, so they do
-not reach a live preview or any frame handler. They are diagnostic: scored and
-discarded, never saved.
+By default, autofocus images are acquired through the base `CMMCore.snapImage`,
+so they do not reach a live preview or any frame handler. They are diagnostic:
+scored and discarded, never saved. The `show_images` setting of `oughtafocus`
+and `jaf` sends them through `CMMCorePlus.snapImage` instead, so the search can
+be watched while it happens — useful when setting a routine up, and off by
+default because a preview flickering through a search rarely is.
 
 On failure or cancellation a routine puts the focus device back where it found
 it. A failed autofocus must not leave the sample somewhere else.
