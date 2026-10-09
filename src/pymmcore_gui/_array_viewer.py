@@ -96,16 +96,13 @@ class MMArrayViewer(ndv.ArrayViewer):
         kwargs.setdefault("channel_mode", ChannelMode.COMPOSITE)
         super().__init__(data, **kwargs)
 
-        # pymmcore-gui viewers always start with the shared histogram visible
-        # and logarithmic.  ndv currently exposes these states through its Qt
-        # controls rather than its viewer model, so use the same toggles a user
-        # would click.  Checking the histogram first creates it; checking log
-        # second immediately applies the logarithmic scale to that canvas.
+        # pymmcore-gui viewers always start with the shared histogram visible.
+        # ndv currently exposes this state through its Qt controls rather than
+        # its viewer model, so use the same toggle a user would click.
         if self._viewer_model.use_shared_histogram:
             with suppress(AttributeError):
                 qwidget = self.widget()
                 qwidget.shared_histogram_btn.setChecked(True)
-                qwidget.shared_hist_log_btn.setChecked(True)
 
         # Set by the viewer manager (e.g. AcquireViewersManager) right after
         # construction, for MDA-backed viewers: a snapshot of the sink's
