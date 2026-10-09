@@ -3017,8 +3017,8 @@ test = [
 
 [[package]]
 name = "pymmcore-plus"
-version = "0.17.3.dev92+ga2081c3b2"
-source = { git = "https://github.com/fdrgsp/pymmcore-plus?rev=cite#a2081c3b2558c07a8de8c7a99b5ce106ed623b04" }
+version = "0.17.3.dev94+g5de156140"
+source = { git = "https://github.com/fdrgsp/pymmcore-plus?rev=cite#5de156140de3fc017aaf8bb5eaa201d5c5569d2e" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -3041,8 +3041,8 @@ cli = [
 
 [[package]]
 name = "pymmcore-widgets"
-version = "0.1.dev568+g952052961"
-source = { git = "https://github.com/fdrgsp/pymmcore-widgets?rev=cite#9520529612c9ebb043741a7781b57591a3506b4b" }
+version = "0.1.dev569+g7bb7e5a80"
+source = { git = "https://github.com/fdrgsp/pymmcore-widgets?rev=cite#7bb7e5a801d482f4fd0f7c4aa01a7fc23bc4522f" }
 dependencies = [
     { name = "psutil" },
     { name = "pymmcore-plus", extra = ["cli"] },
