@@ -1332,12 +1332,10 @@ class PixelCalibrationPanel(QWidget):
                 self._mmc,
                 self,
                 viewer_options={
-                    "show_3d_button": False,
                     "show_roi_button": False,
                     "show_channel_mode_selector": False,
                 },
                 show_save_button=False,
-                show_roll_axes_button=False,
                 show_colormap_selector=False,
             )
             preview.viewer.display_model.luts[0].cmap = Colormap("gray")

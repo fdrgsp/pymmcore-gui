@@ -33,17 +33,19 @@ class NDVPreview(ImagePreviewBase):
         use_with_mda: bool = False,
         viewer_options: dict[str, Any] | None = None,
         show_save_button: bool = True,
-        show_roll_axes_button: bool = True,
         show_colormap_selector: bool = True,
     ):
         super().__init__(parent, mmcore, use_with_mda=use_with_mda)
         px = (self._mmc.getPixelSizeUm() or None) if self._mmc else None
+        # The preview only ever holds the latest 2D frame (BUFFER_SIZE), so the
+        # 3D and orthogonal-view controls can never apply: always hide them.
+        viewer_options = {**(viewer_options or {}), "show_3d_button": False}
         try:
             self._viewer = MMArrayViewer(
                 scales=({"x": px, "y": px} if px else {}),
                 viewer_options=viewer_options,
                 show_save_button=show_save_button,
-                show_roll_axes_button=show_roll_axes_button,
+                show_roll_axes_button=False,
             )
         except Exception:
             # ImagePreviewBase attaches core callbacks during construction. If
@@ -52,7 +54,7 @@ class NDVPreview(ImagePreviewBase):
             # the original exception behind a second initialization error.
             self.detach()
             raise
-        self._viewer_options = dict(viewer_options or {})
+        self._viewer_options = viewer_options
         self._show_colormap_selector = show_colormap_selector
         self._buffer: RingBuffer | None = None
         self._buffer_applied = False

@@ -70,7 +70,7 @@ class _FakeViewer:
         return self._widget
 
 
-def test_viewer_defaults_to_composite_log_histogram(qtbot: QtBot) -> None:
+def test_viewer_defaults_to_composite_linear_histogram(qtbot: QtBot) -> None:
     viewer = MMArrayViewer(
         show_save_button=False,
         show_roll_axes_button=False,
@@ -81,7 +81,7 @@ def test_viewer_defaults_to_composite_log_histogram(qtbot: QtBot) -> None:
     qwidget = viewer.widget()
     assert viewer.display_model.channel_mode is ChannelMode.COMPOSITE
     assert qwidget.shared_histogram_btn.isChecked()
-    assert qwidget.shared_hist_log_btn.isChecked()
+    assert not qwidget.shared_hist_log_btn.isChecked()
     assert viewer._shared_histogram is not None
 
 

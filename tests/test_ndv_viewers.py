@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 import ndv
+import pytest
 import useq
 from useq import MDASequence
 
@@ -15,10 +16,11 @@ from pymmcore_gui._qt.QtAds import CDockManager
 from pymmcore_gui._qt.QtWidgets import QApplication, QWidget
 
 if TYPE_CHECKING:
-    import pytest
     from ndv.models import ArrayDisplayModel
     from pymmcore_plus import CMMCorePlus
     from pytestqt.qtbot import QtBot
+
+    from pymmcore_gui._array_viewer import MMArrayViewer
 
 
 class _Emitter:
@@ -119,3 +121,26 @@ def test_viewers_manager(
     assert manager.active_viewer is None
     assert not manager._records
     assert not manager._connected
+
+
+@pytest.mark.parametrize("z_plan", [None, useq.ZRangeAround(range=2, step=1)])
+def test_live_viewer_shows_z_buttons_only_for_z_stacks(
+    mmcore: CMMCorePlus, qtbot: QtBot, z_plan: useq.ZRangeAround | None
+) -> None:
+    dummy = QWidget()
+    qtbot.addWidget(dummy)
+    manager = AcquireViewersManager(CDockManager(dummy), mmcore, parent=dummy)
+    created: list[MMArrayViewer] = []
+    manager.mdaViewerCreated.connect(created.append)
+
+    mmcore.mda.run(
+        MDASequence(channels=["DAPI"], z_plan=z_plan),  # pyright: ignore
+        output="memory",
+    )
+    qtbot.waitUntil(lambda: bool(created))
+
+    viewer = created[0]
+    has_z = z_plan is not None
+    assert viewer._roll_axes_btn is not None
+    assert viewer._roll_axes_btn.isHidden() is not has_z
+    assert viewer.widget().ndims_btn.isHidden() is not has_z

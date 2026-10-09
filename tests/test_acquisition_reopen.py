@@ -605,3 +605,21 @@ def test_drag_enter_resolves_paths_once_for_the_whole_drag(
         assert probe.call_count == 1
 
     assert win._drag_paths == [path]
+
+
+@pytest.mark.parametrize("z_plan", [None, useq.ZRangeAround(range=2, step=1)])
+def test_reopened_viewer_shows_z_buttons_only_for_z_stacks(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    tmp_path: Path,
+    z_plan: useq.ZRangeAround | None,
+) -> None:
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    seq = useq.MDASequence(channels=_ch("DAPI"), z_plan=z_plan)
+    viewer = _open(page, _write_acquisition(seq, tmp_path / "z.ome.tiff"))
+
+    has_z = z_plan is not None
+    assert viewer._roll_axes_btn is not None
+    assert viewer._roll_axes_btn.isHidden() is not has_z
+    assert viewer.widget().ndims_btn.isHidden() is not has_z

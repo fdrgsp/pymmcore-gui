@@ -88,7 +88,12 @@ class MMArrayViewer(ndv.ArrayViewer):
         show_save_button = bool(kwargs.pop("show_save_button", True))
         show_roll_axes_button = bool(kwargs.pop("show_roll_axes_button", True))
         show_center_cross_button = bool(kwargs.pop("show_center_cross_button", True))
+        # Hide the 3D and orthogonal-view buttons while there is no z stack
+        # (see _update_z_buttons). Opt-in: the snap/live Preview, which has no
+        # data at construction, hides them outright instead.
+        auto_hide_z_buttons = bool(kwargs.pop("auto_hide_z_buttons", False))
         opts = kwargs.pop("viewer_options", None) or {}
+        show_3d_button = bool(opts.get("show_3d_button", True))
         opts.setdefault("show_roi_button", True)
         opts.setdefault("use_shared_histogram", True)
         opts.setdefault("show_center_cross_button", show_center_cross_button)
@@ -117,8 +122,9 @@ class MMArrayViewer(ndv.ArrayViewer):
         # recovered from its on-disk metadata, if any). Drives the "Re-use
         # MDA…" context-menu action below; left None for the snap/live
         # Preview (which isn't an MMArrayViewer at all) and for a reopened
-        # file with no recoverable sequence metadata.
-        self.mda_sequence: MDASequence | None = None
+        # file with no recoverable sequence metadata. Also feeds
+        # _has_z_stack, via the mda_sequence property.
+        self._mda_sequence: MDASequence | None = None
         self.source_title: str = ""
         # Invoked (no args) when "Re-use MDA…" is selected. The viewer never
         # reaches into the MDA widget itself -- the manager that created this
@@ -138,11 +144,57 @@ class MMArrayViewer(ndv.ArrayViewer):
         if show_save_button:
             with suppress(Exception):
                 _add_save_button(self)
+        self._roll_axes_btn: QPushButton | None = None
         if show_roll_axes_button:
             with suppress(Exception):
-                _add_roll_axes_button(self)
+                self._roll_axes_btn = _add_roll_axes_button(self)
         with suppress(Exception):
             unstyle_widgets(widget)
+
+        self._show_3d_button = show_3d_button
+        self._auto_hide_z_buttons = auto_hide_z_buttons
+        self._update_z_buttons()
+
+    @property
+    def mda_sequence(self) -> MDASequence | None:
+        return self._mda_sequence
+
+    @mda_sequence.setter
+    def mda_sequence(self, sequence: MDASequence | None) -> None:
+        self._mda_sequence = sequence
+        self._update_z_buttons()
+
+    def _on_dims_changed(self) -> None:
+        super()._on_dims_changed()
+        # A live run's sink grows its coords as frames arrive, so the z axis
+        # can appear (or grow past one plane) after construction.
+        self._update_z_buttons()
+
+    def _has_z_stack(self) -> bool:
+        """Whether the sequence or the data has more than one z plane."""
+        if self._mda_sequence is not None and self._mda_sequence.sizes.get("z", 0) > 1:
+            return True
+        if (wrapper := self.data_wrapper) is None:
+            return False
+        try:
+            return int(wrapper.sizes().get("z", 0)) > 1
+        except Exception:
+            return False
+
+    def _update_z_buttons(self) -> None:
+        """Show the 3D and orthogonal-view buttons only for z stacks."""
+        # Also reached from super().__init__ (dims changes) and the
+        # mda_sequence setter before our own state exists.
+        if not getattr(self, "_auto_hide_z_buttons", False):
+            return
+        has_z = self._has_z_stack()
+        show_3d = self._show_3d_button and has_z
+        self._viewer_model.show_3d_button = show_3d
+        with suppress(AttributeError):
+            # ndv's Qt view only reacts to option *changes*; set the widget too.
+            self.widget().ndims_btn.setVisible(show_3d)
+        if self._roll_axes_btn is not None:
+            self._roll_axes_btn.setVisible(has_z)
 
     def _roll_axes(self) -> None:
         """Cycle visible axes through the three orthogonal ZYX views."""

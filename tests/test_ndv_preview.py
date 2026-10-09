@@ -271,3 +271,14 @@ def test_a_preview_created_mid_run_does_not_mirror_the_acquisition(
     mmcore.snapImage()
     qtbot.wait(0)
     assert len(appended) == 1
+
+
+def test_preview_always_hides_z_buttons(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    """A preview only ever holds one 2D frame, so 3D/orthogonal views never apply."""
+    preview = NDVPreview(mmcore)
+    qtbot.addWidget(preview)
+    mmcore.snapImage()
+    qtbot.wait(0)
+
+    assert preview.viewer._roll_axes_btn is None
+    assert preview.viewer.widget().ndims_btn.isHidden()

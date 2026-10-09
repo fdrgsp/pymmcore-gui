@@ -534,7 +534,7 @@ class AcquireViewersManager(QObject):
         self._viewer_for_loaded(loaded)
 
     def _viewer_for_loaded(self, loaded: LoadedAcquisition) -> ndv.ArrayViewer:
-        viewer = MMArrayViewer(loaded.wrapper)
+        viewer = MMArrayViewer(loaded.wrapper, auto_hide_z_buttons=True)
         widget = viewer.widget()
         # Keyed to the resolved path (not a random id), so re-dropping the
         # exact same file is idempotent about naming; two different files
@@ -578,7 +578,9 @@ class AcquireViewersManager(QObject):
             # supplying "memory" whenever file saving is disabled.
             return
 
-        viewer = MMArrayViewer(view, scales=_extract_scales(sequence, meta))
+        viewer = MMArrayViewer(
+            view, scales=_extract_scales(sequence, meta), auto_hide_z_buttons=True
+        )
         self._channel_luts.bind_live_mda(viewer, sequence)
         widget = viewer.widget()
         sha = str(sequence.uid)[:8]
