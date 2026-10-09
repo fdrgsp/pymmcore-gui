@@ -4118,8 +4118,8 @@ wheels = [
 
 [[package]]
 name = "useq-schema"
-version = "0.9.3.dev7+ga59f64a16"
-source = { git = "https://github.com/fdrgsp/useq-schema?rev=cite#a59f64a164b5c2574cb4a397caa24a41fc41f974" }
+version = "0.9.3.dev8+g770797ea4"
+source = { git = "https://github.com/fdrgsp/useq-schema?rev=cite#770797ea4ef072f31cf1df667690ad36b189dd96" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
