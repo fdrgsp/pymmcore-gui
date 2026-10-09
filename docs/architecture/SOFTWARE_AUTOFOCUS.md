@@ -79,6 +79,13 @@ The plan's `event()` also rewrites the Z position of the inserted event to the
 *home* position of a relative Z stack, so autofocus runs at the middle of the
 stack rather than its first slice.
 
+"Changed" means changed since the previous event, and that record is kept by the
+*iteration*, not by the plan (`triggers_after`). It used to live on the plan,
+where it outlived the iteration: running the same sequence twice skipped the
+second run's first autofocus, and so did a copy of it, because copying a model
+copies its private attributes too. `should_autofocus(event)` called on its own
+still remembers the last event it was asked about.
+
 **Why the plans need a discriminator.** These models ignore unknown fields. A
 plain `AxesBasedAF | SoftwareAxesBasedAF` union would happily parse a software
 plan as a hardware one and silently drop its `method`, so the union uses a
@@ -139,7 +146,17 @@ there is nothing to interpolate: a peak at a scan edge, too few points, a flat
 curve, or a parabola opening the wrong way.
 
 Both searches stay strictly inside the requested range. That range is a safety
-limit on how far the objective may travel, not a hint.
+limit on how far the objective may travel, not a hint. So the Z-stack grid is
+built from both limits, and its step is the *largest* spacing allowed: when the
+range is not a multiple of it, the spacing shrinks to divide it evenly. Stepping
+out from the lower limit instead overshot the upper one — 10 µm at 6 µm steps
+visited 7 µm.
+
+Neither search can tell from where it stopped whether there was anything to
+find, so the routines check: a curve whose every score is the same — a lamp
+left off, a closed shutter, a black or saturated frame — or that is not a
+number, or a Brent search that ran out of images, is a failure, not a focus.
+Before this, a blank frame was reported as focus at an arbitrary position.
 
 ## 5. The routines
 
@@ -153,13 +170,19 @@ limit on how far the objective may travel, not a hint.
 peak.
 
 `jaf` covers both of MMStudio's JAF plugins. Each pass walks outward from its
-start and stops early once the score has fallen well below the best seen, which
-saves images on the far side of the peak. The fine pass can use a different
-channel — brightfield to find the sample, then fluorescence to focus on it.
+start and stops early once clearly past the peak, which saves images on its far
+side: the score must have risen above the pass's first image, then stayed more
+than `threshold` below the best for two images in a row. The fine pass can use a
+different channel — brightfield to find the sample, then fluorescence to focus
+on it. `full_scan` measures every position instead.
 
 `duo` chains two routines, each starting where the last ended: typically a
 coarse one over a wide range then a precise one over a narrow range, which
-together find focus from further out than either manages alone.
+together find focus from further out than either manages alone. Both steps are
+resolved and their settings checked before anything moves, so a misspelt second
+routine does not surface only after the first has moved the stage. And however
+a step ends — failed, raised or cancelled — the stage goes back to where the
+*chain* started, not just to where that step started.
 
 A routine borrows camera state for the run (`capture_state`): a channel that
 always has contrast, a short exposure because the images are discarded, a
@@ -198,7 +221,9 @@ the channel and exposure of the final search pass (the fine pass for `jaf`, the
 second step for `duo`), then restores the pre-autofocus camera settings.
 
 On failure or cancellation a routine puts the focus device back where it found
-it. A failed autofocus must not leave the sample somewhere else.
+it. A failed autofocus must not leave the sample somewhere else. The built-ins
+do so themselves, and `run_guarded` — which every routine passes through,
+whether run by hand or by the engine — enforces it for user-registered ones too.
 
 **Adding one.** `register_software_autofocus(name, run, settings_model)` makes a
 routine available to sequences and to the GUI, which builds its settings form
@@ -210,13 +235,21 @@ from the dataclass.
 
 - **Resolve.** An unknown method name, or no focus device, is logged and
   skipped rather than raising — an acquisition should carry on. A *misspelled
-  setting*, by contrast, raises: that is a mistake in the sequence that will
-  never work.
-- **Continuous focus.** A locked hardware autofocus would fight the routine for
-  the stage, so it is switched off — and left off, because re-engaging would
-  pull focus straight back off the position just measured. A routine that drives
-  the autofocus device itself opts out with `manages_continuous_focus`.
+  setting* is checked before anything moves and reported once as a failure,
+  not retried: it would fail every attempt the same way. Run by hand
+  (`run_software_autofocus`) it raises instead, since nothing has to carry on.
+- **Preparation** (`prepare_microscope`, shared with `run_software_autofocus`,
+  so a routine tested on its own runs as it would in an acquisition). Live is
+  stopped, since a routine acquires its own images one at a time. A locked
+  hardware autofocus would fight the routine for the stage, so it is switched
+  off — and left off, because re-engaging would pull focus straight back off
+  the position just measured. A routine that drives the autofocus device itself
+  opts out with `manages_continuous_focus`.
 - **Retries.** `max_retries` attempts, then the result is reported as failed.
+  Each starts from the same Z: a failed attempt is put back by `run_guarded`.
+  Before that, a routine that moved and then failed left each retry starting
+  where the last gave up, ratcheting the focus away — 10, 20, 30 µm, with the
+  frame acquired at 40.
 - **The Z correction.** On success, `z_after - z_before` is added to that
   position's correction, which `_set_event_z` applies to every later event
   there. Only the drive the Z plan uses is corrected: a routine that moved some
@@ -284,15 +317,24 @@ position with the settings as edited, in a worker thread, and reports where
 focus landed — the drive is left where the routine put it, exactly as in a run.
 It goes through `run_software_autofocus()`, the same call the engine makes, so
 what is tested is what will run. Closing the dialog abandons a search still in
-flight, and a run in progress refuses the test rather than fighting it for the
-stage. Driving a microscope takes a core, which `useq_widgets` has none of: the
-MDA widget supplies the runner through `AutofocusAxis.setTestRunner`, and
-without one the button is not offered at all.
+flight — but the dialog stays up until the routine has actually stopped, since
+until then it still has the stage and camera, and being modal, nothing else can
+start an acquisition meanwhile. A run in progress refuses the test rather than
+fighting it for the stage. Driving a microscope takes a core, which
+`useq_widgets` has none of: the MDA widget supplies the runner through
+`AutofocusAxis.setTestRunner`, and without one the button is not offered at all.
 In this GUI, that runner opens Preview before the worker starts when **Show
 images** is selected, including when Preview has never been opened manually.
 After a successful test it snaps once more at the reported focus position.
 That final image also uses the routine's channel and exposure, without leaving
 those settings applied to the microscope afterward.
+
+The form gives back exactly what it was given for any control left alone.
+A control shows a value only as precisely as it can display it, and handing
+that back quietly rewrote saved settings (0.0125 became 0.013, and 10.0004
+rounded to the default and was then dropped). Settings the routine does not
+define are kept too: the routine rejects them by name when run, rather than the
+form deleting them unseen.
 
 With the card unchecked there is no autofocus to configure, so the modes and
 their options are disabled — Qt re-enables a checkable group box's children
@@ -335,6 +377,13 @@ here follows it.
   corner.
 - **`FFT_BANDPASS` works in float.** The Java quantises the log power spectrum
   to 8 bits first.
+- **JAF stops a pass only once clearly past the peak.** The Java stops at the
+  first image more than `threshold` below the best. Far from focus the curve is
+  nearly flat and noise alone moves it by more than that, so with 2% noise it
+  found a focus 6 µm away in 39% of passes; requiring a rise and then two such
+  images in a row finds it in 96%, for one image more on a clean curve.
+- **No information is not a focus.** The Java reports wherever its search
+  ended, even on a blank frame; see §4.
 - **`duo` is a routine, not a plugin that reaches into a manager.**
 - **Exposure defaults to "leave it alone".** MMStudio's OughtaFocus always sets
   one (100 ms by default), which inside an MDA would override the channel's.
