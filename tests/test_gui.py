@@ -6341,6 +6341,34 @@ def test_position_subsequence_popup_is_collapsed_and_themed(
     assert_bounds_icons_themed()
 
 
+def test_position_subsequence_popup_opens_without_a_focused_control(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Opening the popup focuses no control, so none shows a focus ring.
+
+    Regression test: the Grid/Tiles tab's checkbox took the initial focus, and
+    its focus ring read as a blue square inside the (unchecked) box.
+    """
+    set_theme(DARK_THEME)
+    widget = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(widget)
+    position_btn = widget.stage_positions.findChild(MDAButton)
+    assert position_btn is not None
+
+    popup = _MDAPopup(parent=position_btn)
+    qtbot.addWidget(popup)
+    popup.show()
+    QApplication.processEvents()
+
+    # focusWidget() is what gets the focus once the window is active, so this
+    # needs no (on macOS, unreliable mid-suite) window activation: unfixed, it
+    # is the tab's checkbox after activation and None before.
+    assert popup.focusWidget() is popup
+    # ...while the keyboard can still reach the controls
+    popup.focusNextChild()  # what the Tab key does
+    assert popup.focusWidget() is not popup
+
+
 def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     """The Stage Explorer follows the application's style and font."""
     set_theme(DARK_THEME)

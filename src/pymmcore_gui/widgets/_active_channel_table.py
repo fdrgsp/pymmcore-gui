@@ -347,6 +347,13 @@ def _theme_subsequence_popup(popup: QWidget) -> None:
     """Match a position sub-sequence popup's styling to the rest of the app."""
     unstyle_widgets(popup)
 
+    # Left to itself, the dialog hands initial focus to the first focusable
+    # widget in it -- the Grid/Tiles tab's own checkbox -- which then shows the
+    # focus ring as a blue square inside the box, as if it were half-checked.
+    # Focusing the dialog itself instead shows no ring anywhere; Esc/Enter
+    # still work, and Tab still moves into the controls.
+    popup.setFocus(Qt.FocusReason.OtherFocusReason)
+
     # The grid's Mark/Move bounds buttons swap their raw icon at runtime
     # (mode toggle, go_middle checkbox), so re-theme them whenever that
     # happens rather than relying on the one-off sweep above.
