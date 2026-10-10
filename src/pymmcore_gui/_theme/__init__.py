@@ -20,6 +20,7 @@ from pymmcore_gui._theme._fonts import (
     ui_font,
 )
 from pymmcore_gui._theme._light import LIGHT_THEME
+from pymmcore_gui._theme._pixel_sizes import rescale_pixel_sizes
 from pymmcore_gui._theme._qt import color_to_qcolor, to_qpalette
 from pymmcore_gui._theme._scaled_view import ScaledThemeView
 from pymmcore_gui._theme._style import MicroscopeStyle
@@ -166,6 +167,11 @@ def set_zoom(factor: float) -> None:
     """Set zoom factor and refresh the entire UI."""
     if _current_style is None:
         raise RuntimeError("call set_style() during app init")
+
+    # Hard-coded pixel sizes (fixed/min/max sizes, button icon sizes) --
+    # before the style learns the new zoom: default icon sizes come from it
+    # and must be read at the zoom they belong to.
+    rescale_pixel_sizes(_current_style.zoom_factor, factor)
 
     # no view rebuild needed; ScaledThemeView reads zoom live.
     _current_style.zoom_factor = factor

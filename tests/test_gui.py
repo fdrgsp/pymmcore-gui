@@ -83,6 +83,7 @@ from pymmcore_gui._theme import (
 )
 from pymmcore_gui._theme._dark import DARK_THEME
 from pymmcore_gui._theme._light import LIGHT_THEME
+from pymmcore_gui._theme._pixel_sizes import is_self_sized
 from pymmcore_gui.widgets._acquire import (
     _MDA_DOCK_WIDTH,
     _RIGHT_DOCK_MAX_WIDTH,
@@ -3042,6 +3043,70 @@ def test_acquire_panel_buttons_follow_zoom(mmcore: CMMCorePlus, qtbot: QtBot) ->
             assert page.panel_button(info.key).iconSize() == expected
     finally:
         set_theme(DARK_THEME)
+
+
+def _explicit_pixel_sizes(root: QWidget) -> dict[int, tuple[QWidget, list[int]]]:
+    """Every hard-coded pixel size under *root*: min/max sizes and icon sizes."""
+    out = {}
+    for w in (root, *root.findChildren(QWidget)):
+        if is_self_sized(w):
+            continue
+        mn, mx = w.minimumSize(), w.maximumSize()
+        sizes = [mn.width(), mn.height(), mx.width(), mx.height()]
+        if isinstance(w, QAbstractButton):
+            sizes += [w.iconSize().width(), w.iconSize().height()]
+        out[id(w)] = (w, sizes)
+    return out
+
+
+def test_every_panel_follows_zoom(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    """Hard-coded pixel sizes in panel widgets rescale with Cmd+Shift+±.
+
+    Regression test: pymmcore-widgets' stage control pins its move buttons at
+    38x38 px (28 px icons) and its labels at 110 px, so on zooming its text
+    grew while the buttons stayed put. ``set_zoom`` now rescales any widget's
+    explicit sizes; walking every registered panel keeps a newly added one
+    from silently opting out.
+    """
+    set_theme(DARK_THEME)
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+
+    roots: dict[str, QWidget] = {}
+    for info in PANELS:
+        # the console starts an IPython kernel (slow), and holds no fixed sizes
+        if info.key not in (PanelKey.CONSOLE, PanelKey.STAGES):
+            roots[info.key] = page.open_panel(info.key)
+    roots[StageKind.XYZ] = page._stage_widget_for(StageKind.XYZ)
+    per_device = cast("StagesPanel", page._stage_widget_for(StageKind.PER_DEVICE))
+    per_device.add_stages(["XY", "Z"])
+    for device, dock in per_device._docks.items():
+        # the dock's own ADS chrome is sized by dock_chrome_stylesheet instead
+        stage = dock.widget()
+        assert stage is not None
+        roots[f"stage {device}"] = stage
+
+    try:
+        for old, new in ((1.0, 1.5), (1.5, 0.8)):
+            set_zoom(old)
+            before = {k: _explicit_pixel_sizes(r) for k, r in roots.items()}
+            set_zoom(new)
+            for key, root in roots.items():
+                after = _explicit_pixel_sizes(root)
+                for wid, (w, sizes) in before[key].items():
+                    for v0, v1 in zip(sizes, after[wid][1], strict=True):
+                        # Loose on purpose: widgets that size themselves from
+                        # measured text follow the font, and text width is not
+                        # linear in point size. The point is to catch sizes
+                        # left frozen (or moving the wrong way).
+                        expected_change = v0 * new / old - v0
+                        if 0 < v0 < 100_000 and abs(expected_change) > 2:
+                            assert (v1 - v0) / expected_change >= 0.5, (
+                                f"{key}: {type(w).__name__} {sizes} -> {after[wid][1]}"
+                                f" at zoom {old} -> {new}"
+                            )
+    finally:
+        set_theme(DARK_THEME)  # restores the default zoom too
 
 
 def test_snap_opens_closable_preview(
