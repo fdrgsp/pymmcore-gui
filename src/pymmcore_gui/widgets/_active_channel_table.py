@@ -33,6 +33,9 @@ from pymmcore_gui._qt.QtWidgets import (
 from pymmcore_gui._theme import qcolor, theme
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    import useq
     from pymmcore_plus import CMMCorePlus
     from qtpy.QtCore import QModelIndex, SignalInstance  # type: ignore[attr-defined]
     from qtpy.QtWidgets import QStyleOptionViewItem, QTableWidget
@@ -126,6 +129,20 @@ class _CurrentChannelColumn(ColumnInfo):
 
 CURRENT_CHANNEL_COLUMN = _CurrentChannelColumn()
 
+_ChannelKey = tuple[str, str]  # (group, config)
+_ChannelSettings = tuple[float, str, float]  # (exposure, light source, intensity)
+
+
+def _settings_of(record: dict[str, Any]) -> tuple[_ChannelKey, _ChannelSettings]:
+    """A channel table row's (group, config) and the settings it holds."""
+    key = (str(record.get("group") or ""), str(record.get("config") or ""))
+    settings = (
+        float(record.get("exposure") or 0),
+        str(record.get("light_source") or ""),
+        float(record.get("intensity") or 0),
+    )
+    return key, settings
+
 
 class ActiveChannelTable(CoreConnectedChannelTable):
     """Core channel table that tracks which channel is live on the microscope.
@@ -146,8 +163,16 @@ class ActiveChannelTable(CoreConnectedChannelTable):
         parent: QWidget | None = None,
     ) -> None:
         self._active_row: int = -1
-        self._removed_settings: dict[tuple[str, str], tuple[float, str, float]] = {}
+        # The settings each (group, config) last had when it left the table --
+        # its row was removed, or switched to another config with its Config
+        # combo -- so bringing that channel back recalls its own exposure,
+        # light source and intensity.
+        self._channel_settings: dict[_ChannelKey, _ChannelSettings] = {}
+        # Every row's (group, config) as of the last change, see _on_changed.
+        self._row_keys: list[_ChannelKey] = []
         super().__init__(rows, mmcore, parent)
+        self.valueChanged.connect(self._on_changed)
+        self._row_keys = self._current_keys()
         # Prepend the active-channel indicator at the leftmost position.
         table = self.table()
         table.addColumn(CURRENT_CHANNEL_COLUMN, 0)
@@ -158,24 +183,50 @@ class ActiveChannelTable(CoreConnectedChannelTable):
             header_item.setToolTip("Channel currently active on the microscope")
         self.apply_theme_metrics()
 
-    def _remember_rows(self, rows: list[int]) -> None:
+    def _current_keys(self) -> list[_ChannelKey]:
         table = self.table()
-        for row in rows:
-            record = table.rowData(row)
-            if config := str(record.get("config") or ""):
-                key = (str(record.get("group") or ""), config)
-                self._removed_settings[key] = (
-                    float(record.get("exposure") or 0),
-                    str(record.get("light_source") or ""),
-                    float(record.get("intensity") or 0),
-                )
+        return [_settings_of(table.rowData(r))[0] for r in range(table.rowCount())]
+
+    def _on_changed(self) -> None:
+        """Remember a channel's settings when its row switches to another config.
+
+        A Config combo change alters only that row's key: until
+        restoreChannelSettings() runs, the row still holds the settings it
+        had under its previous config, so they are filed under that one.
+        Anything else -- rows added, removed (see _remove_selected), or moved
+        (which changes two rows' keys at once) -- just updates the keys.
+        """
+        keys = self._current_keys()
+        if len(keys) == len(self._row_keys):
+            switched = [
+                row
+                for row, (old, new) in enumerate(zip(self._row_keys, keys, strict=True))
+                if old != new
+            ]
+            if len(switched) == 1:
+                row = switched[0]
+                _, settings = _settings_of(self.table().rowData(row))
+                self._remember([(self._row_keys[row], settings)])
+        self._row_keys = keys
+
+    def _remember(self, rows: Iterable[tuple[_ChannelKey, _ChannelSettings]]) -> None:
+        for key, settings in rows:
+            if key[1]:
+                self._channel_settings[key] = settings
+
+    def setValue(self, value: Iterable[useq.Channel]) -> None:
+        # fills the table with signals blocked, i.e. without a valueChanged
+        super().setValue(value)
+        self._row_keys = self._current_keys()
 
     def _remove_selected(self) -> None:
-        self._remember_rows(self._selected_rows())
+        table = self.table()
+        self._remember(_settings_of(table.rowData(r)) for r in self._selected_rows())
         super()._remove_selected()
 
     def _remove_all(self) -> None:
-        self._remember_rows(list(range(self.table().rowCount())))
+        table = self.table()
+        self._remember(_settings_of(table.rowData(r)) for r in range(table.rowCount()))
         super()._remove_all()
 
     def _add_row(self) -> None:
@@ -189,23 +240,20 @@ class ActiveChannelTable(CoreConnectedChannelTable):
         self.channelAdded.emit(row, restored)
 
     def restoreChannelSettings(self, row: int) -> bool:
-        """Copy a matching row's values, or recall the last removed values."""
+        """Copy a matching row's values, or recall the channel's last values."""
+        # file the row's previous channel first, while it still holds its values
+        self._on_changed()
         table = self.table()
-        record = table.rowData(row)
-        key = (str(record.get("group") or ""), str(record.get("config") or ""))
+        key, _ = _settings_of(table.rowData(row))
         if not key[1]:
             return False
-        remembered = self._removed_settings.get(key)
+        remembered = self._channel_settings.get(key)
         for other_row in reversed(range(table.rowCount())):
             if other_row == row:
                 continue
-            other = table.rowData(other_row)
-            if (str(other.get("group") or ""), str(other.get("config") or "")) == key:
-                remembered = (
-                    float(other.get("exposure") or 0),
-                    str(other.get("light_source") or ""),
-                    float(other.get("intensity") or 0),
-                )
+            other_key, other_settings = _settings_of(table.rowData(other_row))
+            if other_key == key:
+                remembered = other_settings
                 break
         if remembered is None:
             return False

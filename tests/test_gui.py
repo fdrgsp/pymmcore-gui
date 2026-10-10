@@ -3604,6 +3604,52 @@ def test_readded_channel_recalls_exposure_and_light_intensity(
 
 
 @pytest.mark.parametrize("widget_type", [MemoryMDAWidget, TopbarMemoryMDAWidget])
+def test_switching_a_row_back_to_a_channel_recalls_its_exposure(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    widget_type: type[MemoryMDAWidget] | type[TopbarMemoryMDAWidget],
+) -> None:
+    """A row's Config combo switched away and back brings the channel's edits back.
+
+    Regression test: settings were only remembered when a row was *removed*, so
+    after clearing the table every channel was remembered at the default
+    exposure -- and switching a row Cy5 -> DAPI -> Cy5 restored that stale
+    default instead of the 20 ms the user had just set for Cy5.
+    """
+    mda = widget_type(mmcore)
+    qtbot.addWidget(mda)
+    mda.setValue(
+        useq.MDASequence(
+            channels=(
+                useq.Channel(group="Channel", config="Cy5", exposure=100),
+                useq.Channel(group="Channel", config="DAPI", exposure=100),
+            )
+        )
+    )
+    channels = mda.channels
+    table = channels.table()
+    channels.act_clear.trigger()
+    channels.act_add_row.trigger()
+    exposure_col = table.indexOf(channels.EXPOSURE)
+    cell = table.cellWidget(0, table.indexOf(channels._config_column))
+    assert cell is not None
+    combo = cell.findChild(QComboBox)
+    assert combo is not None
+
+    def switch_to(config: str) -> float | None:
+        combo.setCurrentText(config)
+        combo.activated.emit(combo.currentIndex())
+        assert [channel.config for channel in channels.value()] == [config]
+        return channels.value()[0].exposure
+
+    switch_to("Cy5")
+    channels.EXPOSURE.set_cell_data(table, 0, exposure_col, 20.0)
+    channels.valueChanged.emit()  # as the spin box's own edit does
+    assert switch_to("DAPI") == 100.0  # DAPI's own (remembered) exposure
+    assert switch_to("Cy5") == 20.0
+
+
+@pytest.mark.parametrize("widget_type", [MemoryMDAWidget, TopbarMemoryMDAWidget])
 def test_duplicate_channel_copies_current_exposure_and_light_intensity(
     mmcore: CMMCorePlus,
     qtbot: QtBot,
