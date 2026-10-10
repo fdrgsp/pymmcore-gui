@@ -9,7 +9,7 @@ from __future__ import annotations
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
-from pymmcore_plus import DeviceType, Keyword, PropertyType
+from pymmcore_plus import DeviceType, FocusDirection, Keyword, PropertyType
 from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import set_source_icon
@@ -37,6 +37,14 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from pymmcore_plus.model import AvailableDevice, Device, Property
+
+# Worded as the Java wizard does: the direction is that of *positive* stage
+# motion, which is what the user has to work out on their own microscope.
+FOCUS_DIRECTIONS: dict[FocusDirection, str] = {
+    FocusDirection.Unknown: "Unknown",
+    FocusDirection.TowardSample: "Positive Toward Sample",
+    FocusDirection.AwayFromSample: "Positive Away From Sample",
+}
 
 
 def _editor_for(prop: Property, on_change: Callable[[str], None]) -> QWidget:
@@ -86,6 +94,7 @@ class DeviceSetupPane(QWidget):
     delayChanged = Signal(object, float)  # (Device, delay in ms)
     renameRequested = Signal(object, str)  # (Device, new label)
     stateLabelChanged = Signal(object, int, str)  # (Device, state, new label)
+    focusDirectionChanged = Signal(object, object)  # (Device, FocusDirection)
     portSelected = Signal(str, str)  # (serial adapter name, library)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -236,6 +245,12 @@ class DeviceSetupPane(QWidget):
             self._add_section("State Labels")
             self._add_state_labels(dev)
 
+        # Single-axis (focus) stages: which way positive motion moves the
+        # objective relative to the sample. Z stacks and autofocus rely on it.
+        if dev.device_type == DeviceType.StageDevice:
+            self._add_section("Focus")
+            self._add_focus_direction(dev)
+
         # a device with a "Port" is configured through that serial device
         if port_device is not None:
             self._add_section(f"Serial port — {port_device.name}")
@@ -342,6 +357,23 @@ class DeviceSetupPane(QWidget):
         # but looks like a bug -- a small table over a big dead area -- when
         # this is the last section, as it is for most state devices).
         self._body_layout.addWidget(table, 1)
+
+    def _add_focus_direction(self, dev: Device) -> None:
+        """Focus direction chooser for a stage device."""
+        combo = QComboBox()
+        for direction, text in FOCUS_DIRECTIONS.items():
+            combo.addItem(text, int(direction))
+        combo.setCurrentIndex(max(combo.findData(int(dev.focus_direction)), 0))
+        # connect after populating so seeding the value doesn't emit
+        combo.currentIndexChanged.connect(
+            lambda _i: self.focusDirectionChanged.emit(
+                dev, FocusDirection(combo.currentData())
+            )
+        )
+        form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.addRow("Focus Direction:", combo)
+        self._body_layout.addLayout(form)
 
     def _add_properties(
         self, props: Sequence[Property], serial_devices: Sequence[Device] = ()

@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 import useq
 from cmap import Colormap
-from pymmcore_plus import PropertyType
+from pymmcore_plus import FocusDirection, PropertyType
 from pymmcore_plus.autofocus import AutofocusResult, CaptureSettings, capture_state
 from pymmcore_plus.mda import MDARunner
 from pymmcore_widgets import CameraRoiWidget, StageWidget, XYZStageWidget
@@ -6636,6 +6636,48 @@ def test_selecting_an_installed_device_abandons_a_pending_add(
     assert pending.name not in mmcore.getLoadedDevices()
     assert page._pending is None
     assert page._setup._title.text() == installed.name
+
+
+def _focus_direction_combo(page: HardwareSetupPage) -> QComboBox | None:
+    combos = [
+        c
+        for c in page._setup.findChildren(QComboBox)
+        if c.findText("Positive Toward Sample") >= 0
+    ]
+    return combos[0] if combos else None
+
+
+def test_stage_focus_direction_is_set_from_the_setup_pane(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    """A focus stage offers its focus direction, which reaches core, model and cfg.
+
+    It also starts from what the core already holds: the model used to drop it
+    (pymmcore-plus read it into ``labels``), so saving reset it to Unknown.
+    """
+    mmcore.setFocusDirection("Z", FocusDirection.AwayFromSample)
+    set_theme(DARK_THEME)
+    page = HardwareSetupPage(mmcore)
+    qtbot.addWidget(page)
+    z = page.model.get_device("Z")
+    page._setup.show_installed(z)
+
+    combo = _focus_direction_combo(page)
+    assert combo is not None
+    assert combo.currentText() == "Positive Away From Sample"
+
+    combo.setCurrentIndex(combo.findText("Positive Toward Sample"))
+    assert mmcore.getFocusDirection("Z") is FocusDirection.TowardSample
+    assert z.focus_direction is FocusDirection.TowardSample
+    assert page.is_dirty()
+
+    assert page.save_to(str(cfg := tmp_path / "out.cfg"))
+    assert "FocusDirection,Z,1" in cfg.read_text()
+
+    # not offered for anything but a single-axis stage
+    # (the Z pane's widgets are only deleteLater()'d, hence the wait)
+    page._setup.show_installed(page.model.get_device("XY"))
+    qtbot.waitUntil(lambda: _focus_direction_combo(page) is None)
 
 
 def _hardware_page_over(

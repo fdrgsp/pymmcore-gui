@@ -11,7 +11,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from pymmcore_plus import CMMCorePlus, DeviceType, Keyword
+from pymmcore_plus import CMMCorePlus, DeviceType, FocusDirection, Keyword
 from pymmcore_plus.model import Device, Microscope
 from superqt.iconify import QIconifyIcon
 
@@ -108,6 +108,7 @@ class HardwareSetupPage(TabPage):
         self._setup.delayChanged.connect(self._on_delay_changed)
         self._setup.renameRequested.connect(self._rename_device)
         self._setup.stateLabelChanged.connect(self._on_state_label_changed)
+        self._setup.focusDirectionChanged.connect(self._on_focus_direction_changed)
         self._setup.portSelected.connect(self._on_port_selected)
 
         # A configuration may be loaded into the core *after* this page is
@@ -691,6 +692,22 @@ class HardwareSetupPage(TabPage):
             return
         self._dirty = True
         self._status(f"Renamed state {state} of {dev.name} to {label!r}")
+
+    def _on_focus_direction_changed(
+        self, dev: Device, direction: FocusDirection
+    ) -> None:
+        """Set which way positive motion of a focus stage moves the objective."""
+        if direction == dev.focus_direction:
+            return
+        try:
+            self._core.setFocusDirection(dev.name, direction)
+        except Exception as e:
+            self._warn(f"Failed to set the focus direction of {dev.name!r}:\n\n{e}")
+            self._setup.show_installed(dev, self._port_device_for(dev))
+            return
+        dev.focus_direction = direction
+        self._dirty = True
+        self._status(f"Set the focus direction of {dev.name} to {direction.name}")
 
     # ── helpers ───────────────────────────────────────────────────
 
