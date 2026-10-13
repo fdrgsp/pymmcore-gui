@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pymmcore_plus import DeviceType
+from pymmcore_plus import DeviceType, Keyword
 
 from pymmcore_gui._qt.QtCore import Qt, Signal
 from pymmcore_gui._qt.QtWidgets import (
@@ -24,9 +24,21 @@ from pymmcore_gui._qt.QtWidgets import (
 from pymmcore_gui._theme import theme
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from pymmcore_plus.model import AvailableDevice, Device
+
+# (Core property, row title, device type that can fill it)
+CORE_ROLES: tuple[tuple[str, str, DeviceType], ...] = (
+    (Keyword.CoreXYStage.value, "XY Stage", DeviceType.XYStage),
+    (Keyword.CoreFocus.value, "Focus Stage", DeviceType.Stage),
+    (Keyword.CoreCamera.value, "Camera", DeviceType.Camera),
+    (Keyword.CoreShutter.value, "Shutter", DeviceType.Shutter),
+    (Keyword.CoreAutoFocus.value, "Autofocus", DeviceType.AutoFocus),
+    (Keyword.CoreSLM.value, "SLM", DeviceType.SLM),
+    (Keyword.CoreGalvo.value, "Galvo", DeviceType.Galvo),
+    (Keyword.CoreImageProcessor.value, "Image Processor", DeviceType.ImageProcessor),
+)
 
 
 def pane_title(text: str) -> QLabel:
@@ -285,3 +297,95 @@ class InstalledDevicesPane(QWidget):
     def _emit_remove(self) -> None:
         if (dev := self._table.selected_object()) is not None:
             self.removeRequested.emit(dev)
+
+
+class CoreRolesPane(QWidget):
+    """Right of the installed devices: which device fills each Core role."""
+
+    roleChanged = Signal(str, str)  # Core property, device label (or "1"/"0")
+
+    HEADERS = ("Role", "Device")
+    AUTO_SHUTTER = Keyword.CoreAutoShutter.value
+    ROLES = frozenset({*(role for role, *_ in CORE_ROLES), AUTO_SHUTTER})
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+
+        self._table = QTableWidget(len(CORE_ROLES) + 1, len(self.HEADERS))
+        self._table.setHorizontalHeaderLabels(list(self.HEADERS))
+        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self._table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._table.setWordWrap(False)
+        if (vh := self._table.verticalHeader()) is not None:
+            vh.setVisible(False)
+        if (hh := self._table.horizontalHeader()) is not None:
+            hh.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+            hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+            hh.setHighlightSections(False)
+
+        # not a device, but a Core setting saved alongside the roles
+        self._auto_shutter = QComboBox()
+        self._auto_shutter.addItem("Enabled", "1")
+        self._auto_shutter.addItem("Disabled", "0")
+        self._auto_shutter.setToolTip(
+            "Open the default shutter for each exposure and close it afterwards."
+        )
+        self._auto_shutter.currentIndexChanged.connect(
+            lambda _: self.roleChanged.emit(
+                self.AUTO_SHUTTER, self._auto_shutter.currentData()
+            )
+        )
+
+        self._combos: dict[str, QComboBox] = {}
+        rows: list[tuple[str, QComboBox]] = []
+        for role, title, _ in CORE_ROLES:
+            combo = QComboBox()
+            combo.currentIndexChanged.connect(
+                lambda _, r=role, c=combo: self.roleChanged.emit(r, c.currentData())
+            )
+            self._combos[role] = combo
+            rows.append((title, combo))
+            if role == Keyword.CoreShutter:
+                rows.append(("Auto Shutter", self._auto_shutter))
+        for row, (title, combo) in enumerate(rows):
+            self._table.setItem(row, 0, QTableWidgetItem(title))
+            self._table.setCellWidget(row, 1, combo)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(theme().sp_xs)
+        layout.addWidget(pane_title("Default Devices"))
+        layout.addWidget(self._table, 1)
+
+    def set_roles(
+        self,
+        candidates: Mapping[str, Sequence[str]],
+        current: Mapping[str, str],
+    ) -> None:
+        """Offer `candidates` for each role, showing `current` as selected.
+
+        A role nothing can fill shows a disabled "(none)" rather than vanishing,
+        so the list keeps the same shape as devices come and go.
+        """
+        for role, combo in self._combos.items():
+            labels = candidates.get(role, ())
+            items = [(label, label) for label in labels] or [("(none)", "")]
+            combo.blockSignals(True)
+            # only rebuild when the choices changed: this also runs from the
+            # combo's own currentIndexChanged (via the core's propertyChanged)
+            n = combo.count()
+            shown = [(combo.itemText(i), combo.itemData(i)) for i in range(n)]
+            if shown != items:
+                combo.clear()
+                for text, data in items:
+                    combo.addItem(text, data)
+            combo.setCurrentIndex(max(combo.findData(current.get(role, "")), 0))
+            combo.setEnabled(bool(labels))
+            combo.blockSignals(False)
+        self._auto_shutter.blockSignals(True)
+        auto_shutter = current.get(self.AUTO_SHUTTER, "1")
+        self._auto_shutter.setCurrentIndex(
+            max(self._auto_shutter.findData(auto_shutter), 0)
+        )
+        self._auto_shutter.blockSignals(False)

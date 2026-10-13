@@ -32,7 +32,9 @@ from pymmcore_gui._qt.QtWidgets import (
 from pymmcore_gui._theme import qcolor, theme
 from pymmcore_gui.widgets._busy import BusyOverlay, busy
 from pymmcore_gui.widgets._hardware._panes import (
+    CORE_ROLES,
     AvailableDevicesPane,
+    CoreRolesPane,
     InstalledDevicesPane,
 )
 from pymmcore_gui.widgets._hardware._peripherals import PeripheralsDialog
@@ -72,17 +74,24 @@ class HardwareSetupPage(TabPage):
 
         self._available = AvailableDevicesPane()
         self._installed = InstalledDevicesPane()
+        self._roles = CoreRolesPane()
         self._setup = DeviceSetupPane()
         self._overlay = BusyOverlay(self)
 
         # available devices | (installed devices over device settings)
+        #                   | default devices
         self.left.add_widget(self._available, 1)
         self._detail_split = QSplitter(Qt.Orientation.Vertical)
         self._detail_split.addWidget(self._installed)
         self._detail_split.addWidget(self._setup)
         self._detail_split.setStretchFactor(0, 1)
         self._detail_split.setStretchFactor(1, 1)
-        self.add_content_widget(self._detail_split)
+        self._roles_split = QSplitter(Qt.Orientation.Horizontal)
+        self._roles_split.addWidget(self._detail_split)
+        self._roles_split.addWidget(self._roles)
+        self._roles_split.setStretchFactor(0, 3)
+        self._roles_split.setStretchFactor(1, 2)
+        self.add_content_widget(self._roles_split)
 
         self._toolbar_buttons: list[tuple[QPushButton, str]] = []
         for text, icon, slot in (
@@ -101,6 +110,7 @@ class HardwareSetupPage(TabPage):
         self._available.deviceSelected.connect(self._on_available_selected)
         self._installed.deviceSelected.connect(self._on_installed_selected)
         self._installed.removeRequested.connect(self._on_remove_requested)
+        self._roles.roleChanged.connect(self._on_role_changed)
         self._setup.addRequested.connect(self._begin_add)
         self._setup.addConfirmed.connect(self._finish_add)
         self._setup.addCancelled.connect(self._cancel_add)
@@ -117,6 +127,8 @@ class HardwareSetupPage(TabPage):
         self._core.events.systemConfigurationLoaded.connect(
             self._on_system_config_loaded
         )
+        # default devices can also be changed from outside this page
+        self._core.events.propertyChanged.connect(self._on_core_property_changed)
 
         self.reload_model()
         self._seed_hardware_sizes()
@@ -130,6 +142,11 @@ class HardwareSetupPage(TabPage):
         # the widget may already be torn down on the C++ side
         with suppress(RuntimeError):
             self._reload("Loading configuration…")
+
+    def _on_core_property_changed(self, device: str, prop: str, _value: str) -> None:
+        if device == Keyword.CoreDevice and prop in self._roles.ROLES:
+            with suppress(RuntimeError):
+                self._refresh_roles()
 
     # ── model ─────────────────────────────────────────────────────
 
@@ -214,6 +231,9 @@ class HardwareSetupPage(TabPage):
                     with suppress(Exception):
                         self._core.deletePixelSizeConfig(pixel_config_name)
                 self._model = Microscope()
+                # unlike the devices, this setting would carry over
+                with suppress(Exception):
+                    self._core.setAutoShutter(True)
                 if adapter_path is not None:
                     self._set_adapter_path(adapter_path)
                 self._refresh_all()
@@ -307,6 +327,9 @@ class HardwareSetupPage(TabPage):
             self._model.update_config_groups_from_core(self._core)
         with suppress(Exception):
             self._model.update_pixel_sizes_from_core(self._core)
+        # the default devices live on the core, which is what this page edits
+        with suppress(Exception):
+            self._model.core_device.update_from_core(self._core)
         try:
             self._model.save(path)
             if light_sources:
@@ -367,6 +390,7 @@ class HardwareSetupPage(TabPage):
             self._model.load_available_devices(self._core)
         self._available.set_devices(self._model.available_devices)
         self._installed.set_devices(self._model.devices)
+        self._refresh_roles()
         self._setup.show_empty()
 
     # ── selection ─────────────────────────────────────────────────
@@ -535,6 +559,7 @@ class HardwareSetupPage(TabPage):
         if dev.device_type is DeviceType.Hub:
             self._add_peripherals(dev)
         self._installed.set_devices(self._model.devices)
+        self._sync_roles()
         self._setup.show_installed(dev, self._port_device_for(dev))
 
     def _add_peripherals(self, hub: Device) -> None:
@@ -598,6 +623,7 @@ class HardwareSetupPage(TabPage):
             self._model.load_available_devices(self._core)
         self._available.set_devices(self._model.available_devices)
         self._installed.set_devices(self._model.devices)
+        self._sync_roles()
         self._setup.show_empty()
 
     # ── properties ────────────────────────────────────────────────
@@ -638,6 +664,8 @@ class HardwareSetupPage(TabPage):
             self._setup.show_installed(dev, self._port_device_for(dev))
             return
 
+        # unloading clears every role the device fills, so remember them
+        roles = [r for r, *_ in CORE_ROLES if self._core_role(r) == old_name]
         try:
             with suppress(Exception):
                 dev.unload(self._core)
@@ -664,9 +692,13 @@ class HardwareSetupPage(TabPage):
             if other.port == old_name:
                 with suppress(Exception):
                     other.get_property(Keyword.Port).value = new_name
+        for role in roles:
+            with suppress(Exception):
+                self._core.setProperty(Keyword.CoreDevice, role, new_name)
 
         self._dirty = True
         self._installed.set_devices(self._model.devices)
+        self._sync_roles()
         self._setup.show_installed(dev, self._port_device_for(dev))
         self._status(f"Renamed {old_name} to {new_name}")
 
@@ -709,6 +741,53 @@ class HardwareSetupPage(TabPage):
         self._dirty = True
         self._status(f"Set the focus direction of {dev.name} to {direction.name}")
 
+    # ── default devices ───────────────────────────────────────────
+
+    def _core_role(self, role: str) -> str:
+        try:
+            return self._core.getProperty(Keyword.CoreDevice, role)
+        except Exception:
+            return ""
+
+    def _role_candidates(self) -> dict[str, list[str]]:
+        """The installed devices that can fill each Core role."""
+        return {
+            role: [d.name for d in self._model.devices if d.device_type is dev_type]
+            for role, _, dev_type in CORE_ROLES
+        }
+
+    def _refresh_roles(self) -> None:
+        current = {role: self._core_role(role) for role in self._roles.ROLES}
+        self._roles.set_roles(self._role_candidates(), current)
+
+    def _sync_roles(self) -> None:
+        """Fill each role that is empty or names a device that is gone.
+
+        MMCore only assigns default roles while loading a whole configuration
+        (the last loaded device of each type), never as devices are added one at
+        a time, so without this a new configuration has no camera at all. The
+        same "last of its type" rule is what reloading the saved file would do.
+        """
+        for role, labels in self._role_candidates().items():
+            if labels and self._core_role(role) not in labels:
+                with suppress(Exception):
+                    self._core.setProperty(Keyword.CoreDevice, role, labels[-1])
+        self._refresh_roles()
+
+    def _on_role_changed(self, role: str, label: str) -> None:
+        try:
+            self._core.setProperty(Keyword.CoreDevice, role, label)
+        except Exception as e:
+            self._warn(f"Failed to set {role}:\n\n{e}")
+            self._refresh_roles()
+            return
+        self._dirty = True
+        if role == self._roles.AUTO_SHUTTER:
+            state = "Enabled" if label == "1" else "Disabled"
+            self._status(f"{state} Auto Shutter")
+        else:
+            self._status(f"Set the default {role} device to {label}")
+
     # ── helpers ───────────────────────────────────────────────────
 
     def _suggest_label(self, dev: AvailableDevice) -> str:
@@ -740,6 +819,7 @@ class HardwareSetupPage(TabPage):
         fixed, which would otherwise skew the split).
         """
         self._h_split.setStretchFactor(0, 1)  # available devices
-        self._h_split.setStretchFactor(1, 1)  # installed-over-settings column
+        self._h_split.setStretchFactor(1, 1)  # devices, settings and defaults
         self._h_split.setSizes([500, 500])
         self._detail_split.setSizes([500, 500])
+        self._roles_split.setSizes([600, 400])

@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 import useq
 from cmap import Colormap
-from pymmcore_plus import FocusDirection, PropertyType
+from pymmcore_plus import CMMCorePlus, FocusDirection, PropertyType
 from pymmcore_plus.autofocus import AutofocusResult, CaptureSettings, capture_state
 from pymmcore_plus.mda import MDARunner
 from pymmcore_widgets import CameraRoiWidget, StageWidget, XYZStageWidget
@@ -113,7 +113,6 @@ from pymmcore_gui.widgets._startup import StartupDialog
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
 
-    from pymmcore_plus import CMMCorePlus
     from pymmcore_plus.mda import SinkProtocol
     from pymmcore_plus.model import Device
     from pymmcore_widgets.mda._core_grid import CoreConnectedGridPlanWidget
@@ -6817,6 +6816,147 @@ def test_stage_focus_direction_is_set_from_the_setup_pane(
     # (the Z pane's widgets are only deleteLater()'d, hence the wait)
     page._setup.show_installed(page.model.get_device("XY"))
     qtbot.waitUntil(lambda: _focus_direction_combo(page) is None)
+
+
+def _role_combo(page: HardwareSetupPage, role: str) -> QComboBox:
+    return page._roles._combos[role]
+
+
+def test_default_devices_are_set_from_the_hardware_page(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    """Each Core role offers the installed devices of its type, and is saved."""
+    page = HardwareSetupPage(mmcore)
+    qtbot.addWidget(page)
+
+    focus = _role_combo(page, "Focus")
+    assert [focus.itemText(i) for i in range(focus.count())] == ["Z", "Z1"]
+    assert focus.currentText() == "Z"
+    assert _role_combo(page, "XYStage").currentText() == "XY"
+    # nothing installed can be an SLM
+    assert _role_combo(page, "SLM").currentText() == "(none)"
+    assert not _role_combo(page, "SLM").isEnabled()
+
+    focus.setCurrentIndex(focus.findText("Z1"))
+    assert mmcore.getFocusDevice() == "Z1"
+    assert page.is_dirty()
+
+    cfg = tmp_path / "out.cfg"
+    assert page.save_to(str(cfg))
+    lines = cfg.read_text().splitlines()
+    assert "Property,Core,Focus,Z1" in lines
+    assert "Property,Core,XYStage,XY" in lines
+    reloaded = CMMCorePlus()
+    reloaded.loadSystemConfiguration(cfg)
+    assert reloaded.getFocusDevice() == "Z1"
+
+
+def test_default_devices_survive_saving_and_reloading(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    """Save, then Load the file back through the page, onto a fresh core.
+
+    Without a Roles line MMCore would pick the last loaded device of each type,
+    so each choice here is deliberately *not* the last one.
+    """
+    page = HardwareSetupPage(mmcore)
+    qtbot.addWidget(page)
+    _select_available_adapter(page, "DXYStage")
+    page._begin_add("XY2")
+    page._finish_add()
+    # adding a second stage keeps the first one as the default
+    assert _role_combo(page, "XYStage").currentText() == "XY"
+
+    focus = _role_combo(page, "Focus")
+    focus.setCurrentIndex(focus.findText("Z"))
+    page._roles._auto_shutter.setCurrentIndex(
+        page._roles._auto_shutter.findText("Disabled")
+    )
+    cfg = tmp_path / "roles.cfg"
+    assert page.save_to(str(cfg))
+
+    core2 = CMMCorePlus()
+    page2 = HardwareSetupPage(core2)
+    qtbot.addWidget(page2)
+    with patch.object(QFileDialog, "getOpenFileName", return_value=(str(cfg), "")):
+        page2.load_config()
+
+    assert core2.getXYStageDevice() == "XY"
+    assert core2.getFocusDevice() == "Z"
+    assert not core2.getAutoShutter()
+    assert _role_combo(page2, "XYStage").currentText() == "XY"
+    assert _role_combo(page2, "Focus").currentText() == "Z"
+    assert page2._roles._auto_shutter.currentText() == "Disabled"
+    assert not page2.is_dirty()
+
+
+def test_default_devices_follow_the_core(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    page = HardwareSetupPage(mmcore)
+    qtbot.addWidget(page)
+
+    # the core reports these from its native callback, so not synchronously
+    mmcore.setFocusDevice("Z1")
+    qtbot.waitUntil(lambda: _role_combo(page, "Focus").currentText() == "Z1")
+    mmcore.setAutoShutter(False)
+    qtbot.waitUntil(lambda: page._roles._auto_shutter.currentText() == "Disabled")
+
+
+def test_auto_shutter_is_set_from_the_hardware_page(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    page = HardwareSetupPage(mmcore)
+    qtbot.addWidget(page)
+    combo = page._roles._auto_shutter
+    assert combo.currentText() == "Enabled"
+
+    combo.setCurrentIndex(combo.findText("Disabled"))
+    assert not mmcore.getAutoShutter()
+    assert page.is_dirty()
+    cfg = tmp_path / "out.cfg"
+    assert page.save_to(str(cfg))
+    assert "Property,Core,AutoShutter,0" in cfg.read_text().splitlines()
+
+    # a new configuration starts from the default again
+    with patch.object(
+        QMessageBox, "question", return_value=QMessageBox.StandardButton.Discard
+    ):
+        page.new_config()
+    assert mmcore.getAutoShutter()
+    assert combo.currentText() == "Enabled"
+
+
+def test_adding_a_device_fills_its_empty_role(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """MMCore assigns no roles to devices added one by one, so the page does."""
+    page = HardwareSetupPage(mmcore)
+    qtbot.addWidget(page)
+    page.new_config()
+    assert mmcore.getXYStageDevice() == ""
+
+    _select_available_adapter(page, "DXYStage")
+    assert page._selected_available is not None
+    page._begin_add("Stage")
+    page._finish_add()
+
+    assert mmcore.getXYStageDevice() == "Stage"
+    assert _role_combo(page, "XYStage").currentText() == "Stage"
+
+
+def test_removing_or_renaming_a_default_device_keeps_its_role_filled(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    mmcore.setFocusDevice("Z1")
+    page = HardwareSetupPage(mmcore)
+    qtbot.addWidget(page)
+
+    page._rename_device(page.model.get_device("Z1"), "Piezo")
+    assert mmcore.getFocusDevice() == "Piezo"
+    assert _role_combo(page, "Focus").currentText() == "Piezo"
+
+    page._on_remove_requested(page.model.get_device("Piezo"))
+    assert mmcore.getFocusDevice() == "Z"
+    assert _role_combo(page, "Focus").currentText() == "Z"
 
 
 def _hardware_page_over(
