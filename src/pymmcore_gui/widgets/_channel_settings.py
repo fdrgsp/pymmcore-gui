@@ -60,7 +60,7 @@ class ChannelSettingsPanel(ChannelSettingsTable):
         self._store.columnsVisibleChanged.connect(self._on_columns_visible_changed)
         self.destroyed.connect(self._disconnect_store)
 
-        self._save_btn = QPushButton("Save Channel Settings to cfg")
+        self._save_btn = QPushButton("Save to cfg")
         self._save_btn.setToolTip(
             "Write each channel's exposure, light source and camera properties into "
             "a Micro-Manager configuration file, so they are restored the next time "
