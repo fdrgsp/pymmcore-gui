@@ -257,7 +257,7 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
     PanelInfo(
         key=PanelKey.CHANNELS,
         title="Channels",
-        icon="mdi:tune-variant",
+        icon="mdi:palette-outline",
         tooltip=(
             "Channels — the exposure, light source and camera settings of each "
             "channel preset, used by new MDA channels"
