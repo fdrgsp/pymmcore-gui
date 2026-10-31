@@ -216,7 +216,10 @@ class PanelInfo:
     icon: str
     tooltip: str
     create: PanelFactory
-    area: DockWidgetArea = DockWidgetArea.RightDockWidgetArea
+    area: DockWidgetArea = DockWidgetArea.LeftDockWidgetArea
+    """Where the panel's dock goes: the MDA has the right column to itself, every
+    other panel opens tabbed in the tools column on the left (see
+    ``AcquirePage``)."""
     default_open: bool = False
     """Open in the built-in "Default" layout (see ``AcquirePage.reset_layout``)."""
     unstyle: bool = False
@@ -237,7 +240,7 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
         icon="proicons:cube",
         tooltip="MDA — show or hide the multi-dimensional acquisition panel",
         create=_create_mda,
-        area=DockWidgetArea.LeftDockWidgetArea,
+        area=DockWidgetArea.RightDockWidgetArea,
         default_open=True,
         refresh=_refresh_mda,
         always_visible=True,
@@ -260,6 +263,7 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
             "channel preset, used by new MDA channels"
         ),
         create=_create_channel_settings,
+        default_open=True,
         refresh=_refresh_presets,
     ),
     PanelInfo(

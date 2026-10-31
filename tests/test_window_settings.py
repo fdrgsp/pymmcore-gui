@@ -66,13 +66,13 @@ def test_restore_state_on_fresh_settings_opens_only_defaults(
 ) -> None:
     """A first launch (no saved state) must open only the default panels.
 
-    The built-in "Default" layout is MDA on the left and Groups and Presets
-    on the right -- and nothing else.
+    The built-in "Default" layout is MDA on the right, and Groups and Presets
+    and Channels tabbed on the left -- and nothing else.
 
     Regression test for the launch path force-opening every registered panel:
     ``restore_state`` -> ``apply_hidden_panels(set())`` used to treat "show
     this button" as "open this panel", so a fresh install eagerly built all
-    six panels, tabbed five of them into the right column, and left the MDA
+    six panels, tabbed five of them into the tools column, and left the MDA
     dock buried. It also poisoned the *next* launch, since the resulting
     state was then persisted on close.
     """
@@ -81,7 +81,7 @@ def test_restore_state_on_fresh_settings_opens_only_defaults(
     win.restore_state(show=True)
 
     acquire = win._acquire
-    assert acquire.open_panels() == {PanelKey.MDA, PanelKey.PRESETS}
+    assert acquire.open_panels() == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.CHANNELS}
     assert sorted(acquire._dock_manager.dockWidgetsMap()) == [
         "acquire_mda",
         "acquire_presets",
@@ -189,7 +189,7 @@ def test_reset_layout_snapshots_the_reset_arrangement_as_last_session(
 
     prefs = settings.modern_window
     assert prefs.acquire_dock_state
-    assert prefs.acquire_panels == {PanelKey.MDA, PanelKey.PRESETS}
+    assert prefs.acquire_panels == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.CHANNELS}
     assert prefs.acquire_hidden_panels == {PanelKey.CONSOLE}
     geometry, theme, zoom = prefs.geometry, prefs.theme, prefs.zoom
 
@@ -198,7 +198,7 @@ def test_reset_layout_snapshots_the_reset_arrangement_as_last_session(
     # Reflects the just-reset (Default) arrangement -- not wiped, so
     # "Last session" stays selectable in Preferences' Layout list.
     assert prefs.acquire_dock_state
-    assert prefs.acquire_panels == {PanelKey.MDA, PanelKey.PRESETS}
+    assert prefs.acquire_panels == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.CHANNELS}
     assert prefs.acquire_hidden_panels == set()
     # Preferences are not layout -- losing these to a layout reset would be
     # a surprise.

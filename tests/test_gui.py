@@ -87,8 +87,8 @@ from pymmcore_gui._theme._light import LIGHT_THEME
 from pymmcore_gui._theme._pixel_sizes import is_self_sized
 from pymmcore_gui.widgets._acquire import (
     _MDA_DOCK_WIDTH,
-    _RIGHT_DOCK_MAX_WIDTH,
-    _RIGHT_DOCK_MIN_USABLE_WIDTH,
+    _TOOLS_DOCK_MAX_WIDTH,
+    _TOOLS_DOCK_MIN_USABLE_WIDTH,
     AcquirePage,
 )
 from pymmcore_gui.widgets._acquire_presets import AcquisitionPresetSelector
@@ -751,7 +751,7 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert isinstance(output, AcquisitionSettings)
     assert isinstance(output.format, ScratchFormat)
 
-    # Groups and Presets is the one other default-open panel.
+    # Groups and Presets and Channels are the other default-open panels.
     assert page.panel_widget(PanelKey.PRESETS) is not None
     assert page.panel_dock(PanelKey.PRESETS) is not None
     assert page.panel_button(PanelKey.PRESETS).isChecked()
@@ -768,6 +768,7 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert not page.panel_button(PanelKey.CONSOLE).isChecked()
 
     assert sorted(dm.dockWidgetsMap()) == [
+        "acquire_channels",
         "acquire_mda",
         "acquire_presets",
         "acquire_viewers",
@@ -2073,6 +2074,7 @@ def test_acquire_panel_buttons_match_registry(
     # Only the default-open panels build eagerly; the rest of the registry
     # stays lazy, matching the guarantee the other tests exercise.
     assert sorted(page._dock_manager.dockWidgetsMap()) == [
+        "acquire_channels",
         "acquire_mda",
         "acquire_presets",
         "acquire_viewers",
@@ -2215,8 +2217,9 @@ def test_acquire_apply_hidden_panels_never_opens_panels(
 
     page.apply_hidden_panels(set())
 
-    assert page.open_panels() == {PanelKey.MDA, PanelKey.PRESETS}
+    assert page.open_panels() == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.CHANNELS}
     assert sorted(page._dock_manager.dockWidgetsMap()) == [
+        "acquire_channels",
         "acquire_mda",
         "acquire_presets",
         "acquire_viewers",
@@ -2256,53 +2259,53 @@ def test_acquire_docked_panels_are_reparented_not_windows(
     assert page._mda.isVisible()
 
 
-def test_acquire_new_panels_go_to_right_column_and_tab_together(
+def test_acquire_new_panels_go_to_tools_column_and_tab_together(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    """A panel opened for the first time lands in the right sidebar, tabbed.
+    """A panel opened for the first time lands in the tools column, tabbed.
 
-    The first one creates the right column; every subsequent one tabs into
+    The first one creates the tools column; every subsequent one tabs into
     that same column rather than spawning a second one beside it. MDA is the
-    only panel placed elsewhere (left).
+    only panel placed elsewhere (right).
     """
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
 
     side_keys = [i.key for i in PANELS if i.key != PanelKey.MDA]
     page.panel_button(side_keys[0]).click()
-    right_area = page._right_dock_area
-    assert right_area is not None
-    assert right_area is not page._central_dock_area
-    assert page._mda_dock.dockAreaWidget() is not right_area
+    tools_area = page._tools_dock_area
+    assert tools_area is not None
+    assert tools_area is not page._central_dock_area
+    assert page._mda_dock.dockAreaWidget() is not tools_area
 
     for key in side_keys[1:]:
         page.panel_button(key).click()
         dock = page.panel_dock(key)
         assert dock is not None
-        assert dock.dockAreaWidget() is right_area, f"{key} did not tab into the column"
+        assert dock.dockAreaWidget() is tools_area, f"{key} did not tab into the column"
 
-    assert right_area.dockWidgetsCount() == len(side_keys)
+    assert tools_area.dockWidgetsCount() == len(side_keys)
 
 
-def test_acquire_right_column_survives_being_emptied(
+def test_acquire_tools_column_survives_being_emptied(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    """After the right column is emptied, the next new panel rebuilds it.
+    """After the tools column is emptied, the next new panel rebuilds it.
 
     ADS destroys a dock area once its last dock leaves, so the cached
-    ``_right_dock_area`` can end up wrapping a deleted C++ object. Docking
-    *into* that would crash instead of tabbing, hence ``_resolve_right_dock_area``.
+    ``_tools_dock_area`` can end up wrapping a deleted C++ object. Docking
+    *into* that would crash instead of tabbing, hence ``_resolve_tools_dock_area``.
     """
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
 
     page.panel_button(PanelKey.PRESETS).setChecked(True)  # default-open already
-    assert page._right_dock_area is not None
+    assert page._tools_dock_area is not None
     page.panel_button(PanelKey.PRESETS).setChecked(
         True
     )  # default-open already  # close it again
 
-    # Must not raise, and must give the new panel a usable right column.
+    # Must not raise, and must give the new panel a usable tools column.
     page.panel_button(PanelKey.EXCEPTION_LOG).click()
     log_dock = page.panel_dock(PanelKey.EXCEPTION_LOG)
     assert log_dock is not None and not log_dock.isClosed()
@@ -2323,13 +2326,14 @@ def test_acquire_reset_layout_restores_defaults(
     qtbot.waitExposed(page)
     qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
 
-    # MDA and Groups and Presets are the defaults; open a third panel and
+    # MDA, Groups and Presets and Channels are the defaults; open another and
     # hide a button to get somewhere a reset has to undo.
     page.panel_button(PanelKey.EXCEPTION_LOG).click()
     page.apply_hidden_panels({PanelKey.CONSOLE})
     assert page.open_panels() == {
         PanelKey.MDA,
         PanelKey.PRESETS,
+        PanelKey.CHANNELS,
         PanelKey.EXCEPTION_LOG,
     }
     assert page.hidden_panels() == {PanelKey.CONSOLE}
@@ -2337,7 +2341,7 @@ def test_acquire_reset_layout_restores_defaults(
     with qtbot.waitSignal(page.layoutReset):
         page.reset_layout()
 
-    assert page.open_panels() == {PanelKey.MDA, PanelKey.PRESETS}
+    assert page.open_panels() == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.CHANNELS}
     assert page.hidden_panels() == set()
     for info in PANELS:
         assert not page.panel_button(info.key).isHidden()
@@ -2405,7 +2409,7 @@ def test_acquire_select_default_layout_reaches_reset(
 
     assert not page.panel_button(PanelKey.CONSOLE).isHidden()
     assert page.panel_widget(PanelKey.CONSOLE) is None  # still never built
-    assert page.open_panels() == {PanelKey.MDA, PanelKey.PRESETS}
+    assert page.open_panels() == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.CHANNELS}
 
 
 def test_selecting_default_keeps_last_session_in_the_layout_list(
@@ -4426,10 +4430,10 @@ def test_acquire_viewer_close_reclaims_space_without_moving_mda(
     assert dock.features().value & DF.DockWidgetDeleteOnClose.value
 
     mda_area = page._mda_dock.dockAreaWidget()
-    right_area = page._right_dock_area
-    assert mda_area is not None and right_area is not None
+    tools_area = page._tools_dock_area
+    assert mda_area is not None and tools_area is not None
     mda_width_before = mda_area.width()
-    right_width_before = right_area.width()
+    right_width_before = tools_area.width()
 
     # Split another viewer beside the active one inside the nested manager.
     # Emptying that split area must not affect either outer tools column.
@@ -4446,7 +4450,7 @@ def test_acquire_viewer_close_reclaims_space_without_moving_mda(
     assert page._viewers.active_viewer is viewer
     assert not viewer.closed
     assert mda_area.width() == mda_width_before
-    assert right_area.width() == right_width_before
+    assert tools_area.width() == right_width_before
 
     # Closing one side of an inner split should let its sibling reclaim the
     # space, and a later viewer should tab into that remaining area.
@@ -4468,7 +4472,7 @@ def test_acquire_viewer_close_reclaims_space_without_moving_mda(
     assert viewer.closed
     assert third_area.width() > third_width_before * 1.5
     assert mda_area.width() == mda_width_before
-    assert right_area.width() == right_width_before
+    assert tools_area.width() == right_width_before
 
     fourth = page._viewers._new_dock("Viewer4")
     fourth.setWidget(QWidget())
@@ -4728,7 +4732,7 @@ def _resized_splitter_sizes(
     """Current splitter sizes for *area*'s splitter with *area*'s slot set to *width*.
 
     ``setSplitterSizes`` needs one entry per *current* child of that specific
-    splitter (2 columns if only MDA/central exist, 3 once the right column is
+    splitter (2 columns if only MDA/central exist, 3 once the tools column is
     open too) -- built from the live sizes rather than assumed, so this stays
     correct regardless of how many columns are open.
     """
@@ -4765,7 +4769,7 @@ def _park_real_cursor_away() -> None:
 def _assert_column_resists_relayout_but_stays_draggable(
     page: AcquirePage, qtbot: QtBot, area: CDockAreaWidget, new_width: int
 ) -> None:
-    """Shared body for the MDA / right-column width-lock regression tests below."""
+    """Shared body for the MDA / tools-column width-lock regression tests below."""
     starting_width = area.width()
     assert area.minimumWidth() == area.maximumWidth() == starting_width
 
@@ -4858,10 +4862,10 @@ def test_acquire_mda_dock_width_resists_relayout_but_stays_draggable(
     _assert_column_resists_relayout_but_stays_draggable(page, qtbot, mda_area, 500)
 
 
-def test_acquire_right_dock_is_always_resizable(
+def test_acquire_tools_dock_is_always_resizable(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    """The right sidebar never depends on hover detection to become resizable."""
+    """The tools column never depends on hover detection to become resizable."""
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
     page.resize(1400, 900)
@@ -4870,22 +4874,22 @@ def test_acquire_right_dock_is_always_resizable(
     qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
 
     page.panel_button(PanelKey.PRESETS).setChecked(True)  # default-open already
-    right_area = page._right_dock_area
-    assert right_area is not None
-    right_column = page._column_widget(right_area)
+    tools_area = page._tools_dock_area
+    assert tools_area is not None
+    tools_column = page._column_widget(tools_area)
     expected_width = min(page._dock_manager.width() // 4, 500)
-    qtbot.waitUntil(lambda: right_column.width() == expected_width, timeout=2000)
-    starting_width = right_column.width()
+    qtbot.waitUntil(lambda: tools_column.width() == expected_width, timeout=2000)
+    starting_width = tools_column.width()
     assert starting_width > 0
-    assert right_column.minimumWidth() == 0
-    assert right_column.maximumWidth() == QWIDGETSIZE_MAX
-    assert right_column not in page._width_locked_areas.values()
+    assert tools_column.minimumWidth() == 0
+    assert tools_column.maximumWidth() == QWIDGETSIZE_MAX
+    assert tools_column not in page._width_locked_areas.values()
 
     target_width = max(100, starting_width - 100)
     page._dock_manager.setSplitterSizes(
-        right_area, _resized_splitter_sizes(page, right_area, target_width)
+        tools_area, _resized_splitter_sizes(page, tools_area, target_width)
     )
-    assert right_column.width() == target_width
+    assert tools_column.width() == target_width
 
 
 def test_column_widget_locates_top_splitter_child_through_nesting(
@@ -4896,12 +4900,12 @@ def test_column_widget_locates_top_splitter_child_through_nesting(
     Regression test for two bugs, both only reproducible on a real,
     non-offscreen display:
 
-    1. Restoring a layout whose right column held more than one *stacked*
+    1. Restoring a layout whose tools column held more than one *stacked*
        (non-tabbed) area -- e.g. Camera ROI split out below Groups & Presets
        rather than tabbed alongside it, exactly what ADS does on a real
        drag-and-drop split -- left the whole column permanently
        un-resizable. ``_install_width_lock`` used to lock whichever single
-       ``CDockAreaWidget`` ``_resolve_right_dock_area`` happened to find.
+       ``CDockAreaWidget`` ``_resolve_tools_dock_area`` happened to find.
        That's fine while every right-side panel stays tabbed together in one
        area, but a vertical splitter forces every stacked child to share its
        width -- so locking just *one* of several stacked areas to a fixed
@@ -4984,7 +4988,12 @@ def test_acquire_layout_round_trip(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     saved = page_a.current_layout()
     state, keys = saved.dock_state, saved.panels
     assert state is not None
-    assert keys == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.EXCEPTION_LOG}
+    assert keys == {
+        PanelKey.MDA,
+        PanelKey.PRESETS,
+        PanelKey.CHANNELS,
+        PanelKey.EXCEPTION_LOG,
+    }
 
     page_b = AcquirePage(mmcore)
     qtbot.addWidget(page_b)
@@ -5131,10 +5140,10 @@ def test_acquire_restore_collapses_an_expanded_auto_hide_panel(
     assert not container_b.isVisible()  # ...but collapsed, not popped open
 
 
-def test_acquire_restored_right_dock_is_resizable(
+def test_acquire_restored_tools_dock_is_resizable(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    """A right sidebar restored on relaunch has no stale fixed-width constraint."""
+    """A tools column restored on relaunch has no stale fixed-width constraint."""
     page_a = AcquirePage(mmcore)
     page_a.resize(1400, 900)
     page_a.panel_button(PanelKey.PRESETS).setChecked(True)  # default-open already
@@ -5153,27 +5162,28 @@ def test_acquire_restored_right_dock_is_resizable(
     qtbot.waitExposed(page_b)
     qtbot.waitUntil(lambda: page_b._mda_width_locked_at_real_size, timeout=2000)
 
-    right_area = page_b._right_dock_area
-    assert right_area is not None
-    right_column = page_b._column_widget(right_area)
-    assert right_column.minimumWidth() == 0
-    assert right_column.maximumWidth() == QWIDGETSIZE_MAX
-    starting_width = right_column.width()
-    target_width = max(100, starting_width - 100)
+    tools_area = page_b._tools_dock_area
+    assert tools_area is not None
+    tools_column = page_b._column_widget(tools_area)
+    assert tools_column.minimumWidth() == 0
+    assert tools_column.maximumWidth() == QWIDGETSIZE_MAX
+    starting_width = tools_column.width()
+    # wider: narrower may hit the column's own minimum (its tab bar's width)
+    target_width = starting_width + 100
     page_b._dock_manager.setSplitterSizes(
-        right_area, _resized_splitter_sizes(page_b, right_area, target_width)
+        tools_area, _resized_splitter_sizes(page_b, tools_area, target_width)
     )
-    assert right_column.width() == target_width
+    assert tools_column.width() == target_width
 
 
-def test_acquire_repairs_an_unusably_narrow_restored_right_dock(
+def test_acquire_repairs_an_unusably_narrow_restored_tools_dock(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
     """A previously persisted transient 60 px tools column is expanded.
 
     The pinned width itself is derived from whatever width the window
     actually ends up with (``min(dock_manager.width() // 4,
-    _RIGHT_DOCK_MAX_WIDTH)``, matching ``_pin_dock_widths``) rather than
+    _TOOLS_DOCK_MAX_WIDTH)``, matching ``_pin_dock_widths``) rather than
     hardcoded to the requested ``resize(1400, 900)`` -- CI's real (not
     virtual/configurable) macOS/Windows runner displays can silently clamp a
     top-level window smaller than requested, unlike a local dev machine.
@@ -5184,19 +5194,19 @@ def test_acquire_repairs_an_unusably_narrow_restored_right_dock(
     qtbot.waitExposed(page_a)
     qtbot.waitUntil(lambda: page_a._mda_width_locked_at_real_size, timeout=2000)
     page_a.panel_button(PanelKey.PRESETS).setChecked(True)  # default-open already
-    right_area = page_a._right_dock_area
-    assert right_area is not None
-    right_column = page_a._column_widget(right_area)
+    tools_area = page_a._tools_dock_area
+    assert tools_area is not None
+    tools_column = page_a._column_widget(tools_area)
     expected_pinned_width_a = min(
-        page_a._dock_manager.width() // 4, _RIGHT_DOCK_MAX_WIDTH
+        page_a._dock_manager.width() // 4, _TOOLS_DOCK_MAX_WIDTH
     )
     qtbot.waitUntil(
-        lambda: right_column.width() == expected_pinned_width_a, timeout=2000
+        lambda: tools_column.width() == expected_pinned_width_a, timeout=2000
     )
     page_a._dock_manager.setSplitterSizes(
-        right_area, _resized_splitter_sizes(page_a, right_area, 60)
+        tools_area, _resized_splitter_sizes(page_a, tools_area, 60)
     )
-    assert right_column.width() == 60
+    assert tools_column.width() == 60
     saved = page_a.current_layout()
     state, keys = saved.dock_state, saved.panels
     assert state is not None
@@ -5212,11 +5222,11 @@ def test_acquire_repairs_an_unusably_narrow_restored_right_dock(
     qtbot.waitExposed(page_b)
     qtbot.waitUntil(lambda: page_b._mda_width_locked_at_real_size, timeout=2000)
 
-    restored_area = page_b._right_dock_area
+    restored_area = page_b._tools_dock_area
     assert restored_area is not None
     restored_column = page_b._column_widget(restored_area)
     expected_pinned_width_b = min(
-        page_b._dock_manager.width() // 4, _RIGHT_DOCK_MAX_WIDTH
+        page_b._dock_manager.width() // 4, _TOOLS_DOCK_MAX_WIDTH
     )
     # A range, not an equality. The repair aims for the pinned width but can
     # only take what the donor column has to spare above its own minimum --
@@ -5250,8 +5260,8 @@ def test_acquire_opening_a_panel_widens_an_unusable_column(
     The target itself, not a hardcoded floor, is what the assertions compare
     against: CI's headless display (real, just small and fixed-resolution --
     see the other width tests in this file) can silently clamp the requested
-    1400px window, in which case ``min(dm.width() // 4, _RIGHT_DOCK_MAX_WIDTH)``
-    -- the same number ``_widen_unusable_right_column`` aims for -- can itself
+    1400px window, in which case ``min(dm.width() // 4, _TOOLS_DOCK_MAX_WIDTH)``
+    -- the same number ``_widen_unusable_tools_column`` aims for -- can itself
     land under the usability floor. The widen still helps in that case; it
     just can't promise reaching a floor the window has no room for.
     """
@@ -5262,20 +5272,20 @@ def test_acquire_opening_a_panel_widens_an_unusable_column(
     qtbot.waitExposed(page)
     qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
 
-    right_area = page._right_dock_area
-    assert right_area is not None
-    column = page._column_widget(right_area)
-    target = min(page._dock_manager.width() // 4, _RIGHT_DOCK_MAX_WIDTH)
+    tools_area = page._tools_dock_area
+    assert tools_area is not None
+    column = page._column_widget(tools_area)
+    target = min(page._dock_manager.width() // 4, _TOOLS_DOCK_MAX_WIDTH)
 
     # Pre-build the dock so the re-show path (toggleView, not addDockWidget)
     # is exercised: addDockWidget schedules an ADS layout pass that can race
-    # with _widen_right_column_soon on the offscreen platform.
+    # with _widen_tools_column_soon on the offscreen platform.
     page.panel_button(PanelKey.EXCEPTION_LOG).setChecked(True)
     assert page.panel_dock(PanelKey.EXCEPTION_LOG) is not None
     page.panel_button(PanelKey.EXCEPTION_LOG).setChecked(False)
 
     page._dock_manager.setSplitterSizes(
-        right_area, _resized_splitter_sizes(page, right_area, 60)
+        tools_area, _resized_splitter_sizes(page, tools_area, 60)
     )
     assert column.width() == 60
 
@@ -5283,15 +5293,15 @@ def test_acquire_opening_a_panel_widens_an_unusable_column(
     page.panel_button(PanelKey.EXCEPTION_LOG).setChecked(True)
     qtbot.waitUntil(lambda: column.width() > 60, timeout=2000)
     assert column.width() <= target
-    if target >= _RIGHT_DOCK_MIN_USABLE_WIDTH:
-        assert column.width() >= _RIGHT_DOCK_MIN_USABLE_WIDTH
+    if target >= _TOOLS_DOCK_MIN_USABLE_WIDTH:
+        assert column.width() >= _TOOLS_DOCK_MIN_USABLE_WIDTH
 
     # A width the user chose is still theirs -- widening only ever rescues a
     # column that is below the usability floor. Only meaningful once the
     # first widen actually reached that floor -- otherwise opening another
     # panel legitimately widens it further, toward the same unreachable
     # target the first one settled for.
-    if column.width() >= _RIGHT_DOCK_MIN_USABLE_WIDTH:
+    if column.width() >= _TOOLS_DOCK_MIN_USABLE_WIDTH:
         usable = column.width()
         page.panel_button(PanelKey.PROPERTIES).setChecked(True)
         qtbot.wait(50)
@@ -5323,15 +5333,15 @@ def test_acquire_narrow_column_repair_gives_up_instead_of_retrying_forever(
     qtbot.waitExposed(page)
     qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
 
-    right_area = page._right_dock_area
-    assert right_area is not None
-    monkeypatch.setattr(acquire_module, "_RIGHT_DOCK_MIN_USABLE_WIDTH", 10_000)
+    tools_area = page._tools_dock_area
+    assert tools_area is not None
+    monkeypatch.setattr(acquire_module, "_TOOLS_DOCK_MIN_USABLE_WIDTH", 10_000)
 
     # Now behave as a restore does: the layout came from disk, so the settle
     # takes the repair path rather than the canonical pin.
     page._layout_restored = True
     page._mda_width_locked_at_real_size = False
-    assert page._widen_unusable_right_column() is True
+    assert page._widen_unusable_tools_column() is True
 
     page._settle_and_lock_widths()
     assert page._mda_width_locked_at_real_size
@@ -5409,10 +5419,10 @@ def test_pin_dock_widths_preserves_a_locked_custom_mda_width(
     """``_pin_dock_widths`` must reuse MDA's current locked width, not the default.
 
     Regression test for a reported bug: a layout saved with MDA resized
-    narrower and *no* right column open (a "minimal" layout, loaded with
+    narrower and *no* tools column open (a "minimal" layout, loaded with
     ``-l``) looked fine on restore -- the visible size stayed clamped to the
     saved width -- but the moment the first tool panel was opened afterward
-    (creating the right column for the first time, via ``_add_side_dock``),
+    (creating the tools column for the first time, via ``_add_side_dock``),
     the very next hover near the MDA/viewer boundary snapped the column back
     to the canonical default width, and moving the mouse away then locked
     that wrong width in permanently. Verified by hand against a real running

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import weakref
 from contextlib import suppress
 from dataclasses import dataclass
@@ -88,8 +89,8 @@ if TYPE_CHECKING:
 
 _DOCK_MIN_WIDTH = 0
 _MDA_DOCK_WIDTH = 700
-_RIGHT_DOCK_MAX_WIDTH = 500
-_RIGHT_DOCK_MIN_USABLE_WIDTH = 200
+_TOOLS_DOCK_MAX_WIDTH = 500
+_TOOLS_DOCK_MIN_USABLE_WIDTH = 200
 _WIDTH_SETTLE_DELAY_MS = 200
 _ADS_NEUTRAL_ICON_BUTTONS = frozenset(
     {
@@ -213,7 +214,7 @@ class AcquirePage(TabPage):
     registry in ``_panels.py``, so the user can rearrange them, pin any of
     them to a side bar, or move them to the bottom. Only ``toolbar`` is
     inherited from ``TabPage``; the dock manager fills the whole content
-    area, replacing the fixed left/right sidebar split the other pages
+    area, replacing the fixed left/tools column split the other pages
     still use.
     """
 
@@ -294,7 +295,7 @@ class AcquirePage(TabPage):
         # must be created by an earlier listener to receive imageSnapped.
         self._core.events.roiSet.connect(self._ensure_preview_for_roi_auto_snap)
 
-        self._right_dock_area: CDockAreaWidget | None = None
+        self._tools_dock_area: CDockAreaWidget | None = None
         # Values are usually the CDockAreaWidget itself, but see
         # ``_column_widget`` -- once a column holds more than one
         # stacked/split-apart area, the locked widget is the wrapping
@@ -397,7 +398,7 @@ class AcquirePage(TabPage):
 
         # Default-open panels build now, before any width pinning. MDA goes
         # first and is bound immediately: opening any *other* panel creates
-        # the right column, which pins the column widths -- and that reads
+        # the tools column, which pins the column widths -- and that reads
         # ``self._mda_dock``.
         self._panel_bar.button_for(PanelKey.MDA).setChecked(True)
         self._mda = cast("MemoryMDAWidgetBase", self.panel_widget(PanelKey.MDA))
@@ -879,7 +880,7 @@ class AcquirePage(TabPage):
         dock.toggleView(checked)
         if checked:
             dock.setAsCurrentTab()
-            # Closing the last dock in the right column makes ADS destroy it;
+            # Closing the last dock in the tools column makes ADS destroy it;
             # re-showing one builds a *new* column, which starts at the same
             # transient sliver width (47--60 px) a freshly created one does.
             # ``_add_side_dock``'s pin only covers first creation -- this path
@@ -887,7 +888,7 @@ class AcquirePage(TabPage):
             # column would otherwise stay unusably narrow with no way back
             # except dragging it. Widening only kicks in below the usability
             # floor, so a column the user deliberately sized is left alone.
-            self._widen_right_column_soon()
+            self._widen_tools_column_soon()
             if panel.info.refresh is not None:
                 QTimer.singleShot(0, partial(self._refresh_panel, key))
 
@@ -911,16 +912,16 @@ class AcquirePage(TabPage):
         if dock is None or dock.dockAreaWidget() is not None:
             return
         with suppress(RuntimeError):
-            if panel.info.area == DockWidgetArea.LeftDockWidgetArea:
+            if panel.info.key == PanelKey.MDA:
                 self._dock_manager.addDockWidget(panel.info.area, dock)
                 return
-            if (right_area := self._resolve_right_dock_area()) is not None:
+            if (tools_area := self._resolve_tools_dock_area()) is not None:
                 self._dock_manager.addDockWidget(
-                    DockWidgetArea.CenterDockWidgetArea, dock, right_area
+                    DockWidgetArea.CenterDockWidgetArea, dock, tools_area
                 )
                 return
-            self._dock_manager.addDockWidget(DockWidgetArea.RightDockWidgetArea, dock)
-            self._right_dock_area = dock.dockAreaWidget()
+            self._dock_manager.addDockWidget(panel.info.area, dock)
+            self._tools_dock_area = dock.dockAreaWidget()
             self._pin_dock_widths()
             pin = partial(self._pin_dock_widths_for_epoch, self._layout_epoch)
             QTimer.singleShot(0, pin)
@@ -941,15 +942,17 @@ class AcquirePage(TabPage):
                 unstyle_widgets(widget)
         panel.widget = widget
         name, title = panel.info.dock_name, panel.info.title
-        if panel.info.area == DockWidgetArea.LeftDockWidgetArea:
+        if panel.info.key == PanelKey.MDA:
             panel.dock = self._add_dock(name, title, widget, panel.info.area)
         else:
             panel.dock = self._add_side_dock(name, title, widget)
         if panel.info.key == PanelKey.CHANNELS:
-            # the panel is exactly as tall as its presets: never squeeze it, and
-            # keep it at the top of a taller dock rather than centred in it
+            # the panel is exactly as tall as its presets (a fixed height, see
+            # ChannelSettingsTable): never squeeze it -- its minimum *size*, not
+            # its size hint, so the column's width stays free -- and keep it at
+            # the top of a taller dock rather than centred in it
             panel.dock.setMinimumSizeHintMode(
-                CDockWidget.eMinimumSizeHintMode.MinimumSizeHintFromContent
+                CDockWidget.eMinimumSizeHintMode.MinimumSizeHintFromContentMinimumSize
             )
             if (dock_layout := panel.dock.layout()) is not None:
                 dock_layout.setAlignment(widget, Qt.AlignmentFlag.AlignTop)
@@ -1269,8 +1272,9 @@ class AcquirePage(TabPage):
 
         Un-hides every toolbar button, un-pins anything the user sent to an
         auto-hide side bar, closes every panel except the default-open ones
-        (MDA on the left, Groups and Presets on the right -- see
-        ``_panels.PANELS``), puts the MDA column back on the left, and
+        (MDA on the right; Groups and Presets and Channels tabbed on the left,
+        Channels shown -- see ``_panels.PANELS``), puts the MDA column back on
+        the right and those tabs back on the left, and
         re-applies the default column widths. Panel *widgets* are kept alive,
         exactly as a normal close does -- this resets the arrangement, not the
         session.
@@ -1306,9 +1310,10 @@ class AcquirePage(TabPage):
             # churn for nothing, and the one ADS operation documented in
             # ``_configure_ads`` as fatal under the offscreen test platform.
             self._dock_manager.addDockWidget(
-                DockWidgetArea.LeftDockWidgetArea, self._mda_dock
+                DockWidgetArea.RightDockWidgetArea, self._mda_dock
             )
-        self._right_dock_area = None
+        self._rehome_default_tabs()
+        self._tools_dock_area = None
         # A reset supersedes whatever was restored, so the canonical widths
         # apply again (see showEvent's one-shot pin).
         self._layout_restored = False
@@ -1317,15 +1322,59 @@ class AcquirePage(TabPage):
         self._set_layout_name(DEFAULT_LAYOUT_NAME)
         self.layoutReset.emit()
 
+    def _rehome_default_tabs(self) -> None:
+        """Tab the default-open side panels back into the leftmost column.
+
+        In ``PANELS`` order, with the last one shown -- as on a fresh start
+        (Groups and Presets, then Channels in front). Only what was moved is
+        re-docked, for the same reason the MDA is (see ``reset_layout``).
+        """
+        docks = [
+            dock
+            for info in PANELS
+            if info.default_open
+            and info.key != PanelKey.MDA
+            and (dock := self._panels[info.key].dock) is not None
+        ]
+        if not docks:
+            return
+        with suppress(RuntimeError):
+            area = docks[0].dockAreaWidget()
+            if area is None or not self._is_leftmost(area):
+                self._dock_manager.addDockWidget(
+                    DockWidgetArea.LeftDockWidgetArea, docks[0]
+                )
+                area = docks[0].dockAreaWidget()
+            if area is None:  # pragma: no cover
+                return
+            for prev, dock in itertools.pairwise(docks):
+                if dock.dockAreaWidget() is not area or area.index(dock) < area.index(
+                    prev
+                ):
+                    # appended, i.e. after the ones before it
+                    self._dock_manager.addDockWidgetTabToArea(dock, area)
+            docks[-1].setAsCurrentTab()
+
+    def _is_leftmost(self, area: CDockAreaWidget) -> bool:
+        """True if *area* is in the leftmost column (and not the viewers')."""
+        if area is self._central_dock_area:
+            return False
+        column = self._column_widget(area)
+        splitter = column.parentWidget()
+        return isinstance(splitter, QSplitter) and splitter.indexOf(column) == 0
+
     def _mda_is_home(self) -> bool:
-        """True if the MDA dock still occupies the leftmost column."""
+        """True if the MDA dock still occupies the rightmost column."""
         if self._mda_dock.isAutoHide():
             return False
         area = self._mda_dock.dockAreaWidget()
         if area is None or area is self._central_dock_area:
             return False
         splitter = area.parentWidget()
-        return isinstance(splitter, QSplitter) and splitter.indexOf(area) == 0
+        return (
+            isinstance(splitter, QSplitter)
+            and splitter.indexOf(area) == splitter.count() - 1
+        )
 
     def _rediscover_areas(self) -> None:
         """Re-point cached area references after ``restoreState`` rebuilt the tree."""
@@ -1335,25 +1384,28 @@ class AcquirePage(TabPage):
             area.setAllowedAreas(DockWidgetArea.OuterDockAreas)
 
         # Drop the stale cache and re-derive from the rebuilt tree, so the
-        # next panel opened tabs into the restored right column instead of
+        # next panel opened tabs into the restored tools column instead of
         # spawning a second one beside it.
-        self._right_dock_area = None
-        self._resolve_right_dock_area()
+        self._tools_dock_area = None
+        self._resolve_tools_dock_area()
 
     # ------------------------------------------------------------------ dock helpers
 
     def _pin_dock_widths(self) -> None:
-        """Set the MDA / right-column widths for the current manager width.
+        """Set the MDA / tools-column widths for the current manager width.
+
+        The MDA column gets its own width, each tools column a quarter of the
+        manager (capped), and the viewers whatever is left.
 
         Called once at startup (before the MDA column's width lock -- see
-        ``_install_width_lock`` -- takes over) and whenever the right column
+        ``_install_width_lock`` -- takes over) and whenever the tools column
         is first created.
 
         A width the MDA column is already locked to -- the user's own drag,
         or a restored/named layout that saved a non-default width -- is kept
         rather than overwritten with the canonical ``_MDA_DOCK_WIDTH``.
         Regression test for the splitter silently caching the canonical width
-        anyway: opening the *first* right-side panel after loading a layout
+        anyway: opening the *first* tools panel after loading a layout
         with a narrower MDA visibly clamped the column at its custom width
         (the lock held), but the very next hover-triggered unlock -- any
         mouse movement over the MDA/viewer boundary -- snapped it straight to
@@ -1367,12 +1419,18 @@ class AcquirePage(TabPage):
             return
         # ``setSplitterSizes`` needs exactly one entry per *current* child of
         # that splitter. Deriving the count from the live splitter rather than
-        # from ``_right_dock_area`` keeps this correct in the in-between
+        # from ``_tools_dock_area`` keeps this correct in the in-between
         # states -- notably right after ``reset_layout`` closes the side
-        # panels, when ADS has not yet collapsed the emptied right column, so
+        # panels, when ADS has not yet collapsed the emptied tools column, so
         # the tree still has three children while the cache says two.
         sizes = list(self._dock_manager.splitterSizes(mda_area))
-        if len(sizes) < 2:
+        mda_column = self._column_widget(mda_area)
+        splitter = mda_column.parentWidget()
+        if len(sizes) < 2 or not isinstance(splitter, QSplitter):
+            return
+        mda_idx = splitter.indexOf(mda_column)
+        viewer_idx = splitter.indexOf(self._column_widget(self._central_dock_area))
+        if mda_idx < 0 or len(sizes) != splitter.count():  # pragma: no cover
             return
         total = self._dock_manager.width()
         new = [0] * len(sizes)
@@ -1380,18 +1438,17 @@ class AcquirePage(TabPage):
         is_locked = (
             mda_area.minimumWidth() == mda_area.maximumWidth() and locked_width > 0
         )
-        new[0] = locked_width if is_locked else _MDA_DOCK_WIDTH
-        middle = range(1, len(sizes))
-        if len(sizes) > 2:
-            new[-1] = min(total // 4, _RIGHT_DOCK_MAX_WIDTH)
-            middle = range(1, len(sizes) - 1)
-        remaining = max(total - sum(new), _DOCK_MIN_WIDTH)
-        for idx in middle:
-            new[idx] = remaining // len(middle)
+        new[mda_idx] = locked_width if is_locked else _MDA_DOCK_WIDTH
+        # every column but the MDA and the viewers is a tools column
+        for idx in range(len(sizes)):
+            if idx not in (mda_idx, viewer_idx):
+                new[idx] = min(total // 4, _TOOLS_DOCK_MAX_WIDTH)
+        if viewer_idx >= 0:
+            new[viewer_idx] = max(total - sum(new), _DOCK_MIN_WIDTH)
         self._dock_manager.setSplitterSizes(mda_area, new)
 
-    def _widen_right_column_soon(self, attempts: int = 5) -> None:
-        """Widen an unusably narrow right column once QtADS has laid it out.
+    def _widen_tools_column_soon(self, attempts: int = 5) -> None:
+        """Widen an unusably narrow tools column once QtADS has laid it out.
 
         Both callers act on a column that does not exist yet at the moment
         they run -- reopening a dock into a column ADS destroyed when it was
@@ -1404,12 +1461,12 @@ class AcquirePage(TabPage):
         def _attempt() -> None:
             # The page (or its docks) may be gone by the next turn.
             with suppress(RuntimeError):
-                if not self._widen_unusable_right_column() and attempts > 1:
-                    self._widen_right_column_soon(attempts - 1)
+                if not self._widen_unusable_tools_column() and attempts > 1:
+                    self._widen_tools_column_soon(attempts - 1)
 
         QTimer.singleShot(0, _attempt)
 
-    def _widen_unusable_right_column(self) -> bool:
+    def _widen_unusable_tools_column(self) -> bool:
         """Expand an unusably narrow tools column to a workable width.
 
         Widths at or above the usability floor are user choices and remain
@@ -1432,11 +1489,11 @@ class AcquirePage(TabPage):
         that clamps the window below the requested size lands in exactly that
         case, so it has to be a normal outcome rather than a retry.
         """
-        area = self._resolve_right_dock_area()
+        area = self._resolve_tools_dock_area()
         if area is None:
             return True
         column = self._column_widget(area)
-        if column.width() >= _RIGHT_DOCK_MIN_USABLE_WIDTH:
+        if column.width() >= _TOOLS_DOCK_MIN_USABLE_WIDTH:
             return True
 
         splitter = column.parentWidget()
@@ -1464,7 +1521,7 @@ class AcquirePage(TabPage):
         # column available instead of staying at the corrupt one. Asking for
         # more than the donor's own minimum allows is harmless either way --
         # the splitter clamps the request.
-        target = min(total // 4, _RIGHT_DOCK_MAX_WIDTH)
+        target = min(total // 4, _TOOLS_DOCK_MAX_WIDTH)
         donor = max(donors, key=sizes.__getitem__)
         delta = min(target - sizes[idx], sizes[donor])
         if delta <= 0:
@@ -1477,7 +1534,7 @@ class AcquirePage(TabPage):
     def _lock_default_areas(self) -> bool:
         """(Re)install the width lock on the MDA area, if available.
 
-        The right tools column deliberately remains unlocked: locking it as
+        The tools column deliberately remains unlocked: locking it as
         soon as its first lazy dock is created can freeze QtADS's transient
         pre-layout width (often only 47--60 px).  It also must remain directly
         resizable without depending on hover detection to release a lock.
@@ -1491,7 +1548,7 @@ class AcquirePage(TabPage):
     def _column_widget(self, area: CDockAreaWidget) -> QWidget:
         """Return the outer splitter's direct child that *area* lives under.
 
-        ``_add_side_dock`` tabs every new right-side panel into one shared
+        ``_add_side_dock`` tabs every new tools panel into one shared
         area by default, in which case *area* already is that direct child --
         and the same is true of the MDA column, ``_add_dock``'s
         ``LeftDockWidgetArea`` default. But ADS lets the user drag *any* tab
@@ -1559,10 +1616,9 @@ class AcquirePage(TabPage):
         splitter = widget.parentWidget()
         if not isinstance(splitter, QSplitter):
             return False
-        # The leftmost column (MDA) has no handle to its left; every other
-        # column (e.g. the right/Groups & Presets column) has no handle to
-        # its right, since it's the last splitter child -- use whichever
-        # boundary actually exists.
+        # The leftmost column (the tools one) has no handle to its left, the
+        # rightmost (MDA) none to its right -- use whichever boundary actually
+        # exists: the one to the left of any column but the first.
         idx = splitter.indexOf(widget)
         handle = splitter.handle(idx if idx > 0 else idx + 1)
         if handle is None:
@@ -1699,21 +1755,21 @@ class AcquirePage(TabPage):
         self._dock_manager.addDockWidget(area, dock, into)
         return dock
 
-    def _resolve_right_dock_area(self) -> CDockAreaWidget | None:
-        """Return the live right-column area, re-deriving it if the cache is stale.
+    def _resolve_tools_dock_area(self) -> CDockAreaWidget | None:
+        """Return the live tools-column area, re-deriving it if the cache is stale.
 
         ADS destroys a dock area once its last dock widget leaves it, and
         ``restoreState`` rebuilds the whole tree -- either way the cached
         reference can end up wrapping a deleted C++ object, and docking *into*
         that would crash rather than tab. Re-derive from whichever side panel
-        is currently open before concluding there is no right column yet.
+        is currently open before concluding there is no tools column yet.
         """
-        area = self._right_dock_area
+        area = self._tools_dock_area
         if area is not None:
             with suppress(RuntimeError):
                 if area.dockWidgetsCount() > 0:
                     return area
-        self._right_dock_area = None
+        self._tools_dock_area = None
         for key, panel in self._panels.items():
             if key == PanelKey.MDA or panel.dock is None:
                 continue
@@ -1722,29 +1778,29 @@ class AcquirePage(TabPage):
                     continue
                 candidate = panel.dock.dockAreaWidget()
                 if candidate is not None and candidate is not self._central_dock_area:
-                    self._right_dock_area = candidate
+                    self._tools_dock_area = candidate
                     return candidate
         return None
 
     def _add_side_dock(self, name: str, title: str, widget: QWidget) -> CDockWidget:
-        """Add a dock to the right column, tabbing into it if one already exists.
+        """Add a dock to the tools column, tabbing into it if one already exists.
 
         Every panel that isn't explicitly placed elsewhere lands here, so a
-        widget being opened for the first time always appears in the right
-        sidebar -- as a new column if it's the only one there, tabbed
-        alongside its neighbours otherwise. The first call caps the column's
-        initial width at ``_RIGHT_DOCK_MAX_WIDTH``.
+        widget being opened for the first time always appears in the tools
+        column on the left -- as a new column if it's the only one there,
+        tabbed alongside its neighbours otherwise. The first call caps the
+        column's initial width at ``_TOOLS_DOCK_MAX_WIDTH``.
         """
-        if (right_area := self._resolve_right_dock_area()) is not None:
+        if (tools_area := self._resolve_tools_dock_area()) is not None:
             return self._add_dock(
                 name,
                 title,
                 widget,
                 DockWidgetArea.CenterDockWidgetArea,
-                right_area,
+                tools_area,
             )
-        dock = self._add_dock(name, title, widget, DockWidgetArea.RightDockWidgetArea)
-        self._right_dock_area = dock.dockAreaWidget()
+        dock = self._add_dock(name, title, widget, DockWidgetArea.LeftDockWidgetArea)
+        self._tools_dock_area = dock.dockAreaWidget()
         self._pin_dock_widths()
         # addDockWidget() has created the area, but QtADS does not insert and
         # lay out its new splitter child until control returns to the event
@@ -1988,7 +2044,7 @@ class AcquirePage(TabPage):
         """
         ok = self._relock_widths(pin=not self._layout_restored)
         if ok and self._layout_restored:
-            ok = self._widen_unusable_right_column()
+            ok = self._widen_unusable_tools_column()
         if not ok:
             self._width_settle_timer.start()
             return
