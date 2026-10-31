@@ -42,6 +42,7 @@ def test_modern_window_save_restore_state(
     assert prefs.acquire_panels == {
         PanelKey.MDA,
         PanelKey.PRESETS,
+        PanelKey.CHANNELS,
         PanelKey.EXCEPTION_LOG,
     }
     assert prefs.theme == "light"
@@ -83,6 +84,7 @@ def test_restore_state_on_fresh_settings_opens_only_defaults(
     acquire = win._acquire
     assert acquire.open_panels() == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.CHANNELS}
     assert sorted(acquire._dock_manager.dockWidgetsMap()) == [
+        "acquire_channels",
         "acquire_mda",
         "acquire_presets",
         "acquire_viewers",

@@ -359,7 +359,12 @@ def test_saving_a_layout_writes_it_and_makes_it_current(
 
     saved = load_layout("My rig")
     assert saved is not None
-    assert saved.panels == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.EXCEPTION_LOG}
+    assert saved.panels == {
+        PanelKey.MDA,
+        PanelKey.PRESETS,
+        PanelKey.CHANNELS,
+        PanelKey.EXCEPTION_LOG,
+    }
     assert page.layout_name == "My rig"
     assert "My rig" in available_layouts()
 
@@ -457,4 +462,4 @@ def test_selecting_a_vanished_layout_falls_back_to_the_default(
         page.select_layout("deleted-behind-our-back")
 
     assert page.layout_name == DEFAULT_LAYOUT_NAME
-    assert page.open_panels() == {PanelKey.MDA, PanelKey.PRESETS}
+    assert page.open_panels() == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.CHANNELS}
