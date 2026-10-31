@@ -162,10 +162,9 @@ class PreferencesDialog(QDialog):
     # ── Show Widgets ─────────────────────────────────────────────
 
     def _build_widgets_group(self, acquire_page: AcquirePage) -> QGroupBox:
-        """One checkbox per hideable panel; toggling applies immediately.
+        """One checkbox per panel; toggling applies immediately.
 
-        Replaces the old ⋯ customize menu -- same panels (every registry
-        entry except the always-visible MDA one). See
+        Replaces the old ⋯ customize menu -- one per registry entry. See
         :meth:`AcquirePage.set_panel_visible` for what checking/unchecking
         actually does (they're not symmetric).
         """
@@ -174,7 +173,7 @@ class PreferencesDialog(QDialog):
             "Choose which of the Acquire toolbar's tool buttons are shown.\n"
             "Takes effect immediately."
         )
-        # 2 columns rather than 1 -- six checkboxes in a single column reads
+        # 2 columns rather than 1 -- the checkboxes in a single column read
         # as a long, sparse list; a grid keeps the group compact.
         columns = 2
         layout = QGridLayout()
@@ -182,8 +181,7 @@ class PreferencesDialog(QDialog):
         layout.setVerticalSpacing(theme().sp_xs)
         hidden = acquire_page.hidden_panels()
         self._widget_checkboxes: dict[str, QCheckBox] = {}
-        hideable = [info for info in PANELS if not info.always_visible]
-        for index, info in enumerate(hideable):
+        for index, info in enumerate(PANELS):
             checkbox = QCheckBox(info.title)
             checkbox.setChecked(info.key not in hidden)
             checkbox.setToolTip(info.tooltip)

@@ -355,10 +355,7 @@ class PanelButtonBar(QWidget):
         return self._buttons[key]
 
     def set_button_visible(self, key: str, visible: bool) -> None:
-        """Show or hide *key*'s button. Always-visible panels ignore hiding."""
-        info = self._info_for(key)
-        if info.always_visible and not visible:
-            return
+        """Show or hide *key*'s button."""
         self._buttons[key].setVisible(visible)
 
     def hidden_keys(self) -> set[str]:
@@ -369,14 +366,7 @@ class PanelButtonBar(QWidget):
         default for existing users, instead of silently missing because it
         wasn't in their saved visible set.
         """
-        return {
-            info.key
-            for info in self._panels
-            if not info.always_visible and self._buttons[info.key].isHidden()
-        }
-
-    def _info_for(self, key: str) -> PanelInfo:
-        return next(info for info in self._panels if info.key == key)
+        return {info.key for info in self._panels if self._buttons[info.key].isHidden()}
 
     # ── theming ───────────────────────────────────────────────────
 

@@ -10,7 +10,7 @@ from functools import partial
 from typing import TYPE_CHECKING, cast
 
 from pymmcore_plus import CMMCorePlus
-from pymmcore_widgets.useq_widgets import PYMMCW_METADATA_KEY
+from pymmcore_widgets.useq_widgets import PYMMCW_METADATA_KEY, MDASequenceWidget
 
 from pymmcore_gui._array_viewer import (
     ensure_visible_icon,
@@ -625,7 +625,11 @@ class AcquirePage(TabPage):
             return
 
         outgoing = self._mda
-        sequence = outgoing.value()
+        # the editor's own state, not MDAWidget.value()'s run-ready sequence:
+        # that one resolves what a run needs from the core (notably a current
+        # stage position when the Positions axis is off), which setValue would
+        # then turn into a checked axis and a row in the incoming editor
+        sequence = MDASequenceWidget.value(outgoing)
         save_info = dict(outgoing.save_info.value())
         tiff_layout = outgoing.tiffLayout()
 

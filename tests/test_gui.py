@@ -801,8 +801,12 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert tab_bar is not None and tab_bar.isHidden()
 
     channels_section = tabs.section("c")
+    # every axis starts off, and the Channels section collapsed
+    assert not channels_section.expanded
+    assert not channels_section.checked
+    channels_section.set_checked(True)
+    channels_section.set_expanded(True)
     assert channels_section.expanded
-    assert channels_section.checked
     channels_section.set_expanded(False)
     assert channels_section.checked
     assert not channels_section.content_visible
@@ -2108,15 +2112,15 @@ def _toggle_widget_checkbox(
 def test_preferences_show_widgets_lists_hideable_panels(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    """Show Widgets offers every panel except the always-visible MDA one."""
+    """Show Widgets offers every panel, the MDA included."""
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
 
     checkboxes = _widgets_dialog(page, qtbot)._widget_checkboxes
-    assert list(checkboxes) == [info.key for info in PANELS if not info.always_visible]
+    assert list(checkboxes) == [info.key for info in PANELS]
     # Everything starts visible, so every entry starts checked.
     assert all(cb.isChecked() for cb in checkboxes.values())
-    assert PanelKey.MDA not in checkboxes
+    assert PanelKey.MDA in checkboxes
     assert not page.hidden_panels()
 
 
@@ -2172,15 +2176,23 @@ def test_preferences_show_widgets_recheck_stays_closed_if_it_was(
     assert page.panel_widget(PanelKey.CONSOLE) is None
 
 
-def test_acquire_set_panel_visible_cannot_hide_mda(
+def test_acquire_set_panel_visible_hides_and_restores_mda(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    """MDA is always_visible, so even a direct request can't hide its button."""
+    """The MDA panel can be hidden like any other, and comes back open."""
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
+    button = page.panel_button(PanelKey.MDA)
+    assert button.isChecked()  # open by default
 
     page.set_panel_visible(PanelKey.MDA, False)
-    assert not page.panel_button(PanelKey.MDA).isHidden()
+    assert button.isHidden()
+    assert not button.isChecked()
+    assert PanelKey.MDA in page.hidden_panels()
+
+    page.set_panel_visible(PanelKey.MDA, True)
+    assert not button.isHidden()
+    assert button.isChecked()
     assert PanelKey.MDA not in page.hidden_panels()
 
 
@@ -3835,6 +3847,10 @@ def test_collapsible_mda_retains_saving_and_execution_controls(
     mda = MemoryMDAWidget(mmcore)
     qtbot.addWidget(mda)
     tabs = mda._collapsible_tabs()
+    # every axis starts off: turn Channels on with a channel, so it has an
+    # enabled editor to lock and a value to save and restore
+    tabs.setChecked("c", True)
+    mda.channels.act_add_row.trigger()
 
     requested = tmp_path / "experiment.ome.tif"
     requested.touch()
@@ -4008,9 +4024,9 @@ def test_collapsible_mda_disables_every_editor_during_acquisition(
     qtbot.addWidget(mda)
     tabs = mda._collapsible_tabs()
 
-    # Turn every optional axis on so their editors are expected to be enabled
-    # while idle, and therefore disabled during the run.
-    for axis in "pgzt":
+    # Turn every axis on so their editors are expected to be enabled while
+    # idle, and therefore disabled during the run.
+    for axis in "cpgzt":
         tabs.setChecked(axis, True)
     tabs.saving_section.set_checked(True)
 

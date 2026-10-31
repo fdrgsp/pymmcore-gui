@@ -224,8 +224,6 @@ class PanelInfo:
     """Open in the built-in "Default" layout (see ``AcquirePage.reset_layout``)."""
     unstyle: bool = False
     refresh: Callable[[QWidget], None] | None = None
-    always_visible: bool = False
-    """If True, this panel's button can't be hidden from Preferences' Show Widgets."""
 
     @property
     def dock_name(self) -> str:
@@ -234,17 +232,6 @@ class PanelInfo:
 
 
 PANELS: Final[tuple[PanelInfo, ...]] = (
-    PanelInfo(
-        key=PanelKey.MDA,
-        title="MDA",
-        icon="proicons:cube",
-        tooltip="MDA — show or hide the multi-dimensional acquisition panel",
-        create=_create_mda,
-        area=DockWidgetArea.RightDockWidgetArea,
-        default_open=True,
-        refresh=_refresh_mda,
-        always_visible=True,
-    ),
     PanelInfo(
         key=PanelKey.PRESETS,
         title="Groups and Presets",
@@ -265,6 +252,16 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
         create=_create_channel_settings,
         default_open=True,
         refresh=_refresh_presets,
+    ),
+    PanelInfo(
+        key=PanelKey.MDA,
+        title="MDA",
+        icon="proicons:cube",
+        tooltip="MDA — show or hide the multi-dimensional acquisition panel",
+        create=_create_mda,
+        area=DockWidgetArea.RightDockWidgetArea,
+        default_open=True,
+        refresh=_refresh_mda,
     ),
     PanelInfo(
         key=PanelKey.PROPERTIES,
