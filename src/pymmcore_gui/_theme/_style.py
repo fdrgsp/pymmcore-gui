@@ -399,6 +399,11 @@ class MicroscopeStyle(QProxyStyle):
 
         match element:
             case PE.PE_FrameFocusRect:
+                # Like Fusion, only for keyboard-driven focus: a widget focused
+                # by a mouse click (e.g. a checkbox just toggled) keeps focus,
+                # and would otherwise keep the ring until focus moves elsewhere.
+                if not option.state & QStyle.StateFlag.State_KeyboardFocusChange:
+                    return
                 # Subtle accent focus ring instead of dotted rect
                 painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                 r = QRectF(option.rect).adjusted(0.5, 0.5, -0.5, -0.5)

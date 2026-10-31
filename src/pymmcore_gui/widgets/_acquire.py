@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, cast
 
 from pymmcore_plus import CMMCorePlus
 from pymmcore_widgets.useq_widgets import PYMMCW_METADATA_KEY, MDASequenceWidget
+from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import (
     ensure_visible_icon,
@@ -950,6 +951,7 @@ class AcquirePage(TabPage):
             panel.dock = self._add_dock(name, title, widget, panel.info.area)
         else:
             panel.dock = self._add_side_dock(name, title, widget)
+        self._apply_dock_tab_icon(panel)
         if panel.info.key == PanelKey.CHANNELS:
             # the panel is exactly as tall as its presets (a fixed height, see
             # ChannelSettingsTable): never squeeze it -- its minimum *size*, not
@@ -973,6 +975,19 @@ class AcquirePage(TabPage):
         # toggleView no-op when already in the target state), so this never
         # loops.
         panel.dock.viewToggled.connect(panel.button.setChecked)
+
+    def _apply_dock_tab_icon(self, panel: _Panel) -> None:
+        """Show the panel's toolbar-button icon in its dock tab.
+
+        Same glyph and color as ``PanelButtonBar._apply_icons``. QIconifyIcon
+        bakes its color in at construction, so ``changeEvent`` re-runs this
+        for every built dock on a theme change.
+        """
+        if panel.dock is None:
+            return
+        color = qcolor(theme().status_green).name()
+        with suppress(RuntimeError):
+            panel.dock.setIcon(QIconifyIcon(panel.info.icon, color=color))
 
     def _camera_roi_widget(self) -> CameraRoiWidget | None:
         """The Camera ROI panel's editor, if that panel has been created."""
@@ -1940,6 +1955,8 @@ class AcquirePage(TabPage):
                 self._apply_dock_style()
                 self._refresh_dock_icons()
                 self._refresh_dock_fonts()
+            for panel in getattr(self, "_panels", {}).values():
+                self._apply_dock_tab_icon(panel)
             self._apply_camera_roi_colors()
 
     def shutdown(self) -> None:
