@@ -125,7 +125,8 @@ def test_dropped_paths_accepts_supported_and_rejects_the_rest(
     assert paths == [good]
 
 
-def test_dropped_paths_empty_for_no_urls() -> None:
+def test_dropped_paths_empty_for_no_urls(qtbot: QtBot) -> None:
+    # qtbot for the QApplication _FakeDropEvent needs, as in the test above
     event = _FakeDropEvent([])
     assert MicroManagerGUI._dropped_acquisition_paths(event) == []  # type: ignore[arg-type]
 
