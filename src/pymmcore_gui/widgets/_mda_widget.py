@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -16,13 +15,11 @@ from pymmcore_widgets import (
 )
 from pymmcore_widgets._icons import StandardIcon
 from pymmcore_widgets.mda import (
-    ChannelProperty,
     CollapsibleCoreMDATabs,
     SectionMetrics,
     TopbarMDATabs,
 )
 from pymmcore_widgets.mda._collapsible_mda import _ClickableLabel
-from pymmcore_widgets.mda._core_channels import NO_LIGHT_SOURCE
 from pymmcore_widgets.useq_widgets._positions import MDAButton
 from superqt.iconify import QIconifyIcon
 
@@ -32,10 +29,7 @@ from pymmcore_gui._array_viewer import (
     set_source_icon,
     unstyle_widgets,
 )
-from pymmcore_gui._light_sources import (
-    parse_light_source_comments,
-    write_light_source_comments,
-)
+from pymmcore_gui._channel_settings_store import channel_settings_store
 from pymmcore_gui._qt.QtCore import (
     QEvent,
     QModelIndex,
@@ -49,7 +43,6 @@ from pymmcore_gui._qt.QtGui import QPainter, QPixmap
 from pymmcore_gui._qt.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
-    QFileDialog,
     QGridLayout,
     QLabel,
     QMessageBox,
@@ -61,10 +54,9 @@ from pymmcore_gui._settings import Settings
 from pymmcore_gui._theme import qcolor, theme
 from pymmcore_gui.widgets._busy import BusyOverlay
 
-from ._active_channel_table import (
-    CURRENT_CHANNEL_COLUMN,
-    ActiveChannelCollapsibleCoreMDATabs,
-    ActiveChannelTopbarMDATabs,
+from ._mda_tabs import (
+    GuiCollapsibleCoreMDATabs,
+    GuiTopbarMDATabs,
     install_third_party_window_theming,
 )
 
@@ -78,7 +70,7 @@ if TYPE_CHECKING:
 
     from pymmcore_gui._qt.QtGui import QResizeEvent
 
-    from ._active_channel_table import ActiveChannelTable
+    from ._mda_channel_table import MDAChannelTable
 
 # Qt's "no maximum", needed to undo a setFixedHeight before recomputing it.
 QWIDGETSIZE_MAX = (1 << 24) - 1
@@ -271,23 +263,18 @@ class MemoryMDAWidgetBase(_MixinBase):
         _settings_box: Any
 
     # ----------- Override type hints in superclass -----------
-    # _create_tab_widget above always installs an ActiveChannelTable, which adds
-    # activeRow/setActiveRow to the upstream CoreConnectedChannelTable
+    # _create_tab_widget above always installs an MDAChannelTable, which adds
+    # the settings store link to the upstream CoreConnectedChannelTable
     # interface; narrow the property's declared return type to match.
 
     @property
-    def channels(self) -> ActiveChannelTable:
-        return cast("ActiveChannelTable", super().channels)
+    def channels(self) -> MDAChannelTable:
+        return cast("MDAChannelTable", super().channels)
 
     def __init__(self, mmcore: CMMCorePlus, parent: QWidget | None = None) -> None:
         self._restoring_sequence = False
-        self._applying_channel_config = False
         self._cancel_requested = False
         self._mda_locked = False
-        # {channel preset: [(device, property, intensity), ...]}, parsed from the
-        # loaded cfg's comment block. Held in memory rather than re-read per use, so
-        # it stays right after saving to a *different* file than the loaded one.
-        self._light_source_declarations: dict[str, list[tuple[str, str, float]]] = {}
         super().__init__(parent=parent, mmcore=mmcore)
         install_third_party_window_theming()
         self._update_time_estimate()
@@ -321,18 +308,6 @@ class MemoryMDAWidgetBase(_MixinBase):
         ):
             btn.setProperty("variant", "subtle")
 
-        # Goes after the stretch that follows the upstream "Show Light Source" /
-        # "Advanced" checkboxes, so it right-aligns in that row. Created before the
-        # unstyle_widgets sweep below so it gets themed with everything else.
-        self._save_light_sources_btn = QPushButton("Save Light Sources to cfg")
-        self._save_light_sources_btn.setToolTip(
-            "Write each channel's light source into a Micro-Manager configuration "
-            "file, so it is restored the next time that file is loaded."
-        )
-        self._save_light_sources_btn.setProperty("variant", "subtle")
-        self._save_light_sources_btn.clicked.connect(self._save_light_sources_to_config)
-        self.channels._btn_row.insertWidget(3, self._save_light_sources_btn)
-
         # All sub-tabs (Channels/Positions/Z/Time/Grid) are constructed
         # eagerly by CoreMDATabs.create_subwidgets() during super().__init__,
         # so one recursive sweep here reaches every descendant -- strips
@@ -345,7 +320,6 @@ class MemoryMDAWidgetBase(_MixinBase):
         # and indicator. Re-apply it here (and after each row insert below).
         self._collapsible_tabs().apply_save_body_style()
         self._apply_table_toolbar_icon_size()
-        self.channels.apply_theme_metrics()
 
         # Channels/Positions/Time are tables: each row is a fresh cell widget
         # built on demand (e.g. the Positions row's black "mdi:grid" per-
@@ -358,7 +332,6 @@ class MemoryMDAWidgetBase(_MixinBase):
             model = table_widget.table().model()
             if model is not None:
                 model.rowsInserted.connect(self._on_table_rows_inserted)
-        self.channels.channelAdded.connect(self._on_channel_added)
 
         # Upstream replaces Pause/Resume icons whenever acquisition state
         # changes. Re-apply our semantic colors after those runtime swaps.
@@ -366,16 +339,14 @@ class MemoryMDAWidgetBase(_MixinBase):
         self._mmc.mda.events.sequenceFinished.connect(self._apply_themed_icons)
         self._connect_position_icon_updates()
         self._apply_themed_icons()
-        self._connect_channel_selection()
 
-        # Connected here rather than in the table itself so it runs *after*
-        # CoreConnectedChannelTable's own systemConfigurationLoaded handler, which
-        # rebuilds the light source combo we are about to pick an entry from.
-        self._mmc.events.systemConfigurationLoaded.connect(
-            self._reload_light_source_declarations
-        )
-        # a configuration is usually already loaded by the time this is constructed
-        self._reload_light_source_declarations()
+        # Link the channel rows to the per-preset settings the Channels panel
+        # edits: new rows start from them, and user edits are stored back.
+        self.channels.setSettingsStore(channel_settings_store(mmcore))
+        self.channels.applyStoredSettings(range(self.channels.table().rowCount()))
+        if (model := self.channels.table().model()) is not None:
+            model.columnsInserted.connect(self._schedule_channel_editor_filters)
+        self._install_channel_editor_filters()
 
         # CoreXYBoundsControl swaps each edge button's icon whenever its
         # Mark/Move action changes.  That replacement installs the upstream
@@ -516,47 +487,36 @@ class MemoryMDAWidgetBase(_MixinBase):
                 self._relay_sequence_finished
             )
             self.control_btns.cancel_btn.released.disconnect(self._on_cancel_requested)
-            self._mmc.events.systemConfigurationLoaded.disconnect(
-                self._reload_light_source_declarations
-            )
         super()._disconnect()
 
     def _on_table_rows_inserted(
         self, _parent: QModelIndex, first: int, last: int
     ) -> None:
-        """Theme new cells and initialize only the newly added channel rows."""
+        """Theme new cells and give new channel rows their presets' settings."""
         unstyle_widgets(self)
         self._collapsible_tabs().apply_save_body_style()
         self._install_channel_editor_filters()
         self._connect_position_icon_updates()
         self._apply_themed_icons()
-        if self.sender() is self.channels.table().model():
-            self._apply_light_source_declarations(range(first, last + 1))
-        self.channels.apply_theme_metrics()
-
-    def _on_channel_added(self, row: int, restored: bool) -> None:
-        """Apply the chosen preset's declaration after its row is initialized."""
-        if not restored:
-            self._apply_light_source_declarations([row], clear_missing=True)
+        if (
+            self.sender() is self.channels.table().model()
+            and not self._restoring_sequence
+        ):
+            self.channels.applyStoredSettings(range(first, last + 1))
 
     def setValue(self, value: useq.MDASequence) -> None:
-        """Restore an MDA sequence without applying a selected row to the core."""
-        selected = self._selected_channel_identity()
-        selected_row = self.channels.activeRow()
+        """Restore an MDA sequence, keeping its own channel settings."""
         self._restoring_sequence = True
         try:
             super().setValue(value)
-            self._restore_channel_selection(selected, selected_row)
         finally:
             self._restoring_sequence = False
         self._flavor_refresh_summaries()
 
     def refresh_channel_table(self) -> None:
-        """Refresh core-backed channel choices without changing microscope state."""
+        """Refresh core-backed channel choices, keeping the rows."""
         channels = self.channels
         table = channels.table()
-        selected = self._selected_channel_identity()
-        selected_row = channels.activeRow()
         values = channels.value(exclude_unchecked=False)
         properties = channels.channelProperties(exclude_unchecked=False)
         light_sources_visible = channels.lightSourceVisible()
@@ -591,174 +551,9 @@ class MemoryMDAWidgetBase(_MixinBase):
                         selector_col,
                         cast("bool", check_state),
                     )
-            self._restore_channel_selection(selected, selected_row)
         finally:
             self._restoring_sequence = False
-        # After the guard is cleared, so the declarations actually apply: the
-        # snapshot restored above predates whatever configuration change prompted
-        # this refresh, and the loaded cfg is the more authoritative source.
-        self._apply_light_source_declarations()
         self._flavor_refresh_summaries()
-
-    # ------------- light source declarations (see LIGHT_SOURCE_COMMENT) ---------
-
-    def _reload_light_source_declarations(self) -> None:
-        """Re-read the declaration block from the newly loaded cfg, and apply it."""
-        self._light_source_declarations = parse_light_source_comments(
-            self._mmc.systemConfigurationFile() or "", self._mmc.getChannelGroup()
-        )
-        self._apply_light_source_declarations()
-
-    def _apply_light_source_declarations(
-        self, rows: Iterable[int] | None = None, clear_missing: bool = False
-    ) -> None:
-        """Select each row's declared light source and default intensity.
-
-        Only rows whose channel preset is declared in the cfg are touched; there is
-        deliberately no fallback that infers a light source from a channel preset's
-        own properties, so an undeclared channel simply has none. Pass
-        ``clear_missing`` to also reset rows whose preset is undeclared (used when
-        the user picks a different preset for a row).
-        """
-        if self._restoring_sequence:
-            return
-        channels = self.channels.value(exclude_unchecked=False)
-        indices = range(len(channels)) if rows is None else rows
-
-        # A declaration listing several properties is one multi-slider light source
-        # (e.g. a Lumencor LIDA): map the whole pair set back to the single-preset
-        # config group entry whose one spin box drives all of them at once.
-        by_pairs = {
-            frozenset(pairs): label
-            for label, pairs in self.channels.lightSources().items()
-        }
-
-        props: list[ChannelProperty] = []
-        for row in indices:
-            if not 0 <= row < len(channels):  # pragma: no cover
-                continue
-            preset = str(channels[row].config or "")
-            if entries := self._light_source_declarations.get(preset):
-                pairs = [(device, prop) for device, prop, _ in entries]
-                # An unmatched pair set leaves the label empty, and
-                # setChannelProperties then resolves each entry by (device,
-                # property) instead -- which is what a single-property declaration
-                # wants anyway, and which drops a declaration naming a property
-                # this configuration does not offer.
-                label = by_pairs.get(frozenset(pairs), "")
-                props.extend(
-                    ChannelProperty(
-                        channel_index=row,
-                        config=preset,
-                        group=label,
-                        device=device,
-                        property=prop,
-                        value=entries[0][2],
-                    )
-                    for device, prop in pairs
-                )
-            elif clear_missing:
-                self._clear_light_source(row)
-        if props:
-            self.channels.setChannelProperties(props)
-
-    def _clear_light_source(self, row: int) -> None:
-        """Reset one row's light source and intensity to "none"."""
-        channels = self.channels
-        table = channels.table()
-        ls_col = table.indexOf(channels._light_source_column)
-        int_col = table.indexOf(channels.INTENSITY)
-        if ls_col < 0 or int_col < 0:  # pragma: no cover
-            return
-        # Left unblocked on purpose: the resulting valueChanged drives upstream's
-        # _sync_intensity_widgets, which re-ranges and disables the spin box.
-        channels._light_source_column.set_cell_data(table, row, ls_col, NO_LIGHT_SOURCE)
-        channels.INTENSITY.set_cell_data(table, row, int_col, 0.0)
-
-    def _save_light_sources_to_config(self) -> None:
-        """Save the whole cfg to a file, with the light source declarations appended.
-
-        The block is rewritten from scratch so a light source the user cleared
-        actually disappears, and two rows sharing one channel preset collapse to a
-        single declaration (the later row wins). The configuration itself is dumped
-        from the core, so uncommitted edits in the Hardware Setup page are not
-        included.
-        """
-        if not (channel_group := self._mmc.getChannelGroup()):
-            QMessageBox.warning(
-                self,
-                "Save Light Sources",
-                "No channel group is set on the current configuration, so there is "
-                "nothing to attach the light sources to.",
-            )
-            return
-        if not self.channels.lightSourceVisible():
-            QMessageBox.warning(
-                self,
-                "Save Light Sources",
-                "Light sources are turned off. Check 'Show Light Source' and pick "
-                "the light source for each channel before saving.",
-            )
-            return
-
-        current = self._mmc.systemConfigurationFile() or ""
-        path_str, _ = QFileDialog.getSaveFileName(
-            self, "Save Micro-Manager configuration file", current, "cfg(*.cfg)"
-        )
-        if not path_str:
-            return
-        path = Path(path_str)
-        if path.suffix.lower() != ".cfg":
-            path = path.with_suffix(".cfg")
-
-        by_row: dict[int, list[ChannelProperty]] = defaultdict(list)
-        for entry in self.channels.channelProperties(exclude_unchecked=False):
-            by_row[entry["channel_index"]].append(entry)
-        declarations: dict[str, list[tuple[str, str, float]]] = {}
-        for row, channel in enumerate(self.channels.value(exclude_unchecked=False)):
-            if (preset := str(channel.config or "")) and (entries := by_row.get(row)):
-                declarations[preset] = [
-                    (entry["device"], entry["property"], float(entry["value"]))
-                    for entry in entries
-                ]
-
-        try:
-            # dumps the configuration itself; comments do not survive this, which is
-            # why the declaration block is appended afterwards rather than merged
-            self._mmc.saveSystemConfiguration(str(path))
-            write_light_source_comments(path, channel_group, declarations)
-        except Exception as exc:
-            QMessageBox.critical(
-                self, "Save Light Sources", f"Could not save {path}:\n{exc}"
-            )
-            return
-        # The core is untouched by all of this, so the table needs no refresh -- but
-        # what was just written is now what a reload of this file would restore.
-        self._light_source_declarations = declarations
-
-    def _connect_channel_selection(self) -> None:
-        table = self.channels.table()
-        selection_model = table.selectionModel()
-        if selection_model is None:  # pragma: no cover
-            return
-        # Hardware fires only from a click on the ● column here; the Config
-        # combo's own activation (connected in _install_channel_editor_filters)
-        # is the other trigger.
-        table.clicked.connect(self._on_channel_cell_clicked)
-        # QAbstractItemView syncs currentIndex to whichever cell widget last
-        # took focus (e.g. clicking into the Exposure/Intensity spin box) --
-        # entirely internal to Qt, so it can't be stopped by filtering mouse or
-        # focus events. Snap it back to the active row whenever that happens.
-        selection_model.currentRowChanged.connect(self._on_table_current_row_changed)
-        model = table.model()
-        if model is not None:
-            model.columnsInserted.connect(self._schedule_channel_editor_filters)
-        self._install_channel_editor_filters()
-
-        # Reverse sync: when the active preset changes on the core from
-        # anywhere else (setConfig, the Groups & Presets table, etc.), update
-        # the ● indicator and select the matching row to reflect the new state.
-        self._mmc.events.configSet.connect(self._on_core_config_set)
 
     def _schedule_channel_editor_filters(self, *_: object) -> None:
         # columnsInserted fires from insertColumn(), before DataTable.addColumn()
@@ -768,21 +563,24 @@ class MemoryMDAWidgetBase(_MixinBase):
         QTimer.singleShot(0, self._install_channel_editor_filters)
 
     def _install_channel_editor_filters(self) -> None:
-        """Wire up the two ways to move hardware, and the live-apply editors.
+        """Connect the editors whose user edits change a channel's settings.
 
-        A row's Config combo `activated` signal (user-only; a programmatic
-        `currentTextChanged` during a sequence restore/refresh must not move
-        hardware) applies that channel, same as clicking the ● column. A row's
-        Exposure/Intensity spin box `editingFinished` pushes a live edit of the
-        *active* row to hardware (see _on_channel_value_committed) but never
-        moves the row highlight -- see _on_table_current_row_changed, which
-        undoes Qt's own focus-driven selection change for every other column.
+        A row's Config combo switching to another preset gives the row that
+        preset's settings; an edit of its exposure, light source, intensity or
+        camera properties is stored for its preset. Only user-driven signals are
+        used -- ``activated`` and ``editingFinished`` -- so that restoring a
+        sequence or rebuilding a column never overwrites a preset's settings.
         """
-        table = self.channels.table()
+        channels = self.channels
+        table = channels.table()
         try:
-            config_col = table.indexOf(self.channels._config_column)
-            exposure_col = table.indexOf(self.channels.EXPOSURE)
-            intensity_col = table.indexOf(self.channels.INTENSITY)
+            config_col = table.indexOf(channels._config_column)
+            settings_cols = {
+                table.indexOf(channels.EXPOSURE),
+                table.indexOf(channels.INTENSITY),
+                table.indexOf(channels._light_source_column),
+                *(table.indexOf(info) for info in channels._camera_columns.values()),
+            }
         except RuntimeError:
             # A zero-delay install queued during table construction may outlive
             # the widget when a window is closed immediately afterward. PySide6
@@ -790,38 +588,39 @@ class MemoryMDAWidgetBase(_MixinBase):
             return
         for row in range(table.rowCount()):
             for col in range(table.columnCount()):
-                cell = table.cellWidget(row, col)
-                if cell is None:
+                if (cell := table.cellWidget(row, col)) is None:
                     continue
+                if col in settings_cols:
+                    self._connect_channel_editor(cell, self._on_channel_settings_edited)
+                elif col == config_col:
+                    for combo in ((cell,) if isinstance(cell, QComboBox) else ()) + (
+                        tuple(cell.findChildren(QComboBox))
+                    ):
+                        self._connect_channel_editor(
+                            combo, self._on_channel_config_activated
+                        )
 
-                if col == config_col:
-                    combos = ((cell,) if isinstance(cell, QComboBox) else ()) + tuple(
-                        cell.findChildren(QComboBox)
-                    )
-                    for combo in combos:
-                        if combo.property("_pymmcore_gui_channel_combo_connected"):
-                            continue
-                        combo.setProperty("_pymmcore_gui_channel_combo_connected", True)
-                        # activated is user-only.  currentTextChanged would also
-                        # fire while loading/refreshing an MDA and could move
-                        # hardware.
-                        #
-                        # The declaration must be applied first: it updates this
-                        # row's Light Source/Intensity, which the apply-to-core
-                        # below then pushes to hardware.
-                        combo.activated.connect(self._on_channel_config_activated)
-                        combo.activated.connect(self._on_channel_combo_activated)
-                elif col in (exposure_col, intensity_col) and isinstance(
-                    cell, QDoubleSpinBox
-                ):
-                    if cell.property("_pymmcore_gui_channel_value_connected"):
-                        continue
-                    cell.setProperty("_pymmcore_gui_channel_value_connected", True)
-                    # editingFinished is user-only (Enter or focus-out) and, unlike
-                    # valueChanged, never fires from a programmatic setValue() --
-                    # e.g. while restoring a sequence or re-ranging the intensity
-                    # spin box for a new light source.
-                    cell.editingFinished.connect(self._on_channel_value_committed)
+    def _connect_channel_editor(self, cell: QWidget, slot: Any) -> None:
+        if cell.property("_pymmcore_gui_channel_editor_connected"):
+            return
+        cell.setProperty("_pymmcore_gui_channel_editor_connected", True)
+        if isinstance(cell, QComboBox):
+            cell.activated.connect(slot)
+        elif isinstance(cell, QDoubleSpinBox):
+            cell.editingFinished.connect(slot)
+
+    def _on_channel_settings_edited(self, *_: object) -> None:
+        if self._restoring_sequence:
+            return
+        index = self._channel_index_for_editor(self.sender())
+        if index.isValid():
+            self.channels.storeRowSettings(index.row())
+
+    def _on_channel_config_activated(self, *_: object) -> None:
+        """Give a row switched to another preset that preset's settings."""
+        index = self._channel_index_for_editor(self.sender())
+        if index.isValid():
+            self.channels.restoreChannelSettings(index.row())
 
     def _channel_index_for_editor(self, editor: QObject | None) -> QModelIndex:
         if not isinstance(editor, QWidget):
@@ -836,224 +635,6 @@ class MemoryMDAWidgetBase(_MixinBase):
                 if cell is editor or (cell is not None and cell.isAncestorOf(editor)):
                     return model.index(row, col)
         return QModelIndex()
-
-    def _on_channel_combo_activated(self, *_: object) -> None:
-        """Apply a channel to the microscope, same as clicking the ● column.
-
-        Only for the *active* row, though: picking a new value in a row that
-        ISN'T already active just updates that row's stored channel for later
-        use -- it doesn't move hardware or change which row is active.
-        Otherwise, switching which channel is loaded on the microscope while
-        merely reconfiguring some other row (e.g. typing a new value into a
-        row below the active one) would be a surprising side effect.
-        """
-        index = self._channel_index_for_editor(self.sender())
-        if not index.isValid() or index.row() != self.channels.activeRow():
-            return
-        self._on_channel_row_selected(index)
-
-    def _on_channel_config_activated(self, *_: object) -> None:
-        """Restore matching settings or the new preset's light declaration.
-
-        Unlike _on_channel_combo_activated this applies to *any* row, not just the
-        active one: the row now holds a different channel, so its light source
-        should describe that channel whether or not hardware moves.
-        """
-        index = self._channel_index_for_editor(self.sender())
-        if index.isValid():
-            if not self.channels.restoreChannelSettings(index.row()):
-                self._apply_light_source_declarations([index.row()], clear_missing=True)
-
-    def _on_channel_cell_clicked(self, index: QModelIndex) -> None:
-        """Apply a channel to the microscope only when the ● column is clicked."""
-        if not index.isValid() or self._restoring_sequence:
-            return
-        current_col = self.channels.table().indexOf(CURRENT_CHANNEL_COLUMN)
-        if index.column() != current_col:
-            return
-        self._on_channel_row_selected(index)
-
-    def _on_channel_value_committed(self, *_: object) -> None:
-        """Push a live-edited exposure/intensity value to the microscope.
-
-        Fires when the user finishes editing the active row's Exposure or
-        Intensity spin box (Enter or focus-out). Only while a sequence (live) is
-        running: idle edits still follow the just-in-time rule and only take
-        effect at the next capture. Edits to a row other than the active one
-        never move hardware -- they just update the table for later use.
-        """
-        if self._restoring_sequence or self._applying_channel_config:
-            return
-        if not self._mmc.isSequenceRunning():
-            return
-        index = self._channel_index_for_editor(self.sender())
-        if not index.isValid() or index.row() != self.channels.activeRow():
-            return
-        self._apply_channel_row_to_core(index.row(), include_capture_settings=True)
-
-    def _on_table_current_row_changed(
-        self, current: QModelIndex, previous: QModelIndex
-    ) -> None:
-        """Snap the row highlight back to the active row if anything else moved it.
-
-        QAbstractItemView makes a cell widget's row "current" as soon as that
-        widget gains keyboard focus -- e.g. simply clicking into the Exposure or
-        Intensity spin box -- entirely internal to Qt, so it can't be stopped by
-        filtering mouse or focus events. Undo that drift immediately (before any
-        repaint, so there's no visible flicker) so the highlighted row always
-        matches setActiveRow and nothing else. A legitimate change (the ● column
-        or the Config combo, both via setActiveRow) already left the active row
-        equal to ``current``, so this is a no-op for those -- and re-asserting
-        via setActiveRow (rather than duplicating its table calls here) means
-        this converges after one bounce instead of looping.
-        """
-        active = self.channels.activeRow()
-        if current.row() != active:
-            self.channels.setActiveRow(active)
-
-    def _on_channel_row_selected(self, current: QModelIndex, *_: object) -> None:
-        """Activate a channel on the microscope and update the ● indicator.
-
-        Called when the user clicks the ● indicator column, and exposed for
-        programmatic use (e.g. during tests and sequence-running channel switches).
-        """
-        if (
-            self._restoring_sequence
-            or self._applying_channel_config
-            or not current.isValid()
-        ):
-            return
-        row = current.row()
-        self.channels.setActiveRow(row)
-        self._apply_channel_row_to_core(
-            row,
-            include_capture_settings=self._mmc.isSequenceRunning(),
-        )
-
-    def _on_core_config_set(self, group: str, preset: str) -> None:
-        """Select the matching row when the active preset changes on the core.
-
-        Fires from ``configSet`` whenever any config changes (e.g. from the
-        Groups & Presets table, not just this widget). Only the channel group
-        is mirrored — other config groups (objective, etc.) are ignored.
-        Guarded against the table→core path so we don't loop. setActiveRow
-        handles both the ● indicator and the row highlight.
-        """
-        if self._applying_channel_config or self._restoring_sequence:
-            return
-        if group != self._mmc.getChannelGroup():
-            return
-        self.channels.setActiveRow(self._find_channel_row(preset))
-
-    def _find_channel_row(self, preset: str) -> int:
-        """Row whose channel config == ``preset``, preferring a checked one."""
-        table = self.channels.table()
-        channels = self.channels.value(exclude_unchecked=False)
-        selector_col = table._get_selector_col()
-        selector = table.columnInfo(selector_col)
-        match = -1
-        for row, channel in enumerate(channels):
-            if str(channel.config or "") != preset:
-                continue
-            if match < 0:
-                match = row
-            if selector is not None and selector.isChecked(table, row, selector_col):
-                return row
-        return match
-
-    def apply_active_channel_for_capture(self) -> bool:
-        """Apply the active row's channel, exposure, and property before imaging.
-
-        The acquisition checkbox is intentionally ignored: it controls inclusion in
-        an MDA, while the table's current row is the independent live/snap selection.
-        """
-        return self._apply_channel_row_to_core(
-            self.channels.activeRow(),
-            include_capture_settings=True,
-        )
-
-    def _apply_channel_row_to_core(
-        self, row: int, *, include_capture_settings: bool = False
-    ) -> bool:
-        if self._restoring_sequence or self._applying_channel_config:
-            return False
-
-        channels = self.channels.value(exclude_unchecked=False)
-        if not 0 <= row < len(channels):
-            return False
-
-        channel = channels[row]
-        config = str(channel.config or "")
-        if not config:
-            return False
-
-        available_groups = set(self._mmc.getAvailableConfigGroups())
-        group = str(channel.group or "")
-        current_channel_group = self._mmc.getChannelGroup()
-        if not group or (group == "Channel" and group not in available_groups):
-            group = current_channel_group
-        if not group or group not in available_groups:
-            return False
-        if config not in self._mmc.getAvailableConfigs(group):
-            return False
-
-        self._applying_channel_config = True
-        try:
-            if self._mmc.getCurrentConfig(group) != config:
-                self._mmc.setConfig(group, config)
-
-            if include_capture_settings:
-                # Ensure any device delays from the selected optical preset have
-                # completed before exposure/property settings and imaging.
-                self._mmc.waitForConfig(group, config)
-
-                if channel.exposure is not None:
-                    self._mmc.setExposure(float(channel.exposure))
-                    if camera := self._mmc.getCameraDevice():
-                        self._mmc.waitForDevice(camera)
-
-                # Although today's table exposes one ranged property per
-                # channel, iterate all matching entries so this remains correct if
-                # the upstream model later permits multiple ranged properties.
-                for entry in self.channels.channelProperties(exclude_unchecked=False):
-                    if entry["channel_index"] != row:
-                        continue
-                    device = entry["device"]
-                    prop = entry["property"]
-                    self._mmc.setProperty(device, prop, entry["value"])
-                    self._mmc.waitForDevice(device)
-        finally:
-            self._applying_channel_config = False
-        return True
-
-    def _selected_channel_identity(self) -> tuple[str, str] | None:
-        row = self.channels.activeRow()
-        channels = self.channels.value(exclude_unchecked=False)
-        if not 0 <= row < len(channels):
-            return None
-        channel = channels[row]
-        return str(channel.group or ""), str(channel.config or "")
-
-    def _restore_channel_selection(
-        self,
-        identity: tuple[str, str] | None,
-        preferred_row: int = -1,
-    ) -> None:
-        """Restore the ● row (and its highlight, via setActiveRow) after a rebuild."""
-        if identity is None:
-            return
-        channels = self.channels.value(exclude_unchecked=False)
-        if 0 <= preferred_row < len(channels):
-            channel = channels[preferred_row]
-            candidate = str(channel.group or ""), str(channel.config or "")
-            if candidate == identity:
-                self.channels.setActiveRow(preferred_row)
-                return
-        for row, channel in enumerate(channels):
-            candidate = str(channel.group or ""), str(channel.config or "")
-            if candidate == identity:
-                self.channels.setActiveRow(row)
-                return
 
     def _collapsible_tabs(self) -> Any:
         """The tab widget, whichever presentation this flavour installed."""
@@ -1232,7 +813,6 @@ class MemoryMDAWidgetBase(_MixinBase):
             self._apply_themed_icons()
             self._apply_theme_metrics()
             self._apply_table_toolbar_icon_size()
-            self.channels.apply_theme_metrics()
 
     # ------------------------- OME-TIFF layout option -------------------------
 
@@ -1353,7 +933,7 @@ class MemoryMDAWidget(MemoryMDAWidgetBase, MDAWidgetCollapsible):
     """
 
     def _create_tab_widget(self) -> CollapsibleCoreMDATabs:
-        return ActiveChannelCollapsibleCoreMDATabs(None, self._mmc)
+        return GuiCollapsibleCoreMDATabs(None, self._mmc)
 
     def _flavor_apply_theme_metrics(self) -> None:
         self.set_section_metrics(_section_metrics())
@@ -1396,7 +976,7 @@ class TopbarMemoryMDAWidget(MemoryMDAWidgetBase, MDAWidgetTopbar):
     """
 
     def _create_tab_widget(self) -> TopbarMDATabs:
-        return ActiveChannelTopbarMDATabs(None, self._mmc)
+        return GuiTopbarMDATabs(None, self._mmc)
 
     def _enable_widgets(self, enable: bool) -> None:
         """Disable editors while keeping the topbar footer controls clickable.

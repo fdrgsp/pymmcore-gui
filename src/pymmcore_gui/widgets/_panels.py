@@ -36,6 +36,7 @@ class PanelKey:
     CAMERA_ROI: Final = "camera_roi"
     STAGE_EXPLORER: Final = "stage_explorer"
     PRESETS: Final = "presets"
+    CHANNELS: Final = "channels"
     PROPERTIES: Final = "properties"
     STAGES: Final = "stages"
     CONSOLE: Final = "console"
@@ -95,6 +96,12 @@ MDA_WIDGET_FACTORIES: Final[dict[str, PanelFactory]] = {
     MdaKind.COLLAPSIBLE: _create_mda,
     MdaKind.TOPBAR: _create_mda_topbar,
 }
+
+
+def _create_channel_settings(_parent: QWidget, core: CMMCorePlus) -> QWidget:
+    from pymmcore_gui.widgets._channel_settings import ChannelSettingsPanel
+
+    return ChannelSettingsPanel(core)
 
 
 def _create_presets(_parent: QWidget, core: CMMCorePlus) -> QWidget:
@@ -242,6 +249,17 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
         tooltip="Groups and Presets — show or hide the group/preset panel",
         create=_create_presets,
         default_open=True,
+        refresh=_refresh_presets,
+    ),
+    PanelInfo(
+        key=PanelKey.CHANNELS,
+        title="Channels",
+        icon="mdi:tune-variant",
+        tooltip=(
+            "Channels — the exposure, light source and camera settings of each "
+            "channel preset, used by new MDA channels"
+        ),
+        create=_create_channel_settings,
         refresh=_refresh_presets,
     ),
     PanelInfo(

@@ -17,9 +17,9 @@ from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import set_source_icon
 from pymmcore_gui._light_sources import (
-    Declarations,
-    parse_light_source_comments,
-    write_light_source_comments,
+    ChannelDeclarations,
+    parse_channel_comments,
+    write_channel_comments,
 )
 from pymmcore_gui._qt.QtCore import QEvent, QSize, Qt
 from pymmcore_gui._qt.QtWidgets import (
@@ -317,8 +317,8 @@ class HardwareSetupPage(TabPage):
     def save_to(self, path: str) -> bool:
         """Write the full configuration to `path`, asking nothing about where."""
         # Decided before the write, because model.save() regenerates the .cfg from
-        # scratch and drops the per-channel light source comments it may hold.
-        light_sources = self._light_sources_to_preserve(Path(path))
+        # scratch and drops the per-channel settings comments it may hold.
+        channel_settings = self._channel_settings_to_preserve(Path(path))
 
         # Config groups and pixel-size configs are edited on the Configurations
         # tab, which commits them to the live core. Pull those into the model so
@@ -332,9 +332,9 @@ class HardwareSetupPage(TabPage):
             self._model.core_device.update_from_core(self._core)
         try:
             self._model.save(path)
-            if light_sources:
-                write_light_source_comments(
-                    Path(path), self._core.getChannelGroup(), light_sources
+            if channel_settings:
+                write_channel_comments(
+                    Path(path), self._core.getChannelGroup(), channel_settings
                 )
         except Exception as e:
             self._warn(f"Failed to save {path}:\n\n{e}")
@@ -344,8 +344,8 @@ class HardwareSetupPage(TabPage):
         self._status(f"Saved {Path(path).name}")
         return True
 
-    def _light_sources_to_preserve(self, path: Path) -> Declarations:
-        """Ask whether to carry over the light sources of the file being overwritten.
+    def _channel_settings_to_preserve(self, path: Path) -> ChannelDeclarations:
+        """Ask whether to carry over the channel settings of the overwritten file.
 
         Only declarations naming a channel preset this configuration still defines
         are offered: one for a channel that no longer exists is dead weight, and is
@@ -353,7 +353,7 @@ class HardwareSetupPage(TabPage):
         """
         if not path.is_file() or not (channel_group := self._core.getChannelGroup()):
             return {}
-        declarations = parse_light_source_comments(path, channel_group)
+        declarations = parse_channel_comments(path, channel_group)
         presets = set(self._core.getAvailableConfigs(channel_group))
         kept = {p: entries for p, entries in declarations.items() if p in presets}
         if not kept:
@@ -362,8 +362,8 @@ class HardwareSetupPage(TabPage):
         plural = "s" if len(kept) > 1 else ""
         reply = QMessageBox.question(
             self,
-            "Light Sources",
-            f"Do you want to keep the light source info "
+            "Channel Settings",
+            f"Do you want to keep the channel settings "
             f"for the {names} channel{plural}?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,

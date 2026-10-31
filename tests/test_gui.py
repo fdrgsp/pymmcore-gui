@@ -18,7 +18,7 @@ from pymmcore_plus.autofocus import AutofocusResult, CaptureSettings, capture_st
 from pymmcore_plus.mda import MDARunner
 from pymmcore_widgets import CameraRoiWidget, StageWidget, XYZStageWidget
 from pymmcore_widgets import MDAWidget as UpstreamMDAWidget
-from pymmcore_widgets.mda._core_channels import PROPERTY_SEPARATOR
+from pymmcore_widgets._light_sources import PROPERTY_SEPARATOR, find_light_sources
 from pymmcore_widgets.useq_widgets._positions import MDAButton, _MDAPopup
 
 import pymmcore_gui._ndv_viewers as acquire_viewers_module
@@ -26,6 +26,7 @@ import pymmcore_gui.widgets._acquire as acquire_module
 import pymmcore_gui.widgets._toolbars as acquire_toolbar_module
 from pymmcore_gui._app import create_mmgui
 from pymmcore_gui._array_viewer import _icon_avg_rgb
+from pymmcore_gui._channel_settings_store import channel_settings_store
 from pymmcore_gui._layouts import (
     DEFAULT_LAYOUT_NAME,
     LAST_SESSION_LAYOUT_NAME,
@@ -91,7 +92,6 @@ from pymmcore_gui.widgets._acquire import (
     AcquirePage,
 )
 from pymmcore_gui.widgets._acquire_presets import AcquisitionPresetSelector
-from pymmcore_gui.widgets._active_channel_table import CURRENT_CHANNEL_COLUMN
 from pymmcore_gui.widgets._configurations import ConfigurationsPage
 from pymmcore_gui.widgets._hardware import HardwareSetupPage
 from pymmcore_gui.widgets._installation import (
@@ -117,22 +117,13 @@ if TYPE_CHECKING:
     from pymmcore_plus.model import Device
     from pymmcore_widgets.mda._core_grid import CoreConnectedGridPlanWidget
     from pymmcore_widgets.mda._core_mda import CoreMDATabs
-    from pymmcore_widgets.useq_widgets._data_table import DataTable
     from pytestqt.qtbot import QtBot
-    from qtpy.QtCore import QModelIndex
     from vispy.app.canvas import MouseEvent
 
     from pymmcore_gui._app import WindowProtocol
     from pymmcore_gui._qt.QtAds import CDockAreaWidget
     from pymmcore_gui._settings import Settings
     from pymmcore_gui._theme import Color
-
-
-def _row_index(table: DataTable, row: int, col: int = 0) -> QModelIndex:
-    """Return ``table.model().index(row, col)``, asserting the model exists."""
-    model = table.model()
-    assert model is not None
-    return model.index(row, col)
 
 
 def _unwrap_card(widget: QWidget | None) -> QWidget | None:
@@ -3167,288 +3158,6 @@ def test_snap_opens_closable_preview(
     assert replacement.frames == 1
 
 
-def test_selecting_channel_row_applies_only_its_core_config(
-    mmcore: CMMCorePlus, qtbot: QtBot
-) -> None:
-    set_theme(DARK_THEME)
-    mda = MemoryMDAWidget(mmcore)
-    qtbot.addWidget(mda)
-    mda.show()
-    qtbot.waitExposed(mda)
-    channels = mda.channels
-    presets = tuple(mmcore.getAvailableConfigs("Channel"))
-    assert len(presets) >= 4
-    first = presets[0]
-    other_preset = presets[2]
-    third_preset = presets[3]
-    mda.setValue(
-        useq.MDASequence(
-            channels=tuple(
-                useq.Channel(
-                    group="Channel",
-                    config=config,
-                    exposure=12.5 + index,
-                )
-                for index, config in enumerate(presets)
-            )
-        )
-    )
-
-    mmcore.setConfig("Channel", first)
-    mmcore.setExposure(8)
-    table = channels.table()
-    model = table.model()
-    assert model is not None
-    config_column = table.indexOf(channels._config_column)
-
-    # Clicking the ● column on each row activates that channel on the microscope.
-    for row, preset in enumerate(presets):
-        mda._on_channel_row_selected(model.index(row, 0))
-        assert mmcore.getCurrentConfig("Channel") == preset
-
-    # Row activation never pushes exposure to hardware (just-in-time rule).
-    assert mmcore.getExposure() == pytest.approx(8)
-    assert channels.value(exclude_unchecked=False)[1].exposure == pytest.approx(13.5)
-
-    # Clicking the Exposure editor neither selects that row nor applies the
-    # channel to the microscope: Exposure isn't a row-activating column, so
-    # highlighting it would misrepresent which channel is actually active.
-    exposure_column = table.indexOf(channels.EXPOSURE)
-    exposure_editor = table.cellWidget(1, exposure_column)
-    assert exposure_editor is not None
-    table.setCurrentCell(0, config_column)  # set a known visual starting position
-    mmcore.setConfig("Channel", first)
-    qtbot.mouseClick(  # type: ignore[no-untyped-call]
-        exposure_editor, Qt.MouseButton.LeftButton
-    )
-    assert table.currentRow() == 0  # unchanged
-    assert mmcore.getCurrentConfig("Channel") == first  # unchanged by editor click
-
-    # A genuine mouse click directly on the ● column (no cell widget there,
-    # so this exercises table.clicked / _on_channel_cell_clicked, not
-    # _on_channel_row_selected called programmatically) selects the row and
-    # applies its channel.
-    current_col = table.indexOf(CURRENT_CHANNEL_COLUMN)
-    current_index = model.index(2, current_col)
-    qtbot.mouseClick(  # type: ignore[no-untyped-call]
-        table.viewport(),
-        Qt.MouseButton.LeftButton,
-        pos=table.visualRect(current_index).center(),
-    )
-    assert channels.activeRow() == 2
-    assert table.currentRow() == 2
-    assert {index.row() for index in table.selectedIndexes()} == {2}
-    assert mmcore.getCurrentConfig("Channel") == presets[2]
-    mmcore.setConfig("Channel", first)  # reset for the next section
-
-    # The Config combo is the other way (besides the ● column) to move
-    # hardware -- but only for the row that's already active. Activating a
-    # DIFFERENT row's combo just updates that row's stored channel; it never
-    # applies anything or changes which row is active.
-    assert channels.activeRow() == 0
-    other_row_cell = table.cellWidget(1, config_column)
-    assert other_row_cell is not None
-    other_row_combo = other_row_cell.findChild(QComboBox)
-    assert other_row_combo is not None
-    other_row_combo.setCurrentText(third_preset)
-    other_row_combo.activated.emit(other_row_combo.currentIndex())
-    QApplication.processEvents()
-    assert channels.activeRow() == 0  # unchanged -- row 1 isn't the active row
-    assert table.currentRow() == 0  # unchanged
-    assert mmcore.getCurrentConfig("Channel") == first  # unchanged
-
-    # Make row 1 active first (as the user would, via the ● column) -- its
-    # stored config (third_preset, set above) is applied on activation.
-    mda._on_channel_row_selected(model.index(1, 0))
-    assert channels.activeRow() == 1
-    assert mmcore.getCurrentConfig("Channel") == third_preset
-
-    # Now that row 1 IS the active row, a user activation of its own Config
-    # combo (the `activated` signal) applies the newly picked preset
-    # immediately, same as clicking the ● column. A plain programmatic text
-    # change (currentTextChanged only, as during a sequence restore/refresh)
-    # still stays hardware-neutral.
-    config_cell = table.cellWidget(1, config_column)
-    assert config_cell is not None
-    config_combo = config_cell.findChild(QComboBox)
-    assert config_combo is not None
-    config_combo.setCurrentText(other_preset)
-    QApplication.processEvents()
-    assert mmcore.getCurrentConfig("Channel") == third_preset  # no hardware change yet
-    config_combo.activated.emit(config_combo.currentIndex())
-    QApplication.processEvents()
-    assert table.currentRow() == 1
-    assert channels.activeRow() == 1
-    assert mmcore.getCurrentConfig("Channel") == other_preset  # now applied
-
-    table.clearChecks()
-    mda.refresh_channel_table()
-    assert channels.value() == ()
-    assert len(channels.value(exclude_unchecked=False)) == len(presets)
-    table.checkAllRows()
-
-    # After a table rebuild the ● row is preserved without re-applying hardware.
-    # (Row 1's config combo was switched to `other_preset` above, so that --
-    # not presets[1] -- is what row 1 now holds and what activating it applies.)
-    mda._on_channel_row_selected(model.index(1, 0))
-    assert channels.activeRow() == 1
-    mda.refresh_channel_table()
-    assert channels.activeRow() == 1
-    assert mmcore.getCurrentConfig("Channel") == other_preset
-
-    # Rebuilding/restoring the table via setValue also preserves the ● row.
-    mda.setValue(mda.value())
-    assert channels.activeRow() == 1
-    assert mmcore.getCurrentConfig("Channel") == other_preset
-
-    with patch.object(
-        channels,
-        "value",
-        return_value=(useq.Channel(group="missing", config="unknown", exposure=1),),
-    ):
-        mda._on_channel_row_selected(model.index(0, config_column))
-    assert mmcore.getCurrentConfig("Channel") == other_preset
-
-
-def test_core_config_change_syncs_channel_row_selection(
-    mmcore: CMMCorePlus, qtbot: QtBot
-) -> None:
-    set_theme(DARK_THEME)
-    mda = MemoryMDAWidget(mmcore)
-    qtbot.addWidget(mda)
-    channels = mda.channels
-    table = channels.table()
-    presets = tuple(mmcore.getAvailableConfigs("Channel"))
-    assert len(presets) >= 3
-
-    # Table holds the first two presets only.
-    in_table = presets[:2]
-    not_in_table = presets[2]
-    mda.setValue(
-        useq.MDASequence(
-            channels=tuple(
-                useq.Channel(group="Channel", config=config, exposure=100.0 + i)
-                for i, config in enumerate(in_table)
-            )
-        )
-    )
-
-    # A preset activated on the core (e.g. from the Groups & Presets table, not
-    # through this table at all) updates the ● indicator *and* visibly selects
-    # the matching row -- not just the ● column.
-    mmcore.setConfig("Channel", in_table[1])
-    QApplication.processEvents()
-    assert channels.activeRow() == 1
-    assert table.currentRow() == 1
-    assert {index.row() for index in table.selectedIndexes()} == {1}
-    assert mmcore.getCurrentConfig("Channel") == in_table[1]
-
-    mmcore.setConfig("Channel", in_table[0])
-    QApplication.processEvents()
-    assert channels.activeRow() == 0
-    assert table.currentRow() == 0
-    assert {index.row() for index in table.selectedIndexes()} == {0}
-
-    # Idle sync does not push the row's exposure to the hardware
-    # (just-in-time rule): only the ● indicator is updated.
-    mmcore.setExposure(7.0)
-    mmcore.setConfig("Channel", in_table[1])
-    QApplication.processEvents()
-    assert mmcore.getExposure() == pytest.approx(7.0)
-
-    # Activating a channel that has no row clears the ● indicator and the
-    # visible row selection.
-    mmcore.setConfig("Channel", not_in_table)
-    QApplication.processEvents()
-    assert channels.activeRow() == -1
-    assert table.currentRow() == -1
-    assert not table.selectedIndexes()
-    assert mmcore.getCurrentConfig("Channel") == not_in_table
-
-
-def test_editing_active_row_exposure_or_intensity_applies_during_live(
-    mmcore: CMMCorePlus, qtbot: QtBot
-) -> None:
-    set_theme(DARK_THEME)
-    mda = MemoryMDAWidget(mmcore)
-    qtbot.addWidget(mda)
-    channels = mda.channels
-    table = channels.table()
-    presets = tuple(mmcore.getAvailableConfigs("Channel"))
-    assert len(presets) >= 2
-
-    mda.setValue(
-        useq.MDASequence(
-            channels=tuple(
-                useq.Channel(group="Channel", config=config, exposure=50.0 + i)
-                for i, config in enumerate(presets[:2])
-            )
-        )
-    )
-
-    source_device, source_property = "Camera", "TestProperty1"
-    source_group = next(
-        label
-        for label, pairs in channels.lightSources().items()
-        if pairs == [(source_device, source_property)]
-    )
-    channels.setLightSourceVisible(True)
-    channels.setChannelProperties(
-        [
-            {
-                "channel_index": 0,
-                "config": presets[0],
-                "group": source_group,
-                "device": source_device,
-                "property": source_property,
-                "value": mmcore.getPropertyLowerLimit(source_device, source_property),
-            }
-        ]
-    )
-
-    exposure_col = table.indexOf(channels.EXPOSURE)
-    intensity_col = table.indexOf(channels.INTENSITY)
-    active_exposure = table.cellWidget(0, exposure_col)
-    active_intensity = table.cellWidget(0, intensity_col)
-    other_exposure = table.cellWidget(1, exposure_col)
-    assert isinstance(active_exposure, QDoubleSpinBox)
-    assert isinstance(active_intensity, QDoubleSpinBox)
-    assert isinstance(other_exposure, QDoubleSpinBox)
-
-    mda._on_channel_row_selected(_row_index(table, 0))
-    assert channels.activeRow() == 0
-
-    # Idle: pressing Enter still follows the just-in-time rule -- no hardware
-    # change until the next capture.
-    active_exposure.setValue(77.0)
-    active_exposure.editingFinished.emit()
-    assert mmcore.getExposure() != pytest.approx(77.0)
-
-    mmcore.startContinuousSequenceAcquisition()
-    try:
-        assert mmcore.isSequenceRunning()
-
-        # Live: pressing Enter on the ACTIVE row's exposure applies immediately.
-        active_exposure.setValue(123.0)
-        active_exposure.editingFinished.emit()
-        assert mmcore.getExposure() == pytest.approx(123.0)
-
-        # Live: pressing Enter on the ACTIVE row's intensity applies immediately.
-        new_intensity = mmcore.getPropertyUpperLimit(source_device, source_property)
-        active_intensity.setValue(new_intensity)
-        active_intensity.editingFinished.emit()
-        assert float(
-            mmcore.getProperty(source_device, source_property)
-        ) == pytest.approx(new_intensity)
-
-        # Live: editing a row that ISN'T active never moves hardware.
-        other_exposure.setValue(999.0)
-        other_exposure.editingFinished.emit()
-        assert mmcore.getExposure() == pytest.approx(123.0)
-    finally:
-        mmcore.stopSequenceAcquisition()
-
-
 def test_channel_property_selector_lists_all_runtime_numeric_sliders(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
@@ -3476,7 +3185,7 @@ def test_channel_property_selector_lists_all_runtime_numeric_sliders(
         for label, pairs in choices.items()
         if len(pairs) == 1 and PROPERTY_SEPARATOR in label
     )
-    assert channels.show_light_source.text() == "Show Light Source"
+    assert channels.show_light_source.text() == "Light Sources"
 
     table = channels.table()
     property_col = table.indexOf(channels._light_source_column)
@@ -3710,143 +3419,6 @@ def test_light_source_declarations_are_invisible_to_the_core(
     assert mmcore.getCurrentConfig("Channel") == "DAPI"
 
 
-def test_light_source_declaration_populates_channel_rows(
-    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
-) -> None:
-    _load_cfg_with_light_sources(
-        mmcore, tmp_path, [("DAPI", "Camera", "TestProperty1", 0.05)]
-    )
-    mda = _declared_mda(mmcore, qtbot, ("DAPI", "FITC"))
-
-    mda.refresh_channel_table()
-
-    label, intensity = _light_source_of(mda, 0)
-    assert mda.channels.lightSources()[label] == [("Camera", "TestProperty1")]
-    assert intensity == pytest.approx(0.05)
-    # FITC has no declaration, and nothing is inferred for it
-    assert _light_source_of(mda, 1)[0] == ""
-
-    # and the declaration reaches the acquisition-time properties
-    props = mda.channels.channelProperties(exclude_unchecked=False)
-    assert [(p["channel_index"], p["device"], p["property"]) for p in props] == [
-        (0, "Camera", "TestProperty1")
-    ]
-
-
-def test_light_source_declaration_resolves_multi_property_group(
-    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
-) -> None:
-    """A declaration listing several properties restores as its group label.
-
-    That is what makes one Intensity spin box drive every slider of a multi-channel
-    illuminator, rather than the row landing on a single "Device · Property" entry.
-    """
-    pairs = [("Camera", "TestProperty2"), ("Camera", "TestProperty4")]
-    _load_cfg_with_light_sources(
-        mmcore, tmp_path, [("DAPI", device, prop, 12.0) for device, prop in pairs]
-    )
-    for device, prop in pairs:
-        mmcore.defineConfig("_lida", "levels", device, prop, "0.0")
-    mda = _declared_mda(mmcore, qtbot, ("DAPI",))
-
-    mda.refresh_channel_table()
-
-    label, intensity = _light_source_of(mda, 0)
-    assert label == "_lida"
-    assert mda.channels.lightSources()["_lida"] == pairs
-    assert intensity == pytest.approx(12.0)
-    # one row, but a property entry per underlying slider
-    props = mda.channels.channelProperties(exclude_unchecked=False)
-    assert [(p["device"], p["property"], p["value"]) for p in props] == [
-        (device, prop, 12.0) for device, prop in pairs
-    ]
-
-
-def test_light_source_is_never_inferred_from_the_channel_preset(
-    mmcore: CMMCorePlus, qtbot: QtBot
-) -> None:
-    """A ranged property inside a channel preset is not treated as a declaration.
-
-    Storing the light source there would break preset identity, so it is only ever
-    read from the cfg's comment block -- see LIGHT_SOURCE_COMMENT.
-    """
-    mmcore.defineConfig("Channel", "DAPI", "Camera", "TestProperty1", "0.05")
-    mda = _declared_mda(mmcore, qtbot, ("DAPI",))
-
-    mda.refresh_channel_table()
-
-    assert _light_source_of(mda, 0)[0] == ""
-    assert mda.channels.channelProperties(exclude_unchecked=False) == []
-
-
-def test_stale_light_source_declaration_is_ignored(
-    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
-) -> None:
-    """A declaration naming a device this configuration doesn't have is dropped."""
-    _load_cfg_with_light_sources(
-        mmcore, tmp_path, [("DAPI", "NoSuchDevice", "Level", 5.0)]
-    )
-    mda = _declared_mda(mmcore, qtbot, ("DAPI",))
-
-    mda.refresh_channel_table()
-
-    assert _light_source_of(mda, 0)[0] == ""
-
-
-def test_malformed_light_source_declarations_are_skipped(
-    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
-) -> None:
-    """The block is hand-editable, so junk must be ignored rather than raise."""
-    dest = tmp_path / "declared.cfg"
-    lines = Path(__file__).with_name("test_config.cfg").read_text().splitlines()
-    lines += [
-        "#@LightSource,Channel,DAPI,Camera,TestProperty1",  # too few fields
-        "#@LightSource,Channel,FITC,Camera,TestProperty1,not-a-number",
-        "#@LightSource,OtherGroup,Cy5,Camera,TestProperty1,0.05",  # other group
-        "#@LightSource,Channel,Rhodamine,Camera,TestProperty1,0.05",  # the good one
-    ]
-    dest.write_text("\n".join(lines) + "\n")
-    mmcore.loadSystemConfiguration(dest)
-    mda = _declared_mda(mmcore, qtbot, ("DAPI", "FITC", "Cy5", "Rhodamine"))
-
-    mda.refresh_channel_table()
-
-    assert [_light_source_of(mda, row)[0] for row in range(3)] == ["", "", ""]
-    assert _light_source_of(mda, 3)[1] == pytest.approx(0.05)
-
-
-def test_changing_a_row_preset_follows_the_new_declaration(
-    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
-) -> None:
-    _load_cfg_with_light_sources(
-        mmcore, tmp_path, [("DAPI", "Camera", "TestProperty1", 0.05)]
-    )
-    mda = _declared_mda(mmcore, qtbot, ("DAPI",))
-    mda.refresh_channel_table()
-    assert _light_source_of(mda, 0)[0] != ""
-
-    table = mda.channels.table()
-    config_col = table.indexOf(mda.channels._config_column)
-    cell = table.cellWidget(0, config_col)
-    assert cell is not None
-    # the config cell is a CheckableCombo wrapper; the row's preset lives on the
-    # QComboBox nested inside it, which is what _install_channel_editor_filters
-    # connects to
-    combo = cell.findChildren(QComboBox)[0]
-
-    # switching to an undeclared preset clears the row's light source ...
-    combo.setCurrentText("FITC")
-    combo.activated.emit(combo.currentIndex())
-    assert _light_source_of(mda, 0) == ("", 0.0)
-
-    # ... and switching back restores it
-    combo.setCurrentText("DAPI")
-    combo.activated.emit(combo.currentIndex())
-    label, intensity = _light_source_of(mda, 0)
-    assert mda.channels.lightSources()[label] == [("Camera", "TestProperty1")]
-    assert intensity == pytest.approx(0.05)
-
-
 def test_saved_sequence_wins_over_light_source_declarations(
     mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
 ) -> None:
@@ -3879,113 +3451,6 @@ def test_saved_sequence_wins_over_light_source_declarations(
     restored_label, restored_intensity = _light_source_of(mda, 0)
     assert restored_label == label
     assert restored_intensity == pytest.approx(33.0)
-
-
-def test_save_light_sources_writes_a_complete_cfg(
-    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
-) -> None:
-    mda = _declared_mda(mmcore, qtbot, ("DAPI", "FITC"))
-    channels = mda.channels
-    label = next(
-        lbl
-        for lbl, pairs in channels.lightSources().items()
-        if pairs == [("Camera", "TestProperty1")]
-    )
-    channels.setChannelProperties(
-        [
-            {
-                "channel_index": 0,
-                "config": "DAPI",
-                "group": label,
-                "device": "Camera",
-                "property": "TestProperty1",
-                "value": 0.05,
-            }
-        ]
-    )
-
-    dest = tmp_path / "with_light_sources.cfg"
-    with patch.object(QFileDialog, "getSaveFileName", return_value=(str(dest), "")):
-        mda._save_light_sources_btn.click()
-
-    lines = dest.read_text().splitlines()
-    assert "#@LightSource,Channel,DAPI,Camera,TestProperty1,0.05" in lines
-    # the whole configuration is written, not just the light sources
-    assert any(line.startswith("Device,") for line in lines)
-    assert any(line.startswith("PixelSize_um,") for line in lines)
-    # FITC had no light source, so it gets no declaration
-    assert not any(line.startswith("#@LightSource,Channel,FITC,") for line in lines)
-
-    # nothing was written as real configuration: no new group, and the channel
-    # preset itself is untouched, so preset identity still works
-    assert not any(line.startswith("ConfigGroup,Channel-LightSource") for line in lines)
-    assert not any(
-        line.startswith("ConfigGroup,Channel,DAPI,Camera,TestProperty1")
-        for line in lines
-    )
-    mmcore.setConfig("Channel", "DAPI")
-    assert mmcore.getCurrentConfig("Channel") == "DAPI"
-
-
-def test_saved_light_sources_round_trip_through_a_reloaded_cfg(
-    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
-) -> None:
-    mda = _declared_mda(mmcore, qtbot, ("DAPI",))
-    channels = mda.channels
-    label = next(
-        lbl
-        for lbl, pairs in channels.lightSources().items()
-        if pairs == [("Camera", "TestProperty1")]
-    )
-    channels.setChannelProperties(
-        [
-            {
-                "channel_index": 0,
-                "config": "DAPI",
-                "group": label,
-                "device": "Camera",
-                "property": "TestProperty1",
-                "value": 0.05,
-            }
-        ]
-    )
-
-    dest = tmp_path / "round_trip.cfg"
-    with patch.object(QFileDialog, "getSaveFileName", return_value=(str(dest), "")):
-        mda._save_light_sources_btn.click()
-
-    # a fresh widget over the reloaded file picks the declaration back up
-    mmcore.loadSystemConfiguration(dest)
-    reloaded = _declared_mda(mmcore, qtbot, ("DAPI",))
-    reloaded.refresh_channel_table()
-
-    new_label, intensity = _light_source_of(reloaded, 0)
-    assert reloaded.channels.lightSources()[new_label] == [("Camera", "TestProperty1")]
-    assert intensity == pytest.approx(0.05)
-
-
-def test_save_light_sources_warns_when_the_feature_is_off(
-    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
-) -> None:
-    """Saving with light sources hidden would silently erase every declaration."""
-    _load_cfg_with_light_sources(
-        mmcore, tmp_path, [("DAPI", "Camera", "TestProperty1", 0.05)]
-    )
-    mda = _declared_mda(mmcore, qtbot, ("DAPI",))
-    mda.channels.setLightSourceVisible(False)
-
-    with (
-        patch.object(QMessageBox, "warning") as warning,
-        patch.object(QFileDialog, "getSaveFileName") as dialog,
-    ):
-        mda._save_light_sources_btn.click()
-
-    assert warning.called
-    assert not dialog.called
-    # the loaded cfg's declarations are still intact
-    assert mda._light_source_declarations == {
-        "DAPI": [("Camera", "TestProperty1", 0.05)]
-    }
 
 
 def test_memory_mda_hides_estimated_duration(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
@@ -4700,52 +4165,34 @@ def test_snap_and_live_apply_the_active_channel_capture_settings(
 
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
-    channels = page._mda.channels
     config = tuple(mmcore.getAvailableConfigs("Channel"))[-1]
     exposure = 23.5
-    page._mda.setValue(
-        useq.MDASequence(
-            channels=(useq.Channel(group="Channel", config=config, exposure=exposure),)
-        )
-    )
-
-    table = channels.table()
-    table.indexOf(channels._config_column)
-    channels.setActiveRow(0)
     source_device, source_property = "Camera", "TestProperty1"
     source_group = next(
         label
-        for label, pairs in channels.lightSources().items()
+        for label, pairs in find_light_sources(mmcore).items()
         if pairs == [(source_device, source_property)]
     )
     intensity = mmcore.getPropertyUpperLimit(source_device, source_property)
-    channels.setLightSourceVisible(True)
-    channels.setChannelProperties(
-        [
-            {
-                "channel_index": 0,
-                "config": config,
-                "group": source_group,
-                "device": source_device,
-                "property": source_property,
-                "value": intensity,
-            }
-        ]
+    channel_settings_store(mmcore).set(
+        "Channel",
+        config,
+        {
+            "exposure": exposure,
+            "light_source": source_group,
+            "intensity": intensity,
+            "camera_properties": {},
+        },
     )
-
-    first_config = next(iter(mmcore.getAvailableConfigs("Channel")))
     baseline_intensity = mmcore.getPropertyLowerLimit(source_device, source_property)
 
     def reset_core() -> None:
-        # Drift the core to a preset absent from the single-row table; this now
-        # clears the ● indicator (core->table reverse sync). Re-activate the
-        # row afterwards, as a user would, so the "active channel" is restored.
-        # Idle activation re-applies only the preset, not exposure/intensity --
-        # those must be re-applied at capture time, which is what this verifies.
-        mmcore.setConfig("Channel", first_config)
+        # The preset is set on the microscope (e.g. from the Channels panel or
+        # Groups & Presets), but not its exposure and light source: those must
+        # be applied at capture time, which is what this verifies.
+        mmcore.setConfig("Channel", config)
         mmcore.setExposure(5)
         mmcore.setProperty(source_device, source_property, baseline_intensity)
-        page._mda._on_channel_row_selected(_row_index(table, 0))
 
     def capture_settings() -> tuple[str, float, float]:
         return (
@@ -4777,118 +4224,6 @@ def test_snap_and_live_apply_the_active_channel_capture_settings(
     assert captured[1:] == pytest.approx((exposure, intensity))
     page._live_btn.click()
     assert not mmcore.isSequenceRunning()
-
-
-def test_switching_channel_rows_during_live_applies_all_capture_settings(
-    mmcore: CMMCorePlus,
-    qtbot: QtBot,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FakePreview(QWidget):
-        # the real preview announces a snap it displayed; AcquireViewersManager
-        # connects to it to bring the Preview tab back to the front
-        snapShown = Signal()
-
-        def __init__(
-            self,
-            mmcore: CMMCorePlus,
-            parent: QWidget | None = None,
-        ) -> None:
-            super().__init__(parent)
-
-        def detach(self) -> None:
-            pass
-
-    monkeypatch.setattr(acquire_viewers_module, "NDVPreview", FakePreview)
-
-    page = AcquirePage(mmcore)
-    qtbot.addWidget(page)
-    channels = page._mda.channels
-    configs = tuple(mmcore.getAvailableConfigs("Channel"))
-    selected_configs = (configs[0], configs[-1])
-    exposures = (11.5, 37.5)
-    page._mda.setValue(
-        useq.MDASequence(
-            channels=tuple(
-                useq.Channel(group="Channel", config=config, exposure=exposure)
-                for config, exposure in zip(selected_configs, exposures, strict=True)
-            )
-        )
-    )
-
-    source_device, source_property = "Camera", "TestProperty1"
-    source_group = next(
-        label
-        for label, pairs in channels.lightSources().items()
-        if pairs == [(source_device, source_property)]
-    )
-    property_values = (
-        mmcore.getPropertyLowerLimit(source_device, source_property),
-        mmcore.getPropertyUpperLimit(source_device, source_property),
-    )
-    channels.setLightSourceVisible(True)
-    channels.setChannelProperties(
-        [
-            {
-                "channel_index": row,
-                "config": config,
-                "group": source_group,
-                "device": source_device,
-                "property": source_property,
-                "value": value,
-            }
-            for row, (config, value) in enumerate(
-                zip(selected_configs, property_values, strict=True)
-            )
-        ]
-    )
-
-    def capture_settings() -> tuple[str, float, float]:
-        return (
-            mmcore.getCurrentConfig("Channel"),
-            mmcore.getExposure(),
-            float(mmcore.getProperty(source_device, source_property)),
-        )
-
-    table = channels.table()
-    table.indexOf(channels._config_column)
-    # Activate row 0 on the microscope before starting live.
-    page._mda._on_channel_row_selected(_row_index(table, 0))
-    mmcore.setExposure(5)
-    mmcore.setProperty(source_device, source_property, property_values[1])
-
-    live_started: list[None] = []
-    live_stopped: list[None] = []
-    mmcore.events.continuousSequenceAcquisitionStarted.connect(
-        lambda *_: live_started.append(None)
-    )
-    mmcore.events.sequenceAcquisitionStopped.connect(
-        lambda *_: live_stopped.append(None)
-    )
-
-    page._live_btn.click()
-    try:
-        assert mmcore.isSequenceRunning()
-        assert len(live_started) == 1
-        assert not live_stopped
-        current = capture_settings()
-        assert current[0] == selected_configs[0]
-        assert current[1:] == pytest.approx((exposures[0], property_values[0]))
-
-        # Switch the active channel during live by clicking the ● column.
-        page._mda._on_channel_row_selected(_row_index(table, 1))
-        QApplication.processEvents()
-
-        assert channels.activeRow() == 1
-        assert mmcore.isSequenceRunning()
-        assert len(live_started) == 1
-        assert not live_stopped
-        current = capture_settings()
-        assert current[0] == selected_configs[1]
-        assert current[1:] == pytest.approx((exposures[1], property_values[1]))
-    finally:
-        if mmcore.isSequenceRunning():
-            mmcore.stopSequenceAcquisition()
 
 
 def test_acquire_page_adds_sink_backed_mda_tab(
@@ -6986,7 +6321,7 @@ def test_saving_over_a_cfg_offers_to_keep_its_light_sources(
 
     assert question.called
     assert question.call_args.args[2] == (
-        "Do you want to keep the light source info for the DAPI channel?"
+        "Do you want to keep the channel settings for the DAPI channel?"
     )
     lines = cfg.read_text().splitlines()
     assert "#@LightSource,Channel,DAPI,Camera,TestProperty1,0.05" in lines
@@ -7013,9 +6348,13 @@ def test_keeping_light_sources_lists_every_affected_channel(
         assert page.save_to(str(cfg))
 
     assert question.call_args.args[2] == (
-        "Do you want to keep the light source info for the Cy5, FITC channels?"
+        "Do you want to keep the channel settings for the Cy5, FITC channels?"
     )
-    kept = [line for line in cfg.read_text().splitlines() if "#@LightSource" in line]
+    kept = [
+        line
+        for line in cfg.read_text().splitlines()
+        if line.startswith("#@LightSource")
+    ]
     assert kept == [
         "#@LightSource,Channel,FITC,Camera,TestProperty2,3.0",
         "#@LightSource,Channel,Cy5,Camera,TestProperty1,0.05",
@@ -7756,7 +7095,7 @@ def test_all_mda_presentations_behave_identically(
     qtbot.addWidget(cast("QWidget", widget))
 
     # the app's channel table, not upstream's
-    assert type(widget.channels).__name__ == "ActiveChannelTable"
+    assert type(widget.channels).__name__ == "MDAChannelTable"
     # the OME-TIFF layout option, defaulting the same way
     assert widget.tiffLayout() == "self-contained"
     # turning an axis on works without the caller knowing the presentation
