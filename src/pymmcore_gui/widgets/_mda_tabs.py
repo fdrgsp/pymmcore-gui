@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from contextlib import suppress
 from typing import TYPE_CHECKING, Any, cast
 
 from pymmcore_widgets import HCSWizard
@@ -29,13 +28,8 @@ class GuiCollapsibleCoreMDATabs(CollapsibleCoreMDATabs):
     def create_subwidgets(self) -> None:
         super().create_subwidgets()
         inherited_channels = self.channels
-        self.channels = MDAChannelTable(1, self._mmc)
+        self.channels = MDAChannelTable(0, self._mmc)
         inherited_channels.deleteLater()
-
-    def _apply_editor_min_heights(self) -> None:
-        """Ignore a queued upstream resize after this tab widget was deleted."""
-        with suppress(RuntimeError):
-            super()._apply_editor_min_heights()
 
 
 class GuiTopbarMDATabs(TopbarMDATabs):
@@ -49,7 +43,7 @@ class GuiTopbarMDATabs(TopbarMDATabs):
     def create_subwidgets(self) -> None:
         super().create_subwidgets()
         inherited_channels = self.channels
-        self.channels = MDAChannelTable(1, self._mmc)
+        self.channels = MDAChannelTable(0, self._mmc)
         inherited_channels.deleteLater()
 
 

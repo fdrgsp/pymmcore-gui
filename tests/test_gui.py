@@ -1030,6 +1030,8 @@ def test_acquire_dock_contents_follow_zoom(mmcore: CMMCorePlus, qtbot: QtBot) ->
     set_theme(DARK_THEME)
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
+    # the channel table starts empty: add the row whose cell is measured
+    page._mda.channels.act_add_row.trigger()
 
     def exposure_cell_size() -> float:
         table = page._mda.channels.table()
@@ -4063,6 +4065,12 @@ def test_topbar_mda_keeps_pause_and_cancel_clickable(
         page._set_mda_kind("topbar")
         mda = page.mda_widget
         assert isinstance(mda, TopbarMemoryMDAWidget)
+        # the channel table starts empty, so its axis is off (and the table
+        # disabled): turn it on and add a channel, as a user would, so the run
+        # has an enabled table to lock and unlock
+        mda.tab_wdg.setChecked(mda.channels, True)
+        mda.channels.act_add_row.trigger()
+        assert mda.channels.isEnabled()
         sequence = mda.value()
 
         mmcore.mda.events.sequenceStarted.emit(sequence, {})
@@ -5545,6 +5553,8 @@ def test_mda_action_icons_use_theme_status_colors(
     assert widget.control_btns.pause_btn.text() == "Resume"
     assert_icon_color(widget.control_btns.pause_btn.icon(), green)
 
+    # the position table starts empty: add the row holding the button
+    widget.stage_positions.setValue([useq.Position(x=0, y=0)])
     position_btn = widget.stage_positions.findChild(MDAButton)
     assert position_btn is not None
     position_btn.setValue(
@@ -5638,6 +5648,8 @@ def test_position_subsequence_popup_is_collapsed_and_themed(
     set_theme(DARK_THEME)
     widget = MemoryMDAWidget(mmcore)
     qtbot.addWidget(widget)
+    # the position table starts empty: add the row holding the button
+    widget.stage_positions.setValue([useq.Position(x=0, y=0)])
     position_btn = widget.stage_positions.findChild(MDAButton)
     assert position_btn is not None
 
@@ -5696,6 +5708,8 @@ def test_position_subsequence_popup_opens_without_a_focused_control(
     set_theme(DARK_THEME)
     widget = MemoryMDAWidget(mmcore)
     qtbot.addWidget(widget)
+    # the position table starts empty: add the row holding the button
+    widget.stage_positions.setValue([useq.Position(x=0, y=0)])
     position_btn = widget.stage_positions.findChild(MDAButton)
     assert position_btn is not None
 
