@@ -12,8 +12,8 @@ from pymmcore_widgets import MDAWidget, MDAWidgetCollapsible
 from pymmcore_widgets._icons import StandardIcon
 from pymmcore_widgets.mda import (
     CollapsibleCoreMDATabs,
+    CoreMDATabs,
     SectionMetrics,
-    TopbarMDATabs,
 )
 from pymmcore_widgets.mda._collapsible_mda import _ClickableLabel
 from pymmcore_widgets.useq_widgets._positions import MDAButton
@@ -52,7 +52,7 @@ from pymmcore_gui.widgets._busy import BusyOverlay
 
 from ._mda_tabs import (
     GuiCollapsibleCoreMDATabs,
-    GuiTopbarMDATabs,
+    GuiCoreMDATabs,
     install_third_party_window_theming,
 )
 
@@ -966,14 +966,14 @@ class TopbarMemoryMDAWidget(MemoryMDAWidgetBase, MDAWidget):
     can never outlive the acquisition.
     """
 
-    def _create_tab_widget(self) -> TopbarMDATabs:
-        return GuiTopbarMDATabs(None, self._mmc)
+    def _create_tab_widget(self) -> CoreMDATabs:
+        return GuiCoreMDATabs(None, self._mmc)
 
     def _flavor_apply_tab_icons(self) -> None:
         """Tint every tab's icon to the app's icon colour.
 
         Upstream sets each tab's icon from a plain, uncolored `QIconifyIcon`
-        (`TopbarMDATabs._add_tab`), which is also cached per index
+        (`MDATabs._add_tab`), which is also cached per tab
         (`tab_icon`) precisely so this can re-derive a themed icon from that
         stable source on every call instead of compounding tints onto an
         already-recolored one. Applied through `set_tab_icon` (the button

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 from pymmcore_widgets import HCSWizard
-from pymmcore_widgets.mda import CollapsibleCoreMDATabs, TopbarMDATabs
+from pymmcore_widgets.mda import CollapsibleCoreMDATabs, CoreMDATabs
 from pymmcore_widgets.useq_widgets import CustomPlateWidget
 
 from pymmcore_gui._array_viewer import (
@@ -32,8 +32,8 @@ class GuiCollapsibleCoreMDATabs(CollapsibleCoreMDATabs):
         inherited_channels.deleteLater()
 
 
-class GuiTopbarMDATabs(TopbarMDATabs):
-    """Top-bar MDA tabs using :class:`MDAChannelTable`.
+class GuiCoreMDATabs(CoreMDATabs):
+    """Upstream's top-bar MDA tabs using :class:`MDAChannelTable`.
 
     The top-bar twin of :class:`GuiCollapsibleCoreMDATabs`: both presentations
     must offer the same channel table, so the swap between them changes only the
@@ -125,6 +125,6 @@ def install_third_party_window_theming() -> None:
 
 __all__ = [
     "GuiCollapsibleCoreMDATabs",
-    "GuiTopbarMDATabs",
+    "GuiCoreMDATabs",
     "install_third_party_window_theming",
 ]
