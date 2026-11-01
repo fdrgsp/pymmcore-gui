@@ -2,19 +2,17 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from pymmcore_widgets import HCSWizard
 from pymmcore_widgets.mda import CollapsibleCoreMDATabs, CoreMDATabs
 from pymmcore_widgets.useq_widgets import CustomPlateWidget
 
 from pymmcore_gui._array_viewer import (
-    ensure_visible_icon,
-    set_source_icon,
     unstyle_widgets,
 )
 from pymmcore_gui._qt.QtCore import QEvent, QObject, Qt
-from pymmcore_gui._qt.QtWidgets import QApplication, QPushButton
+from pymmcore_gui._qt.QtWidgets import QApplication
 
 from ._mda_channel_table import MDAChannelTable
 
@@ -57,23 +55,6 @@ def _theme_subsequence_popup(popup: QWidget) -> None:
     # Focusing the dialog itself instead shows no ring anywhere; Esc/Enter
     # still work, and Tab still moves into the controls.
     popup.setFocus(Qt.FocusReason.OtherFocusReason)
-
-    # The grid's Mark/Move bounds buttons swap their raw icon at runtime
-    # (mode toggle, go_middle checkbox), so re-theme them whenever that
-    # happens rather than relying on the one-off sweep above.
-    grid_plan = getattr(getattr(popup, "mda_tabs", None), "grid_plan", None)
-    bounds = getattr(grid_plan, "_core_xy_bounds", None)
-    if grid_plan is None or bounds is None:
-        return
-
-    def _refresh_bounds_icons(*_: object) -> None:
-        for button in cast("Any", bounds).findChildren(QPushButton):
-            set_source_icon(button, button.icon())
-            ensure_visible_icon(button)
-
-    _refresh_bounds_icons()
-    bounds.go_middle.toggled.connect(_refresh_bounds_icons)
-    grid_plan.valueChanged.connect(_refresh_bounds_icons)
 
 
 class _ThirdPartyWindowThemer(QObject):

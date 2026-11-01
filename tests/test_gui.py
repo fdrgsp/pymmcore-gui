@@ -5620,10 +5620,8 @@ def test_toolbar_action_separators_follow_theme(qtbot: QtBot) -> None:
         set_theme(DARK_THEME)
 
 
-def test_mda_grid_bounds_icons_stay_visible_after_action_changes(
-    mmcore: CMMCorePlus, qtbot: QtBot
-) -> None:
-    """The Bounds editor must theme each raw icon installed by Mark/Move."""
+def test_mda_grid_bounds_icons_stay_visible(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    """The Bounds editor's Mark and Move icons are themed, edges and corners."""
     set_theme(DARK_THEME)
     widget = MemoryMDAWidget(mmcore)
     qtbot.addWidget(widget)
@@ -5643,16 +5641,14 @@ def test_mda_grid_bounds_icons_stay_visible_after_action_changes(
                 for actual, wanted in zip(rgb, expected_rgb, strict=True)
             )
 
-    # Entering the edge/bounds mode keeps the initially themed Mark glyphs.
-    grid._mode_area_radio.setChecked(True)
-    grid._mode_bounds_radio.setChecked(True)
+    grid.setMode("area")
+    grid.setMode("bounds")
     assert_themed()
 
-    # Each action change replaces the glyph upstream; both replacements must
-    # be re-themed rather than reverting to the nearly invisible black source.
-    bounds.go_middle.setChecked(True)
+    # Corners shows the corner buttons, themed like the edge ones
+    bounds._corner_mode.setChecked(True)
     assert_themed()
-    bounds.go_middle.setChecked(False)
+    bounds._edge_mode.setChecked(True)
     assert_themed()
 
 
@@ -5694,7 +5690,7 @@ def test_position_subsequence_popup_is_collapsed_and_themed(
 
     grid = cast("CoreConnectedGridPlanWidget", tabs.grid_plan)
     bounds = grid._core_xy_bounds
-    grid._mode_bounds_radio.setChecked(True)
+    grid.setMode("bounds")
     expected = qcolor(theme().text_primary)
     expected_rgb = expected.red(), expected.green(), expected.blue()
 
@@ -5708,7 +5704,7 @@ def test_position_subsequence_popup_is_collapsed_and_themed(
             )
 
     assert_bounds_icons_themed()
-    bounds.go_middle.setChecked(True)
+    bounds._corner_mode.setChecked(True)
     assert_bounds_icons_themed()
 
 
