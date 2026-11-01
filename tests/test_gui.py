@@ -90,6 +90,7 @@ from pymmcore_gui.widgets._acquire import (
     _TOOLS_DOCK_MAX_WIDTH,
     _TOOLS_DOCK_MIN_USABLE_WIDTH,
     AcquirePage,
+    _default_tools_width,
 )
 from pymmcore_gui.widgets._acquire_presets import AcquisitionPresetSelector
 from pymmcore_gui.widgets._configurations import ConfigurationsPage
@@ -115,8 +116,8 @@ if TYPE_CHECKING:
 
     from pymmcore_plus.mda import SinkProtocol
     from pymmcore_plus.model import Device
+    from pymmcore_widgets.mda import CoreMDATabs
     from pymmcore_widgets.mda._core_grid import CoreConnectedGridPlanWidget
-    from pymmcore_widgets.mda._core_mda import CoreMDATabs
     from pytestqt.qtbot import QtBot
     from vispy.app.canvas import MouseEvent
 
@@ -4901,7 +4902,7 @@ def test_acquire_tools_dock_is_always_resizable(
     tools_area = page._tools_dock_area
     assert tools_area is not None
     tools_column = page._column_widget(tools_area)
-    expected_width = min(page._dock_manager.width() // 4, 500)
+    expected_width = _default_tools_width(page._dock_manager.width())
     qtbot.waitUntil(lambda: tools_column.width() == expected_width, timeout=2000)
     starting_width = tools_column.width()
     assert starting_width > 0
@@ -5205,9 +5206,9 @@ def test_acquire_repairs_an_unusably_narrow_restored_tools_dock(
 ) -> None:
     """A previously persisted transient 60 px tools column is expanded.
 
-    The pinned width itself is derived from whatever width the window
-    actually ends up with (``min(dock_manager.width() // 4,
-    _TOOLS_DOCK_MAX_WIDTH)``, matching ``_pin_dock_widths``) rather than
+    The expected widths are derived from whatever width the window actually
+    ends up with (``_default_tools_width`` for the pin, ``min(width // 4,
+    _TOOLS_DOCK_MAX_WIDTH)`` for the repair) rather than
     hardcoded to the requested ``resize(1400, 900)`` -- CI's real (not
     virtual/configurable) macOS/Windows runner displays can silently clamp a
     top-level window smaller than requested, unlike a local dev machine.
@@ -5221,9 +5222,7 @@ def test_acquire_repairs_an_unusably_narrow_restored_tools_dock(
     tools_area = page_a._tools_dock_area
     assert tools_area is not None
     tools_column = page_a._column_widget(tools_area)
-    expected_pinned_width_a = min(
-        page_a._dock_manager.width() // 4, _TOOLS_DOCK_MAX_WIDTH
-    )
+    expected_pinned_width_a = _default_tools_width(page_a._dock_manager.width())
     qtbot.waitUntil(
         lambda: tools_column.width() == expected_pinned_width_a, timeout=2000
     )
@@ -5249,15 +5248,15 @@ def test_acquire_repairs_an_unusably_narrow_restored_tools_dock(
     restored_area = page_b._tools_dock_area
     assert restored_area is not None
     restored_column = page_b._column_widget(restored_area)
-    expected_pinned_width_b = min(
+    expected_repair_width_b = min(
         page_b._dock_manager.width() // 4, _TOOLS_DOCK_MAX_WIDTH
     )
-    # A range, not an equality. The repair aims for the pinned width but can
+    # A range, not an equality. The repair aims for its own target width but can
     # only take what the donor column has to spare above its own minimum --
     # and on a runner that clamped the window below the requested size, that
     # target is smaller still. What must hold either way: the corrupt 60 px
     # was expanded, and the repair never overshoots the target.
-    assert 60 < restored_column.width() <= expected_pinned_width_b
+    assert 60 < restored_column.width() <= expected_repair_width_b
     assert restored_column.minimumWidth() == 0
     assert restored_column.maximumWidth() == QWIDGETSIZE_MAX
 

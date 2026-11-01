@@ -89,8 +89,11 @@ if TYPE_CHECKING:
     from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 
 _DOCK_MIN_WIDTH = 0
-_MDA_DOCK_WIDTH = 700
+_MDA_DOCK_WIDTH = 650
+_TOOLS_DOCK_DEFAULT_WIDTH = 550
+"""Tools-column width in the default layout (capped at a third of the page)."""
 _TOOLS_DOCK_MAX_WIDTH = 500
+"""Cap for the width ``_widen_unusable_tools_column`` repairs a sliver to."""
 _TOOLS_DOCK_MIN_USABLE_WIDTH = 200
 _WIDTH_SETTLE_DELAY_MS = 200
 _ADS_NEUTRAL_ICON_BUTTONS = frozenset(
@@ -154,6 +157,11 @@ def _configure_ads() -> None:
     CDockManager.setAutoHideConfigFlag(
         CDockManager.eAutoHideFlag.DockAreaHasAutoHideButton, True
     )
+
+
+def _default_tools_width(total: int) -> int:
+    """Return the default-layout tools-column width for a *total*-wide manager."""
+    return min(_TOOLS_DOCK_DEFAULT_WIDTH, total // 3)
 
 
 @dataclass
@@ -1413,8 +1421,9 @@ class AcquirePage(TabPage):
     def _pin_dock_widths(self) -> None:
         """Set the MDA / tools-column widths for the current manager width.
 
-        The MDA column gets its own width, each tools column a quarter of the
-        manager (capped), and the viewers whatever is left.
+        The MDA column gets its own width, each tools column
+        ``_TOOLS_DOCK_DEFAULT_WIDTH`` (at most a third of the manager), and the
+        viewers whatever is left.
 
         Called once at startup (before the MDA column's width lock -- see
         ``_install_width_lock`` -- takes over) and whenever the tools column
@@ -1461,7 +1470,7 @@ class AcquirePage(TabPage):
         # every column but the MDA and the viewers is a tools column
         for idx in range(len(sizes)):
             if idx not in (mda_idx, viewer_idx):
-                new[idx] = min(total // 4, _TOOLS_DOCK_MAX_WIDTH)
+                new[idx] = _default_tools_width(total)
         if viewer_idx >= 0:
             new[viewer_idx] = max(total - sum(new), _DOCK_MIN_WIDTH)
         self._dock_manager.setSplitterSizes(mda_area, new)
@@ -1569,8 +1578,8 @@ class AcquirePage(TabPage):
 
         ``_add_side_dock`` tabs every new tools panel into one shared
         area by default, in which case *area* already is that direct child --
-        and the same is true of the MDA column, ``_add_dock``'s
-        ``LeftDockWidgetArea`` default. But ADS lets the user drag *any* tab
+        and the same is true of the MDA column, docked at its registry
+        ``RightDockWidgetArea``. But ADS lets the user drag *any* tab
         out into its own area stacked (or split) alongside the others in the
         same column -- MDA's included, nothing here is special-cased to it --
         and then that column is a nested splitter wrapping one area per stack
@@ -1586,8 +1595,8 @@ class AcquirePage(TabPage):
         is.
 
         Climbs from *area* until the next splitter up is no longer nested in
-        another splitter -- i.e. until it reaches the outermost (MDA / center
-        / right) splitter -- and returns whichever ancestor sits directly
+        another splitter -- i.e. until it reaches the outermost (tools /
+        center / MDA) splitter -- and returns whichever ancestor sits directly
         under *that*. ADS wraps even an unsplit column in a chain of
         single-child splitters (observed for the center/viewer column), so
         "no splitter above" is what actually identifies the outermost level,
@@ -1808,7 +1817,7 @@ class AcquirePage(TabPage):
         widget being opened for the first time always appears in the tools
         column on the left -- as a new column if it's the only one there,
         tabbed alongside its neighbours otherwise. The first call caps the
-        column's initial width at ``_TOOLS_DOCK_MAX_WIDTH``.
+        column's initial width at ``_TOOLS_DOCK_DEFAULT_WIDTH``.
         """
         if (tools_area := self._resolve_tools_dock_area()) is not None:
             return self._add_dock(
