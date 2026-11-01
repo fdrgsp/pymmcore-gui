@@ -1941,8 +1941,8 @@ wheels = [
 
 [[package]]
 name = "ndv"
-version = "0.1.dev278+gc8244319b"
-source = { git = "https://github.com/fdrgsp/ndv?rev=cite#c8244319b2a1b6f23cf8b3e20def96811de9c360" }
+version = "0.1.dev279+gfb7050bfa"
+source = { git = "https://github.com/fdrgsp/ndv?rev=cite#fb7050bfa2862217af75bd2e8839338377f176fb" }
 dependencies = [
     { name = "cmap" },
     { name = "ihist" },
@@ -2154,8 +2154,8 @@ wheels = [
 
 [[package]]
 name = "ome-writers"
-version = "0.3.3.dev18+gce970500a"
-source = { git = "https://github.com/fdrgsp/ome-writers?rev=cite#ce970500ab4ec58258bba0bec2bce0301d163095" }
+version = "0.3.3.dev19+g4f747c7e0"
+source = { git = "https://github.com/fdrgsp/ome-writers?rev=cite#4f747c7e0845e6eeb8034202fd1177ae1e0b7066" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -3038,8 +3038,8 @@ test = [
 
 [[package]]
 name = "pymmcore-plus"
-version = "0.17.3.dev101+g756eb59b0"
-source = { git = "https://github.com/fdrgsp/pymmcore-plus?rev=cite#756eb59b017e79183328a0ca35fe90d39b6f34c6" }
+version = "0.17.3.dev102+g7bf69eac7"
+source = { git = "https://github.com/fdrgsp/pymmcore-plus?rev=cite#7bf69eac7f37280977a840edf177aebe014937bc" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -4105,8 +4105,8 @@ wheels = [
 
 [[package]]
 name = "useq-schema"
-version = "0.9.3.dev11+ge6e839f30"
-source = { git = "https://github.com/fdrgsp/useq-schema?rev=cite#e6e839f30c4934e92cd7a31a04cb9d775c7e35da" }
+version = "0.9.3.dev12+g29596beaf"
+source = { git = "https://github.com/fdrgsp/useq-schema?rev=cite#29596beaf815ac29537cd8c33a06bc3fad9a4608" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
