@@ -106,7 +106,7 @@ _ADS_TAB_CLOSE_BUTTON = "tabCloseButton"
 _MDA_UNLOCKED_PANELS = frozenset(
     {
         # Disables its own editors while keeping Pause/Cancel live -- see
-        # MDAWidgetCollapsible._enable_widgets upstream.
+        # MDAWidget._enable_widgets upstream.
         PanelKey.MDA,
         # No microscope access at all: an escape hatch for inspecting (or
         # rescuing) a run in progress, which is exactly when it's needed.

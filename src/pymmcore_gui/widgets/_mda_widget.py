@@ -8,11 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from ome_writers import AcquisitionSettings, OmeTiffFormat, ScratchFormat
 from ome_writers._schema import _ome_stem_suffix
-from pymmcore_widgets import (
-    MDAWidget,
-    MDAWidgetCollapsible,
-    MDAWidgetTopbar,
-)
+from pymmcore_widgets import MDAWidget, MDAWidgetCollapsible
 from pymmcore_widgets._icons import StandardIcon
 from pymmcore_widgets.mda import (
     CollapsibleCoreMDATabs,
@@ -226,8 +222,8 @@ else:
 class MemoryMDAWidgetBase(_MixinBase):
     """Everything this app adds to an MDA editor, independent of its presentation.
 
-    Both upstream presentations (`MDAWidgetCollapsible`'s sections,
-    `MDAWidgetTopbar`'s tab bar) derive from `MDAWidget` and expose the same
+    Both upstream presentations (`MDAWidget`'s tab bar and its subclass
+    `MDAWidgetCollapsible`'s sections) expose the same
     editors, footer and saving widgets, so the app theme, semantic icons, the
     channel-selection core bridge, the acquisition lock and the memory-sink
     output fallback all live here and are shared verbatim. Both flavours must
@@ -256,11 +252,6 @@ class MemoryMDAWidgetBase(_MixinBase):
         _sequenceStartedInGui: Any
         _sequenceFinishedInGui: Any
         mdaLockChanged: Any
-
-        # The settings card `_install_layout` builds on each concrete flavour
-        # (axis order / keep shutter open / autofocus axis) -- not part of
-        # upstream `MDAWidget`, so `_MixinBase` doesn't carry it either.
-        _settings_box: Any
 
     # ----------- Override type hints in superclass -----------
     # _create_tab_widget above always installs an MDAChannelTable, which adds
@@ -951,13 +942,13 @@ class MemoryMDAWidget(MemoryMDAWidgetBase, MDAWidgetCollapsible):
         self.tabs.refresh_summaries()
 
 
-class TopbarMemoryMDAWidget(MemoryMDAWidgetBase, MDAWidgetTopbar):
+class TopbarMemoryMDAWidget(MemoryMDAWidgetBase, MDAWidget):
     """The same editor, presented as upstream's native icon-labelled top tabs.
 
     Identical in behaviour to `MemoryMDAWidget` -- everything the app adds lives
-    in `MemoryMDAWidgetBase`. This flavour is structurally the closest to plain
-    `MDAWidget`: `tabs` is a real `QTabWidget`, so the hooks below use its
-    native tab API (`setChecked`/`setCurrentWidget`) directly rather than a
+    in `MemoryMDAWidgetBase`. This flavour is upstream's plain `MDAWidget`:
+    `tabs` is a real `QTabWidget`, so the hooks below use its native tab API
+    (`setChecked`/`setCurrentWidget`) directly rather than a
     presentation-specific row/section object.
     """
 
@@ -977,21 +968,6 @@ class TopbarMemoryMDAWidget(MemoryMDAWidgetBase, MDAWidgetTopbar):
 
     def _create_tab_widget(self) -> TopbarMDATabs:
         return GuiTopbarMDATabs(None, self._mmc)
-
-    def _enable_widgets(self, enable: bool) -> None:
-        """Disable editors while keeping the topbar footer controls clickable.
-
-        Upstream's generic implementation disables every direct child except
-        ``control_btns``.  In the topbar presentation those controls are not a
-        direct child: they live inside ``mdaExecutionFooter`` with Save/Load.
-        Disabling that frame also disables Pause and Cancel through their
-        ancestor, despite the buttons themselves remaining enabled.  Keep the
-        footer alive and lock only its editing actions explicitly.
-        """
-        self.tabs._enable_tabs(enable)
-        self._settings_box.setEnabled(enable)
-        self._save_button.setEnabled(enable)
-        self._load_button.setEnabled(enable)
 
     def _flavor_apply_tab_icons(self) -> None:
         """Tint every tab's icon to the app's icon colour.
