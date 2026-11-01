@@ -1,12 +1,4 @@
-"""Acquire-tab toolbar pieces: snap/live and shutters.
-
-Snap and Live are built in-house rather than wrapping ``pymmcore_widgets``'
-``SnapButton``/``LiveButton`` directly: those hardcode their own text,
-30px icon size, and text-swapping behaviour in ways that fought this app's
-"icon-only, persistently-boxed" toolbar style. The core-facing logic they
-wrap (snap-with-shutter, live start/stop) is a handful of lines, so owning it
-directly gives full control over appearance without post-hoc patching.
-"""
+"""Acquire toolbar controls with application-specific styling and core actions."""
 
 from __future__ import annotations
 

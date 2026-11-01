@@ -36,7 +36,6 @@ class Notification:
     never_show_again: str | None = None
     timestamp: float = field(default_factory=time.time, init=False)
     id: int = field(default_factory=lambda: next(_id_counter), init=False)
-    # progress: float | None = None
 
 
 class NotificationManager(QObject):
@@ -118,9 +117,7 @@ class NotificationManager(QObject):
         return super().eventFilter(watched, event)
 
     def reposition_notifications(self, animate: bool = False) -> None:
-        """Reposition notifications when parent resizes."""
-        """Animate notifications to their new positions based on cumulative heights."""
-
+        """Stack notifications by height, optionally animating their movement."""
         if not isinstance(parent := self.parent(), QWidget):
             return  # pragma: no cover
 

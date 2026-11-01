@@ -127,22 +127,11 @@ _ads_configured = False
 
 
 def _configure_ads() -> None:
-    """Apply the process-wide ADS flags, once.
+    """Apply process-wide ADS flags before constructing any dock manager.
 
-    Without ``DockAreaHasAutoHideButton``, pinning a dock to a side
-    bar is drag-only and undiscoverable; without ``EqualSplitOnInsertion``,
-    dragging a viewer tab out to split it gives the new area only a sliver
-    (a fixed minimum width) while the original area keeps the rest, rather
-    than splitting the space evenly. These setters are static -- they affect
-    every ``CDockManager`` in the process, and only the *first* call before
-    any manager is constructed has an effect.
-
-    Note: emptying an area in the outer tools manager by moving its last dock
-    reproduces an offscreen pytest-qt crash on PyQt6Ads 4.4.0.post2 and 5.0.0,
-    despite working interactively on a real display. Automated tests therefore
-    verify outer-manager membership and allowed drop areas rather than simulate
-    those drags. Viewer splitting is exercised directly because it happens in
-    the isolated nested manager and is stable under the harness.
+    Enable discoverable auto-hide controls and equal splits for new viewer areas.
+    Outer-manager drag simulation is unstable under offscreen QtAds tests; viewer
+    splitting is tested in the isolated nested manager.
     """
     global _ads_configured
     if _ads_configured:
@@ -603,22 +592,13 @@ class AcquirePage(TabPage):
 
     def _popup_mda_kind_menu(self, pos: QPoint) -> None:
         """Right-click on the MDA button: pick which editor presentation docks."""
-        button = self.panel_button(PanelKey.MDA)
-        menu = QMenu(button)
-        group = QActionGroup(menu)
-        group.setExclusive(True)
-        labels = {
-            MdaKind.COLLAPSIBLE: "Collapsible",
-            MdaKind.TOPBAR: "Topbar",
-        }
-        for kind, label in labels.items():
-            action = QAction(label, menu)
-            action.setCheckable(True)
-            action.setChecked(kind == self._mda_kind)
-            action.triggered.connect(partial(self._set_mda_kind, kind))
-            group.addAction(action)
-            menu.addAction(action)
-        menu.exec(button.mapToGlobal(pos))
+        self._popup_kind_menu(
+            pos,
+            PanelKey.MDA,
+            self._mda_kind,
+            {MdaKind.COLLAPSIBLE: "Collapsible", MdaKind.TOPBAR: "Topbar"},
+            self._set_mda_kind,
+        )
 
     def _set_mda_kind(self, kind: str) -> None:
         """Swap which MDA editor presentation is docked.
@@ -669,33 +649,42 @@ class AcquirePage(TabPage):
 
     def _popup_stage_kind_menu(self, pos: QPoint) -> None:
         """Right-click on the Stages button: pick which widget flavor is docked."""
-        button = self.panel_button(PanelKey.STAGES)
+        self._popup_kind_menu(
+            pos,
+            PanelKey.STAGES,
+            self._stage_kind,
+            {
+                StageKind.XYZ: "XYZ Stage (core XY/Z devices)",
+                StageKind.PER_DEVICE: "Per-Device Stages (add on demand)",
+            },
+            self._set_stage_kind,
+        )
+
+    def _popup_kind_menu(
+        self,
+        pos: QPoint,
+        panel: str,
+        current: str,
+        labels: Mapping[str, str],
+        select: Callable[[str], None],
+    ) -> None:
+        button = self.panel_button(panel)
         menu = QMenu(button)
         group = QActionGroup(menu)
         group.setExclusive(True)
-        labels = {
-            StageKind.XYZ: "XYZ Stage (core XY/Z devices)",
-            StageKind.PER_DEVICE: "Per-Device Stages (add on demand)",
-        }
         for kind, label in labels.items():
             action = QAction(label, menu)
             action.setCheckable(True)
-            action.setChecked(kind == self._stage_kind)
-            action.triggered.connect(partial(self._set_stage_kind, kind))
+            action.setChecked(kind == current)
+            action.triggered.connect(partial(select, kind))
             group.addAction(action)
             menu.addAction(action)
         menu.exec(button.mapToGlobal(pos))
 
     def _set_stage_kind(self, kind: str) -> None:
-        """Switch which widget flavor is docked under the Stages button.
+        """Swap the stage panel's content while keeping cached widgets and dock state.
 
-        Detaches (not deletes) the widget being switched away from -- it's
-        cached in ``self._stage_widgets`` via ``_stage_widget_for`` and
-        reused if the user switches back, so e.g. devices added to
-        StagesPanel survive a round trip through the other flavor. Swaps
-        only the dock's content; its position, pin state, and tab are
-        untouched. A no-op while the panel has never been opened this
-        session: the next open builds straight from the new kind.
+        If the panel has not been opened, remember the choice for its next opening.
         """
         if kind == self._stage_kind:
             return
@@ -710,18 +699,10 @@ class AcquirePage(TabPage):
     # -------------------------------------------------------------- mda lock
 
     def set_mda_lock(self, locked: bool) -> None:
-        """Lock the page down to watching while an acquisition is running.
+        """Disable microscope controls while an acquisition owns the hardware.
 
-        Everything that could steer the microscope out from under the runner
-        goes away: snap/live, the shutters, the panel buttons (opening a panel
-        mid-run would also *build* it, querying the core), Preferences, and
-        every open panel except the few in :data:`_MDA_UNLOCKED_PANELS`.
-        Viewers are untouched on purpose -- watching frames arrive, and
-        adjusting their contrast, is the point of the run.
-
-        Driven by ``MemoryMDAWidget.mdaLockChanged``, whose False edge comes
-        from that widget's own runner polling: if a ``sequenceFinished`` is
-        ever missed, the lock is still released.
+        Keep viewers, run controls and read-only inspection available. The MDA widget
+        polls runner state so a missed completion signal cannot leave the page locked.
         """
         if locked == self._mda_locked:
             return
@@ -1419,28 +1400,11 @@ class AcquirePage(TabPage):
     # ------------------------------------------------------------------ dock helpers
 
     def _pin_dock_widths(self) -> None:
-        """Set the MDA / tools-column widths for the current manager width.
+        """Allocate initial column widths while preserving a locked MDA width.
 
-        The MDA column gets its own width, each tools column
-        ``_TOOLS_DOCK_DEFAULT_WIDTH`` (at most a third of the manager), and the
-        viewers whatever is left.
-
-        Called once at startup (before the MDA column's width lock -- see
-        ``_install_width_lock`` -- takes over) and whenever the tools column
-        is first created.
-
-        A width the MDA column is already locked to -- the user's own drag,
-        or a restored/named layout that saved a non-default width -- is kept
-        rather than overwritten with the canonical ``_MDA_DOCK_WIDTH``.
-        Regression test for the splitter silently caching the canonical width
-        anyway: opening the *first* tools panel after loading a layout
-        with a narrower MDA visibly clamped the column at its custom width
-        (the lock held), but the very next hover-triggered unlock -- any
-        mouse movement over the MDA/viewer boundary -- snapped it straight to
-        the canonical width, and moving the mouse away then *locked that in*
-        as the new, permanently wrong, width. Only a genuinely unset MDA
-        (fresh construction, or just after ``reset_layout`` releases every
-        lock) falls through to the canonical default.
+        Each tools column gets at most a third of the manager; viewers take the rest.
+        Use the live splitter child count because ADS may not yet have removed an
+        emptied column.
         """
         mda_area = self._mda_dock.dockAreaWidget()
         if mda_area is None:
@@ -1476,14 +1440,9 @@ class AcquirePage(TabPage):
         self._dock_manager.setSplitterSizes(mda_area, new)
 
     def _widen_tools_column_soon(self, attempts: int = 5) -> None:
-        """Widen an unusably narrow tools column once QtADS has laid it out.
+        """Retry sizing a new tools column until ADS finishes its deferred layout.
 
-        Both callers act on a column that does not exist yet at the moment
-        they run -- reopening a dock into a column ADS destroyed when it was
-        emptied, or restoring one -- so this has to wait for ADS's own
-        deferred layout pass. Bounded retries rather than a single shot
-        because that pass may take more than one event-loop turn on a slower
-        machine, and no retries at all would silently leave the sliver.
+        Retries are bounded because a single layout pass may take several event turns.
         """
 
         def _attempt() -> None:
@@ -1495,27 +1454,10 @@ class AcquirePage(TabPage):
         QTimer.singleShot(0, _attempt)
 
     def _widen_unusable_tools_column(self) -> bool:
-        """Expand an unusably narrow tools column to a workable width.
+        """Repair transient tools-column slivers without changing usable widths.
 
-        Widths at or above the usability floor are user choices and remain
-        untouched. Below it, the column is one of QtADS's transient 47--60 px
-        slivers -- what a freshly created (or re-shown, or restored) column
-        starts at before anything sizes it, and what older sessions persisted
-        when a lazy dock was frozen before QtADS laid it out. Widen those,
-        taking space from the largest non-MDA sibling in the outer horizontal
-        splitter.
-
-        Returns whether the caller can stop retrying -- *not* whether the
-        column reached the width it aimed for. Only a dock tree QtADS has not
-        finished rebuilding reports False, so the startup settle timer runs
-        again after its next deferred pass. Every other outcome is final,
-        including "the donor column had less to spare than we asked for":
-        retrying recomputes identical numbers forever, which would leave the
-        settle timer firing for the life of the page and -- because
-        ``_settle_and_lock_widths`` bails before setting it -- the MDA width
-        lock never marked as installed. A CI runner (or any small display)
-        that clamps the window below the requested size lands in exactly that
-        case, so it has to be a normal outcome rather than a retry.
+        Take space from the largest non-MDA sibling. Return False only while ADS is
+        still rebuilding the dock tree; limited donor space is a final outcome.
         """
         area = self._resolve_tools_dock_area()
         if area is None:

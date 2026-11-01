@@ -111,11 +111,17 @@ def _good_data_only(
             # check whether the value is valid for the field
             field = model_fields[key]
             annotation = field.annotation
-            if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+            if (
+                isinstance(annotation, type)
+                and issubclass(annotation, BaseModel)
+                and isinstance(value, dict)
+            ):
                 cleaned[key] = _good_data_only(annotation, value, warn=warn)
             else:
                 try:
-                    TypeAdapter(field.annotation).validate_python(value)
+                    TypeAdapter(
+                        annotation if annotation is not None else Any
+                    ).validate_python(value)
                     cleaned[key] = value
                 except ValidationError as e:
                     if warn:
@@ -165,11 +171,13 @@ class WindowSettingsV1(BaseMMSettings):
 
     @model_validator(mode="before")
     @classmethod
-    def _migrate_names(cls, values: dict[str, Any]) -> dict[str, Any]:
+    def _migrate_names(cls, values: Any) -> Any:
         """Migrate old settings to new ones.
 
         This is a temporary solution until we have a proper migration system.
         """
+        if not isinstance(values, dict):
+            return values
         # migrate from old settings
         if "initial_widgets" in values:
             values["open_widgets"] = values.pop("initial_widgets")
@@ -208,6 +216,8 @@ class ModernWindowSettingsV1(BaseMMSettings):
 
     See ``widgets._panels.StageKind`` and ``AcquireLayout.stage_kind``.
     """
+    acquire_mda_kind: str = "collapsible"
+    """MDA editor presentation, matching AcquireLayout.mda_kind."""
     theme: Literal["dark", "light"] = "dark"
     """Active color theme."""
     zoom: float | None = None

@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 import psutil
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
     from useq import MDAEvent
 
 GH_REPO_URL = "http://github.com/pymmcore-plus/pymmcore-gui"
@@ -37,6 +39,22 @@ def system_memory_gb() -> tuple[float, float]:
     """
     vm = psutil.virtual_memory()
     return vm.total / _BYTES_PER_GB, vm.available / _BYTES_PER_GB
+
+
+def indexed_shape(
+    shape: Sequence[int], indexers: Mapping[int, int | slice]
+) -> tuple[int, ...]:
+    """Return the shape after basic integer/slice indexing, without reading data."""
+    result = []
+    for axis, size in enumerate(shape):
+        index = indexers.get(axis, slice(None))
+        if isinstance(index, slice):
+            result.append(len(range(size)[index]))
+        elif not -size <= index < size:
+            raise IndexError(
+                f"Index {index} out of bounds for axis {axis} of size {size}"
+            )
+    return tuple(result)
 
 
 def get_treeish() -> str:

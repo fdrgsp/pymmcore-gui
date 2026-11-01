@@ -138,21 +138,11 @@ class _ViewerRecord:
 
 
 class AcquireViewersManager(QObject):
-    """Lazy snap preview plus one dock-tabbed viewer for each MDA run.
+    """Manage a lazy preview and dock-tabbed viewers for acquisitions.
 
-    Every Preview/MDA-viewer instance is wrapped in its own ``CDockWidget`` and
-    tabbed into a dedicated nested ``CDockManager`` within the tools workspace.
-
-    Closed viewer docks use ADS's ``DockWidgetDeleteOnClose`` feature so a
-    closed viewer's dock-area/splitter node is actually removed (freeing its
-    Qt widget/canvas resources via the normal parent-child cascade) rather
-    than left behind as a permanently-empty, still-space-occupying shell --
-    otherwise splitting several viewers side by side and closing some of them
-    leaves unreclaimable dead space that the remaining ones can't expand
-    into. The supplied dock manager is dedicated to viewers and nested inside
-    the outer MDA/tools manager. Destroying or splitting a viewer area can
-    therefore relayout only the viewer workspace, never the surrounding tool
-    panels.
+    Viewers use a nested dock manager, keeping their splitter changes independent
+    of the surrounding tools. Delete-on-close removes empty dock areas and releases
+    viewer resources.
     """
 
     _sequenceStarted = Signal(object, object)

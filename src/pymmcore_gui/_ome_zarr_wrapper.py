@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Any, TypeGuard, cast
 import numpy as np
 from ndv.models import DataWrapper
 
+from pymmcore_gui._utils import indexed_shape
+
 if TYPE_CHECKING:
     from collections.abc import Hashable, Sequence
 
@@ -279,10 +281,16 @@ class OMEZarrWrapper(DataWrapper):
             start, stop, step = pos_idx.indices(len(self._positions))
             indices = range(start, stop, step)
             frames = [self._read_position(i, inner_idx) for i in indices]
-            return np.stack(frames, axis=0) if frames else np.empty((0,))
+            if frames:
+                return np.stack(frames, axis=0)
+            return np.empty(
+                indexed_shape(tuple(self.sizes().values()), indexers), dtype=self.dtype
+            )
         return self._read_position(pos_idx, inner_idx)
 
     def _read_position(self, pos_idx: int, inner_idx: tuple) -> np.ndarray:
+        if pos_idx < 0:
+            pos_idx += len(self._positions)
         if not 0 <= pos_idx < len(self._positions):
             raise IndexError(f"Position index {pos_idx} out of range")
         pos_group = cast("ZarrGroup", self._group[self._positions[pos_idx]])
@@ -291,7 +299,21 @@ class OMEZarrWrapper(DataWrapper):
 
     @staticmethod
     def _read_array(arr: ZarrArray, idx: tuple) -> np.ndarray:
+        shape = arr.metadata.shape
+        assert shape is not None
+        selected_shape = indexed_shape(shape, dict(enumerate(idx)))
+        if 0 in selected_shape:
+            return np.empty(selected_shape, dtype=np.dtype(arr.dtype))
+        # TensorStore uses absolute indices, including negative slice bounds.
+        normalized = tuple(
+            slice(*index.indices(size))
+            if isinstance(index, slice)
+            else index + size
+            if index < 0
+            else index
+            for index, size in zip(idx, shape, strict=True)
+        )
         try:
-            return np.asarray(arr.to_tensorstore()[idx].read().result())
+            return np.asarray(arr.to_tensorstore()[normalized].read().result())
         except ImportError:
             return np.asarray(arr.to_zarr_python()[idx])

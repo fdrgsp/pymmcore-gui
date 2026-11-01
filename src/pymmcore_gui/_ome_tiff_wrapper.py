@@ -1,24 +1,8 @@
-"""ndv `DataWrapper` for OME-TIFF files and pyMM multi-position directories.
+"""Lazy ndv DataWrapper for OME-TIFF files and multi-position directories.
 
-`ome_writers`/pyMM writes one file per *stored* position for a multi-position
-acquisition, named `<stem>[_<well>]_p###[_r###_c###].ome.tiff` -- the
-`_r###_c###` tile suffix appears when a stage position holds more than one
-grid tile. This wrapper opens either that directory or a single OME-TIFF file.
-
-Reads are lazy at the single-plane level: only the page(s) needed to satisfy
-a given `isel()` request are ever decoded, so opening a large acquisition
-never materializes it into memory. Dimension labels, channel names, and
-physical (space/time) coordinates all come straight from tifffile's own OME
-metadata parsing (`TiffPageSeries.dims`/`.coords`) rather than a second,
-hand-rolled XML reader.
-
-Multi-position note: a pyMM multi-position acquisition writes one physical
-file per position, but each file's OME-XML describes the *entire* dataset (a
-single `<OME>` graph with one `<Image>` per position, each pointing at its
-own file). Opening any *one* of the sibling files is therefore enough:
-tifffile exposes every position as `tf.series[p]` and transparently opens
-whichever companion file that position's pixels live in -- so this wrapper
-only ever opens a single `TiffFile` handle, never one per position.
+Read only the requested planes. Dimensions, labels and physical coordinates come
+from tifffile's OME metadata parsing. For linked multi-file datasets, one TiffFile
+exposes every position through its series and opens companion files as needed.
 """
 
 from __future__ import annotations
@@ -36,6 +20,8 @@ from typing import TYPE_CHECKING, Any, TypeGuard
 import numpy as np
 import tifffile
 from ndv.models import DataWrapper
+
+from pymmcore_gui._utils import indexed_shape
 
 if TYPE_CHECKING:
     from collections.abc import Hashable, Mapping, Sequence
@@ -73,14 +59,10 @@ def _position_label(filename: str) -> str:
 
 
 def _ome_file_order(xml_str: str | None) -> list[str]:
-    """Per-position filenames in the OME graph's own `<Image>` order.
+    """Return filenames in OME Image order, matching tifffile.series.
 
-    A multi-file OME-TIFF set repeats the whole `<OME>` graph in every file,
-    one `<Image>` per stored position **in acquisition order**, each naming
-    its own file via `<TiffData><UUID FileName="...">`. That order is what
-    `tifffile` exposes as `tf.series[i]`, so it -- not the directory listing
-    -- is what the `p` axis's labels have to follow. Returns `[]` when the
-    metadata is missing or doesn't name exactly one file per image.
+    Directory order may differ from acquisition order for grid traversals. Return
+    an empty list unless the metadata names exactly one file per image.
     """
     if not xml_str:
         return []
@@ -102,6 +84,21 @@ def _ome_file_order(xml_str: str | None) -> list[str]:
     return []  # pragma: no cover
 
 
+def _open_tiff(path: Path) -> tifffile.TiffFile:
+    """Open a TIFF, following a BinaryOnly reference to its metadata master."""
+    file = tifffile.TiffFile(path)
+    if xml := file.ome_metadata:
+        with contextlib.suppress(ET.ParseError):
+            root = ET.fromstring(xml)
+            for element in root.iter():
+                if element.tag.endswith("BinaryOnly") and (
+                    master := element.get("MetadataFile")
+                ):
+                    file.close()
+                    return tifffile.TiffFile(path.parent / master)
+    return file
+
+
 def _resolve_axis(indexer: int | slice, size: int) -> tuple[list[int], bool]:
     """Return (concrete index values, keep_axis) for one axis's `isel` request.
 
@@ -112,7 +109,9 @@ def _resolve_axis(indexer: int | slice, size: int) -> tuple[list[int], bool]:
     if isinstance(indexer, slice):
         start, stop, step = indexer.indices(size)
         return list(range(start, stop, step)), True
-    return [indexer], False
+    if not -size <= indexer < size:
+        raise IndexError(f"Index {indexer} out of bounds for axis of size {size}")
+    return [indexer % size], False
 
 
 def _read_series(
@@ -136,6 +135,9 @@ def _read_series(
     ]
     value_lists = [values for values, _ in axes_info]
     combos = list(itertools.product(*value_lists)) if value_lists else [()]
+
+    if not combos:
+        return np.empty(indexed_shape(series.shape, indexers), dtype=series.dtype)
 
     planes = [
         _read_plane(series, combo, leading_shape, y_idx, x_idx) for combo in combos
@@ -197,38 +199,42 @@ class OMETiffWrapper(DataWrapper):
 
     def __init__(self, data: Any) -> None:
         path = Path(data)
-        self._is_multiposition = path.is_dir()
-
-        if self._is_multiposition:
-            position_files = _multiposition_files(path)
-            if not position_files:
-                raise ValueError(f"No per-position `*.ome.tiff` files found in {path}")
-            # Any sibling file exposes every position via tf.series[p] -- see
-            # the module docstring. Opening the first one is enough.
-            self._tf = tifffile.TiffFile(position_files[0])
-            if len(self._tf.series) < len(position_files):
+        self._position_files: list[Path] = []
+        position_files = _multiposition_files(path) if path.is_dir() else []
+        if path.is_dir() and not position_files:
+            raise ValueError(f"No per-position `*.ome.tiff` files found in {path}")
+        self._tf = _open_tiff(position_files[0] if position_files else path)
+        ordered = _ome_file_order(self._tf.ome_metadata)
+        n_series = len(self._tf.series)
+        self._is_multiposition = bool(position_files) or n_series > 1
+        if position_files:
+            if n_series == 1 and len(ordered) <= 1:
+                # Independent files describe one position each. Open other files
+                # only while reading their requested planes.
+                self._position_files = position_files
+            elif n_series < len(position_files):
+                self._tf.close()
                 raise ValueError(
                     f"{path} has {len(position_files)} position file(s) but its "
-                    f"OME metadata only describes {len(self._tf.series)}"
+                    f"OME metadata only describes {n_series}"
                 )
-            first_series = self._tf.series[0]
-            inner_dims = tuple(d.lower() for d in first_series.dims)
+
+        first_series = self._tf.series[0]
+        inner_dims = tuple(d.lower() for d in first_series.dims)
+        coords = _coords_from_series(first_series, inner_dims)
+        if self._is_multiposition:
             self._dims = ("p", *inner_dims)
-            # Label each position from the file the OME graph assigns to it,
-            # in that graph's order -- which is the same order tifffile
-            # exposes as tf.series[i], and the order the data was acquired in.
-            ordered = _ome_file_order(self._tf.ome_metadata)
-            if len(ordered) == len(self._tf.series):
+            # Linked metadata defines acquisition order, even when opened through
+            # a later sibling file. Independent files use their filename order.
+            if not self._position_files and len(ordered) == n_series:
                 labels = [_position_label(name) for name in ordered]
-            else:
+            elif position_files:
                 labels = [_position_label(p.name) for p in position_files]
-            coords: dict[Hashable, Sequence] = {"p": labels}
-            coords.update(_coords_from_series(first_series, inner_dims))
+            else:
+                labels = [str(i) for i in range(n_series)]
+            coords = {"p": labels, **coords}
         else:
-            self._tf = tifffile.TiffFile(path)
-            first_series = self._tf.series[0]
-            self._dims = tuple(d.lower() for d in first_series.dims)
-            coords = _coords_from_series(first_series, self._dims)
+            self._dims = inner_dims
 
         self._dtype = np.dtype(first_series.dtype)
         self._coords = coords
@@ -301,12 +307,24 @@ class OMETiffWrapper(DataWrapper):
     def _isel_multiposition(self, indexers: Mapping[int, int | slice]) -> np.ndarray:
         pos_idx = indexers.get(0, slice(None))
         inner = {i - 1: v for i, v in indexers.items() if i != 0}
-        n_positions = len(self._tf.series)
+        n_positions = len(self._position_files) or len(self._tf.series)
         if isinstance(pos_idx, slice):
             start, stop, step = pos_idx.indices(n_positions)
-            frames = [
-                _read_series(self._tf.series[i], inner)
-                for i in range(start, stop, step)
-            ]
-            return np.stack(frames, axis=0) if frames else np.empty((0,))
-        return _read_series(self._tf.series[pos_idx], inner)
+            frames = [self._read_position(i, inner) for i in range(start, stop, step)]
+            if frames:
+                return np.stack(frames, axis=0)
+            return np.empty(
+                indexed_shape(tuple(self.sizes().values()), indexers), dtype=self.dtype
+            )
+        return self._read_position(pos_idx, inner)
+
+    def _read_position(
+        self, index: int, indexers: Mapping[int, int | slice]
+    ) -> np.ndarray:
+        if self._position_files:
+            path = self._position_files[index]
+            if path == self._position_files[0]:
+                return _read_series(self._tf.series[0], indexers)
+            with tifffile.TiffFile(path) as file:
+                return _read_series(file.series[0], indexers)
+        return _read_series(self._tf.series[index], indexers)

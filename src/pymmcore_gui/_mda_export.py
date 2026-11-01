@@ -1,19 +1,7 @@
-"""Export a live (in-memory or on-disk) MDA acquisition to OME-TIFF/OME-Zarr.
+"""Export an acquisition through ome-writers, preserving its metadata.
 
-The "save" affordance on an MDA-backed viewer needs to write a *real*,
-metadata-complete OME-TIFF or OME-Zarr regardless of whether the acquisition
-itself streamed straight to disk or ran with output="memory" (the fallback
-`MemoryMDAWidget.prepare_mda` uses whenever the Saving section is unchecked --
-see `pymmcore_gui.widgets._mda_widget`). Rather than hand-rolling a second,
-metadata-poor writer, this module replays the acquisition's live view through
-a brand new `ome_writers` stream, so the export goes through the exact same
-writer -- and therefore produces the exact same on-disk metadata -- as a live,
-disk-backed acquisition would have.
-
-Frames are streamed one at a time directly from the source view; the full
-acquisition is never materialized as a single in-memory array (unlike
-`np.asarray(large_stream_view)`, which the `ome_writers.StreamView` docstring
-explicitly warns against).
+Frames are read and written one at a time, avoiding materialization of the
+entire acquisition in memory.
 """
 
 from __future__ import annotations
@@ -130,7 +118,10 @@ def export_acquisition(
         If nothing has been acquired yet (no frames written to `record.view`).
     """
     dims = _clamp_dimensions(record.settings, record.view)
-    if dims and dims[0].count is None:
+    coords = getattr(record.view, "coords", None) or {}
+    if (dims and dims[0].count is None) or any(
+        dim.name in coords and len(coords[dim.name]) == 0 for dim in dims
+    ):
         raise ValueError("Nothing to export: no frames have been acquired yet.")
 
     out_format: Any = fmt

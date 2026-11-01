@@ -42,6 +42,7 @@ from pymmcore_gui._qt.QtAds import (
 from pymmcore_gui._qt.QtCore import QPoint, QRect, QSize, Qt, Signal
 from pymmcore_gui._qt.QtGui import (
     QAction,
+    QActionGroup,
     QCloseEvent,
     QColor,
     QCursor,
@@ -5789,7 +5790,7 @@ def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
         toolbar.show_grid_action,
         toolbar.map_memory_action,
         toolbar.delete_rois_action,
-        *toolbar.marker_mode_action_group.actions(),
+        *cast("QActionGroup", toolbar.marker_mode_action_group).actions(),
         *explorer.roi_manager.mode_actions.actions(),
     )
     for action in neutral_actions:

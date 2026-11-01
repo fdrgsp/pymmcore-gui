@@ -1,19 +1,7 @@
-"""Named Acquire-page layouts, stored one JSON file per layout.
+"""Named Acquire layouts, stored as individual JSON files.
 
-Deliberately *not* part of :mod:`pymmcore_gui._settings`: a layout is a
-document the user creates, names, and throws away, not a preference. Giving
-each one its own file in ``USER_DATA_DIR/layouts`` means the combo box in the
-startup dialog is simply a directory listing -- so a layout the user (or a
-sync tool, or a fresh install) deletes stops being offered without any
-bookkeeping -- and layouts can be copied between machines or shared with a
-colleague on their own.
-
-Two names are reserved and never live in this directory:
-
-* ``Default`` -- the built-in arrangement, which is code
-  (``AcquirePage.reset_layout``), not data.
-* ``Last session`` -- the arrangement auto-saved on close, which lives in
-  ``Settings.modern_window`` alongside the other window state.
+Default is built into AcquirePage.reset_layout. Last Session is stored in
+Settings.modern_window; all other layouts live in USER_DATA_DIR/layouts.
 """
 
 from __future__ import annotations
@@ -159,20 +147,16 @@ def layout_path(name: str) -> Path:
 
 def is_valid_layout_name(name: str) -> bool:
     """True if *name* is non-empty and doesn't collide with a reserved name."""
-    return bool(name.strip()) and name.strip() not in RESERVED_LAYOUT_NAMES
+    return bool(name.strip()) and name.strip().casefold() not in {
+        reserved.casefold() for reserved in RESERVED_LAYOUT_NAMES
+    }
 
 
 def _saved_layout_paths() -> dict[str, Path]:
-    """Map every saved layout's display name to the file holding it.
+    """Map stored display names to layout files, skipping malformed files.
 
-    Lookups go through the name stored *inside* each file -- the one listings
-    report -- rather than through :func:`layout_path`, because a file's stem
-    can drift from it: saving "Start" where ``start.json`` already exists
-    keeps the old filename on a case-insensitive filesystem, which would then
-    make the layout unloadable by its own listed name anywhere else.
-
-    Unreadable or malformed files are skipped rather than raising: a corrupt
-    layout must never stop the application from launching.
+    A file's stem may differ from its display name after a rename or a move
+    between filesystems with different case sensitivity.
     """
     paths: dict[str, Path] = {}
     try:
@@ -205,14 +189,22 @@ def load_layout(name: str) -> AcquireLayout | None:
 
 def save_layout(name: str, layout: AcquireLayout) -> Path:
     """Write *layout* under *name*, overwriting any existing layout of that name."""
-    path = layout_path(name)
+    path = _saved_layout_paths().get(name)
+    if path is None:
+        candidate = layout_path(name)
+        path = candidate
+        counter = 1
+        while path.exists():
+            path = candidate.with_stem(f"{candidate.stem}_{counter}")
+            counter += 1
     path.write_text(json.dumps(layout.to_dict(name), indent=2), errors="ignore")
     return path
 
 
 def delete_layout(name: str) -> None:
     """Remove *name*'s file if it exists."""
-    layout_path(name).unlink(missing_ok=True)
+    if (path := _saved_layout_paths().get(name)) is not None:
+        path.unlink(missing_ok=True)
 
 
 # ----------------------- the two reserved layouts -----------------------
@@ -230,6 +222,7 @@ def session_layout() -> AcquireLayout:
         hidden_panels=frozenset(prefs.acquire_hidden_panels),
         stage_devices=frozenset(prefs.acquire_stage_devices),
         stage_kind=prefs.acquire_stage_kind,
+        mda_kind=prefs.acquire_mda_kind,
     )
 
 
@@ -241,6 +234,7 @@ def store_session_layout(layout: AcquireLayout) -> None:
     prefs.acquire_hidden_panels = set(layout.hidden_panels)
     prefs.acquire_stage_devices = set(layout.stage_devices)
     prefs.acquire_stage_kind = layout.stage_kind
+    prefs.acquire_mda_kind = layout.mda_kind
 
 
 def available_layouts() -> list[str]:

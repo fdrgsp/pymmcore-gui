@@ -54,13 +54,7 @@ _MAX_ICON_GRAYSCALE_SPREAD = 30
 
 
 class _KeyFilter(QObject):
-    """Compatibility seam for events vispy's canvas would otherwise swallow.
-
-    Installed on both the ndv widget and its canvas (see
-    `MMArrayViewer.__init__`), so it catches right-clicks aimed at the canvas
-    even though vispy's own event handling isn't reachable through the normal
-    QWidget/eventFilter chain.
-    """
+    """Forward canvas context-menu events that vispy otherwise consumes."""
 
     def __init__(self, viewer: MMArrayViewer) -> None:
         super().__init__()
@@ -213,13 +207,7 @@ class MMArrayViewer(ndv.ArrayViewer):
         self.display_model.visible_axes = _ORTHO_VIEWS[(idx + 1) % len(_ORTHO_VIEWS)]
 
     def _show_context_menu(self, global_pos: Any) -> bool:
-        """Show the right-click menu; return whether one was actually shown.
-
-        Absent (rather than merely disabled) when this viewer has no
-        associated sequence at all -- e.g. the snap/live Preview never
-        reaches here (it isn't an `MMArrayViewer`), and a reopened file with
-        no recoverable sequence metadata leaves `mda_sequence` unset.
-        """
+        """Offer sequence reuse when the viewer has an associated acquisition."""
         if self.mda_sequence is None:
             return False
 
@@ -282,14 +270,10 @@ class MMArrayViewer(ndv.ArrayViewer):
         fmt: ExportFormat,
         tiff_layout: str | None = None,
     ) -> None:
-        """Run `export_acquisition`, confirming before clobbering an existing path.
+        """Export, confirming before overwriting the resolved output path.
 
-        `ome_writers` is the authority on whether the *resolved* output path
-        (which, for a multi-position OME-TIFF, is a directory distinct from
-        the file path the user picked) already exists -- so the first attempt
-        always goes in with `overwrite=False`, and only on the resulting
-        `FileExistsError` do we ask and retry. `create_stream` raises that
-        error before any frame is written, so the retry never double-writes.
+        ome-writers resolves multi-position destinations and raises FileExistsError
+        before writing any frames, so retrying with overwrite enabled is safe.
         """
 
         def _run(*, overwrite: bool) -> str | None:
@@ -425,22 +409,10 @@ def set_icon_tint(btn: QAbstractButton, color: QColor) -> None:
 
 
 def ensure_visible_icon(btn: QAbstractButton) -> None:
-    """Recolor a button's icon if it's a too-dark gray to see against its background.
+    """Recolor low-contrast grayscale icons while preserving semantic colors.
 
-    Several third-party buttons (ndv in particular) hardcode a dark gray icon
-    color with no theme awareness, meant for a light background — against
-    this app's dark theme they're nearly invisible. This only touches icons
-    that are themselves close to grayscale (no real hue) *and* close in
-    luminance to the button's background; a meaningfully-colored icon (e.g. a
-    green/magenta/red state indicator) is left alone even if it happens to be
-    on the darker side, since its hue still reads fine against a dark bg.
-
-    Re-callable any time the theme changes (light <-> dark): the button's
-    *original* icon is stashed on first call and every subsequent call
-    re-evaluates from that pristine copy, never from an already-recolored
-    one -- otherwise a dark-theme recolor (e.g. tinted white) would get
-    baked in permanently and turn invisible again after switching to light
-    mode, since a static pixmap doesn't know the theme changed.
+    Re-evaluate from the stored original icon on each theme change so previous
+    tints do not become permanent.
     """
     icon = btn.property(_ORIGINAL_ICON_PROPERTY)
     if icon is None:

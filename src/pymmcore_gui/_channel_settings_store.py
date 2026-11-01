@@ -11,7 +11,7 @@ from __future__ import annotations
 import copy
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any
-from weakref import WeakKeyDictionary
+from weakref import WeakKeyDictionary, ref
 
 from pymmcore_plus import PropertyType
 from pymmcore_widgets._channel_settings import apply_channel_settings
@@ -48,7 +48,8 @@ class ChannelSettingsStore(QObject):
 
     def __init__(self, core: CMMCorePlus) -> None:
         super().__init__()
-        self._core = core
+        # The weak-key cache must not keep its own core alive through the value.
+        self._core_ref = ref(core)
         self._settings: dict[str, dict[str, ChannelSettings]] = {}
         # which optional columns both channel tables show, see setColumnsVisible
         self._columns_visible = {LIGHT_SOURCES: True, CAMERA: False}
@@ -104,7 +105,8 @@ class ChannelSettingsStore(QObject):
         Presets that already have settings keep them, except for those the cfg
         records: the cfg is the authority on those.
         """
-        core = self._core
+        if (core := self._core_ref()) is None:
+            return
         group = core.getChannelGroup()
         if not group:
             return
@@ -145,7 +147,8 @@ class ChannelSettingsStore(QObject):
         Called before a snap or live, so they image with the Channels panel's
         settings. Returns whether there were settings to apply.
         """
-        core = self._core
+        if (core := self._core_ref()) is None:
+            return False
         if not (group := core.getChannelGroup()):
             return False
         preset = core.getCurrentConfig(group)

@@ -100,6 +100,72 @@ def tmp(tmp_path: Path) -> Path:
     return tmp_path
 
 
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_empty_and_negative_indices(tmp: Path, fmt: str) -> None:
+    from ome_writers import dims_from_standard_axes
+
+    dims = dims_from_standard_axes({"p": ["A", "B"], "t": 2, "y": 8, "x": 8})
+    out = _write(dims, fmt, tmp / f"indexing.{fmt}", n_frames=4)
+    wrapper = WRAPPER_TYPE[fmt](out)
+    try:
+        leading = _full_frame(wrapper.dims, position=0)
+        reference = wrapper.isel(leading)
+        negative = {
+            i: -1 if isinstance(value, int) else value for i, value in leading.items()
+        }
+        assert np.all(wrapper.isel(negative) == 3)
+        for axis, name in enumerate(wrapper.dims):
+            if name not in {"p", "t"}:
+                continue
+            empty = {**leading, axis: slice(0, 0)}
+            result = wrapper.isel(empty)
+            assert result.shape == (0, *reference.shape)
+            assert result.dtype == reference.dtype
+            np.testing.assert_array_equal(
+                wrapper.isel({axis: slice(None, None, -1)}),
+                np.flip(wrapper.isel({}), axis=axis),
+            )
+    finally:
+        wrapper.close()
+
+
+@pytest.mark.parametrize("layout", ["self-contained", "master-tiff", "redundant"])
+def test_all_tiff_position_layouts_reopen(tmp: Path, layout: str) -> None:
+    from ome_writers import dims_from_standard_axes
+
+    settings = AcquisitionSettings(
+        dimensions=tuple(
+            dims_from_standard_axes({"p": ["A", "B"], "t": 2, "y": 8, "x": 8})
+        ),
+        dtype="uint16",
+        root_path=str(tmp / "positions.ome.tiff"),
+        format=OmeTiffFormat.model_validate({"multi_file_metadata": layout}),
+    )
+    with create_stream(settings) as stream:
+        for number in range(4):
+            stream.append(np.full((8, 8), number, dtype="uint16"))
+    wrapper = OMETiffWrapper(settings.output_path)
+    try:
+        assert wrapper.sizes() == {"p": 2, "t": 2, "y": 8, "x": 8}
+        np.testing.assert_array_equal(wrapper.isel({})[:, :, 0, 0], [[0, 1], [2, 3]])
+        assert np.all(wrapper.isel({0: -1, 1: -1}) == 3)
+    finally:
+        wrapper.close()
+    second_file = sorted(Path(settings.output_path).glob("*.tiff"))[-1]
+    sibling = OMETiffWrapper(second_file)
+    try:
+        if layout == "self-contained":
+            assert sibling.dims == ("t", "y", "x")
+            np.testing.assert_array_equal(sibling.isel({})[:, 0, 0], [2, 3])
+        else:
+            assert sibling.sizes() == {"p": 2, "t": 2, "y": 8, "x": 8}
+            np.testing.assert_array_equal(
+                sibling.isel({})[:, :, 0, 0], [[0, 1], [2, 3]]
+            )
+    finally:
+        sibling.close()
+
+
 # --------------------------- single position ---------------------------
 
 

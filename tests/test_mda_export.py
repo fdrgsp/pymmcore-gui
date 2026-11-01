@@ -180,9 +180,10 @@ def test_export_clamps_partial_unbounded_acquisition(tmp_path: Path) -> None:
     assert arr.shape == (3, 1, 8, 8)
 
 
-def test_export_nothing_acquired_raises(tmp_path: Path) -> None:
+@pytest.mark.parametrize("count", [None, 3])
+def test_export_nothing_acquired_raises(tmp_path: Path, count: int | None) -> None:
     settings = AcquisitionSettings(
-        dimensions=tuple(dims_from_standard_axes({"t": None, "y": 8, "x": 8})),
+        dimensions=tuple(dims_from_standard_axes({"t": count, "y": 8, "x": 8})),
         dtype="uint16",
         format=ScratchFormat(),
     )

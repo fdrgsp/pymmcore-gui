@@ -160,15 +160,10 @@ class CameraRoiSyncController(QObject):
             self._transitioning = False
 
     def _discard_pending_viewer_roi(self) -> None:
-        """Drop a ROI the tool created but the user never dragged out.
+        """Discard an undrawn ROI before rebuilding the preview's data model.
 
-        The mirror of the cleanup `stop` does, from the other side. Toggling
-        the viewer's ROI tool on arms a ROI whose handle markers hold no data
-        until the first drag gives it a size. Starting a session rebuilds the
-        preview's data model (the full-frame snap below), which makes ndv
-        recompute the scene's bounds -- and vispy cannot compute bounds for
-        an empty markers visual, so it raises instead. Nothing is lost by
-        dropping it: the session installs its own ROI moments later.
+        Its empty marker visual has no bounds, which vispy cannot recompute. The
+        session installs the planned ROI after rebuilding the preview.
         """
         viewer = self._viewer
         if viewer is None or (roi := viewer.roi) is None:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import gc
+import weakref
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
@@ -76,6 +78,20 @@ def _stored(mmcore: CMMCorePlus, preset: str) -> ChannelSettings:
 
 def _mda_row_exposures(mda: MemoryMDAWidget) -> list[tuple[str, float | None]]:
     return [(str(c.config), c.exposure) for c in mda.channels.value()]
+
+
+def test_store_does_not_retain_unused_core(mmcore: CMMCorePlus) -> None:
+    # Both of pytest's log handlers otherwise retain constructor arguments.
+    with patch("pymmcore_plus._logger.logger.disabled", True):
+        other = type(mmcore)()
+    reference = weakref.ref(other)
+    store = channel_settings_store(other)
+    del other
+    gc.collect()
+    assert reference() is None
+    assert store.all() == {}
+    store.seed()
+    assert not store.apply_current_channel()
 
 
 def test_store_is_seeded_with_every_channel_preset(mmcore: CMMCorePlus) -> None:

@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 from cmap import Colormap
-from pymmcore_plus import CMMCorePlus, DeviceType, PropertyType
+from pymmcore_plus import CMMCorePlus, DeviceType
+from pymmcore_widgets._light_sources import find_light_sources, light_source_limits
 from superqt.iconify import QIconifyIcon
 from superqt.utils import signals_blocked
 
@@ -130,8 +131,6 @@ PHASE_LABELS = {
     "finalize": "Fitting and converting to storage units",
     "complete": "Calibration complete",
 }
-
-_LIGHT_SOURCE_SEPARATOR = " · "
 
 
 @dataclass(frozen=True)
@@ -1005,50 +1004,10 @@ class PixelCalibrationPanel(QWidget):
 
     def _find_light_sources(self) -> dict[str, tuple[tuple[str, str], ...]]:
         """Find writable ranged numeric properties usable as illumination."""
-        properties = self._mmc.iterProperties(
-            property_type=(PropertyType.Integer, PropertyType.Float),
-            has_limits=True,
-            is_read_only=False,
-            as_object=False,
-        )
-        pairs = sorted(
-            (
-                (str(device), str(prop))
-                for device, prop in properties
-                if not self._mmc.isPropertyPreInit(device, prop)
-            ),
-            key=lambda pair: (pair[0].casefold(), pair[1].casefold()),
-        )
-        sources: dict[str, tuple[tuple[str, str], ...]] = {
-            f"{device}{_LIGHT_SOURCE_SEPARATOR}{prop}": ((device, prop),)
-            for device, prop in pairs
+        return {
+            label: tuple(pairs)
+            for label, pairs in find_light_sources(self._mmc).items()
         }
-
-        # A single-preset group whose entries are all ranged numeric properties
-        # represents a multi-property source controlled by one intensity value.
-        for group in self._mmc.getAvailableConfigGroups():
-            presets = self._mmc.getAvailableConfigs(group)
-            if len(presets) != 1:
-                continue
-            device_properties: list[tuple[str, str]] = []
-            valid = True
-            try:
-                for device, prop, _ in self._mmc.getConfigData(group, presets[0]):
-                    if (
-                        self._mmc.getPropertyType(device, prop)
-                        not in (PropertyType.Integer, PropertyType.Float)
-                        or not self._mmc.hasPropertyLimits(device, prop)
-                        or self._mmc.isPropertyReadOnly(device, prop)
-                        or self._mmc.isPropertyPreInit(device, prop)
-                    ):
-                        valid = False
-                        break
-                    device_properties.append((str(device), str(prop)))
-            except RuntimeError:
-                valid = False
-            if valid and device_properties and str(group) not in sources:
-                sources[str(group)] = tuple(device_properties)
-        return dict(sorted(sources.items(), key=lambda item: item[0].casefold()))
 
     def _apply_declared_light_source(self) -> None:
         identity = self._channel_identity()
@@ -1084,18 +1043,7 @@ class PixelCalibrationPanel(QWidget):
             self._light_intensity.setValue(0)
             self._update_availability()
             return
-        lower = max(
-            float(self._mmc.getPropertyLowerLimit(device, prop))
-            for device, prop in pairs
-        )
-        upper = min(
-            float(self._mmc.getPropertyUpperLimit(device, prop))
-            for device, prop in pairs
-        )
-        is_integer = all(
-            self._mmc.getPropertyType(device, prop) is PropertyType.Integer
-            for device, prop in pairs
-        )
+        lower, upper, is_integer = light_source_limits(self._mmc, pairs)
         self._light_intensity.setDecimals(0 if is_integer else 3)
         self._light_intensity.setRange(lower, upper)
         self._light_intensity.setEnabled(lower <= upper)

@@ -166,21 +166,10 @@ else:
 
 
 class MemoryMDAWidgetBase(_MixinBase):
-    """Everything this app adds to an MDA editor, independent of its presentation.
+    """Shared application behavior for both MDA editor presentations.
 
-    Both upstream presentations (`MDAWidget`'s tab bar and its subclass
-    `MDAWidgetCollapsible`'s sections) expose the same
-    editors, footer and saving widgets, so the app theme, semantic icons, the
-    channel-selection core bridge, the acquisition lock and the memory-sink
-    output fallback all live here and are shared verbatim. Both flavours must
-    behave identically; only their layout differs.
-
-    What genuinely differs is confined to `tabs`: the collapsible one has
-    `sections`/`saving_section`/`refresh_summaries`, while the top bar is a
-    real `QTabWidget` addressed through its native tab API
-    (`setChecked`/`setCurrentWidget`/`indexOf`) instead. Reached through the
-    small hooks below (`_flavor_*`) rather than by branching through the rest
-    of the class.
+    Own theming, channel settings, acquisition locking and scratch output here.
+    Presentation-specific work belongs in the _flavor_* hooks.
     """
 
     if TYPE_CHECKING:
@@ -233,9 +222,7 @@ class MemoryMDAWidgetBase(_MixinBase):
         combo.setCurrentText("ome-tiff")
         self._install_ome_tiff_options()
 
-        # Run/Pause/Cancel/Save/Load default to the "ghost" variant (no
-        # visible box until hovered) — give them a persistently visible one,
-        # matching the rest of the app's action buttons.
+        # Match the application's persistently visible action buttons.
         for btn in (
             self.control_btns.run_btn,
             self.control_btns.pause_btn,
@@ -245,12 +232,7 @@ class MemoryMDAWidgetBase(_MixinBase):
         ):
             btn.setProperty("variant", "subtle")
 
-        # All sub-tabs (Channels/Positions/Z/Time/Grid) are constructed
-        # eagerly by CoreMDATabs.create_subwidgets() during super().__init__,
-        # so one recursive sweep here reaches every descendant -- strips
-        # hardcoded stylesheets (e.g. useq_widgets' border-less spinboxes,
-        # gray range labels) and normalizes buttons the same way as
-        # everywhere else in the app.
+        # Normalize the eagerly constructed upstream editors to the app theme.
         unstyle_widgets(self)
         # unstyle_widgets clears every stylesheet, including the one the upstream
         # Saving section installs to hide the embedded QGroupBox's native header
@@ -258,13 +240,7 @@ class MemoryMDAWidgetBase(_MixinBase):
         self._collapsible_tabs().apply_save_body_style()
         self._apply_table_toolbar_icon_size()
 
-        # Channels/Positions/Time are tables: each row is a fresh cell widget
-        # built on demand (e.g. the Positions row's black "mdi:grid" per-
-        # position grid button, or the row's spinboxes), created only when a
-        # row is actually added -- long after the sweep above already ran.
-        # Without this, a row added interactively is never covered by any
-        # sweep at all until the next light/dark toggle (which only revisits
-        # icons, not stylesheets).
+        # Theme cell widgets created by later row insertions too.
         for table_widget in (self.channels, self.stage_positions, self.time_plan):
             model = table_widget.table().model()
             if model is not None:
@@ -895,16 +871,7 @@ class TopbarMemoryMDAWidget(MemoryMDAWidgetBase, MDAWidget):
         return GuiCoreMDATabs(None, self._mmc)
 
     def _flavor_apply_tab_icons(self) -> None:
-        """Tint every tab's icon to the app's icon colour.
-
-        Upstream sets each tab's icon from a plain, uncolored `QIconifyIcon`
-        (`MDATabs._add_tab`), which is also cached per tab
-        (`tab_icon`) precisely so this can re-derive a themed icon from that
-        stable source on every call instead of compounding tints onto an
-        already-recolored one. Applied through `set_tab_icon` (the button
-        widget's icon), not `QTabBar.setTabIcon` (the native tab's, which
-        this presentation deliberately leaves empty -- see `set_tab_icon`).
-        """
+        """Tint tab-button icons from their cached originals on each theme change."""
         color = qcolor(theme().text_secondary)
         for i in range(self.tabs.count()):
             if (source := self.tabs.tab_icon(i)) is not None:

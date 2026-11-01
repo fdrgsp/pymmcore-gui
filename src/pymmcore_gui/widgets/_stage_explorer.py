@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from pymmcore_widgets import StageExplorer
 from superqt.iconify import QIconifyIcon
@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
     from vispy.app.canvas import MouseEvent
 
-    from pymmcore_gui._qt.QtGui import QAction, QPaintEvent
+    from pymmcore_gui._qt.QtGui import QAction, QActionGroup, QPaintEvent
 
 _NO_PIXEL_SIZE_MESSAGE = (
     "The Stage Explorer is unavailable: the current objective/resolution preset "
@@ -415,7 +415,8 @@ class ThemedStageExplorer(StageExplorer):
             "FOV Center": "ic:baseline-plus",
             "Both": "ic:outline-add-box",
         }
-        for action in toolbar.marker_mode_action_group.actions():
+        marker_modes = cast("QActionGroup", toolbar.marker_mode_action_group)
+        for action in marker_modes.actions():
             if glyph := marker_mode_icons.get(action.text()):
                 action.setIcon(QIconifyIcon(glyph, color=muted))
 

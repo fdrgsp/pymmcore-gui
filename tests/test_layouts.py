@@ -8,6 +8,7 @@ so the autouse ``layouts_dir`` fixture in ``conftest.py`` redirects
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -54,6 +55,17 @@ def test_layout_round_trips_through_a_file(layouts_dir: Path) -> None:
     assert load_layout("My rig") == original
 
 
+def test_layout_names_with_the_same_safe_filename_stay_distinct() -> None:
+    first = save_layout("Rig/one", _layout())
+    second_layout = replace(_layout(), mda_kind="topbar")
+    second = save_layout("Rig:one", second_layout)
+    assert first != second
+    assert load_layout("Rig/one") == _layout()
+    assert load_layout("Rig:one") == second_layout
+    delete_layout("Rig:one")
+    assert load_layout("Rig/one") == _layout()
+
+
 def test_layout_names_survive_filesystem_unsafe_characters() -> None:
     """The display name lives inside the file, so odd names are preserved."""
     save_layout("Rig #2: 60x/oil", _layout())
@@ -74,6 +86,9 @@ def test_a_layout_is_found_by_its_stored_name_not_its_filename() -> None:
 
     assert list_layouts() == ["Start"]
     assert load_layout("Start") == _layout()
+    assert save_layout("Start", _layout()) == path
+    delete_layout("Start")
+    assert not path.exists()
 
 
 @pytest.mark.parametrize("typed", ["Start", "start", "START", "  start  "])
@@ -130,6 +145,8 @@ def test_corrupt_layout_files_are_skipped_not_raised(layouts_dir: Path) -> None:
         ("   ", False),
         (DEFAULT_LAYOUT_NAME, False),
         (LAST_SESSION_LAYOUT_NAME, False),
+        ("default", False),
+        (" LAST SESSION ", False),
     ],
 )
 def test_reserved_and_empty_names_are_rejected(name: str, valid: bool) -> None:
@@ -147,14 +164,15 @@ def test_session_layout_round_trips_through_settings(settings: Settings) -> None
     assert session_layout().is_empty()
     assert LAST_SESSION_LAYOUT_NAME not in available_layouts()
 
-    store_session_layout(_layout())
+    original = replace(_layout(), stage_kind="per_device", mda_kind="topbar")
+    store_session_layout(original)
 
     prefs = settings.modern_window
     assert prefs.acquire_dock_state == _layout().dock_state
     assert prefs.acquire_panels == {"mda", "presets"}
     assert prefs.acquire_hidden_panels == {"console"}
-    assert session_layout() == _layout()
-    assert resolve_layout(LAST_SESSION_LAYOUT_NAME) == _layout()
+    assert session_layout() == original
+    assert resolve_layout(LAST_SESSION_LAYOUT_NAME) == original
 
 
 def test_available_layouts_ordering() -> None:

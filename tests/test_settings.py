@@ -20,6 +20,19 @@ def test_settings() -> None:
     assert not hasattr(v, "random_value")
 
 
+@pytest.mark.parametrize("invalid", [None, [], 42, "invalid"])
+def test_invalid_nested_settings_do_not_block_valid_preferences(
+    tmp_path: Path, invalid: object
+) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"window": invalid, "send_error_reports": True}))
+    with (
+        patch.object(_settings, "SETTINGS_FILE_NAME", path),
+        pytest.warns(RuntimeWarning, match="Could not validate key 'window'"),
+    ):
+        assert MMGuiUserPrefsSource(SettingsV1)() == {"send_error_reports": True}
+
+
 def test_default_scratch_memory_leaves_room_for_map() -> None:
     with patch("pymmcore_gui._utils.system_memory_gb", return_value=(16.0, 10.0)):
         assert _settings._default_max_memory_gb() == 6.0
@@ -88,6 +101,7 @@ def test_existing_window_sections_round_trip(tmp_path: Path, sections: str) -> N
         "acquire_hidden_panels": ["properties"],
         "acquire_stage_devices": ["XY"],
         "acquire_stage_kind": "per_device",
+        "acquire_mda_kind": "topbar",
         "last_layout": "My rig",
     }
     payload: dict[str, object] = {"version": "1.0"}
@@ -113,3 +127,4 @@ def test_existing_window_sections_round_trip(tmp_path: Path, sections: str) -> N
         assert restored.modern_window.acquire_panels == {"mda", "presets", "console"}
         assert restored.modern_window.acquire_hidden_panels == {"properties"}
         assert restored.modern_window.acquire_stage_devices == {"XY"}
+        assert restored.modern_window.acquire_mda_kind == "topbar"

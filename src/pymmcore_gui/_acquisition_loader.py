@@ -1,20 +1,8 @@
-"""Reopen a previously-acquired dataset for viewing, MDA-parameter re-use, and re-save.
+"""Reopen OME acquisitions with lazy data access and recovered metadata.
 
-Wraps `OMETiffWrapper`/`OMEZarrWrapper` (ndv-compatible, lazy, and unaware of
-pymmcore-plus) with the pieces that *are* pymmcore-plus-specific: recovering
-the original `useq.MDASequence` and summary metadata from the acquisition-level
-metadata `export_acquisition`/a live disk-backed run wrote via
-`OmeWritersSink`/`export_acquisition` (`pymmcore_plus.summary_metadata`, under
-the "pymmcore_plus" global-metadata namespace both writers use -- see
-`pymmcore_plus.mda._sink._serialize_summary_meta`), and building an
-`AcquisitionRecord` so a reopened viewer's Save button re-exports the
-acquisition's *real* metadata rather than the microscope's current state.
-
-The displayed shape always comes from the wrapper's own on-disk dims/coords,
-never from the recovered sequence -- so a cancelled or partial acquisition
-reopens with only the frames actually written. A file with valid image data
-but no (or unparsable) sequence metadata still opens; `sequence` is simply
-`None`, and callers use that to disable "Re-use MDA...".
+The wrapper's on-disk dimensions determine the displayed shape, including
+partial acquisitions. Recovered sequence and summary metadata enable MDA
+parameter reuse and faithful re-export; missing metadata does not prevent viewing.
 """
 
 from __future__ import annotations
@@ -42,13 +30,9 @@ _PYMMCORE_PLUS_NAMESPACE = "pymmcore_plus"
 
 
 class _WrapperView:
-    """Tuple-indexable adapter from an ndv `DataWrapper` to `AcquisitionRecord.view`.
+    """Adapt acquisition-order tuple indices to DataWrapper.isel mappings.
 
-    `export_acquisition` indexes `record.view` with a plain tuple of leading
-    (non-y/x) axis positions, e.g. `view[(t_idx, c_idx)]`; a `DataWrapper`
-    instead takes a `{axis_index: value}` mapping via `isel()`, with y/x left
-    to default to a full slice. This just bridges the two -- no data is read
-    until something actually indexes it.
+    Pixel data is read only when indexed; unspecified spatial axes remain full slices.
     """
 
     def __init__(self, wrapper: DataWrapper) -> None:
@@ -145,12 +129,10 @@ def open_acquisition(path: str | Path) -> LoadedAcquisition:
 def _recover_summary_metadata(
     wrapper: Any,
 ) -> tuple[MDASequence | None, SummaryMetaV1 | None]:
-    """Best-effort recovery of the acquisition's `MDASequence` + summary metadata.
+    """Recover the original sequence and summary metadata when available.
 
-    Never raises: missing or malformed metadata just means the file still
-    opens for viewing (with `sequence=None`, disabling "Re-use MDA…") and its
-    Save button falls back to whatever `record_from_wrapper` can derive from
-    the data alone.
+    Missing or malformed metadata leaves the acquisition viewable, with no sequence
+    to reuse and export metadata derived from the data wrapper.
     """
     global_metadata = cast(
         "Callable[[str], Mapping[str, Any] | None] | None",
