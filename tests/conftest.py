@@ -14,12 +14,13 @@ from pymmcore_gui._settings import Settings
 os.environ["JUPYTER_PLATFORM_DIRS"] = "1"
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
 import pytest
 from pymmcore_plus import CMMCorePlus, configure_logging
 from pymmcore_plus.core import _mmcore_plus
+from pytestqt.qtbot import QtBot
 
 from pymmcore_gui import _app
 
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
 
     from pytest import FixtureRequest
 
-    from pymmcore_gui._qt.QtWidgets import QApplication
+    from pymmcore_gui._qt.QtWidgets import QApplication, QWidget
 
 TEST_CONFIG = str(Path(__file__).parent / "test_config.cfg")
 
@@ -54,6 +55,25 @@ def _collect_between_tests() -> Iterator[None]:
     """Collect garbage after each test, when nothing is being painted."""
     yield
     gc.collect()
+
+
+@pytest.fixture(autouse=True)
+def _keep_test_widgets_alive(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Hold each test's widgets until pytest-qt has closed them and run the events.
+
+    QtBot only keeps a weak reference, so a widget would be freed as soon as the
+    test function returns. On PySide6 a signal already queued for it is still
+    delivered after that, calling the slot on a freed ``self``: a segfault or a hang.
+    """
+    widgets: list[QWidget] = []
+    add_widget = QtBot.addWidget
+
+    def add_and_keep(self: QtBot, widget: QWidget, **kwargs: Any) -> None:
+        widgets.append(widget)
+        add_widget(self, widget, **kwargs)
+
+    monkeypatch.setattr(QtBot, "addWidget", add_and_keep)
+    yield
 
 
 @pytest.fixture(scope="session")
