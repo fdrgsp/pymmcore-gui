@@ -58,7 +58,16 @@ jobs:
           "CRASH_DUMP_DIR=$dumpDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Test Bundle
+        timeout-minutes: 10
         run: uv run pytest -v --color=yes tests/test_bundle.py
+
+      - name: Upload failure screenshot
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pymmgui-failure-screenshot-${{ runner.os }}
+          path: bundle-failure.png
+          if-no-files-found: warn
 
       - name: Upload crash dump
         if: runner.os == 'Windows' && failure()
