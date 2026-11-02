@@ -370,9 +370,11 @@ class ThemedStageExplorer(StageExplorer):
         slider = getattr(getattr(self, "_contrast_slider", None), "_slider", None)
         reposition = getattr(slider, "_reposition_labels", None)
         if slider is not None and callable(reposition):
-            if layout := slider.layout():
-                layout.activate()
-            reposition()
+            # this runs from a timer, which the slider may not have outlived
+            with suppress(RuntimeError):
+                if layout := slider.layout():
+                    layout.activate()
+                reposition()
 
     def _apply_themed_icons(self) -> None:
         """Recolor every neutral toolbar icon to match the app's chrome.

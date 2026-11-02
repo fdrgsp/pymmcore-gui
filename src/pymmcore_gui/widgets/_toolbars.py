@@ -239,6 +239,10 @@ class ShuttersBar(QWidget):
         super().changeEvent(a0)
 
     def _refresh(self, *_: object) -> None:
+        # the outgoing widgets are only deleted later and can still receive the
+        # signal that got us here: without a device, they don't warn it's gone
+        for widget in self.findChildren(ShuttersWidget):
+            widget.shutter_device = ""
         _clear(self._layout)
         shutters = self._core.getLoadedDevicesOfType(DeviceType.ShutterDevice)
         if not shutters:
