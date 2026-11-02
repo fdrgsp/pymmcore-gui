@@ -2673,8 +2673,8 @@ cli = [
 
 [[package]]
 name = "pymmcore-widgets"
-version = "0.1.dev614+g9a017305e"
-source = { git = "https://github.com/fdrgsp/pymmcore-widgets?rev=cite#9a017305e1f9aa6974a765b2b6b47287d7d3629c" }
+version = "0.1.dev616+ga21ee3934"
+source = { git = "https://github.com/fdrgsp/pymmcore-widgets?rev=cite#a21ee39344c6363ed5f17ff401eae7153c3f9c9d" }
 dependencies = [
     { name = "psutil" },
     { name = "pymmcore-plus", extra = ["cli"] },
@@ -3821,16 +3821,16 @@ wheels = [
 
 [[package]]
 name = "yaozarrs"
-version = "0.3.4"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "pydantic-core", marker = "python_full_version >= '3.13'" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/01/f5/8a4704e3ad436b9eaa9711a9ff68fb24bdfa7169189d1ea1c0de59ab7e4e/yaozarrs-0.3.4.tar.gz", hash = "sha256:7d38998c01d7e562557bf8e74fb3fa35f894e2e98c38521f3bc9e01a109a15d5", size = 201470, upload-time = "2026-10-21T12:47:07.669Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/95/d0/266aa1ba7ebd48a0b1bc7b5b9a0c4b2e8542031e178b247ef0370c2bffdd/yaozarrs-0.4.0.tar.gz", hash = "sha256:7f9a9a5e33bb56014586109a0c2e79537e78124ae90ff7ef7f45bb8bcab6ee2b", size = 301687, upload-time = "2026-11-02T16:21:37.757Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c9/de/ea5d811d55d62c23193a8d21f0d7fa941dd691e24e9bf06d94bb527f67bc/yaozarrs-0.3.4-py3-none-any.whl", hash = "sha256:47502413797d95caa6cfac223a1eebfc3a470b829e2493d556175aa92ad1ca74", size = 106804, upload-time = "2026-10-21T12:47:06.218Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/54/99c10fe1753d270374b05423cb78518ea56b5d64c7b2e2a7b5c5fa61e4b2/yaozarrs-0.4.0-py3-none-any.whl", hash = "sha256:5b45d1d13bd3f4372422bb7936572cb2170351ad16e2c4e78b743b38ac87c780", size = 173158, upload-time = "2026-11-02T16:21:36.451Z" },
 ]
 
 [package.optional-dependencies]
