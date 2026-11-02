@@ -1742,8 +1742,8 @@ wheels = [
 
 [[package]]
 name = "ndv"
-version = "0.1.dev280+g2ae89e528"
-source = { git = "https://github.com/fdrgsp/ndv?rev=cite#2ae89e52826137775472a631496c852ba68095b4" }
+version = "0.1.dev284+g8708bb358"
+source = { git = "https://github.com/fdrgsp/ndv?rev=cite#8708bb35864c80ff52d8da44ffb429377343902f" }
 dependencies = [
     { name = "cmap" },
     { name = "ihist" },
@@ -1867,8 +1867,8 @@ wheels = [
 
 [[package]]
 name = "ome-writers"
-version = "0.3.3.dev20+g4ef122a58"
-source = { git = "https://github.com/fdrgsp/ome-writers?rev=cite#4ef122a5805dac564c286285fe2e8501a1fbab16" }
+version = "0.3.3.dev22+g1d11b74a3"
+source = { git = "https://github.com/fdrgsp/ome-writers?rev=cite#1d11b74a304359cb78f37c85d7d9ca640f5feb05" }
 dependencies = [
     { name = "numpy" },
     { name = "pydantic" },
@@ -2650,8 +2650,8 @@ test = [
 
 [[package]]
 name = "pymmcore-plus"
-version = "0.17.3.dev103+g624cc7dc9"
-source = { git = "https://github.com/fdrgsp/pymmcore-plus?rev=cite#624cc7dc99798cf9eff0fad0131be1c4fe7083a7" }
+version = "0.17.3.dev105+g56588c076"
+source = { git = "https://github.com/fdrgsp/pymmcore-plus?rev=cite#56588c0765e0035a9c47dd12c8cfddd2ba26144c" }
 dependencies = [
     { name = "numpy" },
     { name = "ome-types" },
@@ -3642,8 +3642,8 @@ wheels = [
 
 [[package]]
 name = "useq-schema"
-version = "0.9.3.dev13+ge75c4745a"
-source = { git = "https://github.com/fdrgsp/useq-schema?rev=cite#e75c4745ad00fdadba554f474557479c29a0e6be" }
+version = "0.9.3.dev14+g83ea506a1"
+source = { git = "https://github.com/fdrgsp/useq-schema?rev=cite#83ea506a107fd9650a1c7b92f40e4b23d1a957b7" }
 dependencies = [
     { name = "numpy" },
     { name = "pydantic" },
