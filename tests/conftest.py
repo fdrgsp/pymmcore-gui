@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import os
 
 from pymmcore_gui._settings import Settings
@@ -32,6 +33,27 @@ if TYPE_CHECKING:
 TEST_CONFIG = str(Path(__file__).parent / "test_config.cfg")
 
 configure_logging(stderr_level="CRITICAL")
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _no_automatic_gc() -> Iterator[None]:
+    """Keep the garbage collector from running at an arbitrary moment.
+
+    Left to itself it can fire while Qt is painting and destroy widgets that
+    earlier tests left in reference cycles, which segfaults inside the paint.
+    Whether that happens depends on allocation timing: it showed up under
+    coverage or pytest-xdist, on Python < 3.13, but not in a plain local run.
+    """
+    gc.disable()
+    yield
+    gc.enable()
+
+
+@pytest.fixture(autouse=True)
+def _collect_between_tests() -> Iterator[None]:
+    """Collect garbage after each test, when nothing is being painted."""
+    yield
+    gc.collect()
 
 
 @pytest.fixture(scope="session")

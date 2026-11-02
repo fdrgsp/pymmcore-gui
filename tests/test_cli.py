@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 from typing import TYPE_CHECKING
 from unittest.mock import patch
@@ -55,7 +56,8 @@ def test_old_flag_is_rejected() -> None:
         result = runner.invoke(app, ["run", "--old"])
 
     assert result.exit_code == 2
-    assert "No such option: --old" in result.output
+    # CI forces color on, which splits this text with escape codes
+    assert "No such option: --old" in re.sub(r"\x1b\[[0-9;]*m", "", result.output)
     mock_create.assert_not_called()
 
 

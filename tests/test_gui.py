@@ -3530,7 +3530,7 @@ def test_preferences_dialog_round_trips_scratch_settings(
 
     dlg = PreferencesDialog(page)
     qtbot.addWidget(dlg)
-    dlg._max_memory.setValue(8.0)
+    dlg._max_memory.setValue(1.5)
     dlg._spill_to_disk.setChecked(False)
     assert not dlg._scratch_dir.isEnabled()
     assert not dlg._browse_btn.isEnabled()
@@ -3541,16 +3541,16 @@ def test_preferences_dialog_round_trips_scratch_settings(
     dlg._save()
 
     prefs = settings.scratch
-    assert prefs.max_memory_gb == 8.0
+    assert prefs.max_memory_gb == 1.5
     assert prefs.spill_to_disk is True
     assert prefs.scratch_dir == Path("/tmp/my-scratch")
 
     # A freshly opened dialog reflects what was just saved.
     dlg2 = PreferencesDialog(page)
     qtbot.addWidget(dlg2)
-    assert dlg2._max_memory.value() == 8.0
+    assert dlg2._max_memory.value() == 1.5
     assert dlg2._spill_to_disk.isChecked()
-    assert dlg2._scratch_dir.text() == "/tmp/my-scratch"
+    assert Path(dlg2._scratch_dir.text()) == Path("/tmp/my-scratch")
 
 
 def test_preferences_dialog_save_does_not_close(
@@ -3568,7 +3568,7 @@ def test_preferences_dialog_save_does_not_close(
 
     dlg = PreferencesDialog(page)
     qtbot.addWidget(dlg)
-    dlg._max_memory.setValue(9.0)
+    dlg._max_memory.setValue(2.5)
 
     with (
         patch.object(dlg, "accept") as accept,
@@ -3578,7 +3578,7 @@ def test_preferences_dialog_save_does_not_close(
 
     accept.assert_not_called()
     reject.assert_not_called()
-    assert settings.scratch.max_memory_gb == 9.0
+    assert settings.scratch.max_memory_gb == 2.5
 
 
 def test_preferences_dialog_cancel_does_not_persist(
@@ -5256,8 +5256,10 @@ def test_acquire_repairs_an_unusably_narrow_restored_tools_dock(
     # only take what the donor column has to spare above its own minimum --
     # and on a runner that clamped the window below the requested size, that
     # target is smaller still. What must hold either way: the corrupt 60 px
-    # was expanded, and the repair never overshoots the target.
-    assert 60 < restored_column.width() <= expected_repair_width_b
+    # was expanded, and the repair never overshoots the target -- unless the
+    # column's own minimum width (which depends on the platform) exceeds it.
+    upper = max(expected_repair_width_b, restored_column.minimumSizeHint().width())
+    assert 60 < restored_column.width() <= upper
     assert restored_column.minimumWidth() == 0
     assert restored_column.maximumWidth() == QWIDGETSIZE_MAX
 
