@@ -29,6 +29,7 @@ from pymmcore_gui._qt.QtCore import QPointF, QRect, QRectF, QSize, Qt
 from pymmcore_gui._qt.QtGui import (
     QBrush,
     QColor,
+    QIcon,
     QPainter,
     QPainterPath,
     QPalette,
@@ -474,6 +475,31 @@ class MicroscopeStyle(QProxyStyle):
             case _:
                 super().drawPrimitive(element, option, painter, widget)
 
+    # ── Icons ──
+
+    def generatedIconPixmap(
+        self, iconMode: QIcon.Mode, pixmap: QPixmap, opt: QStyleOption | None
+    ) -> QPixmap:
+        """Paint a disabled icon's shape in the theme's disabled text color.
+
+        What the base style generates only works on a light background: on a dark
+        one, a gray icon comes out almost unchanged. A pixmap without transparency
+        (e.g. a photo) has no shape to fill, and is left to the base style.
+        """
+        if iconMode != QIcon.Mode.Disabled or not pixmap.hasAlpha():
+            return super().generatedIconPixmap(iconMode, pixmap, opt)
+
+        # Late import avoids a circular ref (_theme/__init__.py imports
+        # this module).
+        from pymmcore_gui._theme import qcolor, theme
+
+        disabled = QPixmap(pixmap)
+        painter = QPainter(disabled)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(disabled.rect(), qcolor(theme().text_disabled))
+        painter.end()
+        return disabled
+
     # ── Control Elements ──
 
     def drawControl(
@@ -637,6 +663,8 @@ class MicroscopeStyle(QProxyStyle):
         if not self.styleHint(QStyle.StyleHint.SH_UnderlineShortcut, opt, widget):
             flags |= int(Qt.TextFlag.TextHideMnemonic)
         enabled = bool(opt.state & QStyle.StateFlag.State_Enabled)
+        icon_mode = QIcon.Mode.Normal if enabled else QIcon.Mode.Disabled
+        icon_align = Qt.AlignmentFlag.AlignCenter
 
         if not opt.icon.isNull() and opt.text:
             # Icon + text: center the pair as one group rather than pinning
@@ -654,7 +682,7 @@ class MicroscopeStyle(QProxyStyle):
                 icon_size.width(),
                 icon_size.height(),
             )
-            opt.icon.paint(p, icon_rect)
+            opt.icon.paint(p, icon_rect, icon_align, icon_mode)
             text_rect = QRect(icon_rect.right() + gap, r.top(), text_w, r.height())
             self.drawItemText(p, text_rect, flags, opt.palette, enabled, opt.text)
             return
@@ -668,7 +696,7 @@ class MicroscopeStyle(QProxyStyle):
                 icon_size.width(),
                 icon_size.height(),
             )
-            opt.icon.paint(p, icon_rect)
+            opt.icon.paint(p, icon_rect, icon_align, icon_mode)
 
         if opt.text:
             self.drawItemText(p, r, flags, opt.palette, enabled, opt.text)

@@ -1,12 +1,11 @@
 """Per-channel settings recorded in a Micro-Manager .cfg.
 
-Each channel preset's exposure, light source and camera properties are stored as a
-block of comments at the end of the .cfg, one line per setting::
+Each channel preset's exposure and light source are stored as a block of comments
+at the end of the .cfg, one line per setting::
 
     #@LightSource,Channel,DAPI,LumencorSola,White_Level,50
            ^ channel group  ^ preset  ^ device   ^ property  ^ default intensity
     #@Exposure,Channel,DAPI,20
-    #@CameraProperty,Channel,DAPI,Camera,Gain,2
 
 A light source driving several properties at once has one ``#@LightSource`` line per
 property, with the same intensity.
@@ -33,8 +32,7 @@ from typing import TypeAlias
 
 LIGHT_SOURCE_COMMENT = "#@LightSource"
 EXPOSURE_COMMENT = "#@Exposure"
-CAMERA_PROPERTY_COMMENT = "#@CameraProperty"
-_MARKERS = (LIGHT_SOURCE_COMMENT, EXPOSURE_COMMENT, CAMERA_PROPERTY_COMMENT)
+_MARKERS = (LIGHT_SOURCE_COMMENT, EXPOSURE_COMMENT)
 
 CHANNEL_COMMENT_HEADER = (
     "# ---- pymmcore-gui: per-channel settings ----\n"
@@ -42,8 +40,6 @@ CHANNEL_COMMENT_HEADER = (
     f"# Format: {LIGHT_SOURCE_COMMENT},<channel group>,<preset>,<device>,"
     "<property>,<intensity>\n"
     f"#         {EXPOSURE_COMMENT},<channel group>,<preset>,<exposure ms>\n"
-    f"#         {CAMERA_PROPERTY_COMMENT},<channel group>,<preset>,<camera>,"
-    "<property>,<value>\n"
 )
 # the start of each header line, this one's and the light-source-only one it
 # replaced, so rewriting the block drops either
@@ -63,8 +59,6 @@ class ChannelDeclaration:
     exposure: float | None = None
     # [(device, property, intensity), ...]
     light_source: list[tuple[str, str, float]] = field(default_factory=list)
-    # [(camera, property, value), ...], the value as written
-    camera_properties: list[tuple[str, str, str]] = field(default_factory=list)
 
 
 # {channel preset: declaration}
@@ -102,7 +96,7 @@ def parse_channel_comments(path: str | Path, channel_group: str) -> ChannelDecla
                 declarations[parts[2]].exposure = float(parts[3])
             except ValueError:
                 continue
-        elif marker == LIGHT_SOURCE_COMMENT:
+        else:
             parts = line.split(",")
             if len(parts) != 6 or parts[1] != channel_group:
                 continue
@@ -112,13 +106,6 @@ def parse_channel_comments(path: str | Path, channel_group: str) -> ChannelDecla
             except ValueError:
                 continue
             declarations[preset].light_source.append((device, prop, value))
-        else:
-            # a camera property's value may itself contain commas
-            parts = line.split(",", 5)
-            if len(parts) != 6 or parts[1] != channel_group:
-                continue
-            _, _, preset, device, prop, raw_value = parts
-            declarations[preset].camera_properties.append((device, prop, raw_value))
     return dict(declarations)
 
 
@@ -155,8 +142,6 @@ def write_channel_comments(
             block += f"{EXPOSURE_COMMENT},{prefix},{declaration.exposure}\n"
         for device, prop, value in declaration.light_source:
             block += f"{LIGHT_SOURCE_COMMENT},{prefix},{device},{prop},{value}\n"
-        for device, prop, raw in declaration.camera_properties:
-            block += f"{CAMERA_PROPERTY_COMMENT},{prefix},{device},{prop},{raw}\n"
     if not block:
         path.write_text(f"{lines}\n")
         return

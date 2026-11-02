@@ -9,11 +9,9 @@ edits back, and ``settingsChanged`` tells each of them about the other's.
 from __future__ import annotations
 
 import copy
-from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 from weakref import WeakKeyDictionary, ref
 
-from pymmcore_plus import PropertyType
 from pymmcore_widgets._channel_settings import apply_channel_settings
 from pymmcore_widgets._light_sources import find_light_sources
 
@@ -27,33 +25,31 @@ if TYPE_CHECKING:
     from pymmcore_widgets._channel_settings import ChannelSettings
 
 
-# the optional sets of columns of the channel tables (the exposure is always shown)
-LIGHT_SOURCES = "light_sources"
-CAMERA = "camera"
-
-
 class ChannelSettingsStore(QObject):
     """``{group: {preset: settings}}`` for a core, seeded from its loaded cfg.
 
-    The channel group's presets are seeded when a configuration is loaded: each
-    gets the current exposure, or whatever the cfg records for it (see
+    The channel group's presets are seeded when a configuration is loaded, and a
+    group's the first time it becomes the channel group: each gets the current
+    exposure, or whatever the cfg records for it (see
     ``pymmcore_gui._light_sources``). So every widget reading the store starts from
     the same values, and the recorded settings reach a new MDA channel.
     """
 
     # group, preset, the object that made the change (or None)
     settingsChanged = Signal(str, str, object)
-    # LIGHT_SOURCES or CAMERA, whether it is now shown
-    columnsVisibleChanged = Signal(str, bool)
+    # whether both channel tables now show their light source columns
+    lightSourcesVisibleChanged = Signal(bool)
 
     def __init__(self, core: CMMCorePlus) -> None:
         super().__init__()
         # The weak-key cache must not keep its own core alive through the value.
         self._core_ref = ref(core)
         self._settings: dict[str, dict[str, ChannelSettings]] = {}
-        # which optional columns both channel tables show, see setColumnsVisible
-        self._columns_visible = {LIGHT_SOURCES: True, CAMERA: False}
-        core.events.systemConfigurationLoaded.connect(self.seed)
+        self._light_sources_visible = True
+        # the groups seeded since the configuration was loaded
+        self._seeded_groups: set[str] = set()
+        core.events.systemConfigurationLoaded.connect(self._on_config_loaded)
+        core.events.channelGroupChanged.connect(self._on_channel_group_changed)
         self.seed()
 
     def get(self, group: str, preset: str) -> ChannelSettings | None:
@@ -85,19 +81,28 @@ class ChannelSettingsStore(QObject):
             for preset, settings in presets.items():
                 self.set(group, preset, settings, source)
 
-    def columnsVisible(self, columns: str) -> bool:
-        """Return whether both channel tables show `columns` (see setColumnsVisible)."""
-        return self._columns_visible[columns]
+    def lightSourcesVisible(self) -> bool:
+        """Return whether both channel tables show their light source columns."""
+        return self._light_sources_visible
 
-    def setColumnsVisible(self, columns: str, visible: bool) -> None:
-        """Show or hide `columns` (LIGHT_SOURCES or CAMERA) in both channel tables.
+    def setLightSourcesVisible(self, visible: bool) -> None:
+        """Show or hide the light source columns in both channel tables.
 
-        The Channels panel and the MDA's channel table each have a checkbox per
-        set of columns; checking one checks the other.
+        The Channels panel and the MDA's channel table each have a checkbox for
+        them; checking one checks the other.
         """
-        if self._columns_visible[columns] != visible:
-            self._columns_visible[columns] = visible
-            self.columnsVisibleChanged.emit(columns, visible)
+        if self._light_sources_visible != visible:
+            self._light_sources_visible = visible
+            self.lightSourcesVisibleChanged.emit(visible)
+
+    def _on_config_loaded(self) -> None:
+        self._seeded_groups.clear()
+        self.seed()
+
+    def _on_channel_group_changed(self, group: str) -> None:
+        # only once: coming back to a group must keep what was edited for it
+        if group not in self._seeded_groups:
+            self.seed()
 
     def seed(self) -> None:
         """Give each channel group preset a starting point from the loaded cfg.
@@ -110,6 +115,7 @@ class ChannelSettingsStore(QObject):
         group = core.getChannelGroup()
         if not group:
             return
+        self._seeded_groups.add(group)
         declarations = parse_channel_comments(
             core.systemConfigurationFile() or "", group
         )
@@ -118,14 +124,12 @@ class ChannelSettingsStore(QObject):
         by_pairs = {
             frozenset(pairs): label for label, pairs in find_light_sources(core).items()
         }
-        camera = core.getCameraDevice()
-        exposure = core.getExposure() if camera else 100.0
+        exposure = core.getExposure() if core.getCameraDevice() else 100.0
         for preset in core.getAvailableConfigs(group):
             settings = self.get(group, preset) or {
                 "exposure": exposure,
                 "light_source": "",
                 "intensity": 0.0,
-                "camera_properties": {},
             }
             if (declared := declarations.get(preset)) is not None:
                 if declared.exposure is not None:
@@ -134,12 +138,13 @@ class ChannelSettingsStore(QObject):
                 if label := by_pairs.get(pairs):
                     settings["light_source"] = label
                     settings["intensity"] = declared.light_source[0][2]
-                for device, prop, raw in declared.camera_properties:
-                    if device == camera and core.hasProperty(camera, prop):
-                        settings["camera_properties"][prop] = _camera_value(
-                            core, camera, prop, raw
-                        )
             self.set(group, preset, settings)
+
+    def is_live(self) -> bool:
+        """Return whether live is running, i.e. a sequence that is not an MDA."""
+        if (core := self._core_ref()) is None:
+            return False
+        return bool(core.isSequenceRunning() and not core.mda.is_running())
 
     def apply_current_channel(self) -> bool:
         """Apply the settings of the channel preset currently set on the core.
@@ -159,23 +164,6 @@ class ChannelSettingsStore(QObject):
         apply_channel_settings(core, settings, find_light_sources(core))
         core.waitForSystem()
         return True
-
-
-def _camera_value(
-    core: CMMCorePlus, camera: str, prop: str, raw: str
-) -> float | int | str:
-    """Cast a camera property value read from the cfg, like the Channels panel.
-
-    Properties with allowed values keep their string; numeric ones are numbers.
-    """
-    if core.getAllowedPropertyValues(camera, prop):
-        return raw
-    with suppress(ValueError):
-        if core.getPropertyType(camera, prop) is PropertyType.Integer:
-            return int(float(raw))
-        if core.getPropertyType(camera, prop) is PropertyType.Float:
-            return float(raw)
-    return raw
 
 
 _STORES: WeakKeyDictionary[CMMCorePlus, ChannelSettingsStore] = WeakKeyDictionary()

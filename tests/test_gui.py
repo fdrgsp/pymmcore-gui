@@ -20,6 +20,7 @@ from pymmcore_widgets import CameraRoiWidget, StageWidget, XYZStageWidget
 from pymmcore_widgets import MDAWidget as UpstreamMDAWidget
 from pymmcore_widgets._light_sources import PROPERTY_SEPARATOR, find_light_sources
 from pymmcore_widgets.useq_widgets._positions import MDAButton, _MDAPopup
+from superqt.iconify import QIconifyIcon
 
 import pymmcore_gui._ndv_viewers as acquire_viewers_module
 import pymmcore_gui.widgets._acquire as acquire_module
@@ -126,6 +127,7 @@ if TYPE_CHECKING:
     from pymmcore_gui._qt.QtAds import CDockAreaWidget
     from pymmcore_gui._settings import Settings
     from pymmcore_gui._theme import Color
+    from pymmcore_gui._theme._types import Theme
 
 
 def _unwrap_card(widget: QWidget | None) -> QWidget | None:
@@ -3205,7 +3207,7 @@ def test_channel_property_selector_lists_all_runtime_numeric_sliders(
         for label, pairs in choices.items()
         if len(pairs) == 1 and PROPERTY_SEPARATOR in label
     )
-    assert channels.show_light_source.text() == "Light Sources"
+    assert channels.show_light_source.text() == "Light Source"
 
     table = channels.table()
     property_col = table.indexOf(channels._light_source_column)
@@ -4211,7 +4213,6 @@ def test_snap_and_live_apply_the_active_channel_capture_settings(
             "exposure": exposure,
             "light_source": source_group,
             "intensity": intensity,
-            "camera_properties": {},
         },
     )
     baseline_intensity = mmcore.getPropertyLowerLimit(source_device, source_property)
@@ -7298,3 +7299,42 @@ def test_run_without_pixel_size_warns_for_grid_plans(
     answers.append(QMessageBox.StandardButton.Ok)
     assert mda.prepare_mda() is not False
     assert not answers
+
+
+def _paints_color(button: QPushButton, color: QColor) -> bool:
+    image = button.grab().toImage()
+    return any(
+        image.pixelColor(x, y).name() == color.name()
+        for x in range(image.width())
+        for y in range(image.height())
+    )
+
+
+@pytest.mark.parametrize("scheme", [DARK_THEME, LIGHT_THEME])
+def test_style_dims_the_icon_of_a_disabled_button(qtbot: QtBot, scheme: Theme) -> None:
+    """Icon-only or with text, a disabled push button paints its icon disabled."""
+    set_theme(scheme)
+    disabled = qcolor(theme().text_disabled)
+    # a gray one too: the base style's own disabled icon hardly differs on dark
+    for color in (QColor("#00ff00"), qcolor(theme().text_secondary)):
+        for text in ("", "Run"):
+            button = QPushButton(text)
+            qtbot.addWidget(button)
+            button.setProperty("variant", "subtle")
+            button.setIcon(QIconifyIcon("mdi:cog", color=color.name()))
+            button.setIconSize(QSize(20, 20))
+            button.resize(80, 40)
+
+            assert _paints_color(button, color)
+            button.setEnabled(False)
+            assert not _paints_color(button, color)
+            assert _paints_color(button, disabled)
+
+
+def test_style_leaves_a_disabled_opaque_pixmap_to_the_base_style(qtbot: QtBot) -> None:
+    """A filled shape would turn e.g. a photo into a solid block."""
+    set_theme(DARK_THEME)
+    pixmap = QPixmap(8, 8)
+    pixmap.fill(QColor("#00ff00"))
+    disabled = QIcon(pixmap).pixmap(QSize(8, 8), QIcon.Mode.Disabled).toImage()
+    assert disabled.pixelColor(4, 4).name() != qcolor(theme().text_disabled).name()

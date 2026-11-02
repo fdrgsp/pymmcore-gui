@@ -37,10 +37,13 @@ from pymmcore_gui._qt.QtCore import (
 )
 from pymmcore_gui._qt.QtGui import QPainter, QPixmap
 from pymmcore_gui._qt.QtWidgets import (
+    QAbstractSpinBox,
+    QApplication,
     QComboBox,
     QDoubleSpinBox,
     QGridLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QToolButton,
     QWidget,
@@ -467,11 +470,11 @@ class MemoryMDAWidgetBase(_MixinBase):
     def _install_channel_editor_filters(self) -> None:
         """Connect the editors whose user edits change a channel's settings.
 
-        A row's Config combo switching to another preset gives the row that
-        preset's settings; an edit of its exposure, light source, intensity or
-        camera properties is stored for its preset. Only user-driven signals are
-        used -- ``activated`` and ``editingFinished`` -- so that restoring a
-        sequence or rebuilding a column never overwrites a preset's settings.
+        Picking another preset in a row's Config combo gives the row that preset's
+        settings; an edit of its exposure, light source or intensity is stored for
+        its preset. Only user-driven signals are used -- ``activated`` and
+        ``editingFinished`` -- so that restoring a sequence or rebuilding a column
+        never overwrites a preset's settings.
         """
         channels = self.channels
         table = channels.table()
@@ -481,7 +484,6 @@ class MemoryMDAWidgetBase(_MixinBase):
                 table.indexOf(channels.EXPOSURE),
                 table.indexOf(channels.INTENSITY),
                 table.indexOf(channels._light_source_column),
-                *(table.indexOf(info) for info in channels._camera_columns.values()),
             }
         except RuntimeError:
             # A zero-delay install queued during table construction may outlive
@@ -507,9 +509,16 @@ class MemoryMDAWidgetBase(_MixinBase):
             return
         cell.setProperty("_pymmcore_gui_channel_editor_connected", True)
         if isinstance(cell, QComboBox):
+            # unlike a spin box, a combo does not take the focus that selects its row
+            cell.activated.connect(self._select_channel_editor_row)
             cell.activated.connect(slot)
         elif isinstance(cell, QDoubleSpinBox):
             cell.editingFinished.connect(slot)
+
+    def _select_channel_editor_row(self, *_: object) -> None:
+        index = self._channel_index_for_editor(self.sender())
+        if index.isValid():
+            self.channels.table().selectRow(index.row())
 
     def _on_channel_settings_edited(self, *_: object) -> None:
         if self._restoring_sequence:
@@ -519,10 +528,9 @@ class MemoryMDAWidgetBase(_MixinBase):
             self.channels.storeRowSettings(index.row())
 
     def _on_channel_config_activated(self, *_: object) -> None:
-        """Give a row switched to another preset that preset's settings."""
         index = self._channel_index_for_editor(self.sender())
         if index.isValid():
-            self.channels.restoreChannelSettings(index.row())
+            self.channels.presetPicked(index.row())
 
     def _channel_index_for_editor(self, editor: QObject | None) -> QModelIndex:
         if not isinstance(editor, QWidget):
@@ -537,6 +545,26 @@ class MemoryMDAWidgetBase(_MixinBase):
                 if cell is editor or (cell is not None and cell.isAncestorOf(editor)):
                     return model.index(row, col)
         return QModelIndex()
+
+    def apply_active_channel_for_capture(self) -> bool:
+        """Apply the selected channel's settings before a snap or live.
+
+        Those of the row marked in the channel table, whose values may differ from
+        its preset's (several rows of one preset, a restored sequence); otherwise, or
+        with the table's channel control off, of the preset set on the core. The
+        row's acquisition checkbox is ignored: it controls inclusion in an MDA, not
+        the live/snap selection.
+
+        An editor still being typed in goes first, here or in the Channels panel: on
+        macOS, clicking Snap or Live leaves it the focus, so it has not taken its value.
+        """
+        focused = QApplication.focusWidget()
+        if isinstance(focused, (QAbstractSpinBox, QLineEdit)):
+            focused.clearFocus()
+        channels = self.channels
+        if channels.channelControlEnabled() and (row := channels.activeRow()) >= 0:
+            return channels.applyRow(row, wait=True)
+        return channel_settings_store(self._mmc).apply_current_channel()
 
     def _collapsible_tabs(self) -> Any:
         """The tab widget, whichever presentation this flavour installed."""
@@ -779,6 +807,8 @@ class MemoryMDAWidgetBase(_MixinBase):
 
     def prepare_mda(self) -> bool | SingleOutput | None:
         """Return a disk path or a scratch sink that supports live viewing."""
+        # the check below already reads the sequence
+        self._commit_editors()
         if (
             self._mmc.getPixelSizeUm() <= 0
             and self._sequence_uses_grid()

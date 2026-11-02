@@ -20,7 +20,6 @@ from pymmcore_gui._array_viewer import (
     unstyle_widgets,
 )
 from pymmcore_gui._camera_roi_sync import CameraRoiSyncController
-from pymmcore_gui._channel_settings_store import channel_settings_store
 from pymmcore_gui._layouts import (
     DEFAULT_LAYOUT_NAME,
     RESERVED_LAYOUT_NAMES,
@@ -344,11 +343,6 @@ class AcquirePage(TabPage):
         self.toolbar.add_widget(self._snap_btn)
         self._live_btn = LiveButton(mmcore=self._core)
         self.toolbar.add_widget(self._live_btn)
-        # snap and live image with the Channels panel's settings for the channel
-        # preset currently set on the microscope
-        store = channel_settings_store(self._core)
-        self._snap_btn.snapRequested.connect(store.apply_current_channel)
-        self._live_btn.liveStartedRequested.connect(store.apply_current_channel)
         self.toolbar.add_widget(toolbar_separator())
         self.toolbar.add_widget(self._shutters)
 
@@ -575,12 +569,22 @@ class AcquirePage(TabPage):
 
         widget.af_axis.setTestRunner(run_autofocus_test)
         widget.mdaLockChanged.connect(self.set_mda_lock)
+        self._snap_btn.snapRequested.connect(widget.apply_active_channel_for_capture)
+        self._live_btn.liveStartedRequested.connect(
+            widget.apply_active_channel_for_capture
+        )
 
     def _unbind_mda(self) -> None:
         """Undo :meth:`_bind_mda`, leaving the widget itself intact."""
         widget = self._mda
         with suppress(RuntimeError, TypeError):
             widget.mdaLockChanged.disconnect(self.set_mda_lock)
+            self._snap_btn.snapRequested.disconnect(
+                widget.apply_active_channel_for_capture
+            )
+            self._live_btn.liveStartedRequested.disconnect(
+                widget.apply_active_channel_for_capture
+            )
 
     def _mda_widget_for(self, kind: str) -> QWidget:
         """Return the MDA editor for *kind*, building and caching it once."""
