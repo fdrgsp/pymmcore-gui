@@ -1024,7 +1024,7 @@ wheels = [
 
 [[package]]
 name = "ipython"
-version = "9.18.0"
+version = "9.18.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "colorama", marker = "sys_platform == 'win32'" },
@@ -1038,9 +1038,9 @@ dependencies = [
     { name = "stack-data" },
     { name = "traitlets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c6/9d/fea7fe7e360b6a4992f00600445849374675d82d665ffc194aee50c314ab/ipython-9.18.0.tar.gz", hash = "sha256:93ec98e27d5ce494c962758111c7dff1ef45f9efdd55604ae70a7d4cabb3e1ea", size = 4436921, upload-time = "2026-10-30T08:33:14.247Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/38/04/0d945c72d5b77527273ecb4c66aa2436de7a3b3bbe3da345bf053232b886/ipython-9.18.1.tar.gz", hash = "sha256:6319c0f5372c196397899479e6db1783dd7937abae06815d1317e8d5d51aaaaf", size = 4437314, upload-time = "2026-11-02T09:19:55.55Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/55/7e/61834f817d193fe48ebe4bf1f9bb24c145143423db019897387c30c8f80a/ipython-9.18.0-py3-none-any.whl", hash = "sha256:d9b8e19267e811cafbc9d72e794a130c3fc60518108d20f5e1f05dae74f619ec", size = 649604, upload-time = "2026-10-30T08:33:12.016Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/1c/91da4a1c541b75e97eb99d09c6a9b0534de55bb4a466669d1170e39b915c/ipython-9.18.1-py3-none-any.whl", hash = "sha256:997ce9140d374531a61069c70c0f9ef299d6dd3559ea0f94b8af589726e3c1d5", size = 649819, upload-time = "2026-11-02T09:19:53.32Z" },
 ]
 
 [[package]]
@@ -1742,8 +1742,8 @@ wheels = [
 
 [[package]]
 name = "ndv"
-version = "0.1.dev279+gfb7050bfa"
-source = { git = "https://github.com/fdrgsp/ndv?rev=cite#fb7050bfa2862217af75bd2e8839338377f176fb" }
+version = "0.1.dev280+g2ae89e528"
+source = { git = "https://github.com/fdrgsp/ndv?rev=cite#2ae89e52826137775472a631496c852ba68095b4" }
 dependencies = [
     { name = "cmap" },
     { name = "ihist" },
@@ -1867,8 +1867,8 @@ wheels = [
 
 [[package]]
 name = "ome-writers"
-version = "0.3.3.dev19+g4f747c7e0"
-source = { git = "https://github.com/fdrgsp/ome-writers?rev=cite#4f747c7e0845e6eeb8034202fd1177ae1e0b7066" }
+version = "0.3.3.dev20+g4ef122a58"
+source = { git = "https://github.com/fdrgsp/ome-writers?rev=cite#4ef122a5805dac564c286285fe2e8501a1fbab16" }
 dependencies = [
     { name = "numpy" },
     { name = "pydantic" },
@@ -2650,8 +2650,8 @@ test = [
 
 [[package]]
 name = "pymmcore-plus"
-version = "0.17.3.dev102+g7bf69eac7"
-source = { git = "https://github.com/fdrgsp/pymmcore-plus?rev=cite#7bf69eac7f37280977a840edf177aebe014937bc" }
+version = "0.17.3.dev103+g624cc7dc9"
+source = { git = "https://github.com/fdrgsp/pymmcore-plus?rev=cite#624cc7dc99798cf9eff0fad0131be1c4fe7083a7" }
 dependencies = [
     { name = "numpy" },
     { name = "ome-types" },
@@ -2673,8 +2673,8 @@ cli = [
 
 [[package]]
 name = "pymmcore-widgets"
-version = "0.1.dev609+g382f858cf"
-source = { git = "https://github.com/fdrgsp/pymmcore-widgets?rev=cite#382f858cf8bd5aaebfce21f2755f86ea79e7df3c" }
+version = "0.1.dev610+g1eb9c2fc8"
+source = { git = "https://github.com/fdrgsp/pymmcore-widgets?rev=cite#1eb9c2fc8ec7f5b4d3973c28e999483d26a7ad6e" }
 dependencies = [
     { name = "psutil" },
     { name = "pymmcore-plus", extra = ["cli"] },
@@ -3642,8 +3642,8 @@ wheels = [
 
 [[package]]
 name = "useq-schema"
-version = "0.9.3.dev12+g29596beaf"
-source = { git = "https://github.com/fdrgsp/useq-schema?rev=cite#29596beaf815ac29537cd8c33a06bc3fad9a4608" }
+version = "0.9.3.dev13+ge75c4745a"
+source = { git = "https://github.com/fdrgsp/useq-schema?rev=cite#e75c4745ad00fdadba554f474557479c29a0e6be" }
 dependencies = [
     { name = "numpy" },
     { name = "pydantic" },
