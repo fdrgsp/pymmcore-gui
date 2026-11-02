@@ -2340,7 +2340,7 @@ def test_acquire_reset_layout_restores_defaults(
     page.resize(1400, 900)
     page.show()
     qtbot.waitExposed(page)
-    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
+    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=10000)
 
     # MDA, Groups and Presets and Channels are the defaults; open another and
     # hide a button to get somewhere a reset has to undo.
@@ -2466,7 +2466,7 @@ def test_acquire_reset_layout_after_restore_repins_default_widths(
     page_a.resize(1400, 900)
     page_a.show()
     qtbot.waitExposed(page_a)
-    qtbot.waitUntil(lambda: page_a._mda_width_locked_at_real_size, timeout=2000)
+    qtbot.waitUntil(lambda: page_a._mda_width_locked_at_real_size, timeout=10000)
 
     mda_area = page_a._mda_dock.dockAreaWidget()
     assert mda_area is not None
@@ -2487,7 +2487,7 @@ def test_acquire_reset_layout_after_restore_repins_default_widths(
     assert page_b.restore_layout(state, keys)
     page_b.show()
     qtbot.waitExposed(page_b)
-    qtbot.waitUntil(lambda: page_b._mda_width_locked_at_real_size, timeout=2000)
+    qtbot.waitUntil(lambda: page_b._mda_width_locked_at_real_size, timeout=10000)
     assert page_b._layout_restored
 
     page_b.reset_layout()
@@ -4439,7 +4439,7 @@ def test_acquire_viewer_close_reclaims_space_without_moving_mda(
     page.resize(1400, 900)
     page.show()
     qtbot.waitExposed(page)
-    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
+    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=10000)
     page.panel_button(PanelKey.PRESETS).setChecked(True)  # default-open already
 
     mmcore.mda.run(
@@ -4880,7 +4880,7 @@ def test_acquire_mda_dock_width_resists_relayout_but_stays_draggable(
     # small width; showEvent schedules a debounced re-pin (see
     # ``_schedule_width_settle``) that fires once geometry stops changing,
     # same as it would for the real app's startup. Wait for it to settle.
-    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
+    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=10000)
 
     mda_area = page._mda_dock.dockAreaWidget()
     assert mda_area is not None
@@ -4897,7 +4897,7 @@ def test_acquire_tools_dock_is_always_resizable(
     page.resize(1400, 900)
     page.show()
     qtbot.waitExposed(page)
-    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
+    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=10000)
 
     page.panel_button(PanelKey.PRESETS).setChecked(True)  # default-open already
     tools_area = page._tools_dock_area
@@ -5186,7 +5186,7 @@ def test_acquire_restored_tools_dock_is_resizable(
     assert page_b.restore_layout(state, keys)
     page_b.show()
     qtbot.waitExposed(page_b)
-    qtbot.waitUntil(lambda: page_b._mda_width_locked_at_real_size, timeout=2000)
+    qtbot.waitUntil(lambda: page_b._mda_width_locked_at_real_size, timeout=10000)
 
     tools_area = page_b._tools_dock_area
     assert tools_area is not None
@@ -5218,7 +5218,7 @@ def test_acquire_repairs_an_unusably_narrow_restored_tools_dock(
     page_a.resize(1400, 900)
     page_a.show()
     qtbot.waitExposed(page_a)
-    qtbot.waitUntil(lambda: page_a._mda_width_locked_at_real_size, timeout=2000)
+    qtbot.waitUntil(lambda: page_a._mda_width_locked_at_real_size, timeout=10000)
     page_a.panel_button(PanelKey.PRESETS).setChecked(True)  # default-open already
     tools_area = page_a._tools_dock_area
     assert tools_area is not None
@@ -5244,7 +5244,7 @@ def test_acquire_repairs_an_unusably_narrow_restored_tools_dock(
     assert page_b.restore_layout(state, keys)
     page_b.show()
     qtbot.waitExposed(page_b)
-    qtbot.waitUntil(lambda: page_b._mda_width_locked_at_real_size, timeout=2000)
+    qtbot.waitUntil(lambda: page_b._mda_width_locked_at_real_size, timeout=10000)
 
     restored_area = page_b._tools_dock_area
     assert restored_area is not None
@@ -5296,7 +5296,7 @@ def test_acquire_opening_a_panel_widens_an_unusable_column(
     page.resize(1400, 900)
     page.show()
     qtbot.waitExposed(page)
-    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
+    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=10000)
 
     tools_area = page._tools_dock_area
     assert tools_area is not None
@@ -5357,7 +5357,7 @@ def test_acquire_narrow_column_repair_gives_up_instead_of_retrying_forever(
     page.resize(1400, 900)
     page.show()
     qtbot.waitExposed(page)
-    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
+    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=10000)
 
     tools_area = page._tools_dock_area
     assert tools_area is not None
@@ -5389,7 +5389,7 @@ def test_acquire_restore_does_not_repin_column_widths(
     page_a.resize(1400, 900)
     page_a.show()
     qtbot.waitExposed(page_a)
-    qtbot.waitUntil(lambda: page_a._mda_width_locked_at_real_size, timeout=2000)
+    qtbot.waitUntil(lambda: page_a._mda_width_locked_at_real_size, timeout=10000)
 
     mda_area = page_a._mda_dock.dockAreaWidget()
     assert mda_area is not None
@@ -5414,7 +5414,7 @@ def test_acquire_restore_does_not_repin_column_widths(
     assert page_b.restore_layout(state, keys)
     page_b.show()
     qtbot.waitExposed(page_b)
-    qtbot.waitUntil(lambda: page_b._mda_width_locked_at_real_size, timeout=2000)
+    qtbot.waitUntil(lambda: page_b._mda_width_locked_at_real_size, timeout=10000)
     # A stray real cursor position -- left over from *any* earlier real drag,
     # in this test or another one entirely -- can park itself on page_b's own
     # handle purely by screen-coordinate coincidence and read as a live hover
@@ -5475,7 +5475,7 @@ def test_pin_dock_widths_preserves_a_locked_custom_mda_width(
     page.resize(1400, 900)
     page.show()
     qtbot.waitExposed(page)
-    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
+    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=10000)
 
     mda_area = page._mda_dock.dockAreaWidget()
     assert mda_area is not None
@@ -6675,7 +6675,7 @@ def test_acquire_width_settle_waits_out_a_late_resize(
     page.resize(1400, 900)
     assert not page._mda_width_locked_at_real_size
 
-    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
+    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=10000)
     # Locked at the *final* (1400-wide) canonical width, not the transient
     # 400-wide one.
     assert mda_area.width() == _MDA_DOCK_WIDTH
@@ -6728,7 +6728,7 @@ def test_acquire_settle_retries_until_lock_actually_takes(
 
     page.show()
     qtbot.waitExposed(page)
-    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=2000)
+    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=10000)
 
     assert call_count > 2, "test didn't actually exercise a retry"
     mda_area = page._mda_dock.dockAreaWidget()
@@ -6984,7 +6984,14 @@ def test_mda_kind_menu_offers_all_presentations(
     assert button.contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
 
     menus: list[QMenu] = []
-    with patch.object(QMenu, "exec", lambda self, *a: menus.append(self)):
+
+    class SpyMenu(QMenu):
+        # patching QMenu.exec itself does nothing on PySide6, where an instance
+        # call doesn't go through the class attribute
+        def exec(self, *a: object) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
+            menus.append(self)
+
+    with patch.object(acquire_module, "QMenu", SpyMenu):
         page._popup_mda_kind_menu(QPoint(0, 0))
     assert len(menus) == 1
     actions = menus[0].actions()

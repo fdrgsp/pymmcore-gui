@@ -33,6 +33,7 @@ jobs:
   test:
     name: ${{ matrix.os }} py${{ matrix.python-version }}${{ matrix.qt }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     # windows-latest py3.13PySide6 hits a reproducible-but-harmless crash
     # (exit 0xC0000409 / __fastfail) *after* pytest's own clean "N passed"
     # summary. A procdump-captured minidump showed only one thread left

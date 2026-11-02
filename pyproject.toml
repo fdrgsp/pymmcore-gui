@@ -189,6 +189,10 @@ venv = ".venv"
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
+# a hung test dumps its stacks and takes its worker down, instead of silently
+# keeping the job going until CI gives up without a summary of the failures
+faulthandler_timeout = 300
+faulthandler_exit_on_timeout = true
 filterwarnings = [
     "error",
     "ignore:Parsing dates involving a day of month::ipykernel",

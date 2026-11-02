@@ -19,6 +19,7 @@ from ome_writers import (
 )
 from pymmcore_widgets.useq_widgets import PYMMCW_METADATA_KEY
 
+import pymmcore_gui._array_viewer as array_viewer_module
 import pymmcore_gui._ndv_viewers as acquire_viewers_module
 from pymmcore_gui._main_window import MicroManagerGUI
 from pymmcore_gui._qt.QtCore import QThread
@@ -26,10 +27,29 @@ from pymmcore_gui._qt.QtWidgets import QFileDialog, QMenu, QMessageBox
 from pymmcore_gui.widgets._acquire import AcquirePage
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from pymmcore_plus import CMMCorePlus
     from pytestqt.qtbot import QtBot
 
     from pymmcore_gui._array_viewer import MMArrayViewer
+
+
+@pytest.fixture
+def shown_menus() -> Iterator[list[QMenu]]:
+    """Record the menus a viewer pops up, without blocking on a real popup.
+
+    Patching ``QMenu.exec`` itself does nothing on PySide6, where an instance
+    call doesn't go through the class attribute.
+    """
+    shown: list[QMenu] = []
+
+    class SpyMenu(QMenu):
+        def exec(self, *a: object) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
+            shown.append(self)
+
+    with patch.object(array_viewer_module, "QMenu", SpyMenu):
+        yield shown
 
 
 def _ch(*names: str) -> tuple[useq.Channel, ...]:
@@ -247,7 +267,7 @@ def test_open_acquisition_close_releases_file_handle(
 
 
 def test_context_menu_absent_without_sequence(
-    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path, shown_menus: list[QMenu]
 ) -> None:
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
@@ -265,14 +285,13 @@ def test_context_menu_absent_without_sequence(
         stream.append(np.zeros((8, 8), dtype="uint16"))
     viewer = _open(page, Path(settings.output_path))
 
-    with patch.object(QMenu, "exec") as exec_:
-        shown = viewer._show_context_menu(Mock())
+    shown = viewer._show_context_menu(Mock())
     assert shown is False
-    exec_.assert_not_called()
+    assert not shown_menus
 
 
 def test_context_menu_present_and_enabled_when_idle(
-    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path, shown_menus: list[QMenu]
 ) -> None:
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
@@ -281,14 +300,13 @@ def test_context_menu_present_and_enabled_when_idle(
     )
     viewer = _open(page, path)
 
-    with patch.object(QMenu, "exec") as exec_:
-        shown = viewer._show_context_menu(Mock())
+    shown = viewer._show_context_menu(Mock())
     assert shown is True
-    exec_.assert_called_once()
+    assert len(shown_menus) == 1
 
 
 def test_context_menu_disabled_while_mda_running(
-    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path, shown_menus: list[QMenu]
 ) -> None:
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
@@ -297,20 +315,11 @@ def test_context_menu_disabled_while_mda_running(
     )
     viewer = _open(page, path)
 
-    captured_menu: list[QMenu] = []
-    real_menu_cls = QMenu
-
-    def _spy_exec(self: QMenu, *a: object, **k: object) -> None:
-        captured_menu.append(self)
-
-    with (
-        patch.object(real_menu_cls, "exec", _spy_exec),
-        patch.object(mmcore.mda, "is_running", return_value=True),
-    ):
+    with patch.object(mmcore.mda, "is_running", return_value=True):
         viewer._show_context_menu(Mock())
 
-    assert captured_menu
-    actions = captured_menu[0].actions()
+    assert shown_menus
+    actions = shown_menus[0].actions()
     assert actions and actions[0].text() == "Re-use MDA…"
     assert actions[0].isEnabled() is False
 
