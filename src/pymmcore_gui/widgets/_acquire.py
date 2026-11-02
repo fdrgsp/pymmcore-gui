@@ -89,7 +89,7 @@ if TYPE_CHECKING:
     from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 
 _DOCK_MIN_WIDTH = 0
-_MDA_DOCK_WIDTH = 650
+_MDA_DOCK_WIDTH = 670
 _TOOLS_DOCK_DEFAULT_WIDTH = 550
 """Tools-column width in the default layout (capped at a third of the page)."""
 _TOOLS_DOCK_MAX_WIDTH = 500
