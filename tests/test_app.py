@@ -91,9 +91,9 @@ def test_failed_explicit_config_load_is_not_fatal(mmcore: CMMCorePlus) -> None:
     (windowed, no console) with no traceback either. The app simply appeared
     to do nothing after the startup dialog.
 
-    The default first-launch choice, "Demo configuration", hits exactly this:
-    it resolves against the Micro-Manager install ``pymmcore-plus`` finds, and
-    the bundle ships no device adapters.
+    Choosing "Demo configuration" without Micro-Manager hits exactly this: it
+    resolves against the install ``pymmcore-plus`` finds, and the bundle ships
+    no device adapters.
     """
 
     def _raise(*_a: object, **_k: object) -> None:

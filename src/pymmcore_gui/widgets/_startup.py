@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
+from pymmcore_plus import find_micromanager
+
 from pymmcore_gui._layouts import DEFAULT_LAYOUT_NAME, available_layouts
 from pymmcore_gui._qt.QtCore import Qt
 from pymmcore_gui._qt.QtGui import QPixmap
@@ -185,8 +187,13 @@ class StartupDialog(QDialog):
         combo.insertSeparator(combo.count())
         combo.addItem(_BROWSE_LABEL, _BROWSE_ROLE)
         # The most recent config is the likely answer; demo is the fallback
-        # for a first launch, when it's the only real entry anyway.
-        combo.setCurrentIndex(2 if recent else 0)
+        # for a first launch, when it's the only real entry anyway. Without a
+        # Micro-Manager install neither can load, so don't default into an
+        # error dialog: start empty, and the window opens on Installation.
+        if find_micromanager(return_first=True):
+            combo.setCurrentIndex(2 if recent else 0)
+        else:
+            combo.setCurrentIndex(1)
 
     def _on_config_activated(self, index: int) -> None:
         combo = self._config_combo

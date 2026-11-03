@@ -81,6 +81,31 @@ def test_dialog_offers_a_no_configuration_option(qtbot: QtBot) -> None:
     assert dialog.value().config is None
 
 
+@pytest.mark.parametrize("has_recent", [False, True])
+def test_dialog_starts_empty_without_micromanager(
+    qtbot: QtBot, settings: Settings, tmp_path: Path, has_recent: bool
+) -> None:
+    """A fresh machine must not default into a config that can't load.
+
+    Regression test: "Demo configuration" was preselected even with no
+    Micro-Manager installed, so pressing Start led straight to an error dialog
+    before the window could open on the Installation tab.
+    """
+    recent = tmp_path / "recent.cfg"
+    recent.touch()
+    if has_recent:
+        settings.recent_configs = [recent]
+
+    with patch("pymmcore_gui.widgets._startup.find_micromanager", return_value=None):
+        dialog = StartupDialog()
+    qtbot.addWidget(dialog)
+
+    assert dialog.value().config is None
+    # The other entries stay available, just not preselected.
+    assert "Demo configuration" in _combo_items(dialog._config_combo)
+    assert ("recent.cfg" in _combo_items(dialog._config_combo)) is has_recent
+
+
 def test_dialog_drops_config_paths_that_no_longer_exist(
     qtbot: QtBot, settings: Settings, tmp_path: Path
 ) -> None:
