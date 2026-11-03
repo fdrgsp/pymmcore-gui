@@ -73,7 +73,7 @@ def main() -> None:
         sys.exit(f"Refusing to touch {_settings.SETTINGS_FILE_NAME}")
 
     # In the order the app does it: a core made before Qt uses other signals.
-    app = _app._QAPP = _app.MMQApplication(sys.argv[:1])
+    _app._QAPP = _app.MMQApplication(sys.argv[:1])
     core = CMMCorePlus.instance()
     core.setDeviceAdapterSearchPaths([mm_path])
 
@@ -225,7 +225,10 @@ def main() -> None:
         show_positions,
         lambda: None,
         lambda: capture(page.panel_widget(PanelKey.MDA), "mda-positions"),
-        lambda: (mda.tabs.section("p").set_expanded(False), mda.tabs.section("p").set_checked(False)),
+        lambda: (
+            mda.tabs.section("p").set_expanded(False),
+            mda.tabs.section("p").set_checked(False),
+        ),
         lambda: mda.control_btns.run_btn.click(),
         lambda: WAIT if core.mda.is_running() else None,
         show_mda_result,
