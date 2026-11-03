@@ -620,7 +620,10 @@ class AcquireViewersManager(QObject):
                 wrapper, snap.image, scale_overrides=scales
             )
 
-        dw = self._new_dock(snap.title)
+        # Named after the widget: snaps with the same settings in the same second
+        # share a title, and the dock manager keys its docks by this name.
+        dw = self._new_dock(widget.objectName())
+        dw.setWindowTitle(snap.title)
         dw.setWidget(widget, CDockWidget.eInsertMode.ForceNoScrollArea)
         dw.closed.connect(lambda: self._on_viewer_closed(dw))
         dw.setAsCurrentTab()

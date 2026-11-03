@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from pymmcore_gui._channel_settings_store import current_light_intensity
 from pymmcore_gui._qt.QtCore import QObject, QPoint, QSize, Qt, Signal
 from pymmcore_gui._qt.QtGui import QIcon, QImage, QPixmap
 from pymmcore_gui._qt.QtWidgets import (
@@ -47,6 +48,7 @@ class SnappedImage:
     channel: str = ""
     exposure_ms: float | None = None
     pixel_size_um: float | None = None
+    light_intensity: float | None = None
 
     @classmethod
     def capture(cls, core: CMMCorePlus, image: np.ndarray) -> SnappedImage:
@@ -55,16 +57,19 @@ class SnappedImage:
         Call this on the thread that snapped: by the time the GUI thread gets
         round to it, the microscope may already have moved on.
         """
-        exposure = pixel_size = None
+        exposure = pixel_size = light_intensity = None
         with suppress(Exception):
             exposure = core.getExposure()
         with suppress(Exception):
             pixel_size = core.getPixelSizeUm() or None
+        with suppress(Exception):
+            light_intensity = current_light_intensity(core)
         return cls(
             image,
             channel=current_channel(core),
             exposure_ms=exposure,
             pixel_size_um=pixel_size,
+            light_intensity=light_intensity,
         )
 
     @property
@@ -72,19 +77,27 @@ class SnappedImage:
         return self.image.ndim == 3
 
     @property
+    def _settings(self) -> list[str]:
+        """Return what this was snapped with, leaving out what is not known."""
+        settings = [self.channel] if self.channel else []
+        if self.exposure_ms is not None:
+            settings.append(f"{self.exposure_ms:g} ms")
+        if self.light_intensity is not None:
+            settings.append(f"I={self.light_intensity:g}")
+        return settings
+
+    @property
     def title(self) -> str:
-        return f"Snap {self.timestamp:%H:%M:%S}"
+        time = f"{self.timestamp:%H:%M:%S}"
+        settings = self._settings
+        return " · ".join([*settings, time]) if settings else f"Snap {time}"
 
     @property
     def description(self) -> str:
         """Return when this was snapped, then what with, on a second line."""
         height, width = self.image.shape[:2]
-        details = [f"{width} x {height}"]
-        if self.exposure_ms is not None:
-            details.insert(0, f"{self.exposure_ms:g} ms")
-        if self.channel:
-            details.insert(0, self.channel)
-        return f"{self.timestamp:%Y-%m-%d %H:%M:%S}\n{' · '.join(details)}"
+        details = " · ".join([*self._settings, f"{width} x {height}"])
+        return f"{self.timestamp:%Y-%m-%d %H:%M:%S}\n{details}"
 
 
 class SnapAlbum(QObject):

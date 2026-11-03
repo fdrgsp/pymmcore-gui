@@ -165,8 +165,31 @@ class ChannelSettingsStore(QObject):
         core.waitForSystem()
         return True
 
+    def light_intensity(self) -> float | None:
+        """Return the intensity of the current preset's light source.
+
+        None if the light source columns are hidden, or the preset has no light
+        source.
+        """
+        if not self._light_sources_visible or (core := self._core_ref()) is None:
+            return None
+        group = core.getChannelGroup()
+        settings = self.get(group, core.getCurrentConfig(group)) if group else None
+        if settings is None or settings["light_source"] not in find_light_sources(core):
+            return None
+        return settings["intensity"]
+
 
 _STORES: WeakKeyDictionary[CMMCorePlus, ChannelSettingsStore] = WeakKeyDictionary()
+
+
+def current_light_intensity(core: CMMCorePlus) -> float | None:
+    """Return `ChannelSettingsStore.light_intensity` of `core`, if it has a store.
+
+    Never creates the store: this runs on the thread that snapped, and the store is
+    a QObject that belongs on the GUI thread.
+    """
+    return store.light_intensity() if (store := _STORES.get(core)) else None
 
 
 def channel_settings_store(core: CMMCorePlus) -> ChannelSettingsStore:

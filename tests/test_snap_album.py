@@ -13,6 +13,11 @@ from pytestqt.qt_compat import qt_api
 
 import pymmcore_gui._ndv_viewers as viewers_module
 from pymmcore_gui._array_viewer import MMArrayViewer
+from pymmcore_gui._channel_settings_store import (
+    _STORES,
+    channel_settings_store,
+    current_light_intensity,
+)
 from pymmcore_gui._mda_export import export_acquisition
 from pymmcore_gui._ndv_viewers import AcquireViewersManager
 from pymmcore_gui._qt.QtAds import CDockManager
@@ -82,10 +87,70 @@ def test_description_names_when_and_what_with() -> None:
     snap = _snap(
         timestamp=datetime(2026, 11, 3, 14, 32, 5), channel="DAPI", exposure_ms=100.0
     )
-    assert snap.title == "Snap 14:32:05"
+    assert snap.title == "DAPI · 100 ms · 14:32:05"
     assert snap.description == "2026-11-03 14:32:05\nDAPI · 100 ms · 12 x 8"
     # nothing to report beyond the shape, without a dangling separator
-    assert _snap(timestamp=snap.timestamp).description.endswith("05\n12 x 8")
+    bare = _snap(timestamp=snap.timestamp)
+    assert bare.title == "Snap 14:32:05"
+    assert bare.description.endswith("05\n12 x 8")
+
+
+def test_title_and_description_give_the_intensity_without_a_unit() -> None:
+    snap = _snap(
+        timestamp=datetime(2026, 11, 3, 14, 32, 5),
+        channel="DAPI",
+        exposure_ms=100.0,
+        light_intensity=55.0,
+    )
+    assert snap.title == "DAPI · 100 ms · I=55 · 14:32:05"
+    assert snap.description == "2026-11-03 14:32:05\nDAPI · 100 ms · I=55 · 12 x 8"
+
+
+def test_capture_records_the_intensity_only_if_its_column_is_shown(
+    mmcore: CMMCorePlus,
+) -> None:
+    image = np.zeros((8, 12), dtype=np.uint16)
+    store = channel_settings_store(mmcore)
+    mmcore.setConfig("Channel", "DAPI")
+    # no light source picked for this preset
+    assert SnappedImage.capture(mmcore, image).light_intensity is None
+
+    source = "Camera · TestProperty2"
+    store.set(
+        "Channel", "DAPI", {"exposure": 20, "light_source": source, "intensity": 55}
+    )
+    assert SnappedImage.capture(mmcore, image).light_intensity == 55
+
+    store.setLightSourcesVisible(False)
+    assert SnappedImage.capture(mmcore, image).light_intensity is None
+
+
+def test_capture_does_not_create_the_settings_store(mmcore: CMMCorePlus) -> None:
+    assert mmcore not in _STORES
+    assert current_light_intensity(mmcore) is None
+    assert mmcore not in _STORES
+
+
+def test_snaps_with_the_same_settings_open_in_their_own_tabs(
+    manager: AcquireViewersManager,
+) -> None:
+    # in the same second, not the same microsecond
+    first, second = (
+        _snap(
+            i,
+            channel="DAPI",
+            exposure_ms=5.0,
+            timestamp=datetime(2026, 11, 3, 14, 32, 5, i),
+        )
+        for i in range(2)
+    )
+    assert first.title == second.title
+
+    assert manager.open_snap(first) is not manager.open_snap(second)
+    docks = [d for d, r in manager._records.items() if r.snap in (first, second)]
+    assert len(docks) == 2
+    assert {d.windowTitle() for d in docks} == {"DAPI · 5 ms · 14:32:05"}
+    assert docks[0].objectName() != docks[1].objectName()
 
 
 @pytest.mark.parametrize(
