@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from importlib.metadata import entry_points
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -49,6 +50,16 @@ def test_default_command_forwards_config_to_default_gui(tmp_path: Path) -> None:
     assert mock_create.call_args.kwargs["mm_config"] == config.resolve()
     # The CLI uses the same default window as the Python API.
     assert "window_cls" not in mock_create.call_args.kwargs
+
+
+def test_pymm_is_the_main_command_and_mmgui_its_alias() -> None:
+    scripts = {ep.name: ep.value for ep in entry_points(group="console_scripts")}
+    assert scripts["pymm"] == "pymmcore_gui.__main__:main"
+    assert scripts["mmgui"] == scripts["pymm"]
+
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0
+    assert "pymm run" in result.stdout
 
 
 def test_old_flag_is_rejected() -> None:

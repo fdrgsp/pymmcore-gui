@@ -10,7 +10,7 @@ import pymmcore_gui
 
 __all__ = ["app", "main"]
 app = typer.Typer(
-    name="mmgui",
+    name="pymm",
     add_completion=False,
     context_settings={
         "help_option_names": ["-h", "--help"],
@@ -55,17 +55,19 @@ def _main(
         resolve_path=True,
         help="Path to MM hardware config file.",
     ),
-    # Declared here as well as on `run` so `mmgui -l Foo` (which this callback
+    # Declared here as well as on `run` so `pymm -l Foo` (which this callback
     # forwards to `run`) isn't rejected as an unknown option first.
     layout: str | None = typer.Option(
         None, "-l", "--layout", help="Name of the saved window layout to open with."
     ),
 ) -> None:
-    """mmgui: pymmcore-gui command line (v{version}).
+    """pymm: pymmcore-gui command line (v{version}).
 
-    For additional help on a specific command: type `mmgui [command] --help`
+    For additional help on a specific command: type `pymm [command] --help`
 
-    The default command is `mmgui run`, use `mmgui run --help` for more options.
+    The default command is `pymm run`, use `pymm run --help` for more options.
+
+    `mmgui` is an alias of `pymm`.
     """
     # fix for windows CI encoding and emoji printing
     if getattr(sys.stdout, "encoding", None) != "utf-8":
@@ -102,7 +104,7 @@ def run(
         "--layout",
         help=(
             "Name of the saved window layout to open with (use "
-            "`mmgui layouts` to list them). Without -c, this preselects the "
+            "`pymm layouts` to list them). Without -c, this preselects the "
             "startup dialog's layout instead of skipping the dialog."
         ),
     ),

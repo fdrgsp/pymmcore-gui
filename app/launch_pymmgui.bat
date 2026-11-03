@@ -11,14 +11,14 @@ set "PATH=%USERPROFILE%\.local\bin;%PATH%"
 set attempts=0
 
 :run
-uv run mmgui
+uv run pymm run
 if not errorlevel 1 goto done
 
 set /a attempts+=1
 if %attempts% geq 2 goto fail
 
 echo.
-echo mmgui failed to start - this is usually antivirus briefly locking the
+echo pymm failed to start - this is usually antivirus briefly locking the
 echo executable right after install. Retrying in 3 seconds...
 timeout /t 3 /nobreak >nul
 goto run

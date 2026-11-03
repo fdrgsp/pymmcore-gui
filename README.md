@@ -119,7 +119,7 @@ pip install git+https://github.com/pymmcore-plus/pymmcore-gui
 mmcore install
 
 # run the app
-mmgui
+pymm run
 ```
 
 *More info on the `mmcore install` command
@@ -183,10 +183,10 @@ adapters), **Hardware Setup** (build or edit a configuration),
 ### Launching via Python (CLI)
 
 If you installed pymmcore-gui into a Python environment, you can launch the
-GUI from the command line using the `mmgui` command:
+GUI from the command line using the `pymm` command (`mmgui` is an alias of it):
 
 ```bash
-mmgui
+pymm run
 ```
 
 ### Launching via Python (Script)
@@ -203,7 +203,7 @@ create_mmgui()
 
 This will initialize the application and show the main GUI window.
 
-Python launches, `mmgui`, and the bundled application all use the same interface,
+Python launches, `pymm run`, and the bundled application all use the same interface,
 with Installation, Hardware Setup, Configurations, and Acquire pages. Startup
 asks which configuration and layout to open. An explicit configuration skips
 that dialog; use `mm_config=False` to keep an already configured core unchanged.
@@ -279,7 +279,7 @@ and architectural patterns used in the project. Briefly:
 git clone https://github.com/pymmcore-plus/pymmcore-gui.git
 cd pymmcore-gui
 uv sync
-uv run mmgui
+uv run pymm run
 uv run pytest
 ```
 

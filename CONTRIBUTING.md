@@ -117,10 +117,10 @@ than the minimum version defined in `pyproject.toml` under the
 To run the GUI, just run
 
 ```sh
-uv run mmgui
+uv run pymm run
 ```
 
-(*or... just `mmgui` if you've [activated your virtual
+(*or... just `pymm run` if you've [activated your virtual
 environment](#activating-the-virtual-environment-optional)*)
 
 > [!TIP]
