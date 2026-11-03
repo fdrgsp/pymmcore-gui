@@ -154,7 +154,15 @@ def test_overlapping_saves_never_leave_a_broken_file(tmp_path: Path) -> None:
 
     def read_continuously() -> None:
         while not done.is_set():
-            if content := path.read_text() if path.exists() else "":
+            try:
+                content = path.read_text() if path.exists() else ""
+            except PermissionError:
+                # Windows refuses to open a file mid-replace. That's not a broken
+                # file: it's the same lock `_write_atomically` retries for.
+                if sys.platform != "win32":
+                    raise
+                continue
+            if content:
                 try:
                     json.loads(content)
                 except ValueError:
