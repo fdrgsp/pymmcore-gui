@@ -391,8 +391,9 @@ class AcquirePage(TabPage):
         # Default-open panels build now, before any width pinning. MDA goes
         # first and is bound immediately: opening any *other* panel creates
         # the tools column, which pins the column widths -- and that reads
-        # ``self._mda_dock``.
-        self._panel_bar.button_for(PanelKey.MDA).setChecked(True)
+        # ``self._mda_dock``. It is built up front, open or not, because so much
+        # of the page drives it.
+        self._create_panel(self._panels[PanelKey.MDA])
         self._mda = cast("MemoryMDAWidgetBase", self.panel_widget(PanelKey.MDA))
         # Seed the flavor cache with the widget the panel factory just built, so
         # switching away and back reuses it rather than starting from a blank one.
@@ -406,6 +407,8 @@ class AcquirePage(TabPage):
         self._snap_btn.snapRequested.connect(self._viewers.ensure_preview)
         self._live_btn.liveStartedRequested.connect(self._viewers.ensure_preview)
         self._bind_mda(self._mda)
+        # the built-in layout starts without it: its button opens it on the right
+        self._mda_dock.toggleView(False)
 
         self._pin_dock_widths()
         self._lock_default_areas()
@@ -887,8 +890,43 @@ class AcquirePage(TabPage):
             # except dragging it. Widening only kicks in below the usability
             # floor, so a column the user deliberately sized is left alone.
             self._widen_tools_column_soon()
+            if key == PanelKey.MDA:
+                self._size_opened_mda_column()
             if panel.info.refresh is not None:
                 QTimer.singleShot(0, partial(self._refresh_panel, key))
+
+    def _size_opened_mda_column(self) -> None:
+        """Give the just-opened MDA column its default width, unless it has its own.
+
+        A column that was open before keeps its lock, and so its width, while it
+        is closed. One that has never been laid out -- the built-in layout, or a
+        layout saved without the MDA -- opens at a transient sliver instead, which
+        the lock would then freeze. Before the first settle there is no real
+        geometry yet: ``_settle_and_lock_widths`` will size it.
+        """
+        area = self._mda_dock.dockAreaWidget()
+        if (
+            not self._mda_width_locked_at_real_size
+            or area is None
+            or self._mda_dock.isAutoHide()
+        ):
+            return
+        column = self._column_widget(area)
+        if column.minimumWidth() == column.maximumWidth() > 0:
+            return
+        splitter = column.parentWidget()
+        if not isinstance(splitter, QSplitter):
+            return
+        mda_idx = splitter.indexOf(column)
+        viewer_idx = splitter.indexOf(self._column_widget(self._central_dock_area))
+        if mda_idx >= 0 and viewer_idx >= 0:
+            sizes = list(splitter.sizes())
+            sizes[viewer_idx] = max(
+                sizes[viewer_idx] + sizes[mda_idx] - _MDA_DOCK_WIDTH, _DOCK_MIN_WIDTH
+            )
+            sizes[mda_idx] = _MDA_DOCK_WIDTH
+            splitter.setSizes(sizes)
+        self._relock_widths(pin=False)
 
     def _redock_if_orphaned(self, panel: _Panel) -> None:
         """Put a dock ADS detached back where a fresh open would place it.
@@ -1284,9 +1322,8 @@ class AcquirePage(TabPage):
 
         Un-hides every toolbar button, un-pins anything the user sent to an
         auto-hide side bar, closes every panel except the default-open ones
-        (MDA on the right; Groups and Presets and Channels tabbed on the left,
-        Channels shown -- see ``_panels.PANELS``), puts the MDA column back on
-        the right and those tabs back on the left, and
+        (Groups and Presets on the left -- see ``_panels.PANELS``), puts the
+        MDA column back on the right and those panels back on the left, and
         re-applies the default column widths. Panel *widgets* are kept alive,
         exactly as a normal close does -- this resets the arrangement, not the
         session.
@@ -1337,9 +1374,9 @@ class AcquirePage(TabPage):
     def _rehome_default_tabs(self) -> None:
         """Tab the default-open side panels back into the leftmost column.
 
-        In ``PANELS`` order, with the last one shown -- as on a fresh start
-        (Groups and Presets, then Channels in front). Only what was moved is
-        re-docked, for the same reason the MDA is (see ``reset_layout``).
+        In ``PANELS`` order, with the last one shown -- as on a fresh start.
+        Only what was moved is re-docked, for the same reason the MDA is (see
+        ``reset_layout``).
         """
         docks = [
             dock
@@ -1513,10 +1550,12 @@ class AcquirePage(TabPage):
         pre-layout width (often only 47--60 px).  It also must remain directly
         resizable without depending on hover detection to release a lock.
 
-        Returns whether the MDA lock took -- see ``_install_width_lock``.
+        Returns whether the MDA lock took -- see ``_install_width_lock``. A
+        closed MDA counts as success: its hidden column has no width to lock,
+        and waiting for one would never end. ``_toggle_panel`` locks it on open.
         """
         if (mda_area := self._mda_dock.dockAreaWidget()) is not None:
-            return self._install_width_lock(mda_area)
+            return self._install_width_lock(mda_area) or self._mda_dock.isClosed()
         return True
 
     def _column_widget(self, area: CDockAreaWidget) -> QWidget:

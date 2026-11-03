@@ -30,7 +30,7 @@ def test_modern_window_save_restore_state(
     """geometry/theme/zoom/dock-layout round-trip through Settings, across windows."""
     win1 = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(win1)
-    # MDA + Groups and Presets are the defaults, so open a third panel to get
+    # Groups and Presets is the only default, so open a second panel to get
     # an arrangement that differs from the built-in one.
     win1._acquire.panel_button(PanelKey.EXCEPTION_LOG).click()
     win1._toggle_theme()  # dark -> light
@@ -40,9 +40,7 @@ def test_modern_window_save_restore_state(
     prefs = settings.modern_window
     assert prefs.geometry
     assert prefs.acquire_panels == {
-        PanelKey.MDA,
         PanelKey.PRESETS,
-        PanelKey.CHANNELS,
         PanelKey.EXCEPTION_LOG,
     }
     assert prefs.theme == "light"
@@ -67,8 +65,8 @@ def test_restore_state_on_fresh_settings_opens_only_defaults(
 ) -> None:
     """A first launch (no saved state) must open only the default panels.
 
-    The built-in "Default" layout is MDA on the right, and Groups and Presets
-    and Channels tabbed on the left -- and nothing else.
+    The built-in "Default" layout is Groups and Presets on the left -- and
+    nothing else.
 
     Regression test for the launch path force-opening every registered panel:
     ``restore_state`` -> ``apply_hidden_panels(set())`` used to treat "show
@@ -82,13 +80,13 @@ def test_restore_state_on_fresh_settings_opens_only_defaults(
     win.restore_state(show=True)
 
     acquire = win._acquire
-    assert acquire.open_panels() == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.CHANNELS}
+    assert acquire.open_panels() == {PanelKey.PRESETS}
     assert sorted(acquire._dock_manager.dockWidgetsMap()) == [
-        "acquire_channels",
-        "acquire_mda",
+        "acquire_mda",  # built up front, but closed
         "acquire_presets",
         "acquire_viewers",
     ]
+    assert acquire._mda_dock.isClosed()
     assert acquire.hidden_panels() == set()
     assert acquire.panel_widget(PanelKey.CONSOLE) is None
     win.close()
@@ -109,6 +107,7 @@ def test_restored_layout_has_real_column_widths_on_second_launch(
     win1 = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(win1)
     win1.resize(1400, 900)
+    win1._acquire.panel_button(PanelKey.MDA).click()
     win1.show()
     qtbot.waitExposed(win1)
     win1._save_state()
@@ -191,7 +190,7 @@ def test_reset_layout_snapshots_the_reset_arrangement_as_last_session(
 
     prefs = settings.modern_window
     assert prefs.acquire_dock_state
-    assert prefs.acquire_panels == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.CHANNELS}
+    assert prefs.acquire_panels == {PanelKey.PRESETS}
     assert prefs.acquire_hidden_panels == {PanelKey.CONSOLE}
     geometry, theme, zoom = prefs.geometry, prefs.theme, prefs.zoom
 
@@ -200,7 +199,7 @@ def test_reset_layout_snapshots_the_reset_arrangement_as_last_session(
     # Reflects the just-reset (Default) arrangement -- not wiped, so
     # "Last session" stays selectable in Preferences' Layout list.
     assert prefs.acquire_dock_state
-    assert prefs.acquire_panels == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.CHANNELS}
+    assert prefs.acquire_panels == {PanelKey.PRESETS}
     assert prefs.acquire_hidden_panels == set()
     # Preferences are not layout -- losing these to a layout reset would be
     # a surprise.

@@ -745,8 +745,9 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert page._viewers._dock_manager is not dm
 
     assert page._mda_dock.widget() is page._mda
-    assert not page._mda_dock.isClosed()
-    assert page.panel_button(PanelKey.MDA).isChecked()
+    # Built up front, but the built-in layout doesn't show it.
+    assert page._mda_dock.isClosed()
+    assert not page.panel_button(PanelKey.MDA).isChecked()
     # No saving configured -> falls back to a scratch (in-memory) output,
     # built from the user's Data & Memory preferences (see _memory_output_settings).
     from ome_writers import AcquisitionSettings, ScratchFormat
@@ -755,7 +756,7 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert isinstance(output, AcquisitionSettings)
     assert isinstance(output.format, ScratchFormat)
 
-    # Groups and Presets and Channels are the other default-open panels.
+    # Groups and Presets is the other default-open panel.
     assert page.panel_widget(PanelKey.PRESETS) is not None
     assert page.panel_dock(PanelKey.PRESETS) is not None
     assert page.panel_button(PanelKey.PRESETS).isChecked()
@@ -772,7 +773,6 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert not page.panel_button(PanelKey.CONSOLE).isChecked()
 
     assert sorted(dm.dockWidgetsMap()) == [
-        "acquire_channels",
         "acquire_mda",
         "acquire_presets",
         "acquire_viewers",
@@ -2082,10 +2082,9 @@ def test_acquire_panel_buttons_match_registry(
     for info in PANELS:
         assert page.panel_button(info.key).isChecked() == info.default_open
 
-    # Only the default-open panels build eagerly; the rest of the registry
-    # stays lazy, matching the guarantee the other tests exercise.
+    # Only the default-open panels and the MDA build eagerly; the rest of the
+    # registry stays lazy, matching the guarantee the other tests exercise.
     assert sorted(page._dock_manager.dockWidgetsMap()) == [
-        "acquire_channels",
         "acquire_mda",
         "acquire_presets",
         "acquire_viewers",
@@ -2188,7 +2187,8 @@ def test_acquire_set_panel_visible_hides_and_restores_mda(
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
     button = page.panel_button(PanelKey.MDA)
-    assert button.isChecked()  # open by default
+    assert not button.isChecked()  # closed by default
+    button.click()
 
     page.set_panel_visible(PanelKey.MDA, False)
     assert button.isHidden()
@@ -2236,16 +2236,15 @@ def test_acquire_apply_hidden_panels_never_opens_panels(
 
     page.apply_hidden_panels(set())
 
-    assert page.open_panels() == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.CHANNELS}
+    assert page.open_panels() == {PanelKey.PRESETS}
     assert sorted(page._dock_manager.dockWidgetsMap()) == [
-        "acquire_channels",
         "acquire_mda",
         "acquire_presets",
         "acquire_viewers",
     ]
     for info in PANELS:
         assert not page.panel_button(info.key).isHidden()
-        if not info.default_open:
+        if not info.default_open and info.key != PanelKey.MDA:
             assert page.panel_widget(info.key) is None
 
 
@@ -2274,7 +2273,8 @@ def test_acquire_docked_panels_are_reparented_not_windows(
         assert widget.parent() is not None
         assert not dock.isClosed()
 
-    # The MDA panel, which is open from the start, must actually be on screen.
+    # The MDA panel must actually be on screen once opened.
+    page.panel_button(PanelKey.MDA).click()
     assert page._mda.isVisible()
 
 
@@ -2345,14 +2345,14 @@ def test_acquire_reset_layout_restores_defaults(
     qtbot.waitExposed(page)
     qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=10000)
 
-    # MDA, Groups and Presets and Channels are the defaults; open another and
+    # Groups and Presets is the only default; open others and
     # hide a button to get somewhere a reset has to undo.
+    page.panel_button(PanelKey.MDA).click()
     page.panel_button(PanelKey.EXCEPTION_LOG).click()
     page.apply_hidden_panels({PanelKey.CONSOLE})
     assert page.open_panels() == {
         PanelKey.MDA,
         PanelKey.PRESETS,
-        PanelKey.CHANNELS,
         PanelKey.EXCEPTION_LOG,
     }
     assert page.hidden_panels() == {PanelKey.CONSOLE}
@@ -2360,16 +2360,76 @@ def test_acquire_reset_layout_restores_defaults(
     with qtbot.waitSignal(page.layoutReset):
         page.reset_layout()
 
-    assert page.open_panels() == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.CHANNELS}
+    assert page.open_panels() == {PanelKey.PRESETS}
     assert page.hidden_panels() == set()
     for info in PANELS:
         assert not page.panel_button(info.key).isHidden()
     # Widgets survive, exactly as a normal close/reopen does.
     assert page.panel_widget(PanelKey.PRESETS) is not None
 
+    page.panel_button(PanelKey.MDA).click()
     mda_area = page._mda_dock.dockAreaWidget()
     assert mda_area is not None
     assert mda_area.width() == _MDA_DOCK_WIDTH
+
+
+def test_acquire_mda_starts_closed_and_opens_on_the_right(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """The built-in layout hides the MDA; its button opens it at its real width.
+
+    Its column has never been laid out at that point, so it would otherwise open
+    as a sliver and be locked there. Waiting for it must not hold up the initial
+    settle either: every retry re-pins the columns, undoing the user's drags.
+    """
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page.resize(1400, 900)
+    page.show()
+    qtbot.waitExposed(page)
+    qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=10000)
+    assert not page._width_settle_timer.isActive()
+    assert page._mda_dock.isClosed()
+
+    tools_area = page._tools_dock_area
+    assert tools_area is not None
+    tools_width = tools_area.width()
+
+    page.panel_button(PanelKey.MDA).click()
+
+    assert page._mda_is_home()
+    assert page._mda.isVisible()
+    mda_area = page._mda_dock.dockAreaWidget()
+    assert mda_area is not None
+    assert mda_area.width() == _MDA_DOCK_WIDTH
+    assert mda_area.minimumWidth() == mda_area.maximumWidth() == _MDA_DOCK_WIDTH
+    assert tools_area.width() == tools_width
+
+
+def test_acquire_mda_opens_at_its_width_after_restoring_a_layout_without_it(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A layout saved with the MDA closed -- the usual relaunch -- can still open it."""
+    page_a = AcquirePage(mmcore)
+    qtbot.addWidget(page_a)
+    saved = page_a.current_layout()
+    assert saved.panels == {PanelKey.PRESETS}
+
+    page_b = AcquirePage(mmcore)
+    qtbot.addWidget(page_b)
+    page_b.resize(1400, 900)
+    assert page_b.restore_layout(saved.dock_state, saved.panels)
+    page_b.show()
+    qtbot.waitExposed(page_b)
+    qtbot.waitUntil(lambda: page_b._mda_width_locked_at_real_size, timeout=10000)
+    assert page_b._mda_dock.isClosed()
+
+    page_b.panel_button(PanelKey.MDA).click()
+
+    mda_area = page_b._mda_dock.dockAreaWidget()
+    assert mda_area is not None
+    assert mda_area.width() == _MDA_DOCK_WIDTH
+    assert mda_area.minimumWidth() == mda_area.maximumWidth() == _MDA_DOCK_WIDTH
 
 
 def test_acquire_reset_layout_does_not_reopen_a_closed_autohidden_panel(
@@ -2428,7 +2488,7 @@ def test_acquire_select_default_layout_reaches_reset(
 
     assert not page.panel_button(PanelKey.CONSOLE).isHidden()
     assert page.panel_widget(PanelKey.CONSOLE) is None  # still never built
-    assert page.open_panels() == {PanelKey.MDA, PanelKey.PRESETS, PanelKey.CHANNELS}
+    assert page.open_panels() == {PanelKey.PRESETS}
 
 
 def test_selecting_default_keeps_last_session_in_the_layout_list(
@@ -2467,6 +2527,7 @@ def test_acquire_reset_layout_after_restore_repins_default_widths(
     page_a = AcquirePage(mmcore)
     qtbot.addWidget(page_a)
     page_a.resize(1400, 900)
+    page_a.panel_button(PanelKey.MDA).click()
     page_a.show()
     qtbot.waitExposed(page_a)
     qtbot.waitUntil(lambda: page_a._mda_width_locked_at_real_size, timeout=10000)
@@ -2495,6 +2556,7 @@ def test_acquire_reset_layout_after_restore_repins_default_widths(
 
     page_b.reset_layout()
     assert not page_b._layout_restored
+    page_b.panel_button(PanelKey.MDA).click()
     mda_area_b = page_b._mda_dock.dockAreaWidget()
     assert mda_area_b is not None
     assert mda_area_b.width() == _MDA_DOCK_WIDTH
@@ -4878,6 +4940,7 @@ def test_acquire_mda_dock_width_resists_relayout_but_stays_draggable(
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
     page.resize(1400, 900)
+    page.panel_button(PanelKey.MDA).click()
     page.show()
     qtbot.waitExposed(page)
     # AcquirePage is constructed standalone here, before it has real window
@@ -5020,9 +5083,7 @@ def test_acquire_layout_round_trip(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     state, keys = saved.dock_state, saved.panels
     assert state is not None
     assert keys == {
-        PanelKey.MDA,
         PanelKey.PRESETS,
-        PanelKey.CHANNELS,
         PanelKey.EXCEPTION_LOG,
     }
 
@@ -5392,6 +5453,7 @@ def test_acquire_restore_does_not_repin_column_widths(
     page_a = AcquirePage(mmcore)
     qtbot.addWidget(page_a)
     page_a.resize(1400, 900)
+    page_a.panel_button(PanelKey.MDA).click()
     page_a.show()
     qtbot.waitExposed(page_a)
     qtbot.waitUntil(lambda: page_a._mda_width_locked_at_real_size, timeout=10000)
@@ -5478,6 +5540,7 @@ def test_pin_dock_widths_preserves_a_locked_custom_mda_width(
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
     page.resize(1400, 900)
+    page.panel_button(PanelKey.MDA).click()
     page.show()
     qtbot.waitExposed(page)
     qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=10000)
@@ -6669,6 +6732,7 @@ def test_acquire_width_settle_waits_out_a_late_resize(
     qtbot.addWidget(page)
     # Simulate the pre-maximize transient: a too-small initial geometry.
     page.resize(400, 400)
+    page.panel_button(PanelKey.MDA).click()
     page.show()
     qtbot.waitExposed(page)
 
@@ -6717,6 +6781,7 @@ def test_acquire_settle_retries_until_lock_actually_takes(
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
     page.resize(1400, 900)
+    page.panel_button(PanelKey.MDA).click()
 
     call_count = 0
     real_install = page._install_width_lock
@@ -7106,6 +7171,7 @@ def test_mda_kind_survives_a_layout_round_trip(
 
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
+    page.panel_button(PanelKey.MDA).click()
     page.show()
     qtbot.waitExposed(page)
     page._set_mda_kind(MdaKind.TOPBAR)

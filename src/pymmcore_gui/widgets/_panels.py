@@ -233,6 +233,15 @@ class PanelInfo:
 
 PANELS: Final[tuple[PanelInfo, ...]] = (
     PanelInfo(
+        key=PanelKey.PROPERTIES,
+        title="Properties",
+        icon="hugeicons:property-edit",
+        tooltip="Properties — open the device property browser panel",
+        create=_create_property_browser,
+        unstyle=True,
+        refresh=_refresh_property_browser,
+    ),
+    PanelInfo(
         key=PanelKey.PRESETS,
         title="Groups and Presets",
         icon="hugeicons:property-new",
@@ -250,7 +259,6 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
             "channel preset, used by new MDA channels"
         ),
         create=_create_channel_settings,
-        default_open=True,
         refresh=_refresh_presets,
     ),
     PanelInfo(
@@ -260,17 +268,7 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
         tooltip="MDA — show or hide the multi-dimensional acquisition panel",
         create=_create_mda,
         area=DockWidgetArea.RightDockWidgetArea,
-        default_open=True,
         refresh=_refresh_mda,
-    ),
-    PanelInfo(
-        key=PanelKey.PROPERTIES,
-        title="Properties",
-        icon="hugeicons:property-edit",
-        tooltip="Properties — open the device property browser panel",
-        create=_create_property_browser,
-        unstyle=True,
-        refresh=_refresh_property_browser,
     ),
     PanelInfo(
         key=PanelKey.STAGES,
