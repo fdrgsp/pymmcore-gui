@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
     from pytestqt.qtbot import QtBot
 
+    from pymmcore_gui.widgets.image_preview._snap_album import SnappedImage
+
 
 def test_failed_viewer_construction_detaches_core_callbacks(
     mmcore: CMMCorePlus,
@@ -282,3 +284,36 @@ def test_preview_always_hides_z_buttons(mmcore: CMMCorePlus, qtbot: QtBot) -> No
 
     assert preview.viewer._roll_axes_btn is None
     assert preview.viewer.widget().ndims_btn.isHidden()
+
+
+def test_preview_records_only_ordinary_snaps(
+    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Acquisition frames and autofocus images must stay out of the snap album."""
+    monkeypatch.setattr(NDVPreview, "append", lambda _self, _data: None)
+    preview = NDVPreview(mmcore)
+    qtbot.addWidget(preview)
+    recorded: list[SnappedImage] = []
+    preview.snapRecorded.connect(recorded.append)
+
+    mmcore.setConfig("Channel", "DAPI")
+    mmcore.setExposure(42)
+    mmcore.snapImage()
+    qtbot.wait(0)
+    assert len(recorded) == 1
+    assert recorded[0].channel == "DAPI"
+    assert recorded[0].exposure_ms == 42
+    assert recorded[0].pixel_size_um == mmcore.getPixelSizeUm()
+    assert recorded[0].image.shape == (mmcore.getImageHeight(), mmcore.getImageWidth())
+
+    preview.set_autofocus_running(True)
+    mmcore.snapImage()
+    qtbot.wait(0)
+    preview.set_autofocus_running(False)
+    assert len(recorded) == 1
+
+    preview._is_mda_running = True
+    preview.use_with_mda = True
+    mmcore.snapImage()
+    qtbot.wait(0)
+    assert len(recorded) == 1

@@ -1,10 +1,16 @@
 import json
 import os
+import shutil
+import sys
+import tempfile
 import threading
+import time
 import warnings
 from contextlib import suppress
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal, cast
+from uuid import uuid4
 
 from platformdirs import user_data_dir
 from pydantic import (
@@ -30,6 +36,8 @@ USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
 SETTINGS_FILE_NAME = USER_DATA_DIR / "pmm_settings.json"
 TESTING = "PYTEST_VERSION" in os.environ
 _GLOBAL_SETTINGS: "SettingsV1 | None" = None
+# Each flush() saves on a thread of its own, and they can overlap.
+_WRITE_LOCK = threading.Lock()
 
 
 class BaseMMSettings(BaseSettings):
@@ -78,8 +86,13 @@ class MMGuiUserPrefsSource(PydanticBaseSettingsSource):
             return MMGuiUserPrefsSource.values()
         except Exception as e:
             # Never block the application from starting because of a settings file
+            note = ""
+            # Only for bad contents (JSON errors are ValueErrors): a file that could
+            # not be opened right now may be perfectly fine.
+            if isinstance(e, ValueError) and (kept := _set_aside(SETTINGS_FILE_NAME)):
+                note = f" Using defaults; the file was kept as {kept.name}."
             warnings.warn(
-                f"Failed to read settings from {SETTINGS_FILE_NAME}: {e}",
+                f"Failed to read settings from {SETTINGS_FILE_NAME}: {e}.{note}",
                 RuntimeWarning,
                 stacklevel=2,
             )
@@ -98,6 +111,23 @@ class MMGuiUserPrefsSource(PydanticBaseSettingsSource):
         """Return the value for a field (required by ABC)."""
         # Nothing to do here. Only implement the return statement to make mypy happy
         return None, "", False  # pragma: no cover
+
+
+def _set_aside(path: Path) -> Path | None:
+    """Move an unreadable settings file away, returning where it went, if anywhere.
+
+    The app carries on with defaults and saves them sooner or later. Without this,
+    that save would destroy settings that may well be recoverable by hand.
+    """
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = path.with_name(
+        f"{path.stem}.unreadable-{stamp}-{uuid4().hex}{path.suffix}"
+    )
+    try:
+        path.replace(backup)
+    except OSError:
+        return None
+    return backup
 
 
 def _good_data_only(
@@ -419,8 +449,42 @@ class SettingsV1(BaseMMSettings):
             thread.join(timeout)
 
     def _write_settings(self) -> None:
-        json_str = self.model_dump_json(indent=2, exclude_defaults=True)
-        SETTINGS_FILE_NAME.write_text(json_str, errors="ignore")
+        # Serialize the current state rather than a snapshot from flush().
+        with _WRITE_LOCK:
+            json_str = self.model_dump_json(indent=2, exclude_defaults=True)
+            _write_atomically(SETTINGS_FILE_NAME, json_str)
+
+
+def _write_atomically(path: Path, text: str) -> None:
+    """Replace the contents of `path` with `text` in one step.
+
+    Readers see complete old or new contents. Failed writes leave the old file
+    intact; temporary Windows file locks are retried before giving up.
+    """
+    path = path.resolve()  # a symlinked settings file should stay a symlink
+    # In the same folder: a rename is only atomic within one filesystem.
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", errors="ignore") as file:
+            file.write(text)
+            file.flush()
+            os.fsync(file.fileno())
+        # mkstemp's owner-only permissions shouldn't replace the file's own
+        with suppress(OSError):
+            shutil.copymode(path, tmp)
+        for attempt in range(5):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                # Windows readers and antivirus can briefly block replacement.
+                if sys.platform != "win32" or attempt == 4:
+                    raise
+                time.sleep(0.05 * 2**attempt)
+    except BaseException:
+        with suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 
 Settings = SettingsV1

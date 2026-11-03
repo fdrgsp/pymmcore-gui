@@ -10,6 +10,7 @@ import psutil
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from pymmcore_plus import CMMCorePlus
     from useq import MDAEvent
 
 GH_REPO_URL = "http://github.com/pymmcore-plus/pymmcore-gui"
@@ -29,6 +30,15 @@ def autofocus_kind(event: MDAEvent) -> str | None:
     keeps working against a useq that predates software autofocus.
     """
     return _AUTOFOCUS_ACTIONS.get(str(getattr(event.action, "type", "")))
+
+
+def current_channel(core: CMMCorePlus) -> str:
+    """Return the selected preset of the channel group, or `""` if there is none."""
+    try:
+        group = str(core.getChannelGroup())
+        return str(core.getCurrentConfig(group)) if group else ""
+    except Exception:
+        return ""
 
 
 def system_memory_gb() -> tuple[float, float]:

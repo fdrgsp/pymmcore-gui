@@ -10,6 +10,7 @@ from superqt.cmap import QColormapComboBox
 from pymmcore_gui._array_viewer import MMArrayViewer
 from pymmcore_gui._qt.QtCore import QTimer
 from pymmcore_gui._qt.QtWidgets import QApplication, QVBoxLayout, QWidget
+from pymmcore_gui._utils import current_channel
 from pymmcore_gui.widgets.image_preview._preview_base import ImagePreviewBase
 
 if TYPE_CHECKING:
@@ -151,14 +152,7 @@ class NDVPreview(ImagePreviewBase):
 
     def _update_channel_name(self) -> None:
         """Label snap/live LUTs from the microscope's selected channel preset."""
-        name = ""
-        if (core := self._mmc) is not None:
-            try:
-                group = str(core.getChannelGroup())
-                if group:
-                    name = str(core.getCurrentConfig(group))
-            except Exception:
-                pass
+        name = current_channel(core) if (core := self._mmc) is not None else ""
 
         if self._is_rgb:
             names = {

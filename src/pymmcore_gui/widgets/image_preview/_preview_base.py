@@ -8,6 +8,7 @@ from pymmcore_plus import CMMCorePlus
 from pymmcore_gui._qt.QtCore import Qt, QTimerEvent, Signal
 from pymmcore_gui._qt.QtWidgets import QWidget
 from pymmcore_gui._utils import autofocus_kind
+from pymmcore_gui.widgets.image_preview._snap_album import SnappedImage
 
 _DEFAULT_WAIT = 10
 
@@ -18,6 +19,12 @@ class ImagePreviewBase(QWidget):
     # images of a running acquisition: those are worth showing, but not worth
     # pulling the user off the viewer of the run in progress.
     snapShown = Signal()
+
+    # An ordinary snap worth getting back later, as a `SnappedImage`.  Not emitted
+    # for acquisition frames, or for the images an autofocus routine scores: those
+    # would push the user's own snaps out of the album in a moment.  Emitted on the
+    # thread that snapped.
+    snapRecorded = Signal(object)
 
     # Snapped images are relayed through a Qt signal rather than displayed where
     # they arrive: autofocus snaps come from the acquisition thread, and `append`
@@ -163,7 +170,12 @@ class ImagePreviewBase(QWidget):
         # Read the camera buffer here, on the thread that snapped: an autofocus
         # routine has the next image on the way, and would overwrite it before a
         # queued handler on the GUI thread ever got to look.
-        self._snapped.emit(core.getImage(), during_mda)
+        image = core.getImage()
+        # Recorded first: a snap made on the GUI thread is displayed synchronously,
+        # and displaying processes events, which may well change the channel.
+        if not (during_mda or self._autofocus_running):
+            self.snapRecorded.emit(SnappedImage.capture(core, image))
+        self._snapped.emit(image, during_mda)
 
     def _on_snapped(self, image: np.ndarray, during_mda: bool) -> None:
         self.append(image)
@@ -174,7 +186,8 @@ class ImagePreviewBase(QWidget):
         """Say that an autofocus event is in progress.
 
         For a preview created *during* one, which missed its `eventStarted`;
-        `autofocusFinished` clears it as usual.
+        `autofocusFinished` clears it as usual. Also for a routine run outside any
+        acquisition, whose owner has to clear it again.
         """
         self._autofocus_running = running
 

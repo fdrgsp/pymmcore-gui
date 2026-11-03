@@ -135,9 +135,10 @@ class MMArrayViewer(ndv.ArrayViewer):
         if canvas := getattr(widget, "_canvas_widget", None):
             canvas.installEventFilter(self._key_filter)
 
+        self._save_btn: QPushButton | None = None
         if show_save_button:
             with suppress(Exception):
-                _add_save_button(self)
+                self._save_btn = _add_save_button(self)
         self._roll_axes_btn: QPushButton | None = None
         if show_roll_axes_button:
             with suppress(Exception):
@@ -240,9 +241,8 @@ class MMArrayViewer(ndv.ArrayViewer):
 
         if self.display_model.channel_mode is ChannelMode.RGBA:
             # ome_writers models a written frame as a plain 2D (Y, X) plane; it
-            # has no concept of an RGB/RGBA sample axis. This only affects the
-            # snap/live Preview (the only place an RGB frame can appear), so
-            # fall back to a direct, non-metadata TIFF write for that one case.
+            # has no RGB/RGBA sample axis, so save preview and album RGB frames
+            # directly as TIFF without acquisition metadata.
             self._save_rgb_snapshot()
             return
 
@@ -343,6 +343,9 @@ class MMArrayViewer(ndv.ArrayViewer):
             QMessageBox.critical(
                 self.widget(), "Save failed", f"Failed to save data:\n\n{e}"
             )
+        else:
+            if self._on_saved is not None:
+                self._on_saved(path)
 
 
 def _luminance(color: QColor) -> float:

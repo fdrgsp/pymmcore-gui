@@ -78,7 +78,7 @@ viewer's data to a different format/location.
 
 ```text
 MMArrayViewer._save_data()                  _array_viewer.py
-  ├─ RGBA data (Preview snapshot only)
+  ├─ RGBA data (a snapped frame only)
   │    → _save_rgb_snapshot()  [direct tifffile write, no metadata]
   └─ everything else:
        ├─ _prompt_save_path()
@@ -117,6 +117,12 @@ real axis names/scale where available, generic `"other"` axes
 otherwise, best-effort summary metadata from the live core. No
 per-frame metadata is available in this fallback case.
 
+A snap reopened from the Preview's album (`image_preview/_snap_album.py`)
+gets a record of its own instead, with the pixel size from when it was
+snapped and no summary metadata: the live core may have moved on by then,
+and reading the summary at every snap would switch the active camera on a
+multi-camera system (`pymmcore_plus.metadata.image_infos`).
+
 ### `export_acquisition()` mechanics
 
 - **Never materializes the whole array.** It reads one 2D frame at a
@@ -142,10 +148,10 @@ per-frame metadata is available in this fallback case.
 ### The one gap: RGB/RGBA
 
 `ome_writers` models a written frame as a plain 2D (Y, X) plane — it
-has no concept of a color/sample axis. The only place an RGB frame
-can appear is the snap/live Preview (a 1-frame ring buffer), so that
-one case bypasses `ome_writers` entirely and writes a plain TIFF via
-`tifffile` directly (no OME metadata, no format choice).
+has no concept of a color/sample axis. The only places an RGB frame
+can appear are the snap/live Preview (a 1-frame ring buffer) and a snap
+reopened from its album. These bypass `ome_writers` and write a plain TIFF
+via `tifffile` (no OME metadata, no format choice).
 
 ### Files involved in the Save-button path
 

@@ -396,6 +396,15 @@ class _FrameCore:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._core, name)
 
+    def snapImage(self) -> None:
+        """Snap without announcing it, as autofocus routines do.
+
+        These frames reach this panel's own viewer through the callback. Announced,
+        they would also pull the Acquire page's Preview through every one of them
+        and push the user's own snaps out of its album.
+        """
+        super(CMMCorePlus, self._core).snapImage()
+
     def getImage(self) -> np.ndarray:
         """Return a copy and publish it with the current stage position."""
         image = np.asarray(self._core.getImage()).copy()
@@ -463,7 +472,7 @@ class _CalibrationWorker(QObject):
             transaction.apply()
             proxy = _FrameCore(self._core, self._xy_stage, self.frameReady.emit)
             if self._preview_only:
-                self._core.snapImage()
+                proxy.snapImage()
                 proxy.getImage()
             else:
                 result = run_pixel_calibration(

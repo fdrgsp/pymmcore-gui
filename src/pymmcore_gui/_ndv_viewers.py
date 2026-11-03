@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from cmap import Colormap
+from ndv.models import ChannelMode, LUTModel
 from ome_writers import ScratchFormat
 from pymmcore_plus.autofocus import (
     CaptureSettings,
@@ -20,12 +22,17 @@ from pymmcore_plus.autofocus import (
     run_software_autofocus,
 )
 from pymmcore_plus.mda import OmeWritersSink, frame_meta_to_ome
+from superqt import QIconifyIcon
 from useq import SoftwareAutofocus
 
 from pymmcore_gui._acquisition_loader import open_acquisition as _open_acquisition
-from pymmcore_gui._array_viewer import MMArrayViewer
+from pymmcore_gui._array_viewer import (
+    MMArrayViewer,
+    ensure_visible_icon,
+    set_source_icon,
+)
 from pymmcore_gui._channel_luts import ChannelLUTMemory
-from pymmcore_gui._mda_export import AcquisitionRecord
+from pymmcore_gui._mda_export import AcquisitionRecord, record_from_wrapper
 from pymmcore_gui._qt.QtAds import CDockWidget, DockWidgetArea
 from pymmcore_gui._qt.QtCore import (
     QObject,
@@ -36,9 +43,14 @@ from pymmcore_gui._qt.QtCore import (
     QTimer,
     Signal,
 )
-from pymmcore_gui._qt.QtWidgets import QSplitter
+from pymmcore_gui._qt.QtWidgets import QMenu, QPushButton, QSplitter
 from pymmcore_gui._utils import autofocus_kind
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
+from pymmcore_gui.widgets.image_preview._snap_album import (
+    ALBUM_CAPACITY,
+    SnapAlbum,
+    SnapAlbumPopup,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -53,7 +65,9 @@ if TYPE_CHECKING:
 
     from pymmcore_gui._acquisition_loader import LoadedAcquisition
     from pymmcore_gui._qt.QtAds import CDockAreaWidget, CDockManager
+    from pymmcore_gui._qt.QtCore import QPoint
     from pymmcore_gui._qt.QtWidgets import QWidget
+    from pymmcore_gui.widgets.image_preview._snap_album import SnappedImage
 
 
 class _OpenAcquisitionSignals(QObject):
@@ -127,6 +141,8 @@ class _ViewerRecord:
     # Releases a reopened acquisition's file handle(s)/zarr store. None for
     # a live viewer, whose data is owned by the runner/sink instead.
     loader_cleanup: Callable[[], None] | None = None
+    # The album entry this viewer shows, so opening it again reuses this tab.
+    snap: SnappedImage | None = None
 
     def disconnect(self) -> None:
         """Disconnect the live stream from a viewer that is being closed."""
@@ -201,6 +217,7 @@ class AcquireViewersManager(QObject):
 
         self.preview: NDVPreview | None = None
         self._preview_dock: CDockWidget | None = None
+        self._snap_album = SnapAlbum(parent=self)
 
         # PyQt6Ads 4.4 does not reliably honor EqualSplitOnInsertion when an
         # existing tab is dragged out into a new viewer area. Normalize only
@@ -277,7 +294,47 @@ class AcquireViewersManager(QObject):
             self._dock_manager.addDockWidget(DockWidgetArea.CenterDockWidgetArea, dw)
         else:
             self._dock_manager.addDockWidgetTabToArea(dw, target)
+        tab = dw.tabWidget()
+        assert tab is not None
+        tab.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        # Must not close over `tab`. Qt owns it, so nothing but this lambda would keep
+        # its Python wrapper alive; the garbage collector sees that as an unreachable
+        # cycle and clears the lambda while Qt can still call it: a segfault.
+        tab.customContextMenuRequested.connect(lambda pos: self._show_tab_menu(dw, pos))
         return dw
+
+    def _show_tab_menu(self, dw: CDockWidget, pos: QPoint) -> None:
+        if (tab := dw.tabWidget()) is not None:
+            self._tab_menu(dw).exec(tab.mapToGlobal(pos))
+
+    def _tab_menu(self, dw: CDockWidget) -> QMenu:
+        """Build a viewer tab's menu, in place of the docking library's own.
+
+        "All" means this tab's dock area, like the library's "Close Others": a
+        viewer split off beside it is not what a click on this tab is about.
+        """
+        area = dw.dockAreaWidget()
+        tabs = area.openedDockWidgets() if area is not None else [dw]
+        others = [tab for tab in tabs if tab is not dw]
+
+        menu = QMenu(dw.tabWidget())
+        menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        for text, docks in (
+            ("Close", [dw]),
+            ("Close All But This", others),
+            ("Close All", tabs),
+        ):
+            action = menu.addAction(text)
+            assert action is not None
+            action.setEnabled(bool(docks))
+            action.triggered.connect(lambda _, docks=docks: self._close_docks(docks))
+        return menu
+
+    @staticmethod
+    def _close_docks(docks: list[CDockWidget]) -> None:
+        for dock in docks:
+            with suppress(RuntimeError):  # the dock may have been closed meanwhile
+                dock.closeDockWidget()
 
     @staticmethod
     def _disk_backed_title(sink: Any) -> str | None:
@@ -347,6 +404,9 @@ class AcquireViewersManager(QObject):
             # without this a snap after an acquisition -- a stage move with "Snap"
             # checked, say -- would land in a Preview hidden behind it.
             preview.snapShown.connect(self._raise_preview)
+            preview.snapRecorded.connect(self._snap_album.add)
+            with suppress(Exception):
+                _add_snap_album_button(preview.viewer, self._snap_album, self.open_snap)
             self.previewCreated.emit(preview)
         assert self._preview_dock is not None
         self._preview_dock.setAsCurrentTab()
@@ -370,17 +430,25 @@ class AcquireViewersManager(QObject):
                 self.ensure_preview()
             else:
                 self._testPreviewRequested.emit()
-        result = run_software_autofocus(
-            self._core, method, dict(settings), should_cancel=should_cancel
-        )
-        if (
-            show_images
-            and result.succeeded
-            and math.isfinite(result.z_after)
-            and not should_cancel()
-        ):
-            with capture_state(self._core, _final_focus_capture(method, settings)):
-                self._core.snapImage()
+        # So the routine's images are shown, but not kept in the snap album.
+        preview = self.preview if show_images else None
+        if preview is not None:
+            preview.set_autofocus_running(True)
+        try:
+            result = run_software_autofocus(
+                self._core, method, dict(settings), should_cancel=should_cancel
+            )
+            if (
+                show_images
+                and result.succeeded
+                and math.isfinite(result.z_after)
+                and not should_cancel()
+            ):
+                with capture_state(self._core, _final_focus_capture(method, settings)):
+                    self._core.snapImage()
+        finally:
+            if preview is not None:
+                preview.set_autofocus_running(False)
         return result
 
     def _on_event_started(self, event: MDAEvent) -> None:
@@ -513,6 +581,53 @@ class AcquireViewersManager(QObject):
         signals.failed.connect(self.acquisitionOpenFailed)
         signals.done.connect(lambda s=signals: self._pending_opens.discard(s))
         self._open_pool.start(task)
+
+    def open_snap(self, snap: SnappedImage) -> ndv.ArrayViewer:
+        """Show a snap from the album in its own tab, or go back to its open tab.
+
+        Like a reopened acquisition, this viewer is not backed by the microscope's
+        current camera/ROI, so it never fires `mdaViewerCreated`.
+        """
+        for dock, existing in self._records.items():
+            if existing.snap is snap:
+                dock.setAsCurrentTab()
+                return existing.viewer
+
+        px = snap.pixel_size_um
+        scales = {"x": px, "y": px} if px else {}
+        display: dict[str, Any]
+        if snap.is_rgb:
+            display = {
+                "channel_mode": ChannelMode.RGBA,
+                "channel_axis": 2,
+                "visible_axes": (0, 1),
+            }
+        else:
+            # Same as the Preview: neutral, rather than ndv's first composite color.
+            display = {"luts": {0: LUTModel(name=snap.channel, cmap=Colormap("gray"))}}
+        viewer = MMArrayViewer(
+            snap.image, scales=scales, auto_hide_z_buttons=True, **display
+        )
+        widget = viewer.widget()
+        widget.setObjectName(f"ndv-snap-{snap.timestamp:%Y%m%d%H%M%S%f}")
+        viewer.source_title = snap.title
+        wrapper = viewer.data_wrapper
+        if not snap.is_rgb and wrapper is not None:
+            # Without this, Save would stamp the snap with whatever state the
+            # microscope is in by then -- see _synthesize_record. (An RGB frame
+            # has its own save path, which writes no metadata.)
+            viewer._acquisition_record = record_from_wrapper(
+                wrapper, snap.image, scale_overrides=scales
+            )
+
+        dw = self._new_dock(snap.title)
+        dw.setWidget(widget, CDockWidget.eInsertMode.ForceNoScrollArea)
+        dw.closed.connect(lambda: self._on_viewer_closed(dw))
+        dw.setAsCurrentTab()
+        viewer._on_saved = lambda path: self._rename_viewer_tab(dw, viewer, path)
+
+        self._records[dw] = _ViewerRecord(viewer, snap=snap)
+        return viewer
 
     def _on_acquisition_loaded(self, loaded: LoadedAcquisition) -> None:
         """Build the viewer for a background-loaded acquisition (GUI thread)."""
@@ -699,9 +814,7 @@ class AcquireViewersManager(QObject):
         leaves those handles to garbage collection, which may not run until
         long after the window is gone.
         """
-        for dw in list(self._records):
-            with suppress(RuntimeError):
-                dw.closeDockWidget()
+        self._close_docks(list(self._records))
 
     def _on_viewer_closed(self, dw: CDockWidget) -> None:
         record = self._records.pop(dw, None)
@@ -763,7 +876,8 @@ class AcquireViewersManager(QObject):
             with suppress(Exception):
                 self._af_finished_signal.disconnect(self._autofocus_finished_callback)
         for record in self._records.values():
-            self.mdaViewerClosed.emit(record.viewer)
+            if record.is_live:
+                self.mdaViewerClosed.emit(record.viewer)
             record.disconnect()
         self._records.clear()
         self._active_viewer = None
@@ -866,6 +980,32 @@ def _add_follow_lock_button(ndv_viewer: ndv.ArrayViewer, manager: Any) -> None:
 
     btn.toggled.connect(_toggled)
     btn_layout.addWidget(btn)
+
+
+def _add_snap_album_button(
+    viewer: MMArrayViewer,
+    album: SnapAlbum,
+    open_snap: Callable[[SnappedImage], object],
+) -> None:
+    """Add the button listing the album's recent snaps, left of the Save button."""
+    q_widget = viewer.widget()
+    btn_layout = q_widget._btn_layout
+
+    btn = QPushButton(q_widget)
+    # like the follow-lock button: added after MMArrayViewer.__init__'s
+    # unstyle_widgets() sweep, so it has to pick up that treatment itself
+    btn.setProperty("variant", "subtle")
+    set_source_icon(btn, QIconifyIcon("mdi:image-multiple-outline"))
+    ensure_visible_icon(btn)
+    btn.setToolTip(f"Recent snaps (last {ALBUM_CAPACITY})")
+
+    def _show_album() -> None:
+        popup = SnapAlbumPopup(album, btn)
+        popup.snapActivated.connect(open_snap)
+        popup.show_near(btn)
+
+    btn.clicked.connect(_show_album)
+    btn_layout.insertWidget(btn_layout.indexOf(viewer._save_btn), btn)
 
 
 def _extract_scales(

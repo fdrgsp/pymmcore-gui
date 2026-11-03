@@ -1529,6 +1529,7 @@ class _AutofocusPreview(QWidget):
     """Small Preview stand-in for autofocus/threading tests."""
 
     snapShown = Signal()
+    snapRecorded = Signal(object)
 
     def __init__(self, mmcore: CMMCorePlus, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -3130,6 +3131,7 @@ def test_snap_opens_closable_preview(
         # the real preview announces a snap it displayed; AcquireViewersManager
         # connects to it to bring the Preview tab back to the front
         snapShown = Signal()
+        snapRecorded = Signal(object)
 
         def __init__(
             self,
@@ -4131,6 +4133,7 @@ def test_live_opens_preview_before_streaming(
         # the real preview announces a snap it displayed; AcquireViewersManager
         # connects to it to bring the Preview tab back to the front
         snapShown = Signal()
+        snapRecorded = Signal(object)
 
         def __init__(
             self,
@@ -4178,6 +4181,7 @@ def test_snap_and_live_apply_the_active_channel_capture_settings(
         # the real preview announces a snap it displayed; AcquireViewersManager
         # connects to it to bring the Preview tab back to the front
         snapShown = Signal()
+        snapRecorded = Signal(object)
 
         def __init__(
             self,
@@ -5503,6 +5507,7 @@ def test_acquire_restore_preserves_nested_viewer_manager(
 
     class FakePreview(QWidget):
         snapShown = Signal()
+        snapRecorded = Signal(object)
 
         def __init__(self, mmcore: CMMCorePlus, parent: QWidget | None = None) -> None:
             super().__init__(parent)

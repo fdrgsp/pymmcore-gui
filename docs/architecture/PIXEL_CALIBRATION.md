@@ -89,6 +89,10 @@ save actions, and the Group and Preset Editor tab.
 Snap uses the temporary capture transaction and returns a preview frame; it
 does not execute calibration or establish that the sample will calibrate.
 
+Calibration frames are not announced through `imageSnapped`. They reach the
+panel's own viewer through a Qt signal, so the Acquire page's Preview does not
+flicker through them and they cannot push the user's snaps out of its album.
+
 ## 3. Hardware checks and stage motion
 
 The routine requires a selected camera and XY stage, one camera channel, and

@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 import datetime
+import gc
 import threading
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 import ndv
+import numpy as np
 import pytest
 import useq
 from useq import MDASequence
 
 import pymmcore_gui._ndv_viewers as viewers_module
 from pymmcore_gui._ndv_viewers import AcquireViewersManager, _StreamSignalBridge
-from pymmcore_gui._qt.QtAds import CDockManager
-from pymmcore_gui._qt.QtWidgets import QApplication, QWidget
+from pymmcore_gui._qt.QtAds import CDockManager, DockWidgetArea
+from pymmcore_gui._qt.QtCore import QPoint, Qt, QTimer
+from pymmcore_gui._qt.QtWidgets import QApplication, QMenu, QWidget
+from pymmcore_gui.widgets.image_preview._snap_album import SnappedImage
 
 if TYPE_CHECKING:
     from ndv.models import ArrayDisplayModel
@@ -21,6 +25,8 @@ if TYPE_CHECKING:
     from pytestqt.qtbot import QtBot
 
     from pymmcore_gui._array_viewer import MMArrayViewer
+    from pymmcore_gui._qt.QtAds import CDockWidget
+    from pymmcore_gui._qt.QtGui import QAction
 
 
 class _Emitter:
@@ -144,3 +150,103 @@ def test_live_viewer_shows_z_buttons_only_for_z_stacks(
     assert viewer._roll_axes_btn is not None
     assert viewer._roll_axes_btn.isHidden() is not has_z
     assert viewer.widget().ndims_btn.isHidden() is not has_z
+
+
+def _tab_action(
+    manager: AcquireViewersManager, dock: CDockWidget, text: str
+) -> QAction:
+    menu = manager._tab_menu(dock)
+    return next(a for a in menu.actions() if a.text() == text)
+
+
+def _viewer_tabs(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> tuple[AcquireViewersManager, list[CDockWidget]]:
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    manager = AcquireViewersManager(CDockManager(parent), mmcore, parent=parent)
+    for _ in range(3):
+        manager.open_snap(SnappedImage(np.zeros((8, 12), dtype=np.uint16)))
+    return manager, list(manager._records)
+
+
+def test_viewer_tab_menu_names_its_close_actions(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    manager, docks = _viewer_tabs(mmcore, qtbot)
+    menu = manager._tab_menu(docks[0])
+    assert [a.text() for a in menu.actions()] == [
+        "Close",
+        "Close All But This",
+        "Close All",
+    ]
+    assert all(a.isEnabled() for a in menu.actions())
+
+
+def test_viewer_tab_menu_survives_garbage_collection(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """The real menu, after a collection: this used to segfault on right-click.
+
+    Automatic collection is off under pytest, so it has to be asked for here, and
+    before anything in this test holds on to the tab.
+    """
+    manager, [dock, *_] = _viewer_tabs(mmcore, qtbot)
+    parent = manager._parent_widget
+    assert parent is not None
+    parent.show()
+    qtbot.waitExposed(parent)
+    gc.collect()
+
+    opened: list[list[str]] = []
+
+    def close_menu() -> None:
+        menu = QApplication.activePopupWidget()
+        if isinstance(menu, QMenu):
+            opened.append([a.text() for a in menu.actions()])
+            menu.close()
+
+    # not 0: on macOS, showing the menu can run a timer before the popup registers
+    QTimer.singleShot(200, close_menu)
+    tab = dock.tabWidget()
+    assert tab is not None
+    assert tab.contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
+    tab.customContextMenuRequested.emit(QPoint(1, 1))
+    assert opened == [["Close", "Close All But This", "Close All"]]
+
+
+@pytest.mark.parametrize(
+    ("text", "remaining"),
+    [("Close", [1, 2]), ("Close All But This", [0]), ("Close All", [])],
+)
+def test_viewer_tab_menu_closes_the_right_tabs(
+    mmcore: CMMCorePlus, qtbot: QtBot, text: str, remaining: list[int]
+) -> None:
+    manager, docks = _viewer_tabs(mmcore, qtbot)
+    _tab_action(manager, docks[0], text).trigger()
+    qtbot.wait(0)
+    assert list(manager._records) == [docks[i] for i in remaining]
+
+
+def test_close_all_but_this_is_disabled_on_a_lone_tab(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    manager, docks = _viewer_tabs(mmcore, qtbot)
+    _tab_action(manager, docks[0], "Close All But This").trigger()
+    qtbot.wait(0)
+    assert not _tab_action(manager, docks[0], "Close All But This").isEnabled()
+    assert _tab_action(manager, docks[0], "Close All").isEnabled()
+
+
+def test_close_all_stays_within_the_tab_dock_area(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A viewer split off to the side is not closed from another area's tab."""
+    manager, [first, second, split] = _viewer_tabs(mmcore, qtbot)
+    manager._dock_manager.addDockWidget(DockWidgetArea.RightDockWidgetArea, split)
+    assert first.dockAreaWidget() is not split.dockAreaWidget()
+
+    _tab_action(manager, first, "Close All").trigger()
+    qtbot.wait(0)
+    assert list(manager._records) == [split]
+    assert second not in manager._records

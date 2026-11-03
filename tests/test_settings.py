@@ -1,5 +1,11 @@
 import json
+import os
+import stat
+import sys
+import threading
+from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -132,3 +138,229 @@ def test_existing_window_sections_round_trip(tmp_path: Path, sections: str) -> N
         assert restored.modern_window.acquire_hidden_panels == {"properties"}
         assert restored.modern_window.acquire_stage_devices == {"XY"}
         assert restored.modern_window.acquire_mda_kind == "topbar"
+
+
+def _flush(settings: SettingsV1, timeout: float = 30) -> None:
+    with patch("pymmcore_gui._settings.TESTING", False):
+        settings.flush(timeout=timeout)
+
+
+def test_overlapping_saves_never_leave_a_broken_file(tmp_path: Path) -> None:
+    """Saves of different lengths used to interleave, leaving a stray tail behind."""
+    path = tmp_path / "settings.json"
+    settings = SettingsV1()
+    broken: list[str] = []
+    done = threading.Event()
+
+    def read_continuously() -> None:
+        while not done.is_set():
+            if content := path.read_text() if path.exists() else "":
+                try:
+                    json.loads(content)
+                except ValueError:
+                    broken.append(content)
+
+    def save_repeatedly(size: int) -> None:
+        # each writer has its own length, so an interleaved write can't go unnoticed
+        other = SettingsV1(last_config=Path("x" * size))
+        for _ in range(100):
+            other._write_settings()
+
+    with patch.object(_settings, "SETTINGS_FILE_NAME", path):
+        reader = threading.Thread(target=read_continuously)
+        reader.start()
+        writers = [
+            threading.Thread(target=save_repeatedly, args=(size,))
+            for size in (1, 500, 5000, 50000)
+        ]
+        for writer in writers:
+            writer.start()
+        for writer in writers:
+            writer.join()
+        done.set()
+        reader.join()
+
+        assert not broken, f"read {len(broken)} broken files: {broken[0][-40:]!r}"
+        SettingsV1.model_validate_json(path.read_text())
+        _flush(settings)
+        SettingsV1.model_validate_json(path.read_text())
+
+
+def test_failed_save_keeps_the_old_file_and_leaves_nothing_behind(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text('{"send_error_reports": true}')
+    with (
+        patch.object(_settings, "SETTINGS_FILE_NAME", path),
+        patch("pymmcore_gui._settings.os.replace", side_effect=OSError("disk full")),
+        pytest.raises(OSError, match="disk full"),
+    ):
+        SettingsV1(send_error_reports=False)._write_settings()
+
+    assert path.read_text() == '{"send_error_reports": true}'
+    assert [p.name for p in tmp_path.iterdir() if p.is_file()] == ["settings.json"]
+
+
+def test_save_keeps_the_file_permissions(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text("{}")
+    path.chmod(0o640)
+    mode = stat.S_IMODE(path.stat().st_mode)
+    with patch.object(_settings, "SETTINGS_FILE_NAME", path):
+        SettingsV1(send_error_reports=True)._write_settings()
+    assert stat.S_IMODE(path.stat().st_mode) == mode
+    assert json.loads(path.read_text()) == {"send_error_reports": True}
+
+
+def test_save_writes_through_a_symlink(tmp_path: Path) -> None:
+    real = tmp_path / "dotfiles" / "settings.json"
+    real.parent.mkdir()
+    real.write_text("{}")
+    link = tmp_path / "settings.json"
+    try:
+        link.symlink_to(real)
+    except OSError:  # pragma: no cover
+        pytest.skip("symlinks are not available")
+    with patch.object(_settings, "SETTINGS_FILE_NAME", link):
+        SettingsV1(send_error_reports=True)._write_settings()
+    assert link.is_symlink()
+    assert json.loads(real.read_text()) == {"send_error_reports": True}
+
+
+def test_first_save_creates_the_file(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    with patch.object(_settings, "SETTINGS_FILE_NAME", path):
+        SettingsV1(send_error_reports=True)._write_settings()
+    assert json.loads(path.read_text()) == {"send_error_reports": True}
+
+
+@pytest.mark.parametrize(
+    "broken",
+    ['{"channel_luts": {"Channel": {"DAPI": "cmap:blue"}}} }\n}', "[]"],
+    ids=["stray-tail", "not-a-dict"],
+)
+def test_unreadable_file_is_kept_rather_than_overwritten(
+    tmp_path: Path, broken: str
+) -> None:
+    """The next save used to replace it with defaults, losing everything in it."""
+    path = tmp_path / "settings.json"
+    path.write_text(broken)
+    with (
+        patch.object(_settings, "SETTINGS_FILE_NAME", path),
+        pytest.warns(RuntimeWarning, match=r"Failed to read.*kept as settings\."),
+    ):
+        assert MMGuiUserPrefsSource(SettingsV1)() == {}
+        SettingsV1(send_error_reports=True)._write_settings()
+
+    [backup] = tmp_path.glob("settings.unreadable-*.json")
+    assert backup.read_text() == broken
+    assert json.loads(path.read_text()) == {"send_error_reports": True}
+
+
+def test_file_that_cannot_be_opened_is_left_alone(tmp_path: Path) -> None:
+    """Not being able to read it right now says nothing about its contents."""
+    path = tmp_path / "settings.json"
+    path.write_text('{"send_error_reports": true}')
+    with (
+        patch.object(_settings, "SETTINGS_FILE_NAME", path),
+        patch.object(
+            MMGuiUserPrefsSource, "content", side_effect=PermissionError("locked")
+        ),
+        pytest.warns(RuntimeWarning, match="Failed to read settings"),
+    ):
+        assert MMGuiUserPrefsSource(SettingsV1)() == {}
+
+    assert [p.name for p in tmp_path.iterdir() if p.is_file()] == ["settings.json"]
+
+
+def test_warning_still_appears_if_the_file_cannot_be_moved(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text("not json")
+    with (
+        patch.object(_settings, "SETTINGS_FILE_NAME", path),
+        patch.object(Path, "replace", side_effect=OSError("read-only")),
+        pytest.warns(RuntimeWarning, match="Failed to read settings") as caught,
+    ):
+        assert MMGuiUserPrefsSource(SettingsV1)() == {}
+    assert "kept as" not in str(caught[0].message)
+
+
+def test_unreadable_backups_within_one_second_are_preserved(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    stamp = datetime(2026, 11, 3, 12, 0, 0)
+    with (
+        patch.object(_settings, "SETTINGS_FILE_NAME", path),
+        patch.object(_settings, "datetime") as clock,
+    ):
+        clock.now.return_value = stamp
+        for content in ("first broken file", "second broken file"):
+            path.write_text(content)
+            with pytest.warns(RuntimeWarning, match="kept as"):
+                assert MMGuiUserPrefsSource(SettingsV1)() == {}
+    assert {p.read_text() for p in tmp_path.glob("settings.unreadable-*.json")} == {
+        "first broken file",
+        "second broken file",
+    }
+
+
+def test_windows_save_retries_a_temporary_file_lock(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text("{}")
+    replace = os.replace
+    attempts = 0
+
+    def locked_then_replace(source: str, destination: Path) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            assert path.read_text() == "{}"
+            raise PermissionError("sharing violation")
+        replace(source, destination)
+
+    with (
+        patch.object(_settings, "sys", SimpleNamespace(platform="win32")),
+        patch("pymmcore_gui._settings.os.replace", side_effect=locked_then_replace),
+        patch("pymmcore_gui._settings.time.sleep") as sleep,
+    ):
+        _settings._write_atomically(path, '{"send_error_reports": true}')
+    assert attempts == 3
+    assert sleep.call_count == 2
+    assert json.loads(path.read_text()) == {"send_error_reports": True}
+    assert [p for p in tmp_path.iterdir() if p.is_file()] == [path]
+
+
+def test_windows_save_stops_retrying_a_persistent_file_lock(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text("{}")
+    with (
+        patch.object(_settings, "sys", SimpleNamespace(platform="win32")),
+        patch(
+            "pymmcore_gui._settings.os.replace", side_effect=PermissionError("locked")
+        ) as replace,
+        patch("pymmcore_gui._settings.time.sleep") as sleep,
+        pytest.raises(PermissionError, match="locked"),
+    ):
+        _settings._write_atomically(path, '{"send_error_reports": true}')
+    assert replace.call_count == 5
+    assert sleep.call_count == 4
+    assert path.read_text() == "{}"
+    assert [p for p in tmp_path.iterdir() if p.is_file()] == [path]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows file sharing semantics")
+def test_windows_save_preserves_settings_while_a_reader_holds_the_file(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text("{}")
+    with path.open() as reader:
+        with (
+            patch("pymmcore_gui._settings.time.sleep") as sleep,
+            pytest.raises(PermissionError),
+        ):
+            _settings._write_atomically(path, '{"send_error_reports": true}')
+        assert sleep.call_count == 4
+        assert reader.read() == "{}"
+    assert path.read_text() == "{}"
+    assert [p for p in tmp_path.iterdir() if p.is_file()] == [path]
