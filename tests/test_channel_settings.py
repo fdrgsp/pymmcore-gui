@@ -942,3 +942,18 @@ def test_capture_takes_what_is_being_typed_in_the_panel(
     _type_without_enter(qtbot, _panel_cell(panel, "FITC", "exposure"), "55")
     assert mda.apply_active_channel_for_capture()
     assert mmcore.getExposure() == 55
+
+
+def test_open_panel_preserves_new_group_cfg_settings(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    preset = mmcore.getAvailableConfigs("Objective")[0]
+    _load_cfg(mmcore, tmp_path, f"#@Exposure,Objective,{preset},12.5")
+    panel = _panel(mmcore, qtbot)
+    mmcore.setChannelGroup("Objective")
+    qtbot.waitUntil(lambda: panel.channelGroup() == "Objective")
+    qtbot.waitUntil(
+        lambda: _exposure_of(channel_settings_store(mmcore), preset) == 12.5
+    )
+    settings = panel.channelSettings(preset)
+    assert settings is not None and settings["exposure"] == 12.5

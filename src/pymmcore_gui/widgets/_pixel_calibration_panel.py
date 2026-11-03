@@ -1282,10 +1282,14 @@ class PixelCalibrationPanel(QWidget):
                 viewer_options={
                     "show_roi_button": False,
                     "show_channel_mode_selector": False,
+                    "show_center_cross_button": False,
                 },
                 show_save_button=False,
                 show_colormap_selector=False,
             )
+            viewer_widget = preview.viewer.widget()
+            viewer_widget.shared_histogram_btn.setChecked(False)
+            viewer_widget.luts.collapse(animate=False)
             preview.viewer.display_model.luts[0].cmap = Colormap("gray")
             # Snap/calibration frames arrive through the worker's queued
             # frameReady signal. Live preview temporarily attaches this viewer

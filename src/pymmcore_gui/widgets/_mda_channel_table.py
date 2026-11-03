@@ -68,11 +68,7 @@ class MDAChannelTable(CoreConnectedChannelTable):
         mmcore: CMMCorePlus | None = None,
         parent: QWidget | None = None,
     ) -> None:
-        # The settings each (group, config) last had when it left the table --
-        # its row was removed, or switched to another config with its Config
-        # combo -- so bringing that channel back recalls its own exposure,
-        # light source and intensity. Used when there is no settings store, or it
-        # does not know the channel.
+        # Recall removed or switched channels when the shared store has no settings.
         self._channel_settings: dict[_ChannelKey, ChannelSettings] = {}
         # Every row's (group, config) as of the last change, see _on_changed.
         self._row_keys: list[_ChannelKey] = []
@@ -344,13 +340,9 @@ class MDAChannelTable(CoreConnectedChannelTable):
         return _key_of(self.table().rowData(row)), self.rowSettings(row)
 
     def _on_changed(self) -> None:
-        """Remember a channel's settings when its row switches to another config.
+        """Remember settings before a config switch replaces them.
 
-        A Config combo change alters only that row's key: until
-        restoreChannelSettings() runs, the row still holds the settings it
-        had under its previous config, so they are filed under that one.
-        Anything else -- rows added, removed (see _remove_selected), or moved
-        (which changes two rows' keys at once) -- just updates the keys.
+        A single changed key identifies a config switch; row moves change two keys.
         """
         keys = self._current_keys()
         if len(keys) == len(self._row_keys):

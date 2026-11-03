@@ -31,12 +31,7 @@ if TYPE_CHECKING:
 
 
 class SaveToCfgButton(QPushButton):
-    """Icon button saving the channel settings into a cfg.
-
-    Styled like the app's other icon buttons, the same as ``PreferencesButton``, but
-    sized to go with the checkbox it sits next to: its icon is as big as a checkbox's
-    indicator, in a box leaving the row's height as it is.
-    """
+    """Save channel settings with an icon sized to the adjacent checkbox."""
 
     _ICON = "mdi:content-save-outline"
 
@@ -67,13 +62,9 @@ class SaveToCfgButton(QPushButton):
 def add_save_to_cfg_button(
     row: QBoxLayout, checkbox: QCheckBox, parent: QWidget
 ) -> SaveToCfgButton:
-    """Put the button that saves the settings into a cfg right after ``checkbox``.
+    """Group the save button with ``checkbox`` in ``row``.
 
-    Both go in a tighter layout of their own, at the checkbox's place in ``row``, so
-    the button reads as belonging to it rather than as one more item of the row. It
-    starts enabled as the checkbox is checked; the owner keeps it so, in the setter
-    the checkbox calls, since a checkbox changed from elsewhere has its signals
-    blocked.
+    The owner synchronizes enablement, including when checkbox signals are blocked.
     """
     button = SaveToCfgButton(parent)
     button.setEnabled(checkbox.isChecked())
@@ -188,6 +179,11 @@ class ChannelSettingsPanel(ChannelSettingsTable):
         # ones over them once the rows are rebuilt.
         self.setAllChannelSettings(self._store.all())
         super().refresh()
+
+    def _on_group_changed(self, group: str) -> None:
+        # The store seeds a newly selected core group before this signal arrives.
+        self.setAllChannelSettings(self._store.all())
+        self.valueChanged.emit()
 
     def _on_save_clicked(self) -> None:
         save_channel_settings(self, self._mmc)
