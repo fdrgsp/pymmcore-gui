@@ -154,15 +154,7 @@ def test_overlapping_saves_never_leave_a_broken_file(tmp_path: Path) -> None:
 
     def read_continuously() -> None:
         while not done.is_set():
-            try:
-                content = path.read_text() if path.exists() else ""
-            except PermissionError:
-                # Windows refuses to open a file mid-replace. That's not a broken
-                # file: it's the same lock `_write_atomically` retries for.
-                if sys.platform != "win32":
-                    raise
-                continue
-            if content:
+            if content := path.read_text() if path.exists() else "":
                 try:
                     json.loads(content)
                 except ValueError:
@@ -175,8 +167,13 @@ def test_overlapping_saves_never_leave_a_broken_file(tmp_path: Path) -> None:
             other._write_settings()
 
     with patch.object(_settings, "SETTINGS_FILE_NAME", path):
+        # Windows can't replace a file that's open, so reading this eagerly there
+        # uses up the writers' lock retries, which no real reader does (those are
+        # covered by the test_windows_save_* tests). The writers still have to
+        # leave an intact file below.
         reader = threading.Thread(target=read_continuously)
-        reader.start()
+        if sys.platform != "win32":
+            reader.start()
         writers = [
             threading.Thread(target=save_repeatedly, args=(size,))
             for size in (1, 500, 5000, 50000)
@@ -186,7 +183,8 @@ def test_overlapping_saves_never_leave_a_broken_file(tmp_path: Path) -> None:
         for writer in writers:
             writer.join()
         done.set()
-        reader.join()
+        if reader.is_alive():
+            reader.join()
 
         assert not broken, f"read {len(broken)} broken files: {broken[0][-40:]!r}"
         SettingsV1.model_validate_json(path.read_text())
