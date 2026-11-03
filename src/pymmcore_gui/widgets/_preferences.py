@@ -7,7 +7,7 @@ entry point lives, even though Data & Memory is persisted globally like other
 app settings. Kept deliberately separate from the Configurations page: that
 page edits the hardware ``.cfg`` file (with its own dirty-tracking and Save
 button), while Data & Memory applies across every configuration and is
-persisted straight to the user's ``pmm_settings.json`` (see
+persisted straight to the user's ``pymm_settings.json`` (see
 ``pymmcore_gui._settings``).
 """
 

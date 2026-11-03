@@ -33,7 +33,7 @@ from pydantic_settings import (
 APP_NAME = "pymmcore-gui"
 USER_DATA_DIR = Path(user_data_dir(appname=APP_NAME))
 USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
-SETTINGS_FILE_NAME = USER_DATA_DIR / "pmm_settings.json"
+SETTINGS_FILE_NAME = USER_DATA_DIR / "pymm_settings.json"
 TESTING = "PYTEST_VERSION" in os.environ
 _GLOBAL_SETTINGS: "SettingsV1 | None" = None
 # Each flush() saves on a thread of its own, and they can overlap.
