@@ -3219,7 +3219,7 @@ def test_channel_property_selector_lists_all_runtime_numeric_sliders(
     assert property_header is not None
     assert value_header is not None
     assert property_header.text() == "Light Source"
-    assert value_header.text() == "Intensity [%]"
+    assert value_header.text() == "Intensity"
 
 
 # ------------------------- light source declarations -------------------------
