@@ -111,7 +111,11 @@ def test_existing_window_sections_round_trip(tmp_path: Path, sections: str) -> N
     if sections in {"modern", "mixed"}:
         payload["modern_window"] = modern
     path.write_text(json.dumps(payload))
-    with patch.object(_settings, "SETTINGS_FILE_NAME", path):
+    # the scratch memory default follows the RAM available at the time of each load
+    with (
+        patch.object(_settings, "SETTINGS_FILE_NAME", path),
+        patch("pymmcore_gui._utils.system_memory_gb", return_value=(16.0, 8.0)),
+    ):
         loaded = SettingsV1(**MMGuiUserPrefsSource(SettingsV1)())
         path.write_text(loaded.model_dump_json(exclude_defaults=True))
         restored = SettingsV1(**MMGuiUserPrefsSource(SettingsV1)())
