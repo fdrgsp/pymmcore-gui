@@ -371,9 +371,19 @@ class MicroscopeStyle(QProxyStyle):
     ) -> QSize:
         s = super().sizeFromContents(ct, opt, contentsSize, widget)
         if ct == QStyle.ContentsType.CT_PushButton:
-            # Ensure minimum button height and horizontal padding
             s.setHeight(max(s.height(), 26))
-            s.setWidth(s.width() + 8)
+            if isinstance(opt, QStyleOptionButton) and not opt.text:
+                # Icon-only: square it off, so the padding reads the same on
+                # every side. The base style pads a push button for a label it
+                # does not have -- and Qt's own contents size adds a further
+                # 4px of width for the gap before that absent label -- which
+                # together leave it visibly wider than it is tall. Never go
+                # under the width Qt asked for, so a wider-than-tall icon
+                # still fits.
+                s.setWidth(max(s.height(), contentsSize.width()))
+            else:
+                # breathing room either side of the label
+                s.setWidth(s.width() + 8)
         elif ct == QStyle.ContentsType.CT_ComboBox:
             # Fusion's own CT_ComboBox width computation reserves space for
             # *its* default arrow glyph, not the wider one _draw_combobox

@@ -261,7 +261,6 @@ class ThemeToggleButton(QPushButton):
         self._is_dark = is_dark
         self.setFlat(True)
         self.setProperty("variant", "subtle")
-        self.setFixedSize(32, 32)
         self.setToolTip("Toggle light/dark theme")
         self._apply_icon()
 
@@ -278,7 +277,9 @@ class ThemeToggleButton(QPushButton):
         )
         color = qcolor(theme().text_secondary).name()
         self.setIcon(QIconifyIcon(name, color=color))
-        size = theme().scaled(18)
+        # the panel toolbar buttons' icon size, so the style now sizes this
+        # button the same way they are: square, and scaling with the zoom level
+        size = theme().scaled(20)
         self.setIconSize(QSize(size, size))
 
     def changeEvent(self, e: QEvent | None) -> None:
