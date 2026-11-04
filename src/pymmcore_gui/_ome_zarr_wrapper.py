@@ -77,6 +77,17 @@ class OMEZarrWrapper(DataWrapper):
     def dtype(self) -> np.dtype:
         return np.dtype(self._array(0 if self._positions else None).dtype)
 
+    def guess_channel_axis(self) -> int | None:
+        """Use OME axis names rather than guessing from dimension sizes."""
+        return next(
+            (
+                i
+                for i, dim in enumerate(self._dims)
+                if str(dim).lower() in self.COMMON_CHANNEL_NAMES
+            ),
+            None,
+        )
+
     def isel(self, index: Mapping[int, int | slice]) -> np.ndarray:
         if self._positions:
             return isel_positions(

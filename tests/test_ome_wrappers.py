@@ -170,6 +170,33 @@ def test_all_tiff_position_layouts_reopen(tmp: Path, layout: str) -> None:
 
 
 @pytest.mark.parametrize("fmt", FORMATS)
+@pytest.mark.parametrize("channels", [(), ("FITC",), ("DAPI", "FITC")])
+@pytest.mark.parametrize("axis", ["z", "t", "p"])
+def test_channel_axis_uses_metadata(
+    tmp: Path, fmt: str, channels: tuple[str, ...], axis: str
+) -> None:
+    from ome_writers import dims_from_standard_axes
+
+    axes: dict = {axis: 3}
+    if channels:
+        axes["c"] = list(channels)
+    axes.update(y=8, x=8)
+    dims = dims_from_standard_axes(axes)
+    out = _write(dims, fmt, tmp / f"channels.{fmt}", 3 * max(1, len(channels)))
+    wrapper = WRAPPER_TYPE[fmt](out)
+    try:
+        channel_axis = wrapper.guess_channel_axis()
+        if "c" in wrapper.dims:
+            assert channel_axis == wrapper.dims.index("c")
+        else:
+            assert channel_axis is None
+        if axis == "z":
+            assert wrapper.guess_z_axis() == wrapper.dims.index("z")
+    finally:
+        wrapper.close()
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
 def test_single_position_roundtrip(tmp: Path, fmt: str) -> None:
     seq = useq.MDASequence(
         channels=_ch("DAPI", "FITC"),

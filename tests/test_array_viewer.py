@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pytest
+import tifffile
 from ndv.models import ChannelMode
 from ome_writers import (
     AcquisitionSettings,
@@ -34,6 +35,7 @@ from pymmcore_gui._array_viewer import (
     _synthesize_record,
 )
 from pymmcore_gui._mda_export import AcquisitionRecord
+from pymmcore_gui._ome_tiff_wrapper import OMETiffWrapper
 from pymmcore_gui._qt.QtWidgets import QFileDialog, QMessageBox, QWidget
 
 if TYPE_CHECKING:
@@ -98,6 +100,33 @@ def test_center_cross_control_comes_from_ndv(qtbot: QtBot) -> None:
 
     button.setChecked(True)
     assert viewer.center_cross_active()
+
+
+@pytest.mark.parametrize("channels", [1, 2])
+def test_reopened_z_stack_keeps_z_slider(
+    qtbot: QtBot, tmp_path: Path, channels: int
+) -> None:
+    path = tmp_path / "stack.ome.tif"
+    tifffile.imwrite(
+        path,
+        np.zeros((3, channels, 32, 32), dtype="uint16"),
+        metadata={"axes": "ZCYX"},
+        photometric="minisblack",
+    )
+    wrapper = OMETiffWrapper(path)
+    try:
+        viewer = MMArrayViewer(wrapper, auto_hide_z_buttons=True)
+        qtbot.addWidget(viewer.widget())
+        z_axis = wrapper.dims.index("z")
+        assert viewer._resolved.channel_axis == (
+            wrapper.dims.index("c") if channels > 1 else None
+        )
+        assert z_axis not in viewer._resolved.hidden_sliders
+        qtbot.waitUntil(lambda: len(viewer._lut_controllers) == channels)
+        viewer.display_model.current_index["z"] = 2
+        assert viewer._resolved.current_index[z_axis] == 2
+    finally:
+        wrapper.close()
 
 
 def test_synthesize_record_from_stream_view(qtbot: QtBot) -> None:

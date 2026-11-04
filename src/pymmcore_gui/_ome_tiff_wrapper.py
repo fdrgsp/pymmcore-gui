@@ -265,6 +265,10 @@ class OMETiffWrapper(DataWrapper):
     def dtype(self) -> np.dtype:
         return self._dtype
 
+    def guess_channel_axis(self) -> int | None:
+        """Use OME axis names rather than guessing from dimension sizes."""
+        return self._dims.index("c") if "c" in self._dims else None
+
     def isel(self, index: Mapping[int, int | slice]) -> np.ndarray:
         if self._is_multiposition:
             return self._isel_multiposition(index)
