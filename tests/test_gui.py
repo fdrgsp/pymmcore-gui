@@ -2343,6 +2343,7 @@ def test_acquire_reset_layout_restores_defaults(
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
     page.resize(1400, 900)
+    page.setMinimumWidth(1400)
     page.show()
     qtbot.waitExposed(page)
     qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=10000)
@@ -2387,6 +2388,7 @@ def test_acquire_mda_starts_closed_and_opens_on_the_right(
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
     page.resize(1400, 900)
+    page.setMinimumWidth(1400)
     page.show()
     qtbot.waitExposed(page)
     qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=10000)
@@ -2529,6 +2531,7 @@ def test_acquire_reset_layout_after_restore_repins_default_widths(
     page_a = AcquirePage(mmcore)
     qtbot.addWidget(page_a)
     page_a.resize(1400, 900)
+    page_a.setMinimumWidth(1400)
     page_a.panel_button(PanelKey.MDA).click()
     page_a.show()
     qtbot.waitExposed(page_a)
@@ -2550,6 +2553,7 @@ def test_acquire_reset_layout_after_restore_repins_default_widths(
     page_b = AcquirePage(mmcore)
     qtbot.addWidget(page_b)
     page_b.resize(1400, 900)
+    page_b.setMinimumWidth(1400)
     assert page_b.restore_layout(state, keys)
     page_b.show()
     qtbot.waitExposed(page_b)
@@ -4980,6 +4984,7 @@ def test_acquire_mda_dock_width_resists_relayout_but_stays_draggable(
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
     page.resize(1400, 900)
+    page.setMinimumWidth(1400)
     page.panel_button(PanelKey.MDA).click()
     page.show()
     qtbot.waitExposed(page)
@@ -6324,6 +6329,7 @@ def test_hardware_tables_are_aligned_and_filter_stays_usable(
     page = HardwareSetupPage(mmcore)
     qtbot.addWidget(page)
     page.resize(1800, 800)
+    page.setMinimumWidth(1800)
     page.show()
     qtbot.waitExposed(page)
 
@@ -6861,6 +6867,7 @@ def test_acquire_width_settle_waits_out_a_late_resize(
     # Simulate the async WindowMaximized completing just after the first
     # showEvent -- before the debounce timer has fired.
     page.resize(1400, 900)
+    page.setMinimumWidth(1400)
     assert not page._mda_width_locked_at_real_size
 
     qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=10000)
@@ -6899,6 +6906,7 @@ def test_acquire_settle_retries_until_lock_actually_takes(
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
     page.resize(1400, 900)
+    page.setMinimumWidth(1400)
     page.panel_button(PanelKey.MDA).click()
 
     call_count = 0
