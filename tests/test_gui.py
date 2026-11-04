@@ -71,6 +71,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QStyle,
     QStyleOption,
     QStyleOptionSlider,
+    QTableWidget,
     QToolBar,
     QToolButton,
     QWidget,
@@ -98,6 +99,7 @@ from pymmcore_gui.widgets._acquire import (
 from pymmcore_gui.widgets._acquire_presets import AcquisitionPresetSelector
 from pymmcore_gui.widgets._configurations import ConfigurationsPage
 from pymmcore_gui.widgets._hardware import HardwareSetupPage
+from pymmcore_gui.widgets._hardware._peripherals import PeripheralsDialog
 from pymmcore_gui.widgets._installation import (
     InstallationPage,
     InstallReleaseDialog,
@@ -6277,6 +6279,32 @@ def test_hardware_tables_rows_are_as_tall_as_a_combo_box(
         assert v_header.defaultSectionSize() == row_height
         assert table.rowCount() > 0
         assert table.rowHeight(0) == row_height
+
+
+def test_setup_peripherals_and_presets_rows_are_as_tall_as_a_combo_box(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = HardwareSetupPage(mmcore)
+    qtbot.addWidget(page)
+    page._setup.show_installed(page.model.get_device("Objective"))
+    state_labels = page._setup.findChild(QTableWidget)
+    assert state_labels is not None
+
+    dialog = PeripheralsDialog(page.model.get_device("DHub"), page.model)
+    qtbot.addWidget(dialog)
+
+    presets = AcquisitionPresetSelector(mmcore=mmcore)
+    qtbot.addWidget(presets)
+
+    for table in (state_labels, dialog._table, presets.table_wdg):
+        row_height = combo_box_height(table) + 1  # the grid line
+        assert (v_header := table.verticalHeader()) is not None
+        assert v_header.defaultSectionSize() == row_height
+        if table.rowCount():
+            assert table.rowHeight(0) == row_height
+    # even for the rows of the presets that hold a taller slider or spin box
+    rows = range(presets.table_wdg.rowCount())
+    assert {presets.table_wdg.rowHeight(r) for r in rows} == {row_height}
 
 
 def test_default_devices_are_set_from_the_hardware_page(

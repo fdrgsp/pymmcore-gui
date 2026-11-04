@@ -10,6 +10,7 @@ from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from pymmcore_plus import DeviceType, FocusDirection, Keyword, PropertyType
+from pymmcore_widgets._util import use_combo_row_height
 from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import set_source_icon
@@ -330,6 +331,7 @@ class DeviceSetupPane(QWidget):
             hdr.setStretchLastSection(True)
         if (vh := table.verticalHeader()) is not None:
             vh.setVisible(False)
+        use_combo_row_height(table)
         table.setEditTriggers(
             QTableWidget.EditTrigger.DoubleClicked
             | QTableWidget.EditTrigger.EditKeyPressed

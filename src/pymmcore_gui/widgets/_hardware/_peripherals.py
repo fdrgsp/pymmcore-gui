@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
+from pymmcore_widgets._util import use_combo_row_height
+
 from pymmcore_gui._qt.QtCore import Qt
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractItemView,
@@ -48,6 +50,7 @@ class PeripheralsDialog(QDialog):
         # `is not None`: an empty QHeaderView is falsy (see _panes.py)
         if (vh := self._table.verticalHeader()) is not None:
             vh.setVisible(False)
+        use_combo_row_height(self._table)
         if (hh := self._table.horizontalHeader()) is not None:
             hh.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
             hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
