@@ -47,7 +47,7 @@ def test_autofocus_card_padding_and_title_hit_target(
         window = QMainWindow()
         manager = CDockManager(window)
         manager.setStyleSheet(manager.styleSheet() + dock_chrome_stylesheet())
-        dock = CDockWidget("MDA")
+        dock = CDockWidget(manager, "MDA", window)
         dock.setWidget(widget)
         manager.addDockWidget(DockWidgetArea.RightDockWidgetArea, dock)
         qtbot.addWidget(window)
@@ -59,7 +59,12 @@ def test_autofocus_card_padding_and_title_hit_target(
         qtbot.waitExposed(widget)
     af = widget.af_axis
     af.setKind("hardware")
-    qtbot.waitUntil(lambda: af.height() == af.sizeHint().height())
+    qtbot.waitUntil(
+        lambda: (
+            af.height() == af.sizeHint().height()
+            and af.width() >= af.minimumSizeHint().width()
+        )
+    )
     size = af.size()
     settings_label = next(
         label

@@ -16,7 +16,7 @@ from useq import MDASequence
 import pymmcore_gui._ndv_viewers as viewers_module
 from pymmcore_gui._ndv_viewers import AcquireViewersManager, _StreamSignalBridge
 from pymmcore_gui._qt.QtAds import CDockManager, DockWidgetArea
-from pymmcore_gui._qt.QtCore import QPoint, Qt, QTimer
+from pymmcore_gui._qt.QtCore import QPoint, Qt
 from pymmcore_gui._qt.QtWidgets import QApplication, QMenu, QWidget
 from pymmcore_gui.widgets.image_preview._snap_album import SnappedImage
 
@@ -208,7 +208,7 @@ def test_viewer_tab_menu_names_its_close_actions(
 
 
 def test_viewer_tab_menu_survives_garbage_collection(
-    mmcore: CMMCorePlus, qtbot: QtBot
+    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The real menu, after a collection: this used to segfault on right-click.
 
@@ -216,27 +216,43 @@ def test_viewer_tab_menu_survives_garbage_collection(
     before anything in this test holds on to the tab.
     """
     manager, [dock, *_] = _viewer_tabs(mmcore, qtbot)
+    # This exercises tab/menu lifetimes, not the image canvas's OpenGL context.
+    for record in manager._records.values():
+        record.viewer.widget().hide()
     parent = manager._parent_widget
     assert parent is not None
     parent.show()
     qtbot.waitExposed(parent)
     gc.collect()
 
-    opened: list[list[str]] = []
+    opened: list[QMenu] = []
 
-    def close_menu() -> None:
-        menu = QApplication.activePopupWidget()
-        if isinstance(menu, QMenu):
-            opened.append([a.text() for a in menu.actions()])
-            menu.close()
+    class PopupMenu(QMenu):
+        # The manager uses only the instance overload, not QMenu's static helper.
+        def exec(  # pyright: ignore[reportIncompatibleMethodOverride]
+            self, p: QPoint | None = None, action: QAction | None = None
+        ) -> QAction | None:
+            opened.append(self)
+            self.popup(p if p is not None else QPoint())
+            return None
 
-    # not 0: on macOS, showing the menu can run a timer before the popup registers
-    QTimer.singleShot(200, close_menu)
+    # PySide resolves exec on the instance, so patch the factory with a subclass.
+    # The real popup stays visible without a timer racing a nested event loop.
+    monkeypatch.setattr(viewers_module, "QMenu", PopupMenu)
     tab = dock.tabWidget()
     assert tab is not None
     assert tab.contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
     tab.customContextMenuRequested.emit(QPoint(1, 1))
-    assert opened == [["Close", "Close All But This", "Close All"]]
+    try:
+        qtbot.waitUntil(lambda: bool(opened) and opened[0].isVisible())
+        assert [action.text() for action in opened[0].actions()] == [
+            "Close",
+            "Close All But This",
+            "Close All",
+        ]
+    finally:
+        for menu in opened:
+            menu.close()
 
 
 @pytest.mark.parametrize(
