@@ -68,7 +68,7 @@ class MDAChannelTable(CoreConnectedChannelTable):
         mmcore: CMMCorePlus | None = None,
         parent: QWidget | None = None,
     ) -> None:
-        # Recall removed or switched channels when the shared store has no settings.
+        # Recall channels removed or switched since the channel group last changed.
         self._channel_settings: dict[_ChannelKey, ChannelSettings] = {}
         # Every row's (group, config) as of the last change, see _on_changed.
         self._row_keys: list[_ChannelKey] = []
@@ -112,6 +112,8 @@ class MDAChannelTable(CoreConnectedChannelTable):
 
         self._mmc.events.configSet.connect(self._on_config_set)
         self._mmc.events.propertyChanged.connect(self._on_property_changed)
+        # after the base class's connection, which clears (and so remembers) the rows
+        self._mmc.events.channelGroupChanged.connect(self._forget_channel_settings)
         self.destroyed.connect(self._disconnect_store)
         self._update_active_row()
 
@@ -331,6 +333,15 @@ class MDAChannelTable(CoreConnectedChannelTable):
             events = self._mmc.events
             events.configSet.disconnect(self._on_config_set)
             events.propertyChanged.disconnect(self._on_property_changed)
+            events.channelGroupChanged.disconnect(self._forget_channel_settings)
+
+    def _forget_channel_settings(self, *_: object) -> None:
+        """Leave a group's settings to the store once its rows are gone.
+
+        Otherwise a row that differs from the store (a restored sequence's, say) would
+        override it on coming back to the group, unlike what the Channels panel shows.
+        """
+        self._channel_settings.clear()
 
     def _current_keys(self) -> list[_ChannelKey]:
         table = self.table()
@@ -390,7 +401,8 @@ class MDAChannelTable(CoreConnectedChannelTable):
         """Give ``row`` its preset's settings.
 
         In order of preference: another row's (so duplicating a channel copies
-        it), the ones its preset last had in this table, or the stored ones.
+        it), the ones its preset last had in this table since the channel group last
+        changed, or the stored ones.
 
         Returns whether they were applied in full, i.e. including a light source
         this configuration offers.

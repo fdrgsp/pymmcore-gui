@@ -608,6 +608,61 @@ def test_group_combos_set_the_channel_group(mmcore: CMMCorePlus, qtbot: QtBot) -
     assert mmcore.getChannelGroup() == "Channel"
 
 
+@pytest.mark.parametrize("via", ["mda", "panel", "core"])
+def test_channel_added_after_returning_to_a_group_gets_the_stored_settings(
+    mmcore: CMMCorePlus, qtbot: QtBot, via: str
+) -> None:
+    """Rows cleared by a group change must not outlive it as remembered settings.
+
+    A restored sequence's rows keep their own values, so here the row has no light
+    source while the store has one. The Channels panel shows the store's when coming
+    back to the group, and a channel added to the MDA must get the same.
+    """
+    preset = mmcore.getAvailableConfigs("Channel")[0]
+    store = channel_settings_store(mmcore)
+    label = _label_of(mmcore, ("Camera", "TestProperty1"))
+    stored: ChannelSettings = {
+        "exposure": 33.0,
+        "light_source": label,
+        "intensity": 0.05,
+    }
+    store.set("Channel", preset, stored)
+    panel = _panel(mmcore, qtbot)
+    mda = _mda(mmcore, qtbot, preset)
+    channels = mda.channels
+    assert channels.rowSettings(0)["light_source"] == ""
+
+    def switch_to(group: str) -> None:
+        if via == "core":
+            mmcore.setChannelGroup(group)
+        else:
+            combo = panel._group_combo if via == "panel" else channels._group_combo
+            _pick_group(combo, group)
+
+    switch_to("Objective")
+    assert channels.value() == ()
+    switch_to("Channel")
+    assert channels.value() == ()
+
+    channels.act_add_row.trigger()
+    assert channels.value()[0].config == preset
+    assert channels.rowSettings(0) == stored
+
+
+def test_channel_readded_within_a_group_keeps_its_row_values(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Without a group change, a removed row's own values are still recalled."""
+    preset = mmcore.getAvailableConfigs("Channel")[0]
+    mda = _mda(mmcore, qtbot, preset)
+    channels = mda.channels
+    _mda_cell(mda, 0, channels.EXPOSURE).setValue(55)
+
+    channels.act_clear.trigger()
+    channels.act_add_row.trigger()
+    assert _mda_row_exposures(mda) == [(preset, 55)]
+
+
 def _exposure_of(store: ChannelSettingsStore, preset: str) -> float:
     settings = store.get("Objective", preset)
     assert settings is not None
