@@ -123,17 +123,17 @@ def _section_metrics() -> SectionMetrics:
     """The app's zoom-scaled spacing for the collapsible presentation."""
     t = theme()
     return SectionMetrics(
-        header_height=t.row_height,
+        header_height=t.row_height - t.scaled(4),
         disclosure_width=t.scaled(24),
         header_spacing=t.sp_xxs,
         body_margin_h=t.sp_sm,
-        body_margin_top=t.sp_xs,
-        body_margin_bottom=t.sp_sm,
+        body_margin_top=t.sp_xxs,
+        body_margin_bottom=t.sp_xs,
         body_spacing=t.sp_sm,
         content_spacing=t.sp_xxs,
         footer_margin_h=t.sp_sm,
-        footer_margin_top=t.sp_xs,
-        footer_margin_bottom=t.sp_sm,
+        footer_margin_top=t.sp_xxs,
+        footer_margin_bottom=t.sp_xs,
     )
 
 

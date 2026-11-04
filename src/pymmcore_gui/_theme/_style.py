@@ -43,6 +43,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QStyleOptionButton,
     QStyleOptionComboBox,
     QStyleOptionComplex,
+    QStyleOptionGroupBox,
     QStyleOptionHeader,
     QStyleOptionSlider,
     QStyleOptionSpinBox,
@@ -244,7 +245,7 @@ RADIUS_LG = 6
 SCROLLBAR_WIDTH = 7
 SLIDER_GROOVE_H = 4
 SLIDER_HANDLE_SIZE = 14
-CHECKBOX_SIZE = 16
+CHECKBOX_SIZE = 14
 COMBO_ARROW_W = 20
 SPLITTER_HANDLE_W = 4
 TOOLBAR_HANDLE_W = 0  # no drag handle
@@ -597,6 +598,28 @@ class MicroscopeStyle(QProxyStyle):
     ) -> QRect:
         if opt is None:
             return super().subControlRect(cc, opt, sc, widget)
+        if cc == QStyle.ComplexControl.CC_GroupBox and isinstance(
+            opt, QStyleOptionGroupBox
+        ):
+            if sc in (
+                QStyle.SubControl.SC_GroupBoxLabel,
+                QStyle.SubControl.SC_GroupBoxCheckBox,
+                QStyle.SubControl.SC_GroupBoxContents,
+            ):
+                # Fusion puts the title at the frame's left edge. Keep its
+                # paint and hit-test rectangles inset together, and give the
+                # contents the same breathing room as the application's cards.
+                inset = max(1, round(8 * self._zoom))
+                rect = super().subControlRect(cc, opt, sc, widget)
+                if sc == QStyle.SubControl.SC_GroupBoxContents:
+                    # The form adds another 5px. Match the Settings card's
+                    # 5px outer + 5px inner inset instead of adding both again.
+                    horizontal = 5 - (rect.left() - opt.rect.left())
+                    rect.adjust(horizontal, 0, -horizontal, -inset)
+                else:
+                    rtl = opt.direction == Qt.LayoutDirection.RightToLeft
+                    rect.translate(-inset if rtl else inset, 0)
+                return rect
         if cc == QStyle.ComplexControl.CC_SpinBox:
             r = opt.rect
             no_buttons = (
