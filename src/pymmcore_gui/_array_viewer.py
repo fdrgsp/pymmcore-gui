@@ -5,6 +5,7 @@ Adapted from the Christina viewer implementation.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -24,7 +25,7 @@ from pymmcore_gui._mda_export import (
     record_from_wrapper,
 )
 from pymmcore_gui._qt.QtCore import QEvent, QObject, QSize, Qt
-from pymmcore_gui._qt.QtGui import QColor, QIcon, QPainter, QPalette
+from pymmcore_gui._qt.QtGui import QColor, QIcon, QImage, QPainter, QPalette
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractButton,
     QAbstractSlider,
@@ -352,22 +353,39 @@ def _luminance(color: QColor) -> float:
     return 0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue()
 
 
+_ICON_RGB_CACHE: OrderedDict[int, tuple[float, float, float] | None] = OrderedDict()
+
+
 def _icon_avg_rgb(icon: QIcon, size: QSize) -> tuple[float, float, float] | None:
     """Average (r, g, b) of an icon's opaque pixels, or None if fully transparent."""
-    image = icon.pixmap(size).toImage()
-    r_total = g_total = b_total = 0.0
-    count = 0
-    for y in range(image.height()):
-        for x in range(image.width()):
-            pixel = image.pixelColor(x, y)
-            if pixel.alpha() > 32:
-                r_total += pixel.red()
-                g_total += pixel.green()
-                b_total += pixel.blue()
-                count += 1
-    if not count:
-        return None
-    return (r_total / count, g_total / count, b_total / count)
+    pixmap = icon.pixmap(size)
+    # The rendered pixmap's key changes with its pixels, size and device pixel
+    # ratio. It also lets separate buttons sharing an icon reuse the analysis.
+    key = pixmap.cacheKey()
+    if key in _ICON_RGB_CACHE:
+        _ICON_RGB_CACHE.move_to_end(key)
+        return _ICON_RGB_CACHE[key]
+
+    rgb = None
+    if not pixmap.isNull():
+        image = pixmap.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
+        data: Any = image.constBits()
+        # PyQt exposes a sip.voidptr; PySide exposes a sized memoryview.
+        if hasattr(data, "setsize"):
+            data.setsize(image.sizeInBytes())
+        scanlines = np.frombuffer(data, dtype=np.uint8).reshape(
+            image.height(), image.bytesPerLine()
+        )
+        rgba = scanlines[:, : image.width() * 4].reshape(-1, 4)
+        pixels = rgba[rgba[:, 3] > 32, :3]
+        if len(pixels):
+            r, g, b = pixels.mean(axis=0)
+            rgb = (float(r), float(g), float(b))
+
+    _ICON_RGB_CACHE[key] = rgb
+    if len(_ICON_RGB_CACHE) > 512:
+        _ICON_RGB_CACHE.popitem(last=False)
+    return rgb
 
 
 def _recolor_icon(icon: QIcon, color: QColor) -> QIcon:
@@ -454,7 +472,7 @@ def ensure_visible_icon(btn: QAbstractButton) -> None:
         btn.setIcon(icon)  # original already contrasts fine against this bg
 
 
-def unstyle_widgets(widget: Any) -> None:
+def unstyle_widgets(widget: Any, *, theme_icons: bool = True) -> None:
     """Normalize third-party widgets to the app's themed look.
 
     Third-party code sometimes hardcodes a one-off ``setStyleSheet(...)``
@@ -482,6 +500,8 @@ def unstyle_widgets(widget: Any) -> None:
     ``widget`` itself is swept too (not just ``findChildren``), since the
     offending stylesheet is sometimes on the third-party root -- e.g.
     ConfigGroupsEditor sets one on itself.
+
+    Set ``theme_icons=False`` when the caller assigns explicitly themed icons.
     """
     for w in (widget, *widget.findChildren(QWidget)):
         if isinstance(w, (QAbstractSlider, SliderLabel)):
@@ -491,7 +511,8 @@ def unstyle_widgets(widget: Any) -> None:
         if isinstance(w, QAbstractButton):
             if not w.property("variant"):
                 w.setProperty("variant", "subtle")
-            ensure_visible_icon(w)
+            if theme_icons:
+                ensure_visible_icon(w)
 
 
 def _add_save_button(viewer: MMArrayViewer) -> QPushButton:
