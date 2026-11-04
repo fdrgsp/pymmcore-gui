@@ -6866,8 +6866,8 @@ def test_acquire_width_settle_waits_out_a_late_resize(
 
     # Simulate the async WindowMaximized completing just after the first
     # showEvent -- before the debounce timer has fired.
-    page.resize(1400, 900)
     page.setMinimumWidth(1400)
+    page.resize(1400, 900)
     assert not page._mda_width_locked_at_real_size
 
     qtbot.waitUntil(lambda: page._mda_width_locked_at_real_size, timeout=10000)

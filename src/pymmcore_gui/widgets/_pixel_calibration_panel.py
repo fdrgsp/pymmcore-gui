@@ -1630,6 +1630,8 @@ class PixelCalibrationPanel(QWidget):
     def _on_thread_finished(self) -> None:
         terminal_message = self._phase_label.text()
         if self._thread is not None:
+            # finished() precedes native thread cleanup; retain the worker until done.
+            self._thread.wait()
             self._thread.deleteLater()
         self._thread = None
         self._worker = None
