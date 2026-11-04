@@ -21,17 +21,22 @@ if TYPE_CHECKING:
     from pymmcore_gui._qt.QtWidgets import QWidget
 
 
+def _install_gui_tables(tabs: CoreMDATabs) -> None:
+    """Swap in this app's channel and position tables for the upstream ones."""
+    inherited_channels = tabs.channels
+    tabs.channels = MDAChannelTable(0, tabs._mmc)
+    inherited_channels.deleteLater()
+    inherited_positions = tabs.stage_positions
+    tabs.stage_positions = MDAPositionTable(0, tabs._mmc)
+    inherited_positions.deleteLater()
+
+
 class GuiCollapsibleCoreMDATabs(CollapsibleCoreMDATabs):
     """Collapsible MDA tabs using :class:`MDAChannelTable`."""
 
     def create_subwidgets(self) -> None:
         super().create_subwidgets()
-        inherited_channels = self.channels
-        self.channels = MDAChannelTable(0, self._mmc)
-        inherited_channels.deleteLater()
-        inherited_positions = self.stage_positions
-        self.stage_positions = MDAPositionTable(0, self._mmc)
-        inherited_positions.deleteLater()
+        _install_gui_tables(self)
 
 
 class GuiCoreMDATabs(CoreMDATabs):
@@ -44,12 +49,7 @@ class GuiCoreMDATabs(CoreMDATabs):
 
     def create_subwidgets(self) -> None:
         super().create_subwidgets()
-        inherited_channels = self.channels
-        self.channels = MDAChannelTable(0, self._mmc)
-        inherited_channels.deleteLater()
-        inherited_positions = self.stage_positions
-        self.stage_positions = MDAPositionTable(0, self._mmc)
-        inherited_positions.deleteLater()
+        _install_gui_tables(self)
 
 
 def _theme_subsequence_popup(popup: QWidget) -> None:

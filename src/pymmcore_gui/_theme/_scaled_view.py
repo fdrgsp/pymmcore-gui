@@ -60,19 +60,7 @@ class ScaledThemeView:
     def sp_lg(self) -> int:
         return self.scaled(self._theme.sp_lg)
 
-    @property
-    def sp_xl(self) -> int:
-        return self.scaled(self._theme.sp_xl)
-
     # ── scaled metrics ────────────────────────────────────────────
-
-    @property
-    def radius(self) -> int:
-        return self.scaled(self._theme.radius)
-
-    @property
-    def radius_lg(self) -> int:
-        return self.scaled(self._theme.radius_lg)
 
     @property
     def row_height(self) -> int:
@@ -101,18 +89,6 @@ class ScaledThemeView:
         return self._theme.bg_raised
 
     @property
-    def bg_surface(self) -> Color:
-        return self._theme.bg_surface
-
-    @property
-    def bg_hover(self) -> Color:
-        return self._theme.bg_hover
-
-    @property
-    def bg_active(self) -> Color:
-        return self._theme.bg_active
-
-    @property
     def text_primary(self) -> Color:
         return self._theme.text_primary
 
@@ -133,16 +109,8 @@ class ScaledThemeView:
         return self._theme.border_default
 
     @property
-    def border_focus(self) -> Color:
-        return self._theme.border_focus
-
-    @property
     def accent(self) -> Color:
         return self._theme.accent
-
-    @property
-    def accent_muted(self) -> Color:
-        return self._theme.accent_muted
 
     @property
     def status_green(self) -> Color:
@@ -159,11 +127,3 @@ class ScaledThemeView:
     @property
     def status_yellow(self) -> Color:
         return self._theme.status_yellow
-
-    @property
-    def drag_highlight(self) -> Color:
-        return self._theme.drag_highlight
-
-    @property
-    def drop_indicator(self) -> Color:
-        return self._theme.drop_indicator

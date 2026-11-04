@@ -6,7 +6,7 @@ from pymmcore_widgets import PixelConfigurationWidget as _UpstreamPixelConfigura
 from pymmcore_widgets._icons import StandardIcon
 from superqt.utils import signals_blocked
 
-from pymmcore_gui._pixel_calibration import PixelCalibrationResult
+from pymmcore_gui._pixel_calibration import PixelCalibrationResult, flatten_affine
 from pymmcore_gui._qt.QtCore import QEvent, QTimer, Signal
 from pymmcore_gui._qt.QtWidgets import QSizePolicy
 from pymmcore_gui._theme import qcolor, theme
@@ -205,15 +205,7 @@ class PixelConfigurationWidget(_UpstreamPixelConfiguration):
         if self._preset_settings(preset) != payload.fingerprint.config_settings:
             return
 
-        matrix = payload.raw_matrix
-        affine = (
-            float(matrix[0, 0]),
-            float(matrix[0, 1]),
-            0.0,
-            float(matrix[1, 0]),
-            float(matrix[1, 1]),
-            0.0,
-        )
+        affine = flatten_affine(payload.raw_matrix)
         pixel_size = float(payload.raw_pixel_size_um)
         preset.pixel_size_um = pixel_size
         preset.affine = affine

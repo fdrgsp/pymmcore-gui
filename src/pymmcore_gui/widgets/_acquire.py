@@ -754,24 +754,7 @@ class AcquirePage(TabPage):
     # ------------------------------------------------------------------ panels
 
     def _place_panel_bar(self) -> None:
-        """Host the panel bar. This is the single seam for relocating it.
-
-        Today it shares the acquire toolbar row, right of snap/live/shutters.
-        To give it its own row instead, swap the body for::
-
-            row = TabToolBar()
-            row.add_widget(self._panel_bar)
-            row.add_stretch()
-            self.add_toolbar_row(row)
-
-        Moving it into ``MicroManagerGUI`` as a draggable ``QToolBar`` is the same
-        shape: the bar itself needs no changes, only a different host.
-
-        Preferences sits right after the panel buttons, no separator --
-        that's where "Show Widgets" (which buttons are present at all) and
-        "Layout" (switch/save/delete the whole arrangement) now live; see
-        ``_preferences.PreferencesDialog``.
-        """
+        """Host the panel bar: the single seam for relocating it."""
         self.toolbar.add_stretch()
         self.toolbar.add_widget(toolbar_separator())
         self.toolbar.add_widget(self._panel_bar)

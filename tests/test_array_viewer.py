@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pytest
@@ -120,7 +120,7 @@ def test_synthesize_record_from_stream_view(qtbot: QtBot) -> None:
             dtype="uint16",
             scales={"x": 0.5, "y": 0.5},
         )
-        record = _synthesize_record(viewer)
+        record = _synthesize_record(cast("MMArrayViewer", viewer))
 
     assert record is not None
     assert record.view is view
@@ -143,7 +143,7 @@ def test_synthesize_record_from_ring_buffer_like_wrapper(qtbot: QtBot) -> None:
         dtype="uint16",
         scales={"x": 0.25, "y": 0.25},
     )
-    record = _synthesize_record(viewer)
+    record = _synthesize_record(cast("MMArrayViewer", viewer))
 
     assert record is not None
     assert record.view is data
@@ -157,15 +157,12 @@ def test_synthesize_record_from_ring_buffer_like_wrapper(qtbot: QtBot) -> None:
 
 def test_synthesize_record_returns_none_without_data_or_wrapper() -> None:
     viewer = SimpleNamespace(data=None, data_wrapper=None)
-    # pyright checks SimpleNamespace structurally against _RecordSource (and
-    # correctly finds display_model missing); mypy's SimpleNamespace stub is
-    # permissive enough to already accept it, so only pyright needs silencing.
-    assert _synthesize_record(viewer) is None  # pyright: ignore[reportArgumentType]
+    assert _synthesize_record(cast("MMArrayViewer", viewer)) is None
 
 
 def test_synthesize_record_returns_none_for_single_axis(qtbot: QtBot) -> None:
     viewer = _FakeViewer(data=np.zeros(8), sizes={"x": 8})
-    assert _synthesize_record(viewer) is None
+    assert _synthesize_record(cast("MMArrayViewer", viewer)) is None
 
 
 _TIFF_INDEPENDENT = next(

@@ -62,20 +62,17 @@ class BusyOverlay(QWidget):
 
 
 @contextmanager
-def busy(overlay: BusyOverlay | None, message: str) -> Iterator[None]:
+def busy(overlay: BusyOverlay, message: str) -> Iterator[None]:
     """Show `overlay` for the duration of a blocking operation.
 
     Does nothing if the overlay's parent isn't visible yet (e.g. during
     construction), where painting would be pointless and processEvents unsafe.
     """
-    parent = overlay.parentWidget() if overlay is not None else None
-    active = overlay is not None and parent is not None and parent.isVisible()
+    active = (parent := overlay.parentWidget()) is not None and parent.isVisible()
     if active:
-        assert overlay is not None
         overlay.start(message)
     try:
         yield
     finally:
         if active:
-            assert overlay is not None
             overlay.stop()

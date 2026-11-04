@@ -47,7 +47,7 @@ def _result_for_selected_resolution(
     )
     shifts = np.asarray(((-60, 0), (60, 0), (0, -55), (0, 55)), dtype=float)
     deltas = shifts @ matrix.T
-    fit = _describe_fit(matrix, shifts, np.zeros_like(shifts))
+    fit = _describe_fit(matrix, np.zeros_like(shifts))
 
     def _observation(shift: np.ndarray, delta: np.ndarray) -> CalibrationObservation:
         return CalibrationObservation(
@@ -333,14 +333,13 @@ def test_test_position_residuals_are_shown_after_fitting(
     assert len(panel._diagnostics._residual_rows()) == 4
 
     residuals = np.asarray(((6.0, 0.0), (-2.0, 0.0), (-2.0, 0.0), (-2.0, 0.0)))
-    shifts = np.asarray([obs.image_shift_xy for obs in result.observations])
     observations = tuple(
         replace(obs, residual_px=(float(residual[0]), float(residual[1])))
         for obs, residual in zip(result.observations, residuals, strict=True)
     )
     diagnostics = replace(
         result,
-        fit=_describe_fit(result.fit.matrix, shifts, residuals),
+        fit=_describe_fit(result.fit.matrix, residuals),
         observations=observations,
     )
     panel._diagnostics.setResult(diagnostics)
@@ -379,7 +378,7 @@ def test_failed_calibration_shows_estimate_without_applying_it(
     deltas = (shifts + residuals) @ result.fit.matrix.T
     diagnostics = replace(
         result,
-        fit=_describe_fit(result.fit.matrix, shifts, residuals),
+        fit=_describe_fit(result.fit.matrix, residuals),
         observations=tuple(
             replace(
                 obs,

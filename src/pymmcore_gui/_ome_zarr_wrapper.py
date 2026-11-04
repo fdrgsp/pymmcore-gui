@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, TypeGuard, cast
 import numpy as np
 from ndv.models import DataWrapper
 
-from pymmcore_gui._utils import indexed_shape
+from pymmcore_gui._utils import indexed_shape, isel_positions
 
 if TYPE_CHECKING:
     from collections.abc import Hashable, Sequence
@@ -45,6 +45,8 @@ class OMEZarrWrapper(DataWrapper):
         )
         self._positions: list[str] = []
         self._dataset_path: str = ""
+        self._arrays: dict[int | None, ZarrArray] = {}
+        self._stores: dict[int, Any] = {}
         self._dims, self._coords = self._detect_structure()
         super().__init__(self._group)
 
@@ -73,17 +75,24 @@ class OMEZarrWrapper(DataWrapper):
 
     @property
     def dtype(self) -> np.dtype:
-        group = self._group[self._positions[0]] if self._positions else self._group
-        arr = cast("ZarrArray", cast("ZarrGroup", group)[self._dataset_path])
-        return np.dtype(arr.dtype)
+        return np.dtype(self._array(0 if self._positions else None).dtype)
 
     def isel(self, index: Mapping[int, int | slice]) -> np.ndarray:
         if self._positions:
-            return self._isel_multiposition(index)
-        return self._isel_single(index)
+            return isel_positions(
+                index,
+                len(self._positions),
+                tuple(self.sizes().values()),
+                self.dtype,
+                self._read_position,
+            )
+        idx = tuple(index.get(i, slice(None)) for i in range(len(self._dims)))
+        return self._read_array(self._array(None), idx)
 
     def close(self) -> None:
         """Release any resources the underlying zarr store may be holding open."""
+        self._arrays.clear()
+        self._stores.clear()
         store = getattr(self._group, "store", None)
         close = getattr(store, "close", None)
         if callable(close):
@@ -258,47 +267,35 @@ class OMEZarrWrapper(DataWrapper):
 
     # ----------------------- Data Access -----------------------
 
-    def _isel_single(self, indexers: Mapping[int, int | slice]) -> np.ndarray:
-        arr = cast("ZarrArray", self._group[self._dataset_path])
-        idx = tuple(indexers.get(i, slice(None)) for i in range(len(self._dims)))
-        return self._read_array(arr, idx)
+    def _array(self, pos_idx: int | None) -> ZarrArray:
+        """Return (and cache) one position's array node, or the single image's.
 
-    def _isel_multiposition(self, indexers: Mapping[int, int | slice]) -> np.ndarray:
-        """Read one frame's worth of data across the synthetic "p" (position) axis.
-
-        Per `DataWrapper.isel`'s contract, an int index for "p" selects (and
-        squeezes) a single position -- the overwhelmingly common case, since
-        ndv only ever slider-indexes hidden dims with a plain int. A slice
-        instead keeps "p" as a real, stacked axis (e.g. if it were ever made
-        a visible axis), and is honored for its full range rather than
-        collapsing to a single position.
+        Resolving it walks the zarr hierarchy, so cache it: `isel` is called for
+        every frame and every slider move, and the layout is fixed at open time.
         """
-        pos_idx = indexers.get(0, slice(None))
-        inner_idx = tuple(
-            indexers.get(i, slice(None)) for i in range(1, len(self._dims))
-        )
-        if isinstance(pos_idx, slice):
-            start, stop, step = pos_idx.indices(len(self._positions))
-            indices = range(start, stop, step)
-            frames = [self._read_position(i, inner_idx) for i in indices]
-            if frames:
-                return np.stack(frames, axis=0)
-            return np.empty(
-                indexed_shape(tuple(self.sizes().values()), indexers), dtype=self.dtype
+        if (arr := self._arrays.get(pos_idx)) is None:
+            group = (
+                self._group
+                if pos_idx is None
+                else self._group[self._positions[pos_idx]]
             )
-        return self._read_position(pos_idx, inner_idx)
+            arr = cast("ZarrArray", cast("ZarrGroup", group)[self._dataset_path])
+            self._arrays[pos_idx] = arr
+        return arr
 
-    def _read_position(self, pos_idx: int, inner_idx: tuple) -> np.ndarray:
+    def _read_position(
+        self, pos_idx: int, indexers: Mapping[int, int | slice]
+    ) -> np.ndarray:
         if pos_idx < 0:
             pos_idx += len(self._positions)
         if not 0 <= pos_idx < len(self._positions):
             raise IndexError(f"Position index {pos_idx} out of range")
-        pos_group = cast("ZarrGroup", self._group[self._positions[pos_idx]])
-        arr = cast("ZarrArray", pos_group[self._dataset_path])
-        return self._read_array(arr, inner_idx)
+        inner_idx = tuple(
+            indexers.get(i, slice(None)) for i in range(len(self._dims) - 1)
+        )
+        return self._read_array(self._array(pos_idx), inner_idx)
 
-    @staticmethod
-    def _read_array(arr: ZarrArray, idx: tuple) -> np.ndarray:
+    def _read_array(self, arr: ZarrArray, idx: tuple) -> np.ndarray:
         shape = arr.metadata.shape
         assert shape is not None
         selected_shape = indexed_shape(shape, dict(enumerate(idx)))
@@ -313,7 +310,8 @@ class OMEZarrWrapper(DataWrapper):
             else index
             for index, size in zip(idx, shape, strict=True)
         )
-        try:
-            return np.asarray(arr.to_tensorstore()[normalized].read().result())
-        except ImportError:
-            return np.asarray(arr.to_zarr_python()[idx])
+        if (store := self._stores.get(id(arr))) is None:
+            # to_tensorstore() re-opens the array and re-reads its metadata, so
+            # keep the handle: every frame and slider move comes through here.
+            store = self._stores[id(arr)] = arr.to_tensorstore()
+        return np.asarray(store[normalized].read().result())

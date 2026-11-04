@@ -226,36 +226,6 @@ def capture_fingerprint(
     )
 
 
-def fingerprint_matches(core: CalibrationCore, expected: HardwareFingerprint) -> bool:
-    """Return whether the current optical state still matches ``expected``."""
-    try:
-        if str(core.getCameraDevice()) != expected.camera:
-            return False
-        if int(core.getBinning(expected.camera)) != expected.binning:
-            return False
-        if not np.isclose(
-            float(core.getMagnificationFactor()), expected.magnification, rtol=1e-12
-        ):
-            return False
-        if tuple(int(v) for v in core.getROI(expected.camera)) != expected.roi:
-            return False
-        if (
-            int(core.getImageHeight()),
-            int(core.getImageWidth()),
-        ) != expected.image_shape:
-            return False
-        if int(core.getNumberOfCameraChannels()) != expected.channel_count:
-            return False
-        if _current_config(core) != expected.pixel_size_config:
-            return False
-        return all(
-            str(core.getProperty(device, prop)) == value
-            for device, prop, value in expected.config_settings
-        )
-    except Exception:
-        return False
-
-
 def _is_acquiring(core: CalibrationCore, camera: str) -> bool:
     try:
         if core.isSequenceRunning(camera):
@@ -594,7 +564,6 @@ def deduce_pixel_size(matrix: NDArray[np.floating]) -> float:
 
 def _describe_fit(
     matrix: NDArray[np.float64],
-    image_shifts: NDArray[np.float64],
     residuals_px: NDArray[np.float64],
 ) -> AffineFitResult:
     """Package the least-squares 2 x 2 and its diagnostics for the GUI.
@@ -611,11 +580,9 @@ def _describe_fit(
     """
     determinant = float(np.linalg.det(matrix))
     residuals_px = np.asarray(residuals_px, dtype=np.float64)
-    residuals_um = residuals_px @ matrix.T
     residual_norms_px = np.linalg.norm(residuals_px, axis=1)
     pixel_size_x = float(np.linalg.norm(matrix[:, 0]))
     pixel_size_y = float(np.linalg.norm(matrix[:, 1]))
-    singular = np.linalg.svd(matrix, compute_uv=False)
     anisotropy = abs(pixel_size_x - pixel_size_y) / (
         0.5 * (pixel_size_x + pixel_size_y)
     )
@@ -625,18 +592,10 @@ def _describe_fit(
     matrix_condition = float(np.linalg.cond(matrix))
     return AffineFitResult(
         matrix=matrix,
-        residuals_um=residuals_um,
         residuals_px=residuals_px,
         pixel_size_um=float(np.sqrt(abs(determinant))),
-        pixel_size_x_um=pixel_size_x,
-        pixel_size_y_um=pixel_size_y,
-        singular_values=(float(singular[0]), float(singular[1])),
-        design_condition=float(np.linalg.cond(image_shifts)),
-        matrix_condition=matrix_condition,
-        anisotropy=float(anisotropy),
-        nonorthogonality_deg=float(nonorthogonality),
-        rotation_deg=float(np.degrees(np.arctan2(matrix[1, 0], matrix[0, 0]))),
         determinant=determinant,
+        rotation_deg=affine_to_measurements(matrix)[2],
         rms_residual_px=float(np.sqrt(np.mean(np.square(residual_norms_px)))),
         max_residual_px=float(np.max(residual_norms_px)),
         warnings=_diagnostic_warnings(
@@ -914,11 +873,11 @@ def _run_calibration(
     # Java zeroes the translation before handing the transform on; what is left
     # maps image displacement to stage displacement.
     matrix = np.asarray(second_approx[:, :2], dtype=np.float64)
-    fit = _describe_fit(matrix, corner_image, residuals_px)
+    fit = _describe_fit(matrix, residuals_px)
     _notify_fit(fit_callback, fit)
 
     _notify(progress, "finalize", 0.95)
-    raw_matrix, raw_size, _flat = normalize_for_mmcore(
+    raw_matrix, raw_size = normalize_for_mmcore(
         matrix, binning=fingerprint.binning, magnification=fingerprint.magnification
     )
     observations = tuple(

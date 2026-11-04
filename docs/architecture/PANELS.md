@@ -152,8 +152,8 @@ first if it isn't open, just as clicking its button would. The console
 exposes it as `panels`, so a new panel is reachable there with no extra code:
 
 ```python
-panels.focus_monitor          # opens the panel if needed, returns the widget
-dir(panels)                   # every panel key
+panels.focus_monitor  # opens the panel if needed, returns the widget
+dir(panels)  # every panel key
 acquire.panel_widget("focus_monitor")  # the widget, or None, without opening
 ```
 

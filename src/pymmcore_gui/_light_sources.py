@@ -81,31 +81,24 @@ def parse_channel_comments(path: str | Path, channel_group: str) -> ChannelDecla
         return {}
 
     declarations: ChannelDeclarations = defaultdict(ChannelDeclaration)
+    # an exposure line is "<marker>,<group>,<preset>,<value>"; a light-source
+    # line adds the device and property, so each marker has its own field count
+    fields = {EXPOSURE_COMMENT: 4, LIGHT_SOURCE_COMMENT: 6}
     for line in text.splitlines():
         # the header's "Format:" lines mention the markers but do not start with
         # them, so they are not mistaken for declarations
-        line = line.strip()
-        marker = line.split(",", 1)[0]
-        if marker not in _MARKERS:
+        parts = line.strip().split(",")
+        marker = parts[0]
+        if len(parts) != fields.get(marker, -1) or parts[1] != channel_group:
+            continue
+        try:
+            value = float(parts[-1])
+        except ValueError:
             continue
         if marker == EXPOSURE_COMMENT:
-            parts = line.split(",")
-            if len(parts) != 4 or parts[1] != channel_group:
-                continue
-            try:
-                declarations[parts[2]].exposure = float(parts[3])
-            except ValueError:
-                continue
+            declarations[parts[2]].exposure = value
         else:
-            parts = line.split(",")
-            if len(parts) != 6 or parts[1] != channel_group:
-                continue
-            _, _, preset, device, prop, raw_value = parts
-            try:
-                value = float(raw_value)
-            except ValueError:
-                continue
-            declarations[preset].light_source.append((device, prop, value))
+            declarations[parts[2]].light_source.append((parts[3], parts[4], value))
     return dict(declarations)
 
 

@@ -11,7 +11,7 @@ from pymmcore_plus.mda import FinishReason, RunState
 from pymmcore_gui._qt.QtCore import QEvent, Qt, QTimer, Signal
 from pymmcore_gui._qt.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QWidget
 from pymmcore_gui._theme import qcolor, theme
-from pymmcore_gui._utils import autofocus_kind
+from pymmcore_gui._utils import autofocus_kind, connect_direct
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -198,26 +198,9 @@ class MDAStatusWidget(QWidget):
         self._sequenceCanceled.connect(self._on_sequence_canceled)
         self._sequenceFinished.connect(self._on_sequence_finished)
 
-        events = self._runner.events
-        self._sequence_started_callback = self._relay_sequence_started
-        self._awaiting_event_callback = self._relay_awaiting_event
         self._event_started_callback = self._eventStarted.emit
-        self._frame_ready_callback = self._relay_frame_ready
-        # Older pymmcore-plus runners do not report autofocus at all.
-        self._autofocus_finished_signal = getattr(events, "autofocusFinished", None)
-        self._autofocus_finished_callback = self._relay_autofocus_finished
-        self._pause_toggled_callback = self._relay_pause_toggled
-        self._sequence_canceled_callback = self._relay_sequence_canceled
-        self._sequence_finished_callback = self._relay_sequence_finished
-        events.sequenceStarted.connect(self._sequence_started_callback)
-        events.awaitingEvent.connect(self._awaiting_event_callback)
-        events.eventStarted.connect(self._event_started_callback)
-        events.frameReady.connect(self._frame_ready_callback)
-        if self._autofocus_finished_signal is not None:
-            self._autofocus_finished_signal.connect(self._autofocus_finished_callback)
-        events.sequencePauseToggled.connect(self._pause_toggled_callback)
-        events.sequenceCanceled.connect(self._sequence_canceled_callback)
-        events.sequenceFinished.connect(self._sequence_finished_callback)
+        for signal, callback in self._runner_connections():
+            connect_direct(signal, callback)
         self.destroyed.connect(self._disconnect)
         self.hide()
         self._poll_status()
@@ -435,22 +418,22 @@ class MDAStatusWidget(QWidget):
             self._render()
         super().changeEvent(a0)
 
-    def _disconnect(self) -> None:
+    def _runner_connections(self) -> tuple[tuple[Any, Any], ...]:
+        """The runner signals this widget relays, paired with their handlers."""
         events = self._runner.events
-        callbacks: list[tuple[Any, Any]] = [
-            (events.sequenceStarted, self._sequence_started_callback),
-            (events.awaitingEvent, self._awaiting_event_callback),
+        return (
+            (events.sequenceStarted, self._relay_sequence_started),
+            (events.awaitingEvent, self._relay_awaiting_event),
             (events.eventStarted, self._event_started_callback),
-            (events.frameReady, self._frame_ready_callback),
-            (events.sequencePauseToggled, self._pause_toggled_callback),
-            (events.sequenceCanceled, self._sequence_canceled_callback),
-            (events.sequenceFinished, self._sequence_finished_callback),
-        ]
-        if self._autofocus_finished_signal is not None:
-            callbacks.append(
-                (self._autofocus_finished_signal, self._autofocus_finished_callback)
-            )
-        for signal, callback in callbacks:
+            (events.frameReady, self._relay_frame_ready),
+            (events.autofocusFinished, self._relay_autofocus_finished),
+            (events.sequencePauseToggled, self._relay_pause_toggled),
+            (events.sequenceCanceled, self._relay_sequence_canceled),
+            (events.sequenceFinished, self._relay_sequence_finished),
+        )
+
+    def _disconnect(self) -> None:
+        for signal, callback in self._runner_connections():
             with suppress(Exception):
                 signal.disconnect(callback)
 

@@ -13,12 +13,50 @@ from ndv.models import ChannelMode, LUTModel, RingBuffer
 
 import pymmcore_gui.widgets.image_preview._ndv_preview as preview_module
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
+from pymmcore_gui.widgets.image_preview._preview_base import ImagePreviewBase
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
     from pytestqt.qtbot import QtBot
 
     from pymmcore_gui.widgets.image_preview._snap_album import SnappedImage
+
+
+def test_worker_autofocus_flags_precede_snaps(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A complete autofocus burst can arrive before the GUI processes events."""
+    images: list[np.ndarray] = []
+
+    class Preview(ImagePreviewBase):
+        def append(self, data: np.ndarray) -> None:
+            images.append(data)
+
+    preview = Preview(None, mmcore)
+    qtbot.addWidget(preview)
+    recorded: list[object] = []
+    preview.snapRecorded.connect(recorded.append)
+    event = useq.MDAEvent(action=useq.SoftwareAutofocus(method="oughtafocus"))
+
+    def autofocus_burst() -> None:
+        events = mmcore.mda.events
+        events.sequenceStarted.emit(useq.MDASequence(), {})
+        events.eventStarted.emit(event)
+        mmcore.snapImage()
+        events.autofocusFinished.emit(event, Mock())
+        mmcore.snapImage()
+        events.sequenceFinished.emit(useq.MDASequence())
+
+    worker = threading.Thread(target=autofocus_burst)
+    worker.start()
+    worker.join()
+
+    assert not images
+    qtbot.waitUntil(lambda: len(images) == 1)
+    assert not recorded
+    assert not preview._is_mda_running
+    assert not preview._autofocus_running
+    preview.detach()
 
 
 def test_failed_viewer_construction_detaches_core_callbacks(

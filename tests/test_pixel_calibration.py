@@ -10,14 +10,13 @@ import pytest
 
 from pymmcore_gui._pixel_calibration import (
     CalibrationCancelled,
-    CalibrationCommitError,
     CalibrationOptions,
     PixelCalibrationError,
     affine_to_measurements,
-    commit_pixel_calibration,
     cross_correlate,
     deduce_pixel_size,
     fit_affine_with_translation,
+    flatten_affine,
     measure_displacement,
     normalize_for_mmcore,
     run_pixel_calibration,
@@ -171,13 +170,13 @@ def test_fit_affine_with_translation_rejects_collinear_points() -> None:
 def test_normalize_for_mmcore_accounts_for_binning_and_magnification() -> None:
     matrix = np.asarray([[0.8, 0.0], [0.0, 0.8]])
 
-    raw, size, flat = normalize_for_mmcore(matrix, binning=2, magnification=1.0)
+    raw, size = normalize_for_mmcore(matrix, binning=2, magnification=1.0)
 
     assert size == pytest.approx(0.4)
     assert raw == pytest.approx(matrix / 2)
-    assert flat == pytest.approx((0.4, 0.0, 0.0, 0.0, 0.4, 0.0))
+    assert flatten_affine(raw) == pytest.approx((0.4, 0.0, 0.0, 0.0, 0.4, 0.0))
 
-    raw, size, _flat = normalize_for_mmcore(matrix, binning=1, magnification=2.0)
+    raw, size = normalize_for_mmcore(matrix, binning=1, magnification=2.0)
     assert size == pytest.approx(1.6)
     assert raw == pytest.approx(matrix * 2)
 
@@ -256,8 +255,8 @@ class _SyntheticCore:
         self.moves: list[tuple[float, float]] = []
         self.snap_count = 0
         self.fail_snap_at: int | None = None
-        self.fail_affine_once = False
         self.mda = _IdleMDA()
+        # the routine must not write either of these; see the end-to-end test
         self.stored_size = float(np.sqrt(abs(np.linalg.det(self.true_matrix))))
         self.stored_affine: tuple[float, ...] = (
             float(self.true_matrix[0, 0]),
@@ -334,31 +333,6 @@ class _SyntheticCore:
 
     def getPixelSizeUm(self) -> float:
         return self.stored_size
-
-    def getAvailablePixelSizeConfigs(self) -> tuple[str, ...]:
-        return ("Resolution",)
-
-    def getPixelSizeUmByID(self, resolution_id: str) -> float:
-        assert resolution_id == "Resolution"
-        return self.stored_size
-
-    def getPixelSizeAffineByID(self, resolution_id: str) -> tuple[float, ...]:
-        assert resolution_id == "Resolution"
-        return self.stored_affine
-
-    def setPixelSizeUm(self, resolution_id: str, value: float) -> None:
-        assert resolution_id == "Resolution"
-        self.stored_size = value
-
-    def setPixelSizeAffine(self, resolution_id: str, value: tuple[float, ...]) -> None:
-        assert resolution_id == "Resolution"
-        if self.fail_affine_once:
-            self.fail_affine_once = False
-            raise RuntimeError("synthetic persistence failure")
-        self.stored_affine = value
-
-    def getPixelSizeAffine(self) -> tuple[float, ...]:
-        return self.stored_affine
 
 
 # --- end to end --------------------------------------------------------------
@@ -649,40 +623,6 @@ def test_calibration_rejects_a_multichannel_camera() -> None:
 
     with pytest.raises(PixelCalibrationError, match="one camera channel"):
         run_pixel_calibration(ColorCore(), _fast_options(), resolution_id="Resolution")
-
-
-# --- persistence -------------------------------------------------------------
-
-
-def test_commit_pixel_calibration_writes_a_measured_result() -> None:
-    core = _SyntheticCore()
-    result = run_pixel_calibration(core, _fast_options(), resolution_id="Resolution")
-    core.stored_size *= 0.99
-
-    commit_pixel_calibration(core, "Resolution", result)
-
-    assert core.stored_size == pytest.approx(result.raw_pixel_size_um)
-    assert np.asarray(core.stored_affine).reshape(2, 3)[:, :2] == pytest.approx(
-        result.raw_matrix
-    )
-
-
-def test_commit_pixel_calibration_rolls_back_partial_write() -> None:
-    core = _SyntheticCore()
-    result = run_pixel_calibration(core, _fast_options(), resolution_id="Resolution")
-    core.stored_size = 0.31
-    core.stored_affine = (0.31, 0.0, 0.0, 0.0, 0.31, 0.0)
-    old_size = core.stored_size
-    old_affine = core.stored_affine
-    core.fail_affine_once = True
-
-    with pytest.raises(CalibrationCommitError, match="synthetic persistence failure"):
-        commit_pixel_calibration(
-            core, "Resolution", result, allow_large_difference=True
-        )
-
-    assert core.stored_size == old_size
-    assert core.stored_affine == old_affine
 
 
 # --- noise and blur ----------------------------------------------------------

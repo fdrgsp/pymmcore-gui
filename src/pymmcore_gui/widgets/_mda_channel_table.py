@@ -280,26 +280,20 @@ class MDAChannelTable(CoreConnectedChannelTable):
         if visible != self.lightSourceVisible():
             self.setLightSourceVisible(visible)
 
-    def applyStoredSettings(self, rows: Iterable[int]) -> list[int]:
-        """Give each of ``rows`` its preset's stored settings.
-
-        Returns the rows the store has no settings for.
-        """
+    def applyStoredSettings(self, rows: Iterable[int]) -> None:
+        """Give each of ``rows`` its preset's stored settings."""
         table = self.table()
-        missing: list[int] = []
         applied = False
         for row in rows:
             key = _key_of(table.rowData(row))
             stored = self._store.get(*key) if self._store and key[1] else None
             if stored is None:
-                missing.append(row)
                 continue
             with signals_blocked(table):
                 self.setRowSettings(row, stored)
             applied = True
         if applied:
             self.valueChanged.emit()
-        return missing
 
     def storeRowSettings(self, row: int) -> None:
         """Store ``row``'s settings as those of its preset (a user edited it)."""

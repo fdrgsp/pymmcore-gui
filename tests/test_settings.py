@@ -15,6 +15,12 @@ from pymmcore_gui import _settings
 from pymmcore_gui._settings import MMGuiUserPrefsSource, SettingsV1
 
 
+@pytest.fixture(autouse=True)
+def _stable_memory_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep serialization defaults stable as the runner's free RAM changes."""
+    monkeypatch.setattr("pymmcore_gui._utils.system_memory_gb", lambda: (16.0, 10.0))
+
+
 def test_settings() -> None:
     settings = SettingsV1()
     assert settings.version == "1.0"

@@ -39,15 +39,11 @@ if TYPE_CHECKING:
 
     from pymmcore_widgets import InstallWidget
 
-    from pymmcore_gui._qt.QtGui import QResizeEvent, QShowEvent
+    from pymmcore_gui._qt.QtGui import QShowEvent
 
 LOADING_MSG: Final = "Looking for Micro-Manager releases…"
 
 # label, icon, button variant, handler on this page, InstallWidget QAction gating it
-#
-# "primary" for the action buttons and "danger" for the destructive one is what
-# the other tab-page toolbars do (Hardware Setup's New/Load/Save, Configurations'
-# two Save buttons) -- leaving only Install primary made it the odd one out.
 _ACTIONS: Final = (
     ("Refresh", "material-symbols:refresh-rounded", "primary", "_refresh", ""),
     ("Reveal", "material-symbols:search-rounded", "primary", "_reveal", "_act_reveal"),
@@ -73,39 +69,6 @@ _ACTIONS: Final = (
         "_act_uninstall",
     ),
 )
-
-
-def _forget_deleted_installs() -> None:
-    """Drop no-longer-existing installs from pymmcore-plus's discovery cache.
-
-    ``find_micromanager(return_first=False)`` returns the module-level
-    ``_DISCOVERED_MMS`` dict rather than what the current scan actually found,
-    and nothing ever evicts from it -- so an install stays discoverable for the
-    rest of the process after being deleted, and a table re-listing itself puts
-    the row it just removed straight back.
-
-    Guarded, and reaching into a private name: the day pymmcore-plus stops
-    needing this, it should quietly become a no-op rather than a crash.
-    """
-    with suppress(Exception):
-        from pymmcore_plus import _discovery
-
-        cache = _discovery._DISCOVERED_MMS
-        for path in [p for p in cache if not p.is_dir()]:
-            del cache[path]
-
-
-def _test_adapters_note() -> str:
-    """Upstream's warning that this platform only gets the test device adapters.
-
-    Empty where full Micro-Manager nightly builds exist (Windows, Intel macOS).
-    """
-    with suppress(Exception):
-        from pymmcore_widgets import _install_widget
-
-        if not getattr(_install_widget, "FULL_RELEASES", True):
-            return str(getattr(_install_widget, "TEST_ADAPTERS_NOTE", ""))
-    return ""
 
 
 class InstallReleaseDialog(QDialog):
@@ -197,13 +160,8 @@ class InstallationPage(TabPage):
     MicroManagerGUI (which owns the core) connects this to release any device
     adapter DLL one of these paths is about to delete out from under a still-
     loaded device -- see the note on ``_uninstall``. A signal rather than a
-    plain callable attribute so the connection's lifetime is Qt's to manage
-    (tied to both endpoints' C++ objects) instead of a bound method sitting in
-    a Python attribute, which -- since ``MicroManagerGUI`` back-references this
-    page as one of its own attributes -- would otherwise close a reference
-    cycle over ``self`` that only the GC's (non-deterministic) cycle collector
-    breaks, not the deterministic ``deleteLater``/``close`` teardown every
-    other cross-page wire-up here relies on.
+    plain callable attribute so the connection's lifetime is Qt's to manage: a
+    bound method in an attribute would close a reference cycle over ``self``.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -318,13 +276,9 @@ class InstallationPage(TabPage):
     def showEvent(self, a0: QShowEvent | None) -> None:
         super().showEvent(a0)
         if self._widget is None:
-            # Deferred by a tick so the page (and the busy overlay) paint
+            # Deferred by a tick so the page paints
             # before the blocking network fetch starts.
             QTimer.singleShot(0, self.ensure_loaded)
-
-    def resizeEvent(self, a0: QResizeEvent | None) -> None:
-        super().resizeEvent(a0)
-        self._overlay.setGeometry(self.rect())
 
     def _apply_button_icons(self) -> None:
         default_color = qcolor(theme().text_secondary).name()
@@ -363,9 +317,8 @@ class InstallationPage(TabPage):
 
         The wrapped widget owns the machinery -- the subprocess thread, the
         streamed output box, the table refresh when it finishes -- so this only
-        decides *what* to install, which is the part its hidden inline row used
-        to do. While a download runs the button turns into Cancel, matching
-        what that row did.
+        decides *what* to install. While a download runs the button turns into
+        Cancel.
         """
         if (widget := self.ensure_loaded()) is None:
             return
@@ -375,7 +328,8 @@ class InstallationPage(TabPage):
 
         combo = widget.version_combo
         releases = [combo.itemText(i) for i in range(combo.count())]
-        dialog = InstallReleaseDialog(releases, note=_test_adapters_note(), parent=self)
+        note = widget.install_note.text() if widget.install_note is not None else ""
+        dialog = InstallReleaseDialog(releases, note=note, parent=self)
         try:
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
@@ -398,9 +352,7 @@ class InstallationPage(TabPage):
         Deliberately not delegated to the wrapped table's own uninstall, which
         deletes with ``ignore_errors=True`` -- an install that could *not* be
         removed (owned by another user, or with adapters still mapped into a
-        running process on Windows) then looks exactly like one that was -- and
-        which re-lists from a discovery cache still holding what it just
-        deleted, so the row reappears as if nothing happened.
+        running process on Windows) then looks exactly like one that was.
 
         ``aboutToUninstall`` fires after the user confirms but before any
         deletion, so a device adapter DLL the running core still has loaded
@@ -445,7 +397,6 @@ class InstallationPage(TabPage):
                     shutil.rmtree(path)
                 except Exception as e:
                     failures[path] = str(e)
-            _forget_deleted_installs()
             table.refresh()
 
         if failures:

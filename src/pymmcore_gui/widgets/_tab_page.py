@@ -10,7 +10,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 from pymmcore_gui._theme import theme
-from pymmcore_gui.widgets._sidebar import Sidebar, SidebarPosition
+from pymmcore_gui.widgets._sidebar import Sidebar
 from pymmcore_gui.widgets._tab_toolbar import TabToolBar
 
 
@@ -37,7 +37,7 @@ class TabPage(QWidget):
         super().__init__(parent)
 
         self.toolbar = TabToolBar()
-        self.left = Sidebar(SidebarPosition.LEFT)
+        self.left = Sidebar()
         self.content = QWidget()
         self.content.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -54,21 +54,17 @@ class TabPage(QWidget):
         self._h_split.setStretchFactor(0, 0)
         self._h_split.setStretchFactor(1, 1)
 
-        self._page_layout = QVBoxLayout(self)
-        self._page_layout.setContentsMargins(0, 0, 0, 0)
-        self._page_layout.setSpacing(0)
-        self._page_layout.addWidget(self.toolbar)
-        self._page_layout.addWidget(self._h_split)
+        page_layout = QVBoxLayout(self)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.setSpacing(0)
+        page_layout.addWidget(self.toolbar)
+        page_layout.addWidget(self._h_split)
 
         self._seed_sizes()
 
     def add_content_widget(self, widget: QWidget) -> None:
         """Add a widget to the central content area."""
         self._content_layout.addWidget(widget)
-
-    def add_toolbar_row(self, widget: QWidget) -> None:
-        """Insert *widget* as a full-width row directly below ``toolbar``."""
-        self._page_layout.insertWidget(self._page_layout.indexOf(self._h_split), widget)
 
     def _seed_sizes(self) -> None:
         """Seed initial splitter sizes from the theme."""

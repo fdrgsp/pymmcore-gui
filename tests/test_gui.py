@@ -119,7 +119,6 @@ from pymmcore_gui.widgets._startup import StartupDialog
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
 
-    from pymmcore_plus.mda import SinkProtocol
     from pymmcore_plus.model import Device
     from pymmcore_widgets.mda import CoreMDATabs
     from pymmcore_widgets.mda._core_grid import CoreConnectedGridPlanWidget
@@ -816,7 +815,7 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert channels_section.expanded
     channels_section.set_expanded(False)
     assert channels_section.checked
-    assert not channels_section.content_visible
+    assert not channels_section.expanded
     channels_section.set_checked(False)
     assert not channels_section.checked
     assert not channels_section.expanded
@@ -3111,12 +3110,12 @@ def test_acquire_panel_buttons_follow_zoom(mmcore: CMMCorePlus, qtbot: QtBot) ->
 
     try:
         set_zoom(1.5)
-        expected = acquire_toolbar_module._icon_size()
+        expected = acquire_toolbar_module.toolbar_icon_size()
         for info in PANELS:
             assert page.panel_button(info.key).iconSize() == expected
 
         set_zoom(0.8)
-        expected = acquire_toolbar_module._icon_size()
+        expected = acquire_toolbar_module.toolbar_icon_size()
         for info in PANELS:
             assert page.panel_button(info.key).iconSize() == expected
     finally:
@@ -3681,6 +3680,61 @@ def test_preferences_button_opens_dialog(mmcore: CMMCorePlus, qtbot: QtBot) -> N
     assert len(opened) == 1
 
 
+def test_window_toolbar_keeps_its_right_inset_across_zoom(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """The theme toggle must stay lined up with the page toolbar at any zoom.
+
+    ``QToolBarLayout`` recomputes its own contents margins from the style's
+    metrics whenever the style changes, which lands *after* the window has
+    handled that event -- so re-applying the inset inline put the style's much
+    smaller default straight back, and the two toolbars drifted apart on the
+    first zoom change.
+    """
+    set_theme(DARK_THEME)
+    win = MicroManagerGUI(mmcore=mmcore)
+    qtbot.addWidget(win)
+
+    def right_inset() -> int:
+        layout = win._toolbar.layout()
+        assert layout is not None
+        return layout.contentsMargins().right()
+
+    try:
+        assert right_inset() == theme().sp_sm
+        for zoom in (1.25, 1.5, 0.8):
+            set_zoom(zoom)
+            qtbot.waitUntil(lambda: right_inset() == theme().sp_sm)
+    finally:
+        set_theme(DARK_THEME)  # restores the default zoom too
+
+
+def test_theme_toggle_stays_square_across_zoom(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """The theme toggle must stay square at every zoom, not just at its hint.
+
+    Qt does not always hand ``CT_PushButton`` a ``QStyleOptionButton``, so
+    deciding "icon-only" from the option alone sent some calls down the
+    label-padding branch and the button came back a wide rectangle. Assert the
+    laid-out width: the size hint stayed square throughout.
+    """
+    set_theme(DARK_THEME)
+    win = MicroManagerGUI(mmcore=mmcore)
+    qtbot.addWidget(win)
+    win.show()
+    qtbot.waitExposed(win)
+
+    btn = win._theme_btn
+    try:
+        for zoom in (1.0, 1.25, 1.5, 0.8):
+            set_zoom(zoom)
+            qtbot.waitUntil(lambda: btn.width() == btn.sizeHint().width())
+            assert btn.width() == btn.height(), f"stretched at zoom {zoom}"
+    finally:
+        set_theme(DARK_THEME)  # restores the default zoom too
+
+
 def test_theme_toggle_button_matches_other_toolbar_icon_buttons(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
@@ -3719,6 +3773,9 @@ def test_theme_toggle_button_matches_other_toolbar_icon_buttons(
             strict=True,
         )
     )
+    win._theme_btn.click()
+    assert win._is_dark
+    assert _icon_avg_rgb(win._theme_btn.icon(), QSize(18, 18)) != moon_rgb
     set_theme(DARK_THEME)
 
 
@@ -4086,7 +4143,7 @@ def test_collapsible_mda_disables_every_editor_during_acquisition(
 ) -> None:
     """All sections — axes, Saving, Settings — lock during a run and unlock after.
 
-    Extends the channels-only assertion: ``set_editor_enabled`` must sweep every
+    Extends the channels-only assertion: ``_enable_tabs`` must sweep every
     axis section, the Settings body, and the Saving section so nothing stays
     editable while an acquisition is in flight.
     """
@@ -4663,16 +4720,15 @@ def test_acquire_viewer_records_frame_metadata_regardless_of_follow_lock(
     n_before = len(record.acquisition.frame_meta)
     assert n_before >= 1  # the one real frame from the run above
 
-    frame = np.zeros((4, 4), dtype="uint16")
     event = next(iter(sequence))
     meta = frame_metadata(mmcore, runner_time_ms=1.0)
 
     manager._follow_acquisition = False
-    manager._on_frame_ready(frame, event, meta)
+    manager._on_frame_ready(event, meta)
     assert len(record.acquisition.frame_meta) == n_before + 1
 
     manager._follow_acquisition = True
-    manager._on_frame_ready(frame, event, meta)
+    manager._on_frame_ready(event, meta)
     assert len(record.acquisition.frame_meta) == n_before + 2
 
 
@@ -4693,25 +4749,6 @@ class _FakeViewer:
 
     def close(self) -> None:
         pass
-
-
-def test_runner_sink_compatibility_for_released_pymmcore_plus() -> None:
-    """The declared dependency floor predates get_sink()/release_sink()."""
-    sink = cast("SinkProtocol", object())
-    legacy_runner = SimpleNamespace(_sink=sink, is_running=lambda: False)
-
-    assert acquire_viewers_module._runner_sink(legacy_runner) is sink
-    assert acquire_viewers_module._release_runner_sink(legacy_runner, sink)
-    assert legacy_runner._sink is None
-
-    newer_sink = cast("SinkProtocol", object())
-    legacy_runner._sink = newer_sink
-    assert not acquire_viewers_module._release_runner_sink(legacy_runner, sink)
-    assert legacy_runner._sink is newer_sink
-
-    legacy_runner.is_running = lambda: True
-    assert not acquire_viewers_module._release_runner_sink(legacy_runner, newer_sink)
-    assert legacy_runner._sink is newer_sink
 
 
 def test_acquire_closing_viewer_releases_its_sink(

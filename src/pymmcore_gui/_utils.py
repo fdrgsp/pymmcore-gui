@@ -3,17 +3,33 @@ from __future__ import annotations
 import urllib.error
 import urllib.request
 from functools import cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import psutil
 
+from pymmcore_gui._qt.QtCore import Qt
+
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     from pymmcore_plus import CMMCorePlus
     from useq import MDAEvent
 
 GH_REPO_URL = "http://github.com/pymmcore-plus/pymmcore-gui"
+
+
+def connect_direct(signal: Any, callback: Callable[..., Any]) -> None:
+    """Connect `callback` on the emitting thread, whatever signaler `signal` is.
+
+    A psygnal signaler has no connection-type argument; it calls back on the
+    emitting thread regardless, which is what the direct connection asks Qt for.
+    """
+    try:
+        signal.connect(callback, Qt.ConnectionType.DirectConnection)
+    except TypeError:  # pragma: no cover - psygnal signaler
+        signal.connect(callback)
+
 
 _BYTES_PER_GB = 1024**3
 
@@ -49,6 +65,30 @@ def system_memory_gb() -> tuple[float, float]:
     """
     vm = psutil.virtual_memory()
     return vm.total / _BYTES_PER_GB, vm.available / _BYTES_PER_GB
+
+
+def isel_positions(
+    indexers: Mapping[int, int | slice],
+    n_positions: int,
+    sizes: tuple[int, ...],
+    dtype: np.dtype,
+    read_one: Callable[[int, Mapping[int, int | slice]], np.ndarray],
+) -> np.ndarray:
+    """Read one frame per selected position, stacking only for a slice index.
+
+    Per `DataWrapper.isel`'s contract an int index for the synthetic position
+    axis selects (and squeezes) a single position -- the common case, since ndv
+    slider-indexes hidden dims with a plain int. A slice keeps it a real,
+    stacked axis and is honored over its full range.
+    """
+    pos_idx = indexers.get(0, slice(None))
+    inner = {i - 1: v for i, v in indexers.items() if i != 0}
+    if isinstance(pos_idx, slice):
+        frames = [read_one(i, inner) for i in range(n_positions)[pos_idx]]
+        if frames:
+            return np.stack(frames, axis=0)
+        return np.empty(indexed_shape(sizes, indexers), dtype=dtype)
+    return read_one(pos_idx, inner)
 
 
 def indexed_shape(

@@ -7,7 +7,7 @@ from pymmcore_plus import CMMCorePlus
 
 from pymmcore_gui._qt.QtCore import Qt, QTimerEvent, Signal
 from pymmcore_gui._qt.QtWidgets import QWidget
-from pymmcore_gui._utils import autofocus_kind
+from pymmcore_gui._utils import autofocus_kind, connect_direct
 from pymmcore_gui.widgets.image_preview._snap_album import SnappedImage
 
 _DEFAULT_WAIT = 10
@@ -46,7 +46,7 @@ class ImagePreviewBase(QWidget):
         # set while an autofocus event is in flight, during which a snapped
         # image is a routine's diagnostic image rather than acquisition data
         self._autofocus_running: bool = False
-        self._mmc: CMMCorePlus | None = mmcore
+        self._mmc: CMMCorePlus | None = None
         self._snapped.connect(self._on_snapped)
         self.attach(mmcore)
 
@@ -61,41 +61,30 @@ class ImagePreviewBase(QWidget):
         # thread that snapped rather than whenever the GUI thread gets round to
         # a queued call -- otherwise half the images read back as duplicates of
         # a later one. `_on_image_snapped` relays the array it read to the GUI
-        # thread. A non-Qt signaler calls back on the emitting thread anyway.
-        try:
-            ev.imageSnapped.connect(
-                self._on_image_snapped, Qt.ConnectionType.DirectConnection
-            )
-        except TypeError:  # pragma: no cover - psygnal signaler
-            ev.imageSnapped.connect(self._on_image_snapped)
+        # thread.
+        connect_direct(ev.imageSnapped, self._on_image_snapped)
         ev.continuousSequenceAcquisitionStarted.connect(self._on_streaming_start)
         ev.sequenceAcquisitionStarted.connect(self._on_streaming_start)
         ev.sequenceAcquisitionStopped.connect(self._on_streaming_stop)
         ev.exposureChanged.connect(self._on_exposure_changed)
         ev.systemConfigurationLoaded.connect(self._on_system_config_loaded)
         ev.roiSet.connect(self._on_roi_set)
-        ev.propertyChanged.connect(self._on_property_changed)
         # A preview created mid-run missed sequenceStarted, and without this
         # would take every frame of the acquisition for an ordinary snap.
         self._is_mda_running = core.mda.is_running()
-        self._mda_started_callback = lambda: setattr(self, "_is_mda_running", True)
-        self._mda_finished_callback = self._on_mda_finished
-        core.mda.events.sequenceStarted.connect(self._mda_started_callback)
-        core.mda.events.sequenceFinished.connect(self._mda_finished_callback)
-        self._event_started_callback = self._on_mda_event_started
-        core.mda.events.eventStarted.connect(self._event_started_callback)
-        # ``autofocusFinished`` is newer than the rest of the runner's signals.
-        self._af_finished_signal = getattr(core.mda.events, "autofocusFinished", None)
-        self._af_finished_callback = self._on_autofocus_finished
-        if self._af_finished_signal is not None:
-            self._af_finished_signal.connect(self._af_finished_callback)
+        # Update acquisition flags before the next snap reads them.
+        events = core.mda.events
+        connect_direct(events.sequenceStarted, self._on_mda_started)
+        connect_direct(events.sequenceFinished, self._on_mda_finished)
+        connect_direct(events.eventStarted, self._on_mda_event_started)
+        connect_direct(events.autofocusFinished, self._on_autofocus_finished)
 
         self._mmc = core
 
     def detach(self) -> None:
         """Detach this widget from events in `core`."""
         if self._mmc is None:
-            return  # pragma: no cover
+            return
         core, self._mmc = self._mmc, None
         if self._timer_id is not None:
             self.killTimer(self._timer_id)
@@ -110,28 +99,14 @@ class ImagePreviewBase(QWidget):
             (ev.exposureChanged, self._on_exposure_changed),
             (ev.systemConfigurationLoaded, self._on_system_config_loaded),
             (ev.roiSet, self._on_roi_set),
-            (ev.propertyChanged, self._on_property_changed),
-            (
-                core.mda.events.sequenceStarted,
-                getattr(self, "_mda_started_callback", None),
-            ),
-            (
-                core.mda.events.sequenceFinished,
-                getattr(self, "_mda_finished_callback", None),
-            ),
-            (
-                core.mda.events.eventStarted,
-                getattr(self, "_event_started_callback", None),
-            ),
-            (
-                getattr(self, "_af_finished_signal", None),
-                getattr(self, "_af_finished_callback", None),
-            ),
+            (core.mda.events.sequenceStarted, self._on_mda_started),
+            (core.mda.events.sequenceFinished, self._on_mda_finished),
+            (core.mda.events.eventStarted, self._on_mda_event_started),
+            (core.mda.events.autofocusFinished, self._on_autofocus_finished),
         )
         for signal, callback in connections:
-            if signal is not None and callback is not None:
-                with suppress(Exception):
-                    signal.disconnect(callback)
+            with suppress(Exception):
+                signal.disconnect(callback)
 
     @abstractmethod
     def append(self, data: np.ndarray) -> None:
@@ -203,6 +178,9 @@ class ImagePreviewBase(QWidget):
         self._is_mda_running = False
         self._autofocus_running = False
 
+    def _on_mda_started(self) -> None:
+        self._is_mda_running = True
+
     def _on_streaming_start(self) -> None:
         if (core := self._mmc) is not None:
             wait = int(core.getExposure()) or _DEFAULT_WAIT
@@ -217,7 +195,4 @@ class ImagePreviewBase(QWidget):
         pass
 
     def _on_roi_set(self) -> None:
-        pass
-
-    def _on_property_changed(self, dev: str, prop: str, value: str) -> None:
         pass

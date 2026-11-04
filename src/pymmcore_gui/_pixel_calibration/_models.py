@@ -60,10 +60,6 @@ class StageRestoreError(PixelCalibrationError):
         )
 
 
-class CalibrationCommitError(PixelCalibrationError):
-    """Raised when committing or rolling back MMCore calibration data fails."""
-
-
 @dataclass(frozen=True)
 class HardwareFingerprint:
     """Hardware and optical state in which a calibration was measured."""
@@ -112,6 +108,9 @@ class AffineFitResult:
     ``residuals_px`` and the RMS and worst values derived from it are the
     translation-aware residuals the acceptance check uses.
 
+    ``rotation_deg`` comes from :func:`affine_to_measurements`, so it always
+    agrees with the angle the calibration panel reports.
+
     Four corner measurements feeding a six-parameter affine leave only one
     residual degree of freedom per output axis. A bad measurement is therefore
     spread across all four residuals rather than isolated at its source; the
@@ -120,18 +119,10 @@ class AffineFitResult:
     """
 
     matrix: NDArray[np.float64]
-    residuals_um: NDArray[np.float64]
     residuals_px: NDArray[np.float64]
     pixel_size_um: float
-    pixel_size_x_um: float
-    pixel_size_y_um: float
-    singular_values: tuple[float, float]
-    design_condition: float
-    matrix_condition: float
-    anisotropy: float
-    nonorthogonality_deg: float
-    rotation_deg: float
     determinant: float
+    rotation_deg: float
     rms_residual_px: float
     max_residual_px: float
     warnings: tuple[CalibrationWarning, ...] = ()

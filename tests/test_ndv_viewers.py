@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import gc
 import threading
+import weakref
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
@@ -55,6 +56,29 @@ def test_stream_dimension_bridge_marshals_to_gui_thread(
     assert callback_threads == []
     qtbot.waitUntil(lambda: bool(callback_threads))
     assert callback_threads == [threading.get_ident()]
+
+
+def test_frame_relay_releases_pixels_before_gui_dispatch(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Only metadata should stay queued when the GUI cannot keep up."""
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    manager = AcquireViewersManager(CDockManager(parent), mmcore, parent=parent)
+    frames: list[weakref.ReferenceType[np.ndarray]] = []
+
+    def emit_frame() -> None:
+        frame = np.zeros((8, 8), dtype=np.uint16)
+        frames.append(weakref.ref(frame))
+        mmcore.mda.events.frameReady.emit(frame, useq.MDAEvent(), {})
+
+    worker = threading.Thread(target=emit_frame)
+    worker.start()
+    worker.join()
+
+    assert frames[0]() is None
+    qtbot.wait(0)
+    manager._disconnect()
 
 
 class _FakeViewer(ndv.ArrayViewer):

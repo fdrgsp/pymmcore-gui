@@ -78,9 +78,10 @@ from pymmcore_gui.widgets._installation import InstallationPage
 from pymmcore_gui.widgets._mda_status import MDAStatusWidget
 from pymmcore_gui.widgets._panels import PanelKey
 from pymmcore_gui.widgets._startup import StartupChoice, StartupDialog
+from pymmcore_gui.widgets._toolbars import toolbar_icon_size
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from pymmcore_gui._app import MMQApplication
     from pymmcore_gui._notification_manager import Notification
@@ -89,6 +90,21 @@ if TYPE_CHECKING:
 
 RESOURCES = Path(__file__).parent / "resources"
 ICON = RESOURCES / ("icon.ico" if sys.platform.startswith("win") else "logo.png")
+
+
+def _write_config(
+    hardware: HardwareSetupPage,
+    commit: Callable[[], None],
+    mark_saved: Callable[[], None],
+) -> bool:
+    # Ask first: committing to real hardware can block even if saving is cancelled.
+    if not (path := hardware.prompt_save_path()):
+        return False
+    commit()
+    if hardware.save_to(path):
+        mark_saved()
+        return True
+    return False
 
 
 def apply_saved_appearance() -> bool:
@@ -261,6 +277,7 @@ class ThemeToggleButton(QPushButton):
         self._is_dark = is_dark
         self.setFlat(True)
         self.setProperty("variant", "subtle")
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.setToolTip("Toggle light/dark theme")
         self._apply_icon()
 
@@ -276,11 +293,8 @@ class ThemeToggleButton(QPushButton):
             else "material-symbols:dark-mode-rounded"
         )
         color = qcolor(theme().text_secondary).name()
-        self.setIcon(QIconifyIcon(name, color=color))
-        # the panel toolbar buttons' icon size, so the style now sizes this
-        # button the same way they are: square, and scaling with the zoom level
-        size = theme().scaled(20)
-        self.setIconSize(QSize(size, size))
+        set_source_icon(self, QIconifyIcon(name, color=color))
+        self.setIconSize(toolbar_icon_size())
 
     def changeEvent(self, e: QEvent | None) -> None:
         if e is not None and e.type() == QEvent.Type.StyleChange:
@@ -380,6 +394,12 @@ class MicroManagerGUI(QMainWindow):
 
     def __init__(self, *, mmcore: CMMCorePlus | None = None) -> None:
         super().__init__()
+
+        # Applying the saved appearance can already start this timer.
+        self._toolbar_metrics_timer = QTimer(self)
+        self._toolbar_metrics_timer.setSingleShot(True)
+        self._toolbar_metrics_timer.setInterval(0)
+        self._toolbar_metrics_timer.timeout.connect(self._apply_toolbar_metrics)
 
         self._apply_saved_appearance()
 
@@ -1008,26 +1028,19 @@ class MicroManagerGUI(QMainWindow):
 
         Returns True if a file was written, False if cancelled or on error.
         """
-        # Where to save is asked first: the commit below blocks the GUI thread,
-        # and on real hardware there is no reason to spend that time before
-        # learning the user meant to cancel.
-        if not (path := self._hardware.prompt_save_path()):
-            return False
-        self._configurations.commit_to_core()
-        if self._hardware.save_to(path):
-            self._configurations.mark_saved()
-            return True
-        return False
+        return _write_config(
+            self._hardware,
+            self._configurations.commit_to_core,
+            self._configurations.mark_saved,
+        )
 
     def _save_current_configuration(self) -> bool:
         """Commit the selected configuration editor, then write the full .cfg."""
-        if not (path := self._hardware.prompt_save_path()):
-            return False
-        self._configurations.commit_current_to_core()
-        if self._hardware.save_to(path):
-            self._configurations.mark_current_saved()
-            return True
-        return False
+        return _write_config(
+            self._hardware,
+            self._configurations.commit_current_to_core,
+            self._configurations.mark_current_saved,
+        )
 
     def _apply_toolbar_metrics(self) -> None:
         """Inset the toolbar's right edge to match a page's own toolbar.
@@ -1035,6 +1048,11 @@ class MicroManagerGUI(QMainWindow):
         `TabToolBar` insets its contents by ``sp_sm``; a bare `QToolBar` uses
         the style's much smaller default, so the theme toggle would sit closer
         to the window edge than the page toolbar buttons directly below it.
+
+        Deferred on a style change (see `changeEvent`): ``QToolBarLayout``
+        recomputes its own margins from the style's metrics *after* the window
+        handles the event, which would otherwise put the default straight back
+        and leave the two toolbars misaligned at any zoom but the first.
         """
         # StyleChange can arrive while the window is still being built.
         toolbar = getattr(self, "_toolbar", None)
@@ -1044,7 +1062,7 @@ class MicroManagerGUI(QMainWindow):
 
     def changeEvent(self, a0: QEvent | None) -> None:
         if a0 is not None and a0.type() == QEvent.Type.StyleChange:
-            self._apply_toolbar_metrics()
+            self._toolbar_metrics_timer.start()
         super().changeEvent(a0)
 
     def _toggle_theme(self) -> None:

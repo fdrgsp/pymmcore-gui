@@ -19,8 +19,6 @@ from pymmcore_gui._ome_tiff_wrapper import OMETiffWrapper
 from pymmcore_gui._ome_zarr_wrapper import OMEZarrWrapper
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
-
     from ndv.models import DataWrapper
     from pymmcore_plus.metadata import SummaryMetaV1
 
@@ -48,7 +46,7 @@ class LoadedAcquisition:
 
     Parameters
     ----------
-    wrapper : DataWrapper
+    wrapper : OMETiffWrapper | OMEZarrWrapper
         The lazy, ndv-compatible data. Pass this directly as the `data`
         argument to `ndv.ArrayViewer`/`MMArrayViewer` -- `DataWrapper.create`
         returns an already-a-`DataWrapper` argument unchanged, so no data is
@@ -71,7 +69,7 @@ class LoadedAcquisition:
         A display title for the viewer tab (`source_path.name`).
     """
 
-    wrapper: DataWrapper
+    wrapper: OMETiffWrapper | OMEZarrWrapper
     sequence: MDASequence | None
     record: AcquisitionRecord | None
     source_path: Path
@@ -79,9 +77,7 @@ class LoadedAcquisition:
 
     def close(self) -> None:
         """Release the wrapper's underlying file handle(s)/zarr store."""
-        close = getattr(self.wrapper, "close", None)
-        if callable(close):
-            close()
+        self.wrapper.close()
 
 
 def supports_path(path: str | Path) -> bool:
@@ -99,17 +95,15 @@ def open_acquisition(path: str | Path) -> LoadedAcquisition:
         If `path` isn't a format this loader recognizes, or fails to open.
     """
     path = Path(path)
-    wrapper: DataWrapper
-    if OMETiffWrapper.supports(path):
-        try:
-            wrapper = OMETiffWrapper(path)
-        except Exception as e:
-            raise ValueError(f"Failed to open OME-TIFF acquisition {path}: {e}") from e
-    elif OMEZarrWrapper.supports(path):
-        try:
-            wrapper = OMEZarrWrapper(path)
-        except Exception as e:
-            raise ValueError(f"Failed to open OME-Zarr acquisition {path}: {e}") from e
+    for cls, label in ((OMETiffWrapper, "OME-TIFF"), (OMEZarrWrapper, "OME-Zarr")):
+        if cls.supports(path):
+            try:
+                wrapper: OMETiffWrapper | OMEZarrWrapper = cls(path)
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to open {label} acquisition {path}: {e}"
+                ) from e
+            break
     else:
         raise ValueError(f"Not a supported acquisition: {path}")
 
@@ -134,14 +128,8 @@ def _recover_summary_metadata(
     Missing or malformed metadata leaves the acquisition viewable, with no sequence
     to reuse and export metadata derived from the data wrapper.
     """
-    global_metadata = cast(
-        "Callable[[str], Mapping[str, Any] | None] | None",
-        getattr(wrapper, "global_metadata", None),
-    )
-    if not callable(global_metadata):
-        return None, None
     try:
-        meta = global_metadata(_PYMMCORE_PLUS_NAMESPACE)
+        meta = wrapper.global_metadata(_PYMMCORE_PLUS_NAMESPACE)
         if not meta:
             return None, None
         summary_meta = meta.get("summary_metadata")

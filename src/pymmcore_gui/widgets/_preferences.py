@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Final
 from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._layouts import RESERVED_LAYOUT_NAMES, available_layouts
-from pymmcore_gui._qt.QtCore import QEvent, QSize, Qt
+from pymmcore_gui._qt.QtCore import QEvent, Qt
 from pymmcore_gui._qt.QtGui import QCursor
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractItemView,
@@ -44,6 +44,7 @@ from pymmcore_gui._settings import Settings
 from pymmcore_gui._theme import qcolor, theme
 from pymmcore_gui._utils import system_memory_gb
 from pymmcore_gui.widgets._panels import PANELS
+from pymmcore_gui.widgets._toolbars import toolbar_icon_size
 
 if TYPE_CHECKING:
     from pymmcore_gui.widgets._acquire import AcquirePage
@@ -102,11 +103,7 @@ class PreferencesButton(QPushButton):
     def _apply_icon(self) -> None:
         color = qcolor(theme().text_secondary).name()
         self.setIcon(QIconifyIcon(self._ICON, color=color))
-        # Same size as the other Acquire toolbar icon buttons
-        # (``widgets._toolbars._icon_size``); kept in sync manually since
-        # importing that private helper across modules isn't worth it here.
-        size = theme().scaled(20)
-        self.setIconSize(QSize(size, size))
+        self.setIconSize(toolbar_icon_size())
 
     def changeEvent(self, e: QEvent | None) -> None:
         if e is not None and e.type() == QEvent.Type.StyleChange:

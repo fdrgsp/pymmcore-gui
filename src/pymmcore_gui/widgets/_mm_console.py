@@ -98,18 +98,8 @@ class MMConsole(QtConsole):
         }
         mmc = self._mmc
         # Prefer the actual owning window, including custom hosts.
-        owner = QWidget.window(self)
-        candidates = [owner, *QApplication.topLevelWidgets()]
-        window = next(
-            (
-                wdg
-                for wdg in candidates
-                if wdg is not None
-                and wdg is not self
-                and (wdg.objectName() == "pyMMGUI" or hasattr(wdg, "mmcore"))
-            ),
-            None,
-        )
+        candidates = (QWidget.window(self), *QApplication.topLevelWidgets())
+        window = next((wdg for wdg in candidates if hasattr(wdg, "mmcore")), None)
         if window is not None:
             default_vars["window"] = window
             mmc = mmc or getattr(window, "mmcore", None)
@@ -117,10 +107,7 @@ class MMConsole(QtConsole):
             # The modern GUI keeps acquisition controls together on its
             # Acquire page.  Give console users convenient, stable names while
             # retaining ``window`` for access to the rest of the application.
-            acquire = getattr(window, "acquire", None)
-            if acquire is None:
-                acquire = getattr(window, "_acquire", None)
-            if acquire is not None:
+            if (acquire := getattr(window, "acquire", None)) is not None:
                 default_vars["acquire"] = acquire
                 # Looked up on each access, so ``panels.mda`` is always the
                 # editor on screen (the MDA layout can be switched).

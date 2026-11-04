@@ -23,6 +23,7 @@ from ome_writers import (
 )
 
 from pymmcore_gui._acquisition_loader import open_acquisition, supports_path
+from pymmcore_gui._ome_tiff_wrapper import OMETiffWrapper
 
 if TYPE_CHECKING:
     from ome_writers import Channel, Dimension
@@ -220,7 +221,8 @@ def test_close_releases_resources(tmp_path: Path) -> None:
     )
 
     loaded = open_acquisition(out)
-    tf = loaded.wrapper._tf  # type: ignore[attr-defined]
+    assert isinstance(loaded.wrapper, OMETiffWrapper)
+    tf = loaded.wrapper._tf
     assert tf.filehandle.closed is False
     loaded.close()
     assert tf.filehandle.closed is True

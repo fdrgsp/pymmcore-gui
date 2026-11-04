@@ -311,7 +311,7 @@ The translation is zeroed and the 2 × 2 linear part kept. From it:
 pixel_size_x_um = norm(A[:, 0])
 pixel_size_y_um = norm(A[:, 1])
 pixel_size_um   = sqrt(abs(det(A)))
-rotation_deg    = degrees(atan2(A[1, 0], A[0, 0]))
+rotation_deg    = affine_to_measurements(A)[2]
 ```
 
 The scalar pixel size is the square root of the pixel's mapped area, not
@@ -420,14 +420,6 @@ This changes the editor only. Persistence is explicit:
 - **Save to file** asks for a destination, commits the selected configuration
   editor, and saves the full microscope configuration to a `.cfg` file.
   Cancelling the destination dialog leaves those editor changes uncommitted.
-
-There is also a separate `commit_pixel_calibration()` API for programmatic
-use. The GUI's normal editor-save path does not call it. It requires a
-restored stage, an existing target configuration, and matching optical state.
-By default it rejects a raw size change greater than 10%; callers can
-explicitly allow that change. It writes size and affine, verifies readback,
-and attempts to restore both old values on a partial failure. It does not
-write a `.cfg` file.
 [Python only: this separate checked commit and rollback helper.]
 
 `PixelCalibrationResult` retains the matrix, diagnostics, fingerprint, corner
@@ -526,7 +518,5 @@ directory.
   conversion to MMCore raw units and the geometric warnings.
 - [Models and defaults](../../src/pymmcore_gui/_pixel_calibration/_models.py):
   result types, options, warnings, fingerprint, and error classes.
-- [Programmatic commit](../../src/pymmcore_gui/_pixel_calibration/_persistence.py):
-  direct MMCore write, verification, and rollback helper.
 - [Numerical tests](../../tests/test_pixel_calibration.py) and
   [GUI tests](../../tests/test_pixel_configuration_calibration.py).

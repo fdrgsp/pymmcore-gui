@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 import ndv
 import numpy as np
@@ -139,11 +139,21 @@ class MMArrayViewer(ndv.ArrayViewer):
         self._save_btn: QPushButton | None = None
         if show_save_button:
             with suppress(Exception):
-                self._save_btn = _add_save_button(self)
+                self._save_btn = _add_viewer_button(
+                    self,
+                    "mdi:content-save-outline",
+                    "Save as OME-TIFF / OME-Zarr",
+                    self._save_data,
+                )
         self._roll_axes_btn: QPushButton | None = None
         if show_roll_axes_button:
             with suppress(Exception):
-                self._roll_axes_btn = _add_roll_axes_button(self)
+                self._roll_axes_btn = _add_viewer_button(
+                    self,
+                    "fluent:cube-rotate-20-regular",
+                    "Cycle orthogonal views",
+                    self._roll_axes,
+                )
         with suppress(Exception):
             unstyle_widgets(widget)
 
@@ -515,31 +525,19 @@ def unstyle_widgets(widget: Any, *, theme_icons: bool = True) -> None:
                 ensure_visible_icon(w)
 
 
-def _add_save_button(viewer: MMArrayViewer) -> QPushButton:
+def _add_viewer_button(
+    viewer: MMArrayViewer, glyph: str, tooltip: str, slot: Callable[[], Any]
+) -> QPushButton:
+    """Add a button right after ndv's "ndims" button."""
     q_widget = viewer.widget()
     btn_layout = q_widget._btn_layout
 
     btn = QPushButton(q_widget)
-    btn.setIcon(QIconifyIcon("mdi:content-save-outline"))
-    btn.setToolTip("Save as OME-TIFF / OME-Zarr")
-    btn.clicked.connect(viewer._save_data)
+    btn.setIcon(QIconifyIcon(glyph))
+    btn.setToolTip(tooltip)
+    btn.clicked.connect(slot)
 
-    ndims_idx = btn_layout.indexOf(q_widget.ndims_btn)
-    btn_layout.insertWidget(ndims_idx + 1, btn)
-    return btn
-
-
-def _add_roll_axes_button(viewer: MMArrayViewer) -> QPushButton:
-    q_widget = viewer.widget()
-    btn_layout = q_widget._btn_layout
-
-    btn = QPushButton(q_widget)
-    btn.setIcon(QIconifyIcon("fluent:cube-rotate-20-regular"))
-    btn.setToolTip("Cycle orthogonal views")
-    btn.clicked.connect(viewer._roll_axes)
-
-    ndims_idx = btn_layout.indexOf(q_widget.ndims_btn)
-    btn_layout.insertWidget(ndims_idx + 1, btn)
+    btn_layout.insertWidget(btn_layout.indexOf(q_widget.ndims_btn) + 1, btn)
     return btn
 
 
@@ -563,22 +561,6 @@ _SAVE_FILTER_MAP: dict[str, tuple[ExportFormat, str | None]] = {
     "OME-Zarr (*.ome.zarr)": ("ome-zarr", None),
 }
 _SAVE_FILTERS = ";;".join(_SAVE_FILTER_MAP)
-
-
-class _RecordSource(Protocol):
-    """Structural type for `_synthesize_record`'s input.
-
-    Matches the subset of `ndv.ArrayViewer` (which `MMArrayViewer` inherits)
-    that the function actually reads, so lightweight test fakes can duck-type
-    against it without depending on the concrete `MMArrayViewer` class.
-    """
-
-    @property
-    def data(self) -> Any: ...
-    @property
-    def data_wrapper(self) -> Any: ...
-    @property
-    def display_model(self) -> Any: ...
 
 
 def _prompt_save_path(parent: QWidget) -> tuple[Path, ExportFormat, str | None] | None:
@@ -607,7 +589,7 @@ def _prompt_save_path(parent: QWidget) -> tuple[Path, ExportFormat, str | None] 
     return Path(path_str), fmt, layout
 
 
-def _synthesize_record(viewer: _RecordSource) -> AcquisitionRecord | None:
+def _synthesize_record(viewer: ndv.ArrayViewer) -> AcquisitionRecord | None:
     """Build a minimal record straight from what the viewer is currently displaying.
 
     Used whenever no live `AcquisitionRecord` was attached at acquisition time
@@ -633,5 +615,7 @@ def _synthesize_record(viewer: _RecordSource) -> AcquisitionRecord | None:
         wrapper,
         data,
         summary_meta=summary_meta,
-        scale_overrides=dict(viewer.display_model.scales),
+        scale_overrides={
+            str(axis): scale for axis, scale in viewer.display_model.scales.items()
+        },
     )

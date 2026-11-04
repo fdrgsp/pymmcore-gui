@@ -39,9 +39,23 @@ def _diagnostic_warnings(
     return tuple(warnings)
 
 
+def flatten_affine(
+    matrix: NDArray[np.float64],
+) -> tuple[float, float, float, float, float, float]:
+    """Flatten a 2x2 affine into MMCore's six-element row-major form."""
+    return (
+        float(matrix[0, 0]),
+        float(matrix[0, 1]),
+        0.0,
+        float(matrix[1, 0]),
+        float(matrix[1, 1]),
+        0.0,
+    )
+
+
 def normalize_for_mmcore(
     current_matrix: NDArray[np.floating], *, binning: int, magnification: float
-) -> tuple[NDArray[np.float64], float, tuple[float, float, float, float, float, float]]:
+) -> tuple[NDArray[np.float64], float]:
     """Convert a measured current-image affine to MMCore's raw storage units."""
     matrix = np.asarray(current_matrix, dtype=np.float64)
     if matrix.shape != (2, 2) or not np.all(np.isfinite(matrix)):
@@ -54,13 +68,4 @@ def normalize_for_mmcore(
     determinant = float(np.linalg.det(raw))
     if abs(determinant) <= np.finfo(float).eps:
         raise ValueError("current_matrix must be invertible")
-    pixel_size = float(np.sqrt(abs(determinant)))
-    flattened = (
-        float(raw[0, 0]),
-        float(raw[0, 1]),
-        0.0,
-        float(raw[1, 0]),
-        float(raw[1, 1]),
-        0.0,
-    )
-    return raw, pixel_size, flattened
+    return raw, float(np.sqrt(abs(determinant)))

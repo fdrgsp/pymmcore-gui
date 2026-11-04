@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from pymmcore_gui._qt.QtCore import QPointF
-from pymmcore_gui._qt.QtGui import QBrush, QColor, QGradient, QLinearGradient, QPalette
-from pymmcore_gui._theme._types import Brush, Color, LinearGradient, Palette
+from typing import TYPE_CHECKING
+
+from pymmcore_gui._qt.QtGui import QColor, QPalette
+
+if TYPE_CHECKING:
+    from pymmcore_gui._theme._types import Color, Palette
 
 ColorRole = QPalette.ColorRole
 
@@ -36,23 +39,6 @@ def color_to_qcolor(c: Color) -> QColor:
     return QColor(c.red, c.green, c.blue, c.alpha)
 
 
-def _brush_to_qbrush(brush: Brush) -> QBrush:
-    """Convert a model Brush to a QBrush."""
-    if isinstance(brush, Color):
-        return QBrush(color_to_qcolor(brush))
-    if isinstance(brush, LinearGradient):
-        g = QLinearGradient(
-            QPointF(brush.x1, brush.y1),
-            QPointF(brush.x2, brush.y2),
-        )
-        for stop in brush.stops:
-            g.setColorAt(stop.position, color_to_qcolor(stop.color))
-        g.setSpread(QGradient.Spread(brush.spread.value))
-        g.setCoordinateMode(QGradient.CoordinateMode.ObjectBoundingMode)
-        return QBrush(g)
-    raise TypeError(f"Unknown brush type: {type(brush)}")
-
-
 def to_qpalette(palette: Palette) -> QPalette:
     """Convert a Palette to a QPalette."""
     qpal = QPalette()
@@ -79,9 +65,5 @@ def to_qpalette(palette: Palette) -> QPalette:
                 brush = getattr(palette.active, fname)
                 if brush is None:
                     continue
-            qr = QPalette.ColorRole(role.value)
-            if isinstance(brush, Color):
-                qpal.setColor(qg, qr, color_to_qcolor(brush))
-            else:
-                qpal.setBrush(qg, qr, _brush_to_qbrush(brush))
+            qpal.setColor(qg, role, color_to_qcolor(brush))
     return qpal

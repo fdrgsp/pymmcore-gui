@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
@@ -75,6 +76,26 @@ def test_format_countdown_gets_coarser_with_duration() -> None:
     assert _format_countdown(90000.0) == "1d 01:00:00"  # a day and an hour
     assert _format_countdown(89880.0) == "1d 00:58:00"  # minutes keep it ticking
     assert _format_countdown(89882.0) == "1d 00:58:02"  # seconds keep it too
+
+
+def test_worker_finish_reason_is_captured_before_runner_resets(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    widget = MDAStatusWidget(mmcore)
+    qtbot.addWidget(widget)
+    runner = mmcore.mda
+
+    def finish() -> None:
+        runner._finish_reason = FinishReason.CANCELED
+        runner.events.sequenceFinished.emit(MDASequence())
+        runner._finish_reason = None
+
+    worker = threading.Thread(target=finish)
+    worker.start()
+    worker.join()
+
+    qtbot.waitUntil(lambda: widget._result is not None)
+    assert widget._result == "Acquisition canceled"
 
 
 def test_mda_status_tracks_runner_transitions_and_coordinate_meaning(

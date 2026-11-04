@@ -29,7 +29,6 @@ from pymmcore_gui._settings import Settings
 from . import _sentry
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
     from pathlib import Path
     from types import TracebackType
 
@@ -42,21 +41,6 @@ if TYPE_CHECKING:
         @property
         def mmcore(self) -> CMMCorePlus: ...
         def show(self) -> None: ...
-
-    class StartupChoiceProtocol(Protocol):
-        """What a window's startup dialog reports back.
-
-        Structural so caller-supplied windows can provide their own startup
-        choices without depending on the application's startup dialog type.
-        """
-
-        @property
-        def layout(self) -> str: ...
-        @property
-        def config(self) -> str | None: ...
-
-    StartupPrompt = Callable[[str | None], "StartupChoiceProtocol | None"]
-    """Signature of an optional ``window_cls.prompt_startup_choices``."""
 
 
 APP_NAME = "pyMM"
@@ -217,7 +201,7 @@ def create_mmgui(
     # `-c` (and `mm_config=False`) already answer the config question, so
     # they skip the dialog entirely; `-l` only preselects its layout field,
     # since it leaves the config question open.
-    prompt: StartupPrompt | None = getattr(window_cls, "prompt_startup_choices", None)
+    prompt = getattr(window_cls, "prompt_startup_choices", None)
     supports_layouts = prompt is not None
     if mm_config is None and prompt is not None:
         if (startup := prompt(layout)) is None:

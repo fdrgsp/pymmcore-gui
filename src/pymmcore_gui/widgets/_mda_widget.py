@@ -131,7 +131,6 @@ def _section_metrics() -> SectionMetrics:
         body_margin_bottom=t.sp_sm,
         body_spacing=t.sp_sm,
         content_spacing=t.sp_xxs,
-        content_margin_h=t.sp_sm,
         footer_margin_h=t.sp_sm,
         footer_margin_top=t.sp_xs,
         footer_margin_bottom=t.sp_sm,

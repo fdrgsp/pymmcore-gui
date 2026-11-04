@@ -8,19 +8,10 @@ that opts them out of the app font cascade.
 
 from __future__ import annotations
 
-from pymmcore_gui._qt.QtGui import QFont, QFontDatabase
+from pymmcore_gui._qt.QtGui import QFont
 
 UI_FONT_SIZE_PT = 11.0
 UI_FONT_WEIGHT = QFont.Weight.Medium
-
-DEFAULT_MONO_FAMILIES = [
-    "Fira Code",
-    "Source Code Pro",
-    "JetBrains Mono",
-    "SF Mono",
-    "Cascadia Code",
-    "Consolas",
-]
 
 
 def _zoom() -> float:
@@ -37,24 +28,5 @@ def ui_font(
     """System UI font, zoom-scaled."""
     f = QFont()
     f.setPointSizeF(size_pt * _zoom())
-    f.setWeight(weight)
-    return f
-
-
-def mono_font(
-    size_pt: float = UI_FONT_SIZE_PT,
-    weight: int = UI_FONT_WEIGHT,
-) -> QFont:
-    """Monospace font, zoom-scaled."""
-    zoom = _zoom()
-    for fam in DEFAULT_MONO_FAMILIES:
-        if fam in QFontDatabase.families():
-            f = QFont(fam)
-            f.setPointSizeF(size_pt * zoom)
-            f.setWeight(weight)
-            return f
-    f = QFont()
-    f.setStyleHint(QFont.StyleHint.Monospace)
-    f.setPointSizeF(size_pt * zoom)
     f.setWeight(weight)
     return f

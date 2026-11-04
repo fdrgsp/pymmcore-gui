@@ -21,7 +21,7 @@ import numpy as np
 import tifffile
 from ndv.models import DataWrapper
 
-from pymmcore_gui._utils import indexed_shape
+from pymmcore_gui._utils import indexed_shape, isel_positions
 
 if TYPE_CHECKING:
     from collections.abc import Hashable, Mapping, Sequence
@@ -305,18 +305,13 @@ class OMETiffWrapper(DataWrapper):
     # ----------------------- internals -----------------------
 
     def _isel_multiposition(self, indexers: Mapping[int, int | slice]) -> np.ndarray:
-        pos_idx = indexers.get(0, slice(None))
-        inner = {i - 1: v for i, v in indexers.items() if i != 0}
-        n_positions = len(self._position_files) or len(self._tf.series)
-        if isinstance(pos_idx, slice):
-            start, stop, step = pos_idx.indices(n_positions)
-            frames = [self._read_position(i, inner) for i in range(start, stop, step)]
-            if frames:
-                return np.stack(frames, axis=0)
-            return np.empty(
-                indexed_shape(tuple(self.sizes().values()), indexers), dtype=self.dtype
-            )
-        return self._read_position(pos_idx, inner)
+        return isel_positions(
+            indexers,
+            len(self._position_files) or len(self._tf.series),
+            tuple(self.sizes().values()),
+            self.dtype,
+            self._read_position,
+        )
 
     def _read_position(
         self, index: int, indexers: Mapping[int, int | slice]

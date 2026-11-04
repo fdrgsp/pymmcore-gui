@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from pymmcore_gui.widgets._panels import PanelInfo
 
 
-def _icon_size() -> QSize:
+def toolbar_icon_size() -> QSize:
     """The app's compact action-icon size, scaled with the current zoom."""
     size = theme().scaled(20)
     return QSize(size, size)
@@ -60,7 +60,7 @@ class SnapButton(QPushButton):
         self._core = mmcore or CMMCorePlus.instance()
 
         self._apply_icon()
-        self.setIconSize(_icon_size())
+        self.setIconSize(toolbar_icon_size())
         self.setToolTip("Snap")
         self.setProperty("variant", "subtle")
         if control_core:
@@ -82,7 +82,7 @@ class SnapButton(QPushButton):
         # zoom pass over QToolBar instances.
         if e is not None and e.type() == QEvent.Type.StyleChange:
             self._apply_icon()
-            self.setIconSize(_icon_size())
+            self.setIconSize(toolbar_icon_size())
         super().changeEvent(e)
 
     def _on_config_loaded(self, *_: object) -> None:
@@ -135,7 +135,7 @@ class LiveButton(QPushButton):
         self._core = mmcore or CMMCorePlus.instance()
 
         self.setCheckable(True)
-        self.setIconSize(_icon_size())
+        self.setIconSize(toolbar_icon_size())
         self.setProperty("variant", "subtle")
         self._set_running(False)
         if control_core:
@@ -190,10 +190,9 @@ class LiveButton(QPushButton):
         # current running state. The icon size is re-applied too since it's
         # zoom-scaled and this button (a QPushButton, not a QToolBar) isn't
         # touched by the app's zoom pass over QToolBar instances.
-        is_style_change = e is not None and e.type() == QEvent.Type.StyleChange
-        if is_style_change:
+        if e is not None and e.type() == QEvent.Type.StyleChange:
             self._set_running(self.isChecked())
-            self.setIconSize(_icon_size())
+            self.setIconSize(toolbar_icon_size())
         super().changeEvent(e)
 
     def _disconnect(self) -> None:
@@ -338,7 +337,7 @@ class PanelButtonBar(QWidget):
             btn.setCheckable(True)
             btn.setProperty("variant", "subtle")
             btn.setToolTip(info.tooltip)
-            btn.setIconSize(_icon_size())
+            btn.setIconSize(toolbar_icon_size())
             self._layout.addWidget(btn)
             self._buttons[info.key] = btn
 
@@ -378,7 +377,7 @@ class PanelButtonBar(QWidget):
             # the *previous* theme's icon. See the "Theme-aware icons" note
             # in the panels-toolbar design doc.
             set_source_icon(btn, QIconifyIcon(info.icon, color=panel_color))
-            btn.setIconSize(_icon_size())
+            btn.setIconSize(toolbar_icon_size())
 
     def changeEvent(self, a0: QEvent | None) -> None:
         if a0 is not None and a0.type() == QEvent.Type.StyleChange:

@@ -45,7 +45,7 @@ from pymmcore_gui._qt.QtCore import (
     Signal,
 )
 from pymmcore_gui._qt.QtWidgets import QMenu, QPushButton, QSplitter
-from pymmcore_gui._utils import autofocus_kind
+from pymmcore_gui._utils import autofocus_kind, connect_direct
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
 from pymmcore_gui.widgets.image_preview._snap_album import (
     ALBUM_CAPACITY,
@@ -102,27 +102,6 @@ class _OpenAcquisitionTask(QRunnable):
             self.signals.done.emit()
 
 
-def _runner_sink(runner: Any) -> SinkProtocol | None:
-    """Return the runner's sink across released and development plus versions."""
-    if callable(get_sink := getattr(runner, "get_sink", None)):
-        return cast("SinkProtocol | None", get_sink())
-    # get_sink() was added after pymmcore-plus 0.18.1. The runner has used
-    # this same internal attribute since before our declared minimum version.
-    return cast("SinkProtocol | None", getattr(runner, "_sink", None))
-
-
-def _release_runner_sink(runner: Any, sink: SinkProtocol) -> bool:
-    """Release ``sink``, with the same safeguards as newer pymmcore-plus."""
-    if callable(release_sink := getattr(runner, "release_sink", None)):
-        return bool(release_sink(sink))
-    # Compatibility for released pymmcore-plus versions that predate the
-    # public method. Never mutate a running acquisition or a newer run's sink.
-    if runner.is_running() or _runner_sink(runner) is not sink:
-        return False
-    runner._sink = None
-    return True
-
-
 @dataclass
 class _ViewerRecord:
     viewer: ndv.ArrayViewer
@@ -163,7 +142,9 @@ class AcquireViewersManager(QObject):
     """
 
     _sequenceStarted = Signal(object, object)
-    _frameReady = Signal(object, object, object)
+    # the frame itself is not needed on the GUI thread, and queueing it would
+    # keep a whole frame alive until the GUI thread drains the queue
+    _frameReady = Signal(object, object)
     _sequenceFinished = Signal(object)
     _eventStarted = Signal(object)
     _autofocusImageSnapped = Signal(object)
@@ -241,44 +222,22 @@ class AcquireViewersManager(QObject):
             Qt.ConnectionType.BlockingQueuedConnection,
         )
         self._sequence_started_callback = self._sequenceStarted.emit
-        self._frame_ready_callback = self._frameReady.emit
         self._sequence_finished_callback = self._sequenceFinished.emit
-        self._event_started_callback = self._relay_event_started
-        self._autofocus_finished_callback = self._relay_autofocus_finished
-        self._unpreviewed_image_callback = self._capture_unpreviewed_autofocus_image
 
         events = self._core.mda.events
         events.sequenceStarted.connect(self._sequence_started_callback)
-        events.frameReady.connect(self._frame_ready_callback)
+        connect_direct(events.frameReady, self._relay_frame_ready)
         events.sequenceFinished.connect(self._sequence_finished_callback)
         # These three callbacks do only acquisition-thread work, then emit the
         # Qt signals above for every widget mutation.  They must be direct so
         # the first autofocus snap cannot outrun the show-images state.
-        try:
-            events.eventStarted.connect(
-                self._event_started_callback, Qt.ConnectionType.DirectConnection
-            )
-        except TypeError:  # pragma: no cover - psygnal signaler
-            events.eventStarted.connect(self._event_started_callback)
+        connect_direct(events.eventStarted, self._relay_event_started)
         # Keep the camera read on the thread that snapped.  A fast autofocus
         # may overwrite its buffer before the GUI thread creates the Preview.
-        try:
-            self._core.events.imageSnapped.connect(
-                self._unpreviewed_image_callback,
-                Qt.ConnectionType.DirectConnection,
-            )
-        except TypeError:  # pragma: no cover - psygnal signaler
-            self._core.events.imageSnapped.connect(self._unpreviewed_image_callback)
-        # ``autofocusFinished`` is newer than the rest of the runner's signals.
-        self._af_finished_signal = getattr(events, "autofocusFinished", None)
-        if self._af_finished_signal is not None:
-            try:
-                self._af_finished_signal.connect(
-                    self._autofocus_finished_callback,
-                    Qt.ConnectionType.DirectConnection,
-                )
-            except TypeError:  # pragma: no cover - psygnal signaler
-                self._af_finished_signal.connect(self._autofocus_finished_callback)
+        connect_direct(
+            self._core.events.imageSnapped, self._capture_unpreviewed_autofocus_image
+        )
+        connect_direct(events.autofocusFinished, self._relay_autofocus_finished)
         # A bound slot on this QObject may not run during its own destruction.
         # The owner's destroyed signal arrives before Qt deletes its children,
         # while this manager can still disconnect runner callbacks safely.
@@ -698,7 +657,7 @@ class AcquireViewersManager(QObject):
         # a disk-backed run's tab can be titled with its real destination
         # filename from the start, not just "MDA <sha>" until someone
         # manually saves it -- see _on_saved below for that latter case.
-        sink = _runner_sink(self._core.mda)
+        sink = self._core.mda.get_sink()
         title = self._disk_backed_title(sink) or f"MDA {sha}"
 
         viewer.mda_sequence = sequence
@@ -747,9 +706,12 @@ class AcquireViewersManager(QObject):
         self._active_dock = dw
         self.mdaViewerCreated.emit(viewer)
 
-    def _on_frame_ready(
-        self, frame: np.ndarray, event: MDAEvent, meta: FrameMetaV1
+    def _relay_frame_ready(
+        self, _frame: np.ndarray, event: MDAEvent, meta: FrameMetaV1
     ) -> None:
+        self._frameReady.emit(event, meta)
+
+    def _on_frame_ready(self, event: MDAEvent, meta: FrameMetaV1) -> None:
         """Record frame metadata for export, then follow the latest acquired index.
 
         Metadata capture happens unconditionally, *before* the follow-lock
@@ -855,7 +817,7 @@ class AcquireViewersManager(QObject):
         collect the data can survive until the next cyclic-GC run instead of
         being freed the moment this viewer closes.
         """
-        released = _release_runner_sink(self._core.mda, sink)
+        released = bool(self._core.mda.release_sink(sink))
         if released:
             QTimer.singleShot(0, gc.collect)
         return released
@@ -868,16 +830,17 @@ class AcquireViewersManager(QObject):
         with suppress(Exception):
             events.sequenceStarted.disconnect(self._sequence_started_callback)
         with suppress(Exception):
-            events.frameReady.disconnect(self._frame_ready_callback)
+            events.frameReady.disconnect(self._relay_frame_ready)
         with suppress(Exception):
             events.sequenceFinished.disconnect(self._sequence_finished_callback)
         with suppress(Exception):
-            events.eventStarted.disconnect(self._event_started_callback)
+            events.eventStarted.disconnect(self._relay_event_started)
         with suppress(Exception):
-            self._core.events.imageSnapped.disconnect(self._unpreviewed_image_callback)
-        if self._af_finished_signal is not None:
-            with suppress(Exception):
-                self._af_finished_signal.disconnect(self._autofocus_finished_callback)
+            self._core.events.imageSnapped.disconnect(
+                self._capture_unpreviewed_autofocus_image
+            )
+        with suppress(Exception):
+            events.autofocusFinished.disconnect(self._relay_autofocus_finished)
         for record in self._records.values():
             if record.is_live:
                 self.mdaViewerClosed.emit(record.viewer)

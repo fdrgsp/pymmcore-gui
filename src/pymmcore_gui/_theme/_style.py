@@ -12,13 +12,6 @@ Button variants via dynamic property:
     btn.setProperty("variant", "danger")                   # → Danger
     btn.setProperty("accent", QColor("#4CAF50"))           # → Custom accent
 
-Convenience helpers (optional, not required):
-    set_variant(btn, "primary")
-    set_variant(btn, "danger")
-
-Usage:
-    app.setStyle(MicroscopeStyle())
-    app.setPalette(make_dark_palette())
 """
 
 from __future__ import annotations
@@ -37,6 +30,7 @@ from pymmcore_gui._qt.QtGui import (
     QPixmap,
 )
 from pymmcore_gui._qt.QtWidgets import (
+    QAbstractButton,
     QAbstractSpinBox,
     QApplication,
     QComboBox,
@@ -136,6 +130,15 @@ def _get_accent(widget: QWidget | None) -> QColor:
             return a
     pal = widget.palette() if widget else QPalette()
     return pal.color(QPalette.ColorRole.Highlight)
+
+
+def _is_icon_only(opt: QStyleOption | None, widget: QWidget | None) -> bool:
+    """Identify icon-only buttons even when Qt supplies a generic style option."""
+    if isinstance(widget, QAbstractButton):
+        return not widget.text() and not widget.icon().isNull()
+    if isinstance(opt, QStyleOptionButton):
+        return not opt.text and not opt.icon.isNull()
+    return False
 
 
 def _button_colors(
@@ -372,7 +375,7 @@ class MicroscopeStyle(QProxyStyle):
         s = super().sizeFromContents(ct, opt, contentsSize, widget)
         if ct == QStyle.ContentsType.CT_PushButton:
             s.setHeight(max(s.height(), 26))
-            if isinstance(opt, QStyleOptionButton) and not opt.text:
+            if _is_icon_only(opt, widget):
                 # Icon-only: square it off, so the padding reads the same on
                 # every side. The base style pads a push button for a label it
                 # does not have -- and Qt's own contents size adds a further
@@ -1526,19 +1529,3 @@ class MicroscopeStyle(QProxyStyle):
         )
         p.drawLine(inset.topLeft(), inset.bottomRight())
         p.drawLine(inset.topRight(), inset.bottomLeft())
-
-
-# ═══════════════════════════════════════════════════════════════
-# Convenience helpers (optional — just set properties)
-# ═══════════════════════════════════════════════════════════════
-
-
-def set_variant(widget: QWidget, variant: str) -> None:
-    """Set the button variant property.
-
-    Equivalent to widget.setProperty("variant", variant), but validates.
-    """
-    if variant not in ("ghost", "subtle", "primary", "danger"):
-        raise ValueError(f"Unknown variant: {variant!r}")
-    widget.setProperty("variant", variant)
-    widget.update()

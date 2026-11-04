@@ -16,7 +16,6 @@ from pymmcore_gui._theme._dark import DARK_THEME
 from pymmcore_gui._theme._fonts import (
     UI_FONT_SIZE_PT,
     UI_FONT_WEIGHT,
-    mono_font,
     ui_font,
 )
 from pymmcore_gui._theme._light import LIGHT_THEME
@@ -25,18 +24,12 @@ from pymmcore_gui._theme._qt import color_to_qcolor, to_qpalette
 from pymmcore_gui._theme._scaled_view import ScaledThemeView
 from pymmcore_gui._theme._style import MicroscopeStyle
 from pymmcore_gui._theme._types import (
-    Brush,
     Color,
-    ColorGroup,
-    GradientSpread,
-    GradientStop,
-    LinearGradient,
-    Palette,
     Theme,
 )
 
 if TYPE_CHECKING:
-    from pymmcore_gui._qt.QtGui import QColor, QPalette
+    from pymmcore_gui._qt.QtGui import QColor
 
 __all__ = [
     "DARK_THEME",
@@ -44,19 +37,11 @@ __all__ = [
     "UI_FONT_SIZE_PT",
     "UI_FONT_WEIGHT",
     "ZOOM_STEPS",
-    "Brush",
     "Color",
-    "ColorGroup",
-    "GradientSpread",
-    "GradientStop",
-    "LinearGradient",
     "MicroscopeStyle",
-    "Palette",
     "ScaledThemeView",
     "Theme",
     "dock_chrome_stylesheet",
-    "make_dark_palette",
-    "mono_font",
     "qcolor",
     "raw_theme",
     "reset_zoom",
@@ -103,18 +88,15 @@ def set_theme(t: Theme) -> None:
     """Set the active theme and push its QPalette to the application."""
     global _current_theme, _view
 
-    # App-level style + theme setup
-    if isinstance(qapp := QApplication.instance(), QApplication):
-        if style := qapp.style():
-            if not isinstance(style, MicroscopeStyle):
-                style = MicroscopeStyle()
-                qapp.setStyle(style)
-                set_style(style)
+    app = QApplication.instance()
+    if isinstance(app, QApplication) and not isinstance(app.style(), MicroscopeStyle):
+        style = MicroscopeStyle()
+        app.setStyle(style)
+        set_style(style)
 
     _current_theme = t
     if _current_style is not None:
         _view = ScaledThemeView(t, _current_style)
-    app = QApplication.instance()
     pal = to_qpalette(t.palette)
     if isinstance(app, QGuiApplication):
         app.setPalette(pal)
@@ -180,20 +162,17 @@ def set_zoom(factor: float) -> None:
     if not isinstance(app, QApplication):
         return
 
-    # Pillar 2: scale app font
+    # scale app font
     font = QFont(app.font())
     font.setPointSizeF(UI_FONT_SIZE_PT * factor)
     font.setWeight(UI_FONT_WEIGHT)
     app.setFont(font)
 
-    # Pillar 3: icon sizes on caching widgets
+    # refresh icon sizes on caching widgets, and force a complete relayout
     icon_sz = _current_style.pixelMetric(QStyle.PixelMetric.PM_ToolBarIconSize)
     for w in app.allWidgets():
         if isinstance(w, QToolBar):
             w.setIconSize(QSize(icon_sz, icon_sz))
-
-    # Force complete relayout
-    for w in app.allWidgets():
         if layout := w.layout():
             layout.invalidate()
         QCoreApplication.sendEvent(w, QEvent(QEvent.Type.StyleChange))
@@ -290,8 +269,3 @@ def dock_chrome_stylesheet() -> str:
             background-color: {qcolor(t.bg_deepest).name()};
         }}
         """
-
-
-def make_dark_palette() -> QPalette:
-    """Build a dark QPalette matching the mockup color tokens."""
-    return to_qpalette(DARK_THEME.palette)
