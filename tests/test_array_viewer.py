@@ -125,6 +125,7 @@ def test_reopened_z_stack_keeps_z_slider(
         qtbot.waitUntil(lambda: len(viewer._lut_controllers) == channels)
         viewer.display_model.current_index["z"] = 2
         assert viewer._resolved.current_index[z_axis] == 2
+        qtbot.waitUntil(viewer._is_idle)
     finally:
         wrapper.close()
 
