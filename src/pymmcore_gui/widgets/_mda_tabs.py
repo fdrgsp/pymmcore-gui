@@ -15,6 +15,7 @@ from pymmcore_gui._qt.QtCore import QEvent, QObject, Qt
 from pymmcore_gui._qt.QtWidgets import QApplication
 
 from ._mda_channel_table import MDAChannelTable
+from ._mda_position_table import MDAPositionTable
 
 if TYPE_CHECKING:
     from pymmcore_gui._qt.QtWidgets import QWidget
@@ -28,6 +29,9 @@ class GuiCollapsibleCoreMDATabs(CollapsibleCoreMDATabs):
         inherited_channels = self.channels
         self.channels = MDAChannelTable(0, self._mmc)
         inherited_channels.deleteLater()
+        inherited_positions = self.stage_positions
+        self.stage_positions = MDAPositionTable(0, self._mmc)
+        inherited_positions.deleteLater()
 
 
 class GuiCoreMDATabs(CoreMDATabs):
@@ -43,6 +47,9 @@ class GuiCoreMDATabs(CoreMDATabs):
         inherited_channels = self.channels
         self.channels = MDAChannelTable(0, self._mmc)
         inherited_channels.deleteLater()
+        inherited_positions = self.stage_positions
+        self.stage_positions = MDAPositionTable(0, self._mmc)
+        inherited_positions.deleteLater()
 
 
 def _theme_subsequence_popup(popup: QWidget) -> None:
