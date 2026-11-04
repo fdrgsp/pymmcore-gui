@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pymmcore_plus import DeviceType, Keyword
+from pymmcore_widgets._util import use_combo_row_height
 
 from pymmcore_gui._qt.QtCore import Qt, Signal
 from pymmcore_gui._qt.QtWidgets import (
@@ -62,6 +63,7 @@ class _DeviceTable(QTableWidget):
         # skip and leave the row-number gutter on screen.
         if (vh := self.verticalHeader()) is not None:
             vh.setVisible(False)
+        use_combo_row_height(self)
         if (hh := self.horizontalHeader()) is not None:
             hh.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
             hh.setHighlightSections(False)
@@ -315,6 +317,7 @@ class CoreRolesPane(QWidget):
         self._table.setHorizontalHeaderLabels(list(self.HEADERS))
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        use_combo_row_height(self._table)
         self._table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._table.setWordWrap(False)
         if (vh := self._table.verticalHeader()) is not None:

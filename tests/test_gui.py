@@ -19,6 +19,7 @@ from pymmcore_plus.mda import MDARunner
 from pymmcore_widgets import CameraRoiWidget, StageWidget, XYZStageWidget
 from pymmcore_widgets import MDAWidget as UpstreamMDAWidget
 from pymmcore_widgets._light_sources import PROPERTY_SEPARATOR, find_light_sources
+from pymmcore_widgets._util import combo_box_height
 from pymmcore_widgets.useq_widgets._positions import MDAButton, _MDAPopup
 from superqt.iconify import QIconifyIcon
 
@@ -6262,6 +6263,20 @@ def test_stage_focus_direction_is_set_from_the_setup_pane(
 
 def _role_combo(page: HardwareSetupPage, role: str) -> QComboBox:
     return page._roles._combos[role]
+
+
+def test_hardware_tables_rows_are_as_tall_as_a_combo_box(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = HardwareSetupPage(mmcore)
+    qtbot.addWidget(page)
+    for pane in (page._available, page._installed, page._roles):
+        table = pane._table
+        row_height = combo_box_height(table) + 1  # the grid line
+        assert (v_header := table.verticalHeader()) is not None
+        assert v_header.defaultSectionSize() == row_height
+        assert table.rowCount() > 0
+        assert table.rowHeight(0) == row_height
 
 
 def test_default_devices_are_set_from_the_hardware_page(
