@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pymmcore_plus import DeviceType, Keyword
-from pymmcore_widgets._util import use_combo_row_height
+from pymmcore_widgets._util import combo_box_height, use_combo_row_height
 
-from pymmcore_gui._qt.QtCore import Qt, Signal
+from pymmcore_gui._qt.QtCore import QSize, Qt, Signal
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -17,6 +17,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -42,9 +43,33 @@ CORE_ROLES: tuple[tuple[str, str, DeviceType], ...] = (
 )
 
 
+_FILTER_MIN_WIDTH = 140
+
+
+class _PaneTitle(QLabel):
+    """Heading as tall as the input controls, at every font and zoom.
+
+    The Available Devices heading shares its row with a filter and a combo box,
+    so all headings match that height to keep the panes' tables aligned.
+    """
+
+    def sizeHint(self) -> QSize:
+        return self._with_control_height(super().sizeHint())
+
+    def minimumSizeHint(self) -> QSize:
+        return self._with_control_height(super().minimumSizeHint())
+
+    def _with_control_height(self, hint: QSize) -> QSize:
+        line_edit = QLineEdit()
+        line_edit.setStyle(self.style())
+        line_edit.setFont(self.font())
+        height = max(combo_box_height(self), line_edit.sizeHint().height())
+        return QSize(hint.width(), max(hint.height(), height))
+
+
 def pane_title(text: str) -> QLabel:
     """Return the section heading used at the top of each pane."""
-    return QLabel(text)
+    return _PaneTitle(text)
 
 
 class _DeviceTable(QTableWidget):
@@ -103,9 +128,16 @@ class AvailableDevicesPane(QWidget):
         self._filter = QLineEdit()
         self._filter.setPlaceholderText("Filter devices…")
         self._filter.setClearButtonEnabled(True)
+        self._filter.setMinimumWidth(_FILTER_MIN_WIDTH)
         self._filter.textChanged.connect(self._apply_filter)
 
         self._type = QComboBox()
+        # fill the row rather than sizing it: after zooming out, a combo box's
+        # minimum height can lag behind, which would keep this row too tall and
+        # push this pane's table out of line with the others
+        self._type.setSizePolicy(
+            self._type.sizePolicy().horizontalPolicy(), QSizePolicy.Policy.Ignored
+        )
         self._type.currentIndexChanged.connect(self._apply_filter)
 
         self._hub_children = QCheckBox("Show hub children")
@@ -121,17 +153,19 @@ class AvailableDevicesPane(QWidget):
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
 
         t = theme()
-        type_row = QHBoxLayout()
-        type_row.setSpacing(t.sp_xs)
-        type_row.addWidget(self._type, 1)
-        type_row.addWidget(self._hub_children)
+        # in the heading's row, so this table lines up with the other panes'
+        title_row = QHBoxLayout()
+        title_row.setSpacing(t.sp_sm)
+        title_row.addWidget(pane_title("Available Devices"))
+        title_row.addSpacing(t.sp_sm)
+        title_row.addWidget(self._filter, 1)
+        title_row.addWidget(self._type)
+        title_row.addWidget(self._hub_children)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(t.sp_xs)
-        layout.addWidget(pane_title("Available Devices"))
-        layout.addWidget(self._filter)
-        layout.addLayout(type_row)
+        layout.addLayout(title_row)
         layout.addWidget(self._table, 1)
 
     # ── data ──────────────────────────────────────────────────────

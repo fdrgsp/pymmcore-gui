@@ -6281,6 +6281,44 @@ def test_hardware_tables_rows_are_as_tall_as_a_combo_box(
         assert table.rowHeight(0) == row_height
 
 
+def test_hardware_tables_are_aligned_and_filter_stays_usable(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    page = HardwareSetupPage(mmcore)
+    qtbot.addWidget(page)
+    page.resize(1800, 800)
+    page.show()
+    qtbot.waitExposed(page)
+
+    # the available devices get the smaller share of the page
+    available, rest = page._h_split.sizes()
+    assert available < rest
+
+    def top(pane: QWidget) -> int:
+        table = pane._table  # type: ignore[attr-defined]
+        return int(table.mapTo(page, table.rect().topLeft()).y())
+
+    assert top(page._available) == top(page._installed) == top(page._roles)
+
+    try:
+        # zooming out too: a combo box's minimum height lags behind its font
+        for zoom in (2.0, 1.25, 0.8, 1.5):
+            set_zoom(zoom)
+            qtbot.waitUntil(
+                lambda: top(page._available) == top(page._installed) == top(page._roles)
+            )
+    finally:
+        set_theme(DARK_THEME)  # restores the default zoom too
+    QApplication.processEvents()
+
+    # dragging the left pane as narrow as it goes must not collapse the filter
+    pane = page._available
+    narrowest = pane.minimumSizeHint().width()
+    page._h_split.setSizes([narrowest, sum(page._h_split.sizes()) - narrowest])
+    qtbot.waitUntil(lambda: pane.width() == narrowest)
+    assert pane._filter.width() >= 100
+
+
 def test_setup_peripherals_and_presets_rows_are_as_tall_as_a_combo_box(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:

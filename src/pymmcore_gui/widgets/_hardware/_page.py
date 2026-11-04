@@ -44,7 +44,7 @@ from pymmcore_gui.widgets._tab_page import TabPage
 if TYPE_CHECKING:
     from pymmcore_plus.model import AvailableDevice, Property
 
-    from pymmcore_gui._qt.QtGui import QResizeEvent
+    from pymmcore_gui._qt.QtGui import QResizeEvent, QShowEvent
     from pymmcore_gui._qt.QtWidgets import QStatusBar
 
 CFG_FILTER = "Micro-Manager config (*.cfg);;All files (*)"
@@ -71,6 +71,7 @@ class HardwareSetupPage(TabPage):
         # page's own systemConfigurationLoaded handler doesn't redundantly
         # rebuild a model it's already in the middle of constructing.
         self._loading = False
+        self._split_seeded = False
 
         self._available = AvailableDevicesPane()
         self._installed = InstalledDevicesPane()
@@ -183,9 +184,21 @@ class HardwareSetupPage(TabPage):
             set_source_icon(btn, QIconifyIcon(icon, color=color))
             btn.setIconSize(QSize(size, size))
 
+    def showEvent(self, a0: QShowEvent | None) -> None:
+        super().showEvent(a0)
+        if not self._split_seeded:
+            # not during __init__: at the page's default width the left pane's
+            # minimum width would clamp the sizes and skew the split for good
+            self._split_seeded = True
+            total = sum(self._h_split.sizes())
+            self._h_split.setSizes([total * 2 // 5, total - total * 2 // 5])
+
     def changeEvent(self, a0: QEvent | None) -> None:
         if a0 is not None and a0.type() == QEvent.Type.StyleChange:
             self._apply_toolbar_icons()
+            # follow the sidebar's margins, or zoom misaligns the panes' tables
+            m = theme().sp_sm
+            self._content_layout.setContentsMargins(m, m, m, m)
         super().changeEvent(a0)
 
     # ── config files ──────────────────────────────────────────────
@@ -812,14 +825,14 @@ class HardwareSetupPage(TabPage):
                 cast("QStatusBar", bar()).showMessage(message, 5000)
 
     def _seed_hardware_sizes(self) -> None:
-        """Split the page in half: available devices | installed-over-settings.
+        """Split the page 2:3: available devices | installed-over-settings.
 
-        Equal stretch factors keep the two halves balanced as the window
-        resizes (TabPage defaults the center to grow and the left dock to stay
-        fixed, which would otherwise skew the split).
+        Matching stretch factors keep that balance as the window resizes
+        (TabPage defaults the center to grow and the left dock to stay fixed,
+        which would otherwise skew the split). The split itself is set by
+        showEvent, once the page has its real width.
         """
-        self._h_split.setStretchFactor(0, 1)  # available devices
-        self._h_split.setStretchFactor(1, 1)  # devices, settings and defaults
-        self._h_split.setSizes([500, 500])
+        self._h_split.setStretchFactor(0, 2)  # available devices
+        self._h_split.setStretchFactor(1, 3)  # devices, settings and defaults
         self._detail_split.setSizes([500, 500])
         self._roles_split.setSizes([600, 400])
