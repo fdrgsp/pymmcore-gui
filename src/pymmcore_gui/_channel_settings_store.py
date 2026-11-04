@@ -166,18 +166,21 @@ class ChannelSettingsStore(QObject):
         return True
 
     def light_intensity(self) -> float | None:
-        """Return the intensity of the current preset's light source.
+        """Read the current intensity of the preset's selected light source.
 
-        None if the light source columns are hidden, or the preset has no light
-        source.
+        Return None for hidden columns, an absent source, or differing values in
+        a multi-property source.
         """
         if not self._light_sources_visible or (core := self._core_ref()) is None:
             return None
         group = core.getChannelGroup()
         settings = self.get(group, core.getCurrentConfig(group)) if group else None
-        if settings is None or settings["light_source"] not in find_light_sources(core):
+        if settings is None or not settings["light_source"]:
             return None
-        return settings["intensity"]
+        properties = find_light_sources(core).get(settings["light_source"], ())
+        values = [float(core.getProperty(dev, prop)) for dev, prop in properties]
+        # A multi-property source has one intensity only while its values agree.
+        return values[0] if values and all(v == values[0] for v in values) else None
 
 
 _STORES: WeakKeyDictionary[CMMCorePlus, ChannelSettingsStore] = WeakKeyDictionary()

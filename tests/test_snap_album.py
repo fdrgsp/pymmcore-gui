@@ -119,6 +119,7 @@ def test_capture_records_the_intensity_only_if_its_column_is_shown(
     store.set(
         "Channel", "DAPI", {"exposure": 20, "light_source": source, "intensity": 55}
     )
+    assert store.apply_current_channel()
     assert SnappedImage.capture(mmcore, image).light_intensity == 55
 
     store.setLightSourcesVisible(False)
@@ -131,16 +132,17 @@ def test_capture_does_not_create_the_settings_store(mmcore: CMMCorePlus) -> None
     assert mmcore not in _STORES
 
 
+@pytest.mark.parametrize("same_timestamp", [False, True])
 def test_snaps_with_the_same_settings_open_in_their_own_tabs(
     manager: AcquireViewersManager,
+    same_timestamp: bool,
 ) -> None:
-    # in the same second, not the same microsecond
     first, second = (
         _snap(
             i,
             channel="DAPI",
             exposure_ms=5.0,
-            timestamp=datetime(2026, 11, 3, 14, 32, 5, i),
+            timestamp=datetime(2026, 11, 3, 14, 32, 5, 0 if same_timestamp else i),
         )
         for i in range(2)
     )
@@ -501,3 +503,37 @@ def test_disconnect_does_not_announce_album_snaps_as_live_viewers(
     manager.open_snap(_snap())
     manager._disconnect()
     closed.assert_not_called()
+
+
+def test_snap_intensity_reports_the_captured_value_not_the_preset_default(
+    mmcore: CMMCorePlus,
+) -> None:
+    store = channel_settings_store(mmcore)
+    mmcore.setConfig("Channel", "DAPI")
+    store.set(
+        "Channel",
+        "DAPI",
+        {"exposure": 20, "light_source": "Camera · TestProperty2", "intensity": 55},
+    )
+    store.apply_current_channel()
+    mmcore.setProperty("Camera", "TestProperty2", 7)
+    image = np.zeros((8, 12), dtype=np.uint16)
+    assert SnappedImage.capture(mmcore, image).light_intensity == 7
+
+
+def test_snap_intensity_requires_multi_property_values_to_agree(
+    mmcore: CMMCorePlus,
+) -> None:
+    for prop in ("TestProperty2", "TestProperty4"):
+        mmcore.defineConfig("_lights", "levels", "Camera", prop, "0.0")
+    store = channel_settings_store(mmcore)
+    mmcore.setConfig("Channel", "DAPI")
+    store.set(
+        "Channel",
+        "DAPI",
+        {"exposure": 20, "light_source": "_lights", "intensity": 12},
+    )
+    assert store.apply_current_channel()
+    assert store.light_intensity() == 12
+    mmcore.setProperty("Camera", "TestProperty4", 7)
+    assert store.light_intensity() is None

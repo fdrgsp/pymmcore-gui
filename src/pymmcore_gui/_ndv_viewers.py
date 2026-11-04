@@ -11,6 +11,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
+from uuid import uuid4
 
 from cmap import Colormap
 from ndv.models import ChannelMode, LUTModel
@@ -609,7 +610,7 @@ class AcquireViewersManager(QObject):
             snap.image, scales=scales, auto_hide_z_buttons=True, **display
         )
         widget = viewer.widget()
-        widget.setObjectName(f"ndv-snap-{snap.timestamp:%Y%m%d%H%M%S%f}")
+        widget.setObjectName(f"ndv-snap-{uuid4().hex}")
         viewer.source_title = snap.title
         wrapper = viewer.data_wrapper
         if not snap.is_rgb and wrapper is not None:
@@ -620,8 +621,7 @@ class AcquireViewersManager(QObject):
                 wrapper, snap.image, scale_overrides=scales
             )
 
-        # Named after the widget: snaps with the same settings in the same second
-        # share a title, and the dock manager keys its docks by this name.
+        # Dock names must be unique even when snap titles and timestamps match.
         dw = self._new_dock(widget.objectName())
         dw.setWindowTitle(snap.title)
         dw.setWidget(widget, CDockWidget.eInsertMode.ForceNoScrollArea)
