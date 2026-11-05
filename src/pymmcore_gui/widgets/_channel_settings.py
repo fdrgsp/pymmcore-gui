@@ -51,7 +51,6 @@ class SaveToCfgButton(QPushButton):
         style = cast("QStyle", self.style())
         size = style.pixelMetric(QStyle.PixelMetric.PM_IndicatorWidth)
         self.setIconSize(QSize(size, size))
-        self.setFixedSize(size + 4, size + 4)
 
     def changeEvent(self, e: QEvent | None) -> None:
         if e is not None and e.type() == QEvent.Type.StyleChange:
