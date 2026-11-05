@@ -916,7 +916,9 @@ def test_save_button_looks_like_the_preferences_gear(
     assert style is not None
     size = style.pixelMetric(metric)
     assert button.iconSize() == QSize(size, size)
-    assert button.height() <= size + 4
+    # The normal push-button style supplies the frame and padding.
+    assert button.minimumHeight() < button.maximumHeight()
+    assert button.sizeHint().height() == button.sizeHint().width()
     assert not button.text()
     for scheme in (LIGHT_THEME, DARK_THEME):
         set_theme(scheme)

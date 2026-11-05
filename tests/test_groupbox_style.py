@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from pymmcore_gui._qt.QtAds import CDockManager, CDockWidget, DockWidgetArea
-from pymmcore_gui._qt.QtCore import Qt
+from pymmcore_gui._qt.QtCore import QCoreApplication, QEvent, Qt
 from pymmcore_gui._qt.QtWidgets import QLabel, QMainWindow, QStyle, QStyleOptionGroupBox
 from pymmcore_gui._theme import (
     DARK_THEME,
@@ -65,6 +65,9 @@ def test_autofocus_card_padding_and_title_hit_target(
             and af.width() >= af.minimumSizeHint().width()
         )
     )
+    # Dock containers may still have a layout request after the card itself
+    # reaches its size hint. Settle the ancestor layouts before measuring.
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
     size = af.size()
     settings_label = next(
         label
@@ -90,7 +93,7 @@ def test_autofocus_card_padding_and_title_hit_target(
         )
         margin = af.width() - checkbox.right() - 1 if rtl else checkbox.left()
         assert margin >= 4 * zoom
-        control = af.search_below_um if kind == "hardware" else af.every_n_timepoints
+        control = af.search_below_um if kind == "hardware" else af.settings_button
         bottom = control.mapTo(af, control.rect().bottomLeft()).y()
         assert af.height() - bottom - 1 >= 4 * zoom
         assert af.size() == size

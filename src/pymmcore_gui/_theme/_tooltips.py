@@ -58,10 +58,15 @@ class _TooltipFilter(QObject):
         obj, event = a0, a1
         if not isinstance(obj, QWidget) or event is None:
             return False
-        if event.type() == QEvent.Type.Show and obj.objectName() == "qtooltip_label":
-            # A tip that overlaps its source must not take its hover away and
-            # trigger Qt's short leave-to-hide timer.
+        if event.type() in (QEvent.Type.Polish, QEvent.Type.Show) and obj.inherits(
+            "QTipLabel"
+        ):
+            # Keep both Qt hit testing and the native tooltip window from
+            # taking hover/focus from the source, including combo popups.
             obj.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            obj.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+            if event.type() == QEvent.Type.Polish:
+                obj.setWindowFlag(Qt.WindowType.WindowTransparentForInput)
         if event.type() != QEvent.Type.ToolTip or not isinstance(event, QHelpEvent):
             return False
 

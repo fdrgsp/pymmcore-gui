@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 from pymmcore_widgets.useq_widgets._mda_sequence import AutofocusAxis
@@ -67,7 +68,7 @@ def test_long_tooltips_wrap_without_changing_the_source(
 
 
 @pytest.mark.parametrize("popup", [False, True])
-def test_oughtafocus_tooltip_stays_visible_while_hovering(
+def test_oughtafocus_tooltip_has_reading_time_without_taking_hover(
     qtbot: QtBot, popup: bool
 ) -> None:
     editor = AutofocusAxis()
@@ -94,15 +95,20 @@ def test_oughtafocus_tooltip_stays_visible_while_hovering(
         assert viewport is not None
         pos = view.visualRect(item).center()
         qtbot.mouseMove(viewport, pos)  # type: ignore[no-untyped-call]
-        tip = _show_tooltip(viewport, pos)
+        source, position = viewport, pos
     else:
         qtbot.mouseMove(method)  # type: ignore[no-untyped-call]
-        tip = _show_tooltip(method)
+        source, position = method, None
 
+    with patch.object(QToolTip, "showText", wraps=QToolTip.showText) as show:
+        tip = _show_tooltip(source, position)
+    # Native cursor/focus is shared with the other xdist workers. Verify the
+    # reading timer passed to Qt instead of assuming none of them moves it.
+    assert show.call_args.args[-1] >= 30_000
     assert "sharpest" in QToolTip.text()
     assert tip.wordWrap()
     assert tip.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-    qtbot.wait(1000)
-    assert QToolTip.isVisible()
+    assert tip.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    assert tip.windowFlags() & Qt.WindowType.WindowTransparentForInput
     if popup:
         method.hidePopup()
