@@ -18,6 +18,7 @@ from pymmcore_gui._theme._fonts import (
     UI_FONT_WEIGHT,
     ui_font,
 )
+from pymmcore_gui._theme._icons import install_icon_contrast
 from pymmcore_gui._theme._light import LIGHT_THEME
 from pymmcore_gui._theme._pixel_sizes import rescale_pixel_sizes
 from pymmcore_gui._theme._qt import color_to_qcolor, to_qpalette
@@ -138,6 +139,7 @@ def set_style(style: MicroscopeStyle) -> None:
     global _current_style, _view
     _current_style = style
     _view = ScaledThemeView(_current_theme, style)
+    install_icon_contrast()
     install_tooltips()
     set_zoom(_DEFAULT_ZOOM)
 
