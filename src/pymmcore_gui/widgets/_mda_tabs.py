@@ -15,20 +15,16 @@ from pymmcore_gui._qt.QtCore import QEvent, QObject, Qt
 from pymmcore_gui._qt.QtWidgets import QApplication
 
 from ._mda_channel_table import MDAChannelTable
-from ._mda_position_table import MDAPositionTable
 
 if TYPE_CHECKING:
     from pymmcore_gui._qt.QtWidgets import QWidget
 
 
 def _install_gui_tables(tabs: CoreMDATabs) -> None:
-    """Swap in this app's channel and position tables for the upstream ones."""
+    """Swap in this app's channel table for the upstream one."""
     inherited_channels = tabs.channels
     tabs.channels = MDAChannelTable(0, tabs._mmc)
     inherited_channels.deleteLater()
-    inherited_positions = tabs.stage_positions
-    tabs.stage_positions = MDAPositionTable(0, tabs._mmc)
-    inherited_positions.deleteLater()
 
 
 class GuiCollapsibleCoreMDATabs(CollapsibleCoreMDATabs):

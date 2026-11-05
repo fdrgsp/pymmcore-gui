@@ -15,7 +15,6 @@ from pymmcore_gui._qt.QtCore import QSize
 from pymmcore_gui._qt.QtGui import QColor, QIcon, QImage, QPixmap
 from pymmcore_gui._qt.QtWidgets import QApplication, QWidget
 from pymmcore_gui._theme import DARK_THEME, LIGHT_THEME, qcolor, set_theme, theme
-from pymmcore_gui.widgets._mda_position_table import MDAPositionTable
 from pymmcore_gui.widgets._mda_widget import MemoryMDAWidget, TopbarMemoryMDAWidget
 
 if TYPE_CHECKING:
@@ -113,19 +112,15 @@ def test_hcs_import_preserves_plan_cells_visibility_and_theme(
     monkeypatch: pytest.MonkeyPatch,
     widget_cls: type[MemoryMDAWidget | TopbarMemoryMDAWidget],
 ) -> None:
-    populate = CoreConnectedPositionTable._update_table_positions
+    populate = CoreConnectedPositionTable.setValue
 
     def populate_with_feedback(
         self: CoreConnectedPositionTable, plan: useq.WellPlatePlan
     ) -> None:
-        assert isinstance(self, MDAPositionTable)
         assert self._import_overlay.isVisible()
         assert self._import_overlay._message == "Creating position list…"
         populate(self, plan)
 
-    monkeypatch.setattr(
-        CoreConnectedPositionTable, "_update_table_positions", populate_with_feedback
-    )
     widget = widget_cls(mmcore)
     qtbot.addWidget(widget)
     widget.revealAxis("p")
@@ -141,10 +136,12 @@ def test_hcs_import_preserves_plan_cells_visibility_and_theme(
         ),
     )
     editor._hcs.setValue(plan)
-    with qtbot.waitSignal(editor.valueChanged):
-        editor._hcs.accept()
+    with monkeypatch.context() as patch:
+        patch.setattr(CoreConnectedPositionTable, "setValue", populate_with_feedback)
+        with qtbot.waitSignal(editor.valueChanged):
+            editor._hcs.accept()
     QApplication.processEvents()
-    assert isinstance(editor, MDAPositionTable)
+    assert isinstance(editor, CoreConnectedPositionTable)
     assert editor._import_overlay.isHidden()
     assert table.isVisible()
     assert editor.value() == plan
@@ -182,29 +179,3 @@ def test_position_import_error_restores_visibility(
     with pytest.raises(ValueError):
         widget.stage_positions.setValue([{"x": "invalid"}])  # type: ignore[list-item]
     assert table.isVisible()
-
-
-def test_position_creation_message_clears_after_import_error(
-    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    widget = MemoryMDAWidget(mmcore)
-    qtbot.addWidget(widget)
-    widget.revealAxis("p")
-    widget.show()
-    editor = widget.stage_positions
-    assert isinstance(editor, MDAPositionTable)
-
-    def fail(self: CoreConnectedPositionTable, plan: useq.WellPlatePlan) -> None:
-        assert editor._import_overlay.isVisible()
-        raise RuntimeError("Position creation failed")
-
-    monkeypatch.setattr(CoreConnectedPositionTable, "_update_table_positions", fail)
-    plan = useq.WellPlatePlan(
-        plate=useq.WellPlate.from_str("96-well"),
-        a1_center_xy=(1000, 2000),
-        selected_wells=((0,), (0,)),
-    )
-    with pytest.raises(RuntimeError, match="Position creation failed"):
-        editor._update_table_positions(plan)
-    assert editor._import_overlay.isHidden()
-    assert editor.table().isVisible()
