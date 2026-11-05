@@ -168,11 +168,17 @@ def set_zoom(factor: float) -> None:
     font.setWeight(UI_FONT_WEIGHT)
     app.setFont(font)
 
-    # refresh icon sizes on caching widgets, and force a complete relayout
+    # Set global toolbar defaults before StyleChange handlers apply their
+    # widget-specific sizes. Mixing these passes makes the result depend on
+    # allWidgets() order: a toolbar visited after its parent loses the override.
     icon_sz = _current_style.pixelMetric(QStyle.PixelMetric.PM_ToolBarIconSize)
-    for w in app.allWidgets():
+    widgets = app.allWidgets()
+    for w in widgets:
         if isinstance(w, QToolBar):
             w.setIconSize(QSize(icon_sz, icon_sz))
+
+    # Force a complete relayout and let widgets restore their themed metrics.
+    for w in widgets:
         if layout := w.layout():
             layout.invalidate()
         QCoreApplication.sendEvent(w, QEvent(QEvent.Type.StyleChange))
