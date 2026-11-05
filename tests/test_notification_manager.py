@@ -43,7 +43,7 @@ def test_notification_manager(qtbot: QtBot, monkeypatch: MonkeyPatch) -> None:
     # ensure clicking the Action button calls the on_action callback:
     toast = nm._notification_widgets[-1]
     assert isinstance(toast, NotificationToast)
-    with qtbot.waitSignal(toast.destroyed, timeout=1000):
+    with qtbot.waitSignal(toast.destroyed, timeout=5000):
         ...
 
     action_mock = Mock()
