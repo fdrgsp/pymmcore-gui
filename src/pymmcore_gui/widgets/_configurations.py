@@ -542,8 +542,8 @@ class ConfigurationsPage(TabPage):
         color = qcolor(theme().text_secondary).name()
         size = theme().scaled(16)
         for btn, icon in (
-            (self._save_core_btn, "material-symbols:upload-file-outline-rounded"),
-            (self._save_file_btn, "material-symbols:file-save-outline-rounded"),
+            (self._save_core_btn, "material-symbols:upload-rounded"),
+            (self._save_file_btn, "material-symbols:save-outline-rounded"),
         ):
             set_source_icon(btn, QIconifyIcon(icon, color=color))
             btn.setIconSize(QSize(size, size))

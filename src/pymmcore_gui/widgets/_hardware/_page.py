@@ -98,7 +98,7 @@ class HardwareSetupPage(TabPage):
         for text, icon, slot in (
             ("New", "material-symbols:add-box-outline-rounded", self.new_config),
             ("Load…", "material-symbols:upload-rounded", self.load_config),
-            ("Save…", "material-symbols:download-rounded", self.save_config),
+            ("Save…", "material-symbols:save-outline-rounded", self.save_config),
         ):
             btn = QPushButton(text)
             btn.setProperty("variant", "primary")
