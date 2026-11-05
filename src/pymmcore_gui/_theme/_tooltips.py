@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import sys
 from html import escape
 
-from pymmcore_gui._qt.QtCore import QEvent, QObject, QRect, Qt
+from pymmcore_gui._qt.QtCore import QEvent, QObject, QPoint, QRect, Qt
 from pymmcore_gui._qt.QtGui import QHelpEvent, QTextDocument
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractItemView,
@@ -16,6 +17,13 @@ from pymmcore_gui._qt.QtWidgets import (
 
 _READING_TIME_MS = 30_000
 _WIDTH = 360
+
+# With a non-native style (ours is Fusion-based) Qt places tooltips about 40
+# logical px below the cursor on macOS, versus ~16 elsewhere, so they look
+# detached from what they describe. Qt adds its own offset to the position it
+# is given, so shift the anchor up by the difference. Windows/Linux are left
+# on Qt's default placement.
+_MACOS_TOOLTIP_Y_CORRECTION = 24 if sys.platform == "darwin" else 0
 
 
 def _tooltip_text(widget: QWidget, event: QHelpEvent) -> tuple[str, QRect]:
@@ -79,14 +87,18 @@ class _TooltipFilter(QObject):
         if (screen := obj.screen()) is not None:
             width = min(width, screen.availableGeometry().width() - 24)
         wrapped = _wrapped_tooltip(text, max(1, width))
-        if wrapped is None:
+        if wrapped is None and not _MACOS_TOOLTIP_Y_CORRECTION:
             return False
+        # Short tooltips keep Qt's default duration; wrapped ones need time to read.
+        duration = (
+            -1 if wrapped is None else max(_READING_TIME_MS, obj.toolTipDuration())
+        )
         QToolTip.showText(
-            event.globalPos(),
-            wrapped,
+            event.globalPos() - QPoint(0, _MACOS_TOOLTIP_Y_CORRECTION),
+            text if wrapped is None else wrapped,
             obj,
             rect,
-            max(_READING_TIME_MS, obj.toolTipDuration()),
+            duration,
         )
         event.accept()
         return True
