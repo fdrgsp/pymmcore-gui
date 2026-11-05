@@ -1812,6 +1812,7 @@ def test_mda_lock_restricts_acquire_page_to_watching(
     toolbar = explorer.toolBar()
     assert toolbar.zoom_to_fit_action.isEnabled()
     assert toolbar.auto_zoom_to_fit_action.isEnabled()
+    assert toolbar.stop_scan_action.isEnabled()
     assert not toolbar.snap_action.isEnabled()
     assert not toolbar.scan_action.isEnabled()
     assert not toolbar.clear_action.isEnabled()

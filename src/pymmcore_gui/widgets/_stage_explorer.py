@@ -127,6 +127,7 @@ class ThemedStageExplorer(StageExplorer):
         "auto_zoom_to_fit_action",
         "show_grid_action",
         "map_memory_action",
+        "stop_scan_action",
     )
     """Toolbar actions that stay usable while an acquisition is running.
 
@@ -134,7 +135,9 @@ class ThemedStageExplorer(StageExplorer):
     polling, ROI scanning) or edits state a running acquisition owns (Clear
     View, Delete ROIs, Send to MDA), so :meth:`setMdaLocked` shuts it off.
     What is left is pure navigation of what has already been mapped -- the
-    reason the panel stays reachable at all during a run.
+    reason the panel stays reachable at all during a run. Stop Scan is the one
+    exception that does touch the run: it must stay live so a scan started from
+    the Explorer can be cancelled.
     """
 
     def __init__(
