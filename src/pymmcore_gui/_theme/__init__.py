@@ -23,6 +23,7 @@ from pymmcore_gui._theme._pixel_sizes import rescale_pixel_sizes
 from pymmcore_gui._theme._qt import color_to_qcolor, to_qpalette
 from pymmcore_gui._theme._scaled_view import ScaledThemeView
 from pymmcore_gui._theme._style import MicroscopeStyle
+from pymmcore_gui._theme._tooltips import install_tooltips
 from pymmcore_gui._theme._types import (
     Color,
     Theme,
@@ -137,6 +138,7 @@ def set_style(style: MicroscopeStyle) -> None:
     global _current_style, _view
     _current_style = style
     _view = ScaledThemeView(_current_theme, style)
+    install_tooltips()
     set_zoom(_DEFAULT_ZOOM)
 
 

@@ -10,7 +10,7 @@ from pymmcore_widgets._channel_settings import apply_channel_settings
 from pymmcore_widgets._light_sources import find_light_sources
 from superqt.iconify import QIconifyIcon
 
-from pymmcore_gui._array_viewer import unstyle_widgets
+from pymmcore_gui._array_viewer import set_source_icon, unstyle_widgets
 from pymmcore_gui._channel_settings_store import channel_settings_store
 from pymmcore_gui._light_sources import ChannelDeclaration, write_channel_comments
 from pymmcore_gui._qt.QtCore import QEvent, QSize, QTimer
@@ -46,8 +46,8 @@ class SaveToCfgButton(QPushButton):
         self._apply_icon()
 
     def _apply_icon(self) -> None:
-        color = qcolor(theme().text_secondary).name()
-        self.setIcon(QIconifyIcon(self._ICON, color=color))
+        color = qcolor(theme().text_primary).name()
+        set_source_icon(self, QIconifyIcon(self._ICON, color=color))
         style = cast("QStyle", self.style())
         size = style.pixelMetric(QStyle.PixelMetric.PM_IndicatorWidth)
         self.setIconSize(QSize(size, size))

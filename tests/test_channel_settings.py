@@ -921,7 +921,7 @@ def test_save_button_looks_like_the_preferences_gear(
     for scheme in (LIGHT_THEME, DARK_THEME):
         set_theme(scheme)
         button.changeEvent(QEvent(QEvent.Type.StyleChange))
-        assert color() == qcolor(theme().text_secondary).name()
+        assert color() == qcolor(theme().text_primary).name()
 
 
 def test_run_takes_what_is_being_typed(mmcore: CMMCorePlus, qtbot: QtBot) -> None:

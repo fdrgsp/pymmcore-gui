@@ -5678,6 +5678,7 @@ def test_mda_action_icons_use_theme_status_colors(
     assert_icon_color(widget.control_btns.cancel_btn.icon(), red)
     assert_icon_color(widget.channels.act_remove_row.icon(), red)
     assert_icon_color(widget.channels.act_clear.icon(), red)
+    assert_icon_color(widget.af_axis.settings_button.icon(), theme().text_primary)
 
     # Upstream replaces this icon at runtime; our later signal handler must
     # replace its literal "lime" icon with the theme green again.
@@ -5699,6 +5700,7 @@ def test_mda_action_icons_use_theme_status_colors(
     QApplication.processEvents()
     assert_icon_color(widget.control_btns.run_btn.icon(), theme().status_green)
     assert_icon_color(widget.channels.act_remove_row.icon(), theme().status_red)
+    assert_icon_color(widget.af_axis.settings_button.icon(), theme().text_primary)
 
 
 def test_toolbar_action_separators_follow_theme(qtbot: QtBot) -> None:

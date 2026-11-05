@@ -22,6 +22,7 @@ from superqt.iconify import QIconifyIcon
 from pymmcore_gui._array_viewer import (
     _recolor_icon,
     ensure_visible_icon,
+    set_icon_tint,
     set_source_icon,
     unstyle_widgets,
 )
@@ -709,6 +710,7 @@ class MemoryMDAWidgetBase(_MixinBase):
         """Apply the app's semantic green/red to every MDA action icon."""
         self._apply_themed_section_icons()
         self._flavor_apply_tab_icons()
+        set_icon_tint(self.af_axis.settings_button, qcolor(theme().text_primary))
         green = qcolor(theme().status_green).name()
         red = qcolor(theme().status_red).name()
 

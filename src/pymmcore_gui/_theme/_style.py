@@ -884,14 +884,13 @@ class MicroscopeStyle(QProxyStyle):
         # Circle
         if checked:
             p.setPen(QPen(checked_accent, 1.5))
-            p.setBrush(Qt.BrushStyle.NoBrush)
         else:
-            border = pal.color(QPalette.ColorRole.Mid)
+            border = pal.color(QPalette.ColorRole.AlternateBase)
             if hovered:
                 border = pal.color(QPalette.ColorRole.WindowText)
             p.setPen(QPen(border, 1.5))
-            p.setBrush(Qt.BrushStyle.NoBrush)
 
+        p.setBrush(QBrush(pal.color(QPalette.ColorRole.AlternateBase)))
         cx, cy = r.center().x(), r.center().y()
         radius = min(r.width(), r.height()) / 2 - 1
         p.drawEllipse(QPointF(cx, cy), radius, radius)
