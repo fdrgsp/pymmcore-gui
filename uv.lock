@@ -2707,8 +2707,8 @@ cli = [
 
 [[package]]
 name = "pymmcore-widgets"
-version = "0.1.dev658+g6ca92fec6"
-source = { git = "https://github.com/fdrgsp/pymmcore-widgets?rev=cite#6ca92fec62605f86749b755aa898a51d38fd7fce" }
+version = "0.1.dev660+g680411e6a"
+source = { git = "https://github.com/fdrgsp/pymmcore-widgets?rev=cite#680411e6a3ef1883eba6fb2bf0e0e31af393a7e4" }
 dependencies = [
     { name = "psutil" },
     { name = "pymmcore-plus", extra = ["cli"] },
@@ -3817,8 +3817,8 @@ wheels = [
 
 [[package]]
 name = "useq-schema"
-version = "0.9.3.dev14+g83ea506a1"
-source = { git = "https://github.com/fdrgsp/useq-schema?rev=cite#83ea506a107fd9650a1c7b92f40e4b23d1a957b7" }
+version = "0.9.3.dev18+g005087906"
+source = { git = "https://github.com/fdrgsp/useq-schema?rev=cite#0050879063198aa43321db8f3c2daf063d20d321" }
 dependencies = [
     { name = "numpy" },
     { name = "pydantic" },
