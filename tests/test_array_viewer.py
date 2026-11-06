@@ -130,6 +130,44 @@ def test_reopened_z_stack_keeps_z_slider(
         wrapper.close()
 
 
+@pytest.mark.parametrize(
+    ("axes", "channel_axis"),
+    [
+        ({"p": 14, "y": 8, "x": 8}, None),
+        ({"t": 5, "y": 8, "x": 8}, None),
+        ({"t": 5, "c": ["DAPI", "FITC"], "y": 8, "x": 8}, "c"),
+    ],
+)
+def test_stream_view_channel_axis_from_names_only(
+    qtbot: QtBot, axes: dict, channel_axis: str | None
+) -> None:
+    """A small non-channel axis (e.g. 14 positions) must not become channels."""
+    settings = AcquisitionSettings(
+        dimensions=tuple(dims_from_standard_axes(axes)),
+        dtype="uint16",
+        format=ScratchFormat(),
+    )
+    with create_stream(settings) as stream:
+        n_frames = int(
+            np.prod(
+                [
+                    len(v) if isinstance(v, list) else v
+                    for k, v in axes.items()
+                    if k not in "yx"
+                ]
+            )
+        )
+        for _ in range(n_frames):
+            stream.append(np.zeros((8, 8), dtype="uint16"))
+        view = stream.view()
+
+        viewer = MMArrayViewer(view, auto_hide_z_buttons=True)
+        qtbot.addWidget(viewer.widget())
+        expected = None if channel_axis is None else view.dims.index(channel_axis)
+        assert viewer._resolved.channel_axis == expected
+        qtbot.waitUntil(viewer._is_idle)
+
+
 def test_synthesize_record_from_stream_view(qtbot: QtBot) -> None:
     """A live StreamView keeps its real axis names."""
     settings = AcquisitionSettings(

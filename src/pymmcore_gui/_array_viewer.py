@@ -38,6 +38,9 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 
+# imported for its side effect: registers the live-MDA StreamView DataWrapper
+from pymmcore_gui._stream_view_wrapper import StreamViewWrapper  # noqa: F401
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
