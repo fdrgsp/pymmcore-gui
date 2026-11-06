@@ -3915,8 +3915,8 @@ def test_collapsible_mda_preserves_per_position_af_offsets(
     """Per-position autofocus offsets survive the sectioned Positions editor.
 
     The offset lives on each position's sub-sequence ``autofocus_plan`` and is
-    edited through the upstream table's AF column + "Set AF Offset per Position"
-    toggle. Both retained MDA presentations must preserve those offsets.
+    edited through the upstream table's AF column + "HAF Offset" toggle. Both
+    retained MDA presentations must preserve those offsets.
     """
     set_theme(DARK_THEME)
     mmcore.setAutoFocusDevice("Autofocus")
