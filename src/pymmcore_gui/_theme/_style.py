@@ -386,8 +386,18 @@ class MicroscopeStyle(QProxyStyle):
                 # still fits.
                 s.setWidth(max(s.height(), contentsSize.width()))
             else:
-                # breathing room either side of the label
-                s.setWidth(s.width() + 8)
+                # Size to the contents rather than Fusion's width: Fusion
+                # floors every text button at 80px, which leaves short labels
+                # ("HCS", "Save") swimming in empty padding. Rebuild the
+                # QCommonStyle width (contents + margin + frame) without that
+                # floor, plus breathing room either side of the label.
+                margin = self.pixelMetric(
+                    QStyle.PixelMetric.PM_ButtonMargin, opt, widget
+                )
+                frame = self.pixelMetric(
+                    QStyle.PixelMetric.PM_DefaultFrameWidth, opt, widget
+                )
+                s.setWidth(contentsSize.width() + margin + 2 * frame + 8)
         elif ct == QStyle.ContentsType.CT_ComboBox:
             # Fusion's own CT_ComboBox width computation reserves space for
             # *its* default arrow glyph, not the wider one _draw_combobox
