@@ -56,7 +56,7 @@ _MIN_WIDTH: Final = 420
 _APPLY_ICON: Final = "material-symbols:check-rounded"
 _CANCEL_ICON: Final = "material-symbols:close-rounded"
 _BROWSE_ICON: Final = "material-symbols:folder-open-outline-rounded"
-_ADD_ICON: Final = "material-symbols:add-box-outline-rounded"
+_ADD_ICON: Final = "mdi:plus-thick"
 _DELETE_ICON: Final = "material-symbols:delete-forever-outline-rounded"
 
 
@@ -176,21 +176,21 @@ class PreferencesDialog(QDialog):
         t = theme()
         default_color = qcolor(t.text_secondary).name()
         danger_color = qcolor(t.status_red).name()
+        green = qcolor(t.status_green).name()
         size = QSize(t.scaled(16), t.scaled(16))
         for btn, glyph, color in (
             (self._apply_btn, _APPLY_ICON, default_color),
             (self._cancel_btn, _CANCEL_ICON, default_color),
             (self._browse_btn, _BROWSE_ICON, default_color),
-            (self._add_layout_btn, _ADD_ICON, default_color),
+            (self._add_layout_btn, _ADD_ICON, green),
             (self._delete_layout_btn, _DELETE_ICON, danger_color),
         ):
             set_source_icon(btn, QIconifyIcon(glyph, color=color))
             btn.setIconSize(size)
 
-        panel_color = qcolor(t.status_green).name()
         for info in PANELS:
             checkbox = self._widget_checkboxes[info.key]
-            checkbox.setIcon(QIconifyIcon(info.icon, color=panel_color))
+            checkbox.setIcon(QIconifyIcon(info.icon, color=green))
             checkbox.setIconSize(size)
 
     def changeEvent(self, a0: QEvent | None) -> None:
