@@ -5829,6 +5829,39 @@ def test_position_subsequence_popup_is_collapsed_and_themed(
     assert_bounds_icons_themed()
 
 
+def test_third_party_windows_theme_widgets_built_after_opening(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Buttons built after a themed window first opened get the bordered look too.
+
+    Regression test: the HCS wizard's per-well Manual panel is built when its
+    well is first selected, after the wizard's own sweep, so its Set/Clear
+    buttons stayed borderless; and the Surface Focus dialog was never themed.
+    """
+    set_theme(DARK_THEME)
+    widget = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(widget)
+    positions = widget.stage_positions
+
+    positions._show_hcs()
+    wizard = positions._hcs
+    qtbot.waitExposed(wizard)
+    wizard.next()
+    calibration = wizard.calibration_page.widget
+    calibration._plate_view.setSelectedIndices([(1, 0)])
+    well = calibration._current_calibration_widget()
+    assert well is not None
+    qtbot.waitUntil(lambda: well._set_button.property("variant") == "subtle")
+    assert well._clear_button.property("variant") == "subtle"
+
+    positions._edit_surface()
+    dialog = positions._surface_dialog
+    assert dialog is not None
+    qtbot.waitUntil(
+        lambda: all(b.property("variant") for b in dialog._buttons.buttons())
+    )
+
+
 def test_position_subsequence_popup_opens_without_a_focused_control(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:

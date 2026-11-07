@@ -2,22 +2,20 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
-
 from pymmcore_widgets import HCSWizard
 from pymmcore_widgets.mda import CollapsibleCoreMDATabs, CoreMDATabs
 from pymmcore_widgets.useq_widgets import CustomPlateWidget
+from pymmcore_widgets.useq_widgets._z_surface_dialog import ZSurfaceDialog
 
 from pymmcore_gui._array_viewer import (
     unstyle_widgets,
 )
 from pymmcore_gui._qt.QtCore import QEvent, QObject, Qt
-from pymmcore_gui._qt.QtWidgets import QApplication
+from pymmcore_gui._qt.QtWidgets import QApplication, QWidget
 
 from ._mda_channel_table import MDAChannelTable
 
-if TYPE_CHECKING:
-    from pymmcore_gui._qt.QtWidgets import QWidget
+_THEMED = "_pymmcore_gui_themed"
 
 
 def _install_gui_tables(tabs: CoreMDATabs) -> None:
@@ -48,9 +46,16 @@ class GuiCoreMDATabs(CoreMDATabs):
         _install_gui_tables(self)
 
 
+def _theme(widget: QWidget) -> None:
+    """Unstyle ``widget``'s subtree and mark all of it as themed."""
+    unstyle_widgets(widget)
+    for w in (widget, *widget.findChildren(QWidget)):
+        w.setProperty(_THEMED, True)
+
+
 def _theme_subsequence_popup(popup: QWidget) -> None:
     """Match a position sub-sequence popup's styling to the rest of the app."""
-    unstyle_widgets(popup)
+    _theme(popup)
 
     # Left to itself, the dialog hands initial focus to the first focusable
     # widget in it -- the Grid/Tiles tab's own checkbox -- which then shows the
@@ -63,31 +68,33 @@ def _theme_subsequence_popup(popup: QWidget) -> None:
 class _ThirdPartyWindowThemer(QObject):
     """Applies the app's styling to windows pymmcore-widgets opens itself.
 
-    The position sub-sequence popup, the HCS wizard, and the wizard's "New
-    Plate" dialog are all constructed on demand, deep inside
-    pymmcore-widgets, with no app-side subclass to hook construction-time
-    theming into -- the popup is private (``_MDAPopup``, matched by class
-    name for want of a public hook), the wizard is created lazily by the
-    position table's "Well Plate..." button, and the custom-plate dialog is
-    created lazily by the wizard's "+" button (so it postdates the wizard's
-    own ``unstyle_widgets()`` sweep and needs its own). Watch every Show
-    event application-wide instead and theme each the moment it appears.
+    The position sub-sequence popup, the HCS wizard, the wizard's "New
+    Plate" dialog and the Surface Focus dialog are all constructed on demand,
+    deep inside pymmcore-widgets, with no app-side subclass to hook
+    construction-time theming into -- the popup is private (``_MDAPopup``,
+    matched by class name for want of a public hook). Watch every Show event
+    application-wide instead and theme each the moment it appears.
+
+    These windows also build parts of themselves later (e.g. the wizard's
+    per-well Manual calibration panels, created when a well is first
+    selected), after the window's own sweep: any unthemed widget shown inside
+    an already-themed window is themed on its first Show too.
     """
 
     def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
         if (
             a1 is None
             or a1.type() != QEvent.Type.Show
-            or a0 is None
-            or a0.property("_pymmcore_gui_themed")
+            or not isinstance(a0, QWidget)
+            or a0.property(_THEMED)
         ):
             return False
         if type(a0).__name__ == "_MDAPopup":
-            a0.setProperty("_pymmcore_gui_themed", True)
-            _theme_subsequence_popup(cast("QWidget", a0))
-        elif isinstance(a0, (HCSWizard, CustomPlateWidget)):
-            a0.setProperty("_pymmcore_gui_themed", True)
-            unstyle_widgets(a0)
+            _theme_subsequence_popup(a0)
+        elif isinstance(a0, (HCSWizard, CustomPlateWidget, ZSurfaceDialog)) or (
+            (window := a0.window()) is not None and window.property(_THEMED)
+        ):
+            _theme(a0)
         return False
 
 
