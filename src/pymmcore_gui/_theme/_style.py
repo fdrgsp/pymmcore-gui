@@ -386,11 +386,9 @@ class MicroscopeStyle(QProxyStyle):
                 # still fits.
                 s.setWidth(max(s.height(), contentsSize.width()))
             else:
-                # Size to the contents rather than Fusion's width: Fusion
-                # floors every text button at 80px, which leaves short labels
-                # ("HCS", "Save") swimming in empty padding. Rebuild the
-                # QCommonStyle width (contents + margin + frame) without that
-                # floor, plus breathing room either side of the label.
+                # Fusion floors text buttons at 80px, padding short labels
+                # ("HCS", "Save"); rebuild QCommonStyle's width (contents +
+                # margin + frame) without it, plus room either side.
                 margin = self.pixelMetric(
                     QStyle.PixelMetric.PM_ButtonMargin, opt, widget
                 )
@@ -716,20 +714,24 @@ class MicroscopeStyle(QProxyStyle):
             # Icon + text: center the pair as one group rather than pinning
             # the icon to the button's left edge -- on a button wider than
             # its content (e.g. a full-width CTA) a left-pinned icon reads
-            # as stranded, far from the label it belongs to.
+            # as stranded, far from the label it belongs to. Right-to-left
+            # puts the icon after the text, as Fusion does.
             icon_size = opt.iconSize
             gap = 6
             text_w = p.fontMetrics().size(flags, opt.text).width()
             content_w = icon_size.width() + gap + text_w
             start = r.left() + max(0, (r.width() - content_w) // 2)
+            rtl = opt.direction == Qt.LayoutDirection.RightToLeft
+            icon_x = start + text_w + gap if rtl else start
+            text_x = start if rtl else start + icon_size.width() + gap
             icon_rect = QRect(
-                start,
+                icon_x,
                 r.top() + (r.height() - icon_size.height()) // 2,
                 icon_size.width(),
                 icon_size.height(),
             )
             opt.icon.paint(p, icon_rect, icon_align, icon_mode)
-            text_rect = QRect(icon_rect.right() + gap, r.top(), text_w, r.height())
+            text_rect = QRect(text_x, r.top(), text_w, r.height())
             self.drawItemText(p, text_rect, flags, opt.palette, enabled, opt.text)
             return
 

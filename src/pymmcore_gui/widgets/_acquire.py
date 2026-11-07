@@ -16,7 +16,6 @@ from superqt.iconify import QIconifyIcon
 from pymmcore_gui._array_viewer import (
     ensure_visible_icon,
     set_icon_tint,
-    set_source_icon,
     unstyle_widgets,
 )
 from pymmcore_gui._camera_roi_sync import CameraRoiSyncController
@@ -1038,15 +1037,6 @@ class AcquirePage(TabPage):
         widget.setAccentColors(
             qcolor(theme().status_green).name(), qcolor(theme().status_red).name()
         )
-        set_source_icon(widget.crop_btn, widget.crop_btn.icon())
-        set_source_icon(widget.select_roi_btn, widget.select_roi_btn.icon())
-        # setAccentColors calls plain QAbstractButton.setIcon(), which upstream
-        # rightly knows nothing about this app's icon-contrast stash. Without
-        # this, unstyle_widgets' original ensure_visible_icon() call (made
-        # once, at panel creation, before this method first ran) would keep
-        # being the "pristine" source every later theme toggle re-derives
-        # from -- silently reverting these two icons back to upstream's plain
-        # CSS green/red the next time that sweep runs.
 
     def _on_stage_explorer_send_to_mda(
         self, positions: list[useq.Position], replace: bool

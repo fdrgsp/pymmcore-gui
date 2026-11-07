@@ -371,11 +371,6 @@ class PanelButtonBar(QWidget):
         panel_color = qcolor(theme().status_green).name()
         for info in self._panels:
             btn = self._buttons[info.key]
-            # set_source_icon (not setIcon) refreshes the stash that the
-            # app-wide theme-change sweep (ensure_visible_icon) re-derives
-            # from -- a bare setIcon would leave that sweep recoloring from
-            # the *previous* theme's icon. See the "Theme-aware icons" note
-            # in the panels-toolbar design doc.
             set_source_icon(btn, QIconifyIcon(info.icon, color=panel_color))
             btn.setIconSize(toolbar_icon_size())
 

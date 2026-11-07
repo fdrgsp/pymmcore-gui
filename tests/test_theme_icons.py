@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from pymmcore_plus.autofocus import DuoSettings, OughtaFocusSettings
 from pymmcore_widgets.useq_widgets._autofocus_settings import AutofocusSettingsDialog
 
-from pymmcore_gui._array_viewer import _icon_avg_rgb
+from pymmcore_gui._array_viewer import _icon_avg_rgb, ensure_visible_icon
 from pymmcore_gui._qt.QtCore import QSize
 from pymmcore_gui._qt.QtGui import QColor, QIcon, QPixmap
 from pymmcore_gui._qt.QtWidgets import QPushButton
@@ -60,3 +60,20 @@ def test_new_button_keeps_its_semantic_icon_color(qtbot: QtBot) -> None:
     button.show()
     qtbot.waitExposed(button)
     assert _icon_avg_rgb(button.icon(), QSize(16, 16)) == (0, 128, 0)
+
+
+def test_sweep_keeps_an_icon_swapped_in_by_other_code(qtbot: QtBot) -> None:
+    """An upstream `setIcon()` becomes the new source, not reverted by a sweep."""
+
+    def icon(color: str) -> QIcon:
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(QColor(color))
+        return QIcon(pixmap)
+
+    button = QPushButton()
+    qtbot.addWidget(button)
+    button.setIcon(icon("black"))
+    ensure_visible_icon(button)  # stashes the black icon, recolors it on dark
+    button.setIcon(icon("red"))  # upstream swap, unaware of the stash
+    ensure_visible_icon(button)
+    assert _icon_avg_rgb(button.icon(), QSize(16, 16)) == (255, 0, 0)

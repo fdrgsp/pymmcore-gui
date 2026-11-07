@@ -706,6 +706,23 @@ class MemoryMDAWidgetBase(_MixinBase):
             painter.end()
             label.setPixmap(tinted)
 
+    def _apply_surface_focus_icons(self, green: str, red: str) -> None:
+        """Theme the gears the Surface Focus button swaps between.
+
+        Upstream re-picks its icon from `_gears` on every setting change, and
+        its neutral gear is uncolored (black), so the dict itself is themed.
+        """
+        positions = self.stage_positions
+        neutral = qcolor(theme().text_primary).name()
+        positions._gears.update(
+            {
+                "": QIconifyIcon("tabler:settings", color=neutral),
+                "valid": QIconifyIcon("tabler:settings-check", color=green),
+                "error": QIconifyIcon("tabler:settings-x", color=red),
+            }
+        )
+        positions._update_surface_focus()
+
     def _apply_themed_icons(self, *_: object) -> None:
         """Apply the app's semantic green/red to every MDA action icon."""
         self._apply_themed_section_icons()
@@ -713,6 +730,7 @@ class MemoryMDAWidgetBase(_MixinBase):
         set_icon_tint(self.af_axis.settings_button, qcolor(theme().text_primary))
         green = qcolor(theme().status_green).name()
         red = qcolor(theme().status_red).name()
+        self._apply_surface_focus_icons(green, red)
 
         controls = self.control_btns
         set_source_icon(

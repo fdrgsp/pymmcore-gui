@@ -416,12 +416,35 @@ def _recolor_icon(icon: QIcon, color: QColor) -> QIcon:
 
 _ORIGINAL_ICON_PROPERTY = "_pymmcore_gui_original_icon"
 _ICON_TINT_PROPERTY = "_pymmcore_gui_icon_tint"
+_APPLIED_ICON_KEY_PROPERTY = "_pymmcore_gui_applied_icon_key"
+
+
+def _apply_icon(btn: QAbstractButton, icon: QIcon) -> None:
+    btn.setIcon(icon)
+    btn.setProperty(_APPLIED_ICON_KEY_PROPERTY, icon.cacheKey())
+
+
+def _source_icon(btn: QAbstractButton) -> QIcon | None:
+    """Return the stashed original icon to recolor from.
+
+    A button showing an icon not applied here had it swapped by other code
+    (a plain `setIcon()` upstream), so that icon becomes the new original
+    rather than being reverted to the stale one.
+    """
+    current = btn.icon()
+    if current.cacheKey() != btn.property(_APPLIED_ICON_KEY_PROPERTY):
+        if current.isNull():
+            return None
+        btn.setProperty(_ORIGINAL_ICON_PROPERTY, current)
+        btn.setProperty(_APPLIED_ICON_KEY_PROPERTY, current.cacheKey())
+    icon: QIcon = btn.property(_ORIGINAL_ICON_PROPERTY)
+    return icon
 
 
 def set_source_icon(btn: QAbstractButton, icon: QIcon) -> None:
     """Set a button icon and remember it as the source for theme recoloring."""
     btn.setProperty(_ORIGINAL_ICON_PROPERTY, icon)
-    btn.setIcon(icon)
+    _apply_icon(btn, icon)
 
 
 def set_icon_tint(btn: QAbstractButton, color: QColor) -> None:
@@ -432,14 +455,10 @@ def set_icon_tint(btn: QAbstractButton, color: QColor) -> None:
     sweep) preserve the requested semantic color instead of replacing it with
     the generic foreground color.
     """
-    icon = btn.property(_ORIGINAL_ICON_PROPERTY)
-    if icon is None:
-        icon = btn.icon()
-        if icon.isNull():
-            return
-        btn.setProperty(_ORIGINAL_ICON_PROPERTY, icon)
+    if (icon := _source_icon(btn)) is None:
+        return
     btn.setProperty(_ICON_TINT_PROPERTY, QColor(color))
-    btn.setIcon(_recolor_icon(icon, color))
+    _apply_icon(btn, _recolor_icon(icon, color))
 
 
 def ensure_visible_icon(btn: QAbstractButton) -> None:
@@ -448,15 +467,11 @@ def ensure_visible_icon(btn: QAbstractButton) -> None:
     Re-evaluate from the stored original icon on each theme change so previous
     tints do not become permanent.
     """
-    icon = btn.property(_ORIGINAL_ICON_PROPERTY)
-    if icon is None:
-        icon = btn.icon()
-        if icon.isNull():
-            return
-        btn.setProperty(_ORIGINAL_ICON_PROPERTY, icon)
+    if (icon := _source_icon(btn)) is None:
+        return
 
     if isinstance(tint := btn.property(_ICON_TINT_PROPERTY), QColor):
-        btn.setIcon(_recolor_icon(icon, tint))
+        _apply_icon(btn, _recolor_icon(icon, tint))
         return
 
     size = btn.iconSize()
@@ -468,7 +483,7 @@ def ensure_visible_icon(btn: QAbstractButton) -> None:
         return
     r, g, b = rgb
     if max(r, g, b) - min(r, g, b) > _MAX_ICON_GRAYSCALE_SPREAD:
-        btn.setIcon(icon)  # has real hue -- always show the original
+        _apply_icon(btn, icon)  # has real hue -- always show the original
         return
     lum = 0.299 * r + 0.587 * g + 0.114 * b
     # QApplication.palette(), not btn.palette(): right after
@@ -480,9 +495,9 @@ def ensure_visible_icon(btn: QAbstractButton) -> None:
     pal = QApplication.palette() if QApplication.instance() else btn.palette()
     bg_lum = _luminance(pal.color(QPalette.ColorRole.Window))
     if abs(lum - bg_lum) < _MIN_ICON_BG_CONTRAST:
-        btn.setIcon(_recolor_icon(icon, pal.color(QPalette.ColorRole.WindowText)))
+        _apply_icon(btn, _recolor_icon(icon, pal.color(QPalette.ColorRole.WindowText)))
     else:
-        btn.setIcon(icon)  # original already contrasts fine against this bg
+        _apply_icon(btn, icon)  # original already contrasts fine against this bg
 
 
 def unstyle_widgets(widget: Any, *, theme_icons: bool = True) -> None:
