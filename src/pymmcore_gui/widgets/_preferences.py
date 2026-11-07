@@ -179,8 +179,8 @@ class PreferencesDialog(QDialog):
         green = qcolor(t.status_green).name()
         size = QSize(t.scaled(16), t.scaled(16))
         for btn, glyph, color in (
-            (self._apply_btn, _APPLY_ICON, default_color),
-            (self._cancel_btn, _CANCEL_ICON, default_color),
+            (self._apply_btn, _APPLY_ICON, green),
+            (self._cancel_btn, _CANCEL_ICON, danger_color),
             (self._browse_btn, _BROWSE_ICON, default_color),
             (self._add_layout_btn, _ADD_ICON, green),
             (self._delete_layout_btn, _DELETE_ICON, danger_color),
