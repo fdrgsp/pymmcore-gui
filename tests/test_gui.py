@@ -788,9 +788,10 @@ def test_acquire_page_dock_layout(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     assert [section.title for section in tabs.sections] == [
         "Channels",
         "Positions",
-        "Grid/Tiles",
         "Z Stack",
         "Time Series",
+        "Grid/Tiles",
+        "Autofocus",
         "Saving",
     ]
     assert tabs.section("c").content_widget is page._mda.channels
