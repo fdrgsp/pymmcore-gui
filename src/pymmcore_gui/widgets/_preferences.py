@@ -20,8 +20,9 @@ from typing import TYPE_CHECKING, Final
 
 from superqt.iconify import QIconifyIcon
 
+from pymmcore_gui._array_viewer import set_source_icon
 from pymmcore_gui._layouts import RESERVED_LAYOUT_NAMES, available_layouts
-from pymmcore_gui._qt.QtCore import QEvent, Qt
+from pymmcore_gui._qt.QtCore import QEvent, QSize, Qt
 from pymmcore_gui._qt.QtGui import QCursor
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractItemView,
@@ -50,6 +51,13 @@ if TYPE_CHECKING:
     from pymmcore_gui.widgets._acquire import AcquirePage
 
 _MIN_WIDTH: Final = 420
+
+# Same material-symbols set as the Hardware/Installation page buttons.
+_APPLY_ICON: Final = "material-symbols:check-rounded"
+_CANCEL_ICON: Final = "material-symbols:close-rounded"
+_BROWSE_ICON: Final = "material-symbols:folder-open-outline-rounded"
+_ADD_ICON: Final = "material-symbols:add-box-outline-rounded"
+_DELETE_ICON: Final = "material-symbols:delete-forever-outline-rounded"
 
 
 def _resync_hover_state(widget: QWidget) -> None:
@@ -128,7 +136,7 @@ class PreferencesDialog(QDialog):
       exactly like the toolbar buttons they replaced never needed an undo.
     * **Data & Memory** is the odd one out: values are read from
       ``Settings.instance()`` at construction and written back (then
-      flushed to disk) when "Save" is clicked -- which persists but,
+      flushed to disk) when "Apply" is clicked -- which persists but,
       unlike the old single-purpose dialog, does *not* close this one, so
       Show Widgets/Layout stay usable afterward. "Cancel" both discards
       any unsaved edit here and closes the dialog.
@@ -155,6 +163,40 @@ class PreferencesDialog(QDialog):
         outer.addWidget(memory_group)
         outer.addWidget(layout_group)
         outer.addWidget(widgets_group)
+
+        self._apply_icons()
+
+    # ── theming ──────────────────────────────────────────────────
+
+    def _apply_icons(self) -> None:
+        """(Re)build icons; QIconifyIcon bakes its color in, so rerun on theme change.
+
+        Show Widgets checkboxes reuse each panel's toolbar glyph and color.
+        """
+        t = theme()
+        default_color = qcolor(t.text_secondary).name()
+        danger_color = qcolor(t.status_red).name()
+        size = QSize(t.scaled(16), t.scaled(16))
+        for btn, glyph, color in (
+            (self._apply_btn, _APPLY_ICON, default_color),
+            (self._cancel_btn, _CANCEL_ICON, default_color),
+            (self._browse_btn, _BROWSE_ICON, default_color),
+            (self._add_layout_btn, _ADD_ICON, default_color),
+            (self._delete_layout_btn, _DELETE_ICON, danger_color),
+        ):
+            set_source_icon(btn, QIconifyIcon(glyph, color=color))
+            btn.setIconSize(size)
+
+        panel_color = qcolor(t.status_green).name()
+        for info in PANELS:
+            checkbox = self._widget_checkboxes[info.key]
+            checkbox.setIcon(QIconifyIcon(info.icon, color=panel_color))
+            checkbox.setIconSize(size)
+
+    def changeEvent(self, a0: QEvent | None) -> None:
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
+            self._apply_icons()
+        super().changeEvent(a0)
 
     # ── Show Widgets ─────────────────────────────────────────────
 
@@ -252,8 +294,9 @@ class PreferencesDialog(QDialog):
             "with more free space if runs are spilling to a small system\n"
             "disk."
         )
-        self._browse_btn = QPushButton("...")
+        self._browse_btn = QPushButton()
         self._browse_btn.setProperty("variant", "subtle")
+        self._browse_btn.setToolTip("Choose the spill folder")
         self._browse_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._browse_btn.setFixedWidth(t.scaled(32))
         self._browse_btn.clicked.connect(self._browse_scratch_dir)
@@ -266,24 +309,26 @@ class PreferencesDialog(QDialog):
         grid.addLayout(dir_row, 2, 1)
         self._update_scratch_dir_enabled(self._spill_to_disk.isChecked())
 
-        # Save/Cancel live here, not as a dialog-wide footer: they only ever
+        # Apply/Cancel live here, not as a dialog-wide footer: they only ever
         # apply to this group -- Show Widgets and Layout take effect the
-        # moment you click them (see the class docstring).
-        save_btn = QPushButton("Save")
-        save_btn.setProperty("variant", "primary")
-        save_btn.setDefault(True)
-        save_btn.clicked.connect(self._save)
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.setProperty("variant", "subtle")
-        cancel_btn.setAutoDefault(False)
-        cancel_btn.clicked.connect(self.reject)
+        # moment you click them (see the class docstring). Not "primary" or the
+        # default button: both read as focus, and Enter shouldn't persist.
+        self._apply_btn = QPushButton("Apply")
+        self._apply_btn.setProperty("variant", "subtle")
+        self._apply_btn.setAutoDefault(False)
+        self._apply_btn.setToolTip("Save these Data & Memory settings")
+        self._apply_btn.clicked.connect(self._apply)
+        self._cancel_btn = QPushButton("Cancel")
+        self._cancel_btn.setProperty("variant", "subtle")
+        self._cancel_btn.setAutoDefault(False)
+        self._cancel_btn.clicked.connect(self.reject)
 
         buttons = QHBoxLayout()
         buttons.setSpacing(5)
         buttons.setContentsMargins(0, t.sp_sm, 0, 0)
         buttons.addStretch()
-        buttons.addWidget(cancel_btn)
-        buttons.addWidget(save_btn)
+        buttons.addWidget(self._cancel_btn)
+        buttons.addWidget(self._apply_btn)
         grid.addLayout(buttons, 3, 0, 1, 2)
 
         return group
@@ -299,7 +344,7 @@ class PreferencesDialog(QDialog):
         ):
             self._scratch_dir.setText(directory)
 
-    def _save(self) -> None:
+    def _apply(self) -> None:
         """Persist Data & Memory, without closing -- Show Widgets/Layout stay usable."""
         prefs = Settings.instance().scratch
         prefs.max_memory_gb = self._max_memory.value()

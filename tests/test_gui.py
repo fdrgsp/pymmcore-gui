@@ -3596,7 +3596,7 @@ def test_memory_mda_prepare_mda_applies_scratch_prefs(
 def test_preferences_dialog_round_trips_scratch_settings(
     mmcore: CMMCorePlus, qtbot: QtBot, settings: Settings
 ) -> None:
-    """Save persists the form's values; the dialog also starts from whatever
+    """Apply persists the form's values; the dialog also starts from whatever
     is already in Settings, so reopening it shows the last saved values."""
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
@@ -3611,7 +3611,7 @@ def test_preferences_dialog_round_trips_scratch_settings(
     assert dlg._scratch_dir.isEnabled()
     dlg._scratch_dir.setText("/tmp/my-scratch")
 
-    dlg._save()
+    dlg._apply()
 
     prefs = settings.scratch
     assert prefs.max_memory_gb == 1.5
@@ -3626,13 +3626,13 @@ def test_preferences_dialog_round_trips_scratch_settings(
     assert Path(dlg2._scratch_dir.text()) == Path("/tmp/my-scratch")
 
 
-def test_preferences_dialog_save_does_not_close(
+def test_preferences_dialog_apply_does_not_close(
     mmcore: CMMCorePlus, qtbot: QtBot, settings: Settings
 ) -> None:
-    """Save persists Data & Memory but leaves the dialog open.
+    """Apply persists Data & Memory but leaves the dialog open.
 
-    Unlike the dialog's original single-purpose design, Save no longer
-    closes it: Show Widgets/Layout must stay usable afterward, and Save
+    Unlike the dialog's original single-purpose design, Apply no longer
+    closes it: Show Widgets/Layout must stay usable afterward, and Apply
     only ever applies to Data & Memory now that it lives inside that
     group's box.
     """
@@ -3647,7 +3647,7 @@ def test_preferences_dialog_save_does_not_close(
         patch.object(dlg, "accept") as accept,
         patch.object(dlg, "reject") as reject,
     ):
-        dlg._save()
+        dlg._apply()
 
     accept.assert_not_called()
     reject.assert_not_called()
