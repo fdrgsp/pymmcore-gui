@@ -897,7 +897,7 @@ class MicroscopeStyle(QProxyStyle):
         if checked:
             p.setPen(QPen(checked_accent, 1.5))
         else:
-            border = pal.color(QPalette.ColorRole.AlternateBase)
+            border = pal.color(QPalette.ColorRole.Mid)
             if hovered:
                 border = pal.color(QPalette.ColorRole.WindowText)
             p.setPen(QPen(border, 1.5))
