@@ -1065,9 +1065,7 @@ class AcquirePage(TabPage):
         if (widget := self._panels[PanelKey.STAGE_EXPLORER].widget) is None:
             return
         explorer = cast("ThemedStageExplorer", widget)
-        # missing from pymmcore-widgets releases predating the cite-branch port
-        if hasattr(explorer, "set_mda_positions"):
-            explorer.set_mda_positions(self._mda.stage_positions.value())
+        explorer.set_mda_positions(self._mda.stage_positions.value())
 
     def refresh_stage_explorer_pixel_geometry(self) -> None:
         """Refresh an open Stage Explorer after pixel configs are committed."""
