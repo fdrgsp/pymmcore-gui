@@ -7,7 +7,8 @@ configuration wizard.
 
 from __future__ import annotations
 
-from contextlib import suppress
+import logging
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -42,12 +43,25 @@ from pymmcore_gui.widgets._hardware._setup_pane import DeviceSetupPane
 from pymmcore_gui.widgets._tab_page import TabPage
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from pymmcore_plus.model import AvailableDevice, Property
 
     from pymmcore_gui._qt.QtGui import QResizeEvent, QShowEvent
     from pymmcore_gui._qt.QtWidgets import QStatusBar
 
 CFG_FILTER = "Micro-Manager config (*.cfg);;All files (*)"
+
+logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _carry_on(action: str) -> Iterator[None]:
+    """Log, rather than raise, a failure of a best-effort hardware step."""
+    try:
+        yield
+    except Exception as e:
+        logger.warning("Failed to %s: %s", action, e)
 
 
 class HardwareSetupPage(TabPage):
@@ -168,8 +182,7 @@ class HardwareSetupPage(TabPage):
             self._model = Microscope.create_from_core(self._core)
             # create_from_core doesn't carry over the file the core was loaded
             # from, which would otherwise leave Save with no target.
-            with suppress(Exception):
-                self._model.config_file = self._core.systemConfigurationFile() or ""
+            self._model.config_file = self._core.systemConfigurationFile() or ""
             self._refresh_all()
         self._dirty = False
 
@@ -229,23 +242,23 @@ class HardwareSetupPage(TabPage):
         self._loading = True
         try:
             with busy(self._overlay, message):
-                with suppress(Exception):
+                with _carry_on("unload all devices"):
                     self._core.unloadAllDevices()
                 # unloadAllDevices() only clears devices — config groups and
                 # pixel-size configs are independent of any device and would
                 # otherwise survive, now dangling on devices that no longer
                 # exist.
                 for group_name in list(self._core.getAvailableConfigGroups()):
-                    with suppress(Exception):
+                    with _carry_on(f"delete config group {group_name!r}"):
                         self._core.deleteConfigGroup(group_name)
                 for pixel_config_name in list(
                     self._core.getAvailablePixelSizeConfigs()
                 ):
-                    with suppress(Exception):
+                    with _carry_on(f"delete pixel size config {pixel_config_name!r}"):
                         self._core.deletePixelSizeConfig(pixel_config_name)
                 self._model = Microscope()
                 # unlike the devices, this setting would carry over
-                with suppress(Exception):
+                with _carry_on("reset auto shutter"):
                     self._core.setAutoShutter(True)
                 if adapter_path is not None:
                     self._set_adapter_path(adapter_path)
@@ -265,8 +278,7 @@ class HardwareSetupPage(TabPage):
         # CMMCorePlus resolves relative config names (e.g. "MMConfig_demo.cfg")
         # against the install it was *constructed* with, which is no longer the
         # one in use. There is no public setter for it.
-        with suppress(Exception):
-            self._core._mm_path = path
+        self._core._mm_path = path
 
     def load_config(self) -> None:
         """Load a .cfg file into the model and into the core."""
@@ -336,12 +348,12 @@ class HardwareSetupPage(TabPage):
         # Config groups and pixel-size configs are edited on the Configurations
         # tab, which commits them to the live core. Pull those into the model so
         # a saved .cfg captures hardware, groups and pixel sizes together.
-        with suppress(Exception):
+        with _carry_on("read config groups from the core"):
             self._model.update_config_groups_from_core(self._core)
-        with suppress(Exception):
+        with _carry_on("read pixel sizes from the core"):
             self._model.update_pixel_sizes_from_core(self._core)
         # the default devices live on the core, which is what this page edits
-        with suppress(Exception):
+        with _carry_on("read the Core device"):
             self._model.core_device.update_from_core(self._core)
         try:
             self._model.save(path)
@@ -399,7 +411,7 @@ class HardwareSetupPage(TabPage):
 
     def _refresh_all(self) -> None:
         """Re-read available devices and repopulate every pane."""
-        with suppress(Exception):
+        with _carry_on("list the available devices"):
             self._model.load_available_devices(self._core)
         self._available.set_devices(self._model.available_devices)
         self._installed.set_devices(self._model.devices)
@@ -479,7 +491,7 @@ class HardwareSetupPage(TabPage):
             dev.load(self._core)
             dev.update_from_core(self._core)
         except Exception as e:
-            with suppress(Exception):
+            with _carry_on(f"unload {dev.name!r}"):
                 dev.unload(self._core)
             self._warn(f"Failed to load {label!r}:\n\n{e}")
             return
@@ -519,7 +531,7 @@ class HardwareSetupPage(TabPage):
             except Exception as e:
                 self._warn(f"Failed to open port {name!r}:\n\n{e}")
 
-        with suppress(Exception):
+        with _carry_on(f"set the port of {dev.name!r}"):
             dev.get_property(Keyword.Port).value = name
 
         self._setup.show_pending(dev, self._serial_choices(), self._pending_port)
@@ -530,7 +542,7 @@ class HardwareSetupPage(TabPage):
             return
         self._pending_port = None
         if port not in self._model.devices:
-            with suppress(Exception):
+            with _carry_on(f"unload {port.name!r}"):
                 port.unload(self._core)
 
     def _finish_add(self) -> None:
@@ -566,7 +578,7 @@ class HardwareSetupPage(TabPage):
         self._pending = None
         self._dirty = True
         # a new hub exposes child peripherals, so refresh availability first
-        with suppress(Exception):
+        with _carry_on("list the available devices"):
             self._model.load_available_devices(self._core)
         self._available.set_devices(self._model.available_devices)
         if dev.device_type is DeviceType.Hub:
@@ -590,13 +602,13 @@ class HardwareSetupPage(TabPage):
                 child.initialize(self._core, apply_pre_init=True)
             except Exception as e:
                 failures[child.name] = str(e)
-                with suppress(Exception):
+                with _carry_on(f"unload {child.name!r}"):
                     child.unload(self._core)
                 continue
             self._model.devices.append(child)
             self._dirty = True
 
-        with suppress(Exception):
+        with _carry_on("list the available devices"):
             self._model.load_available_devices(self._core)
         self._available.set_devices(self._model.available_devices)
         if failures:
@@ -609,7 +621,7 @@ class HardwareSetupPage(TabPage):
             return
         self._pending = None
         self._unload_pending_port()
-        with suppress(Exception):
+        with _carry_on(f"unload {dev.name!r}"):
             dev.unload(self._core)
         if self._selected_available is not None:
             self._setup.show_available(
@@ -629,10 +641,10 @@ class HardwareSetupPage(TabPage):
         for victim in doomed:
             with suppress(ValueError):
                 self._model.devices.remove(victim)
-            with suppress(Exception):
+            with _carry_on(f"unload {victim.name!r}"):
                 victim.unload(self._core)
 
-        with suppress(Exception):
+        with _carry_on("list the available devices"):
             self._model.load_available_devices(self._core)
         self._available.set_devices(self._model.available_devices)
         self._installed.set_devices(self._model.devices)
@@ -680,7 +692,7 @@ class HardwareSetupPage(TabPage):
         # unloading clears every role the device fills, so remember them
         roles = [r for r, *_ in CORE_ROLES if self._core_role(r) == old_name]
         try:
-            with suppress(Exception):
+            with _carry_on(f"unload {dev.name!r}"):
                 dev.unload(self._core)
             dev.name = new_name
             dev.load(self._core)
@@ -700,13 +712,13 @@ class HardwareSetupPage(TabPage):
         for other in self._model.devices:
             if other.parent_label == old_name:
                 other.parent_label = new_name
-                with suppress(Exception):
+                with _carry_on(f"set the parent of {other.name!r}"):
                     self._core.setParentLabel(other.name, new_name)
             if other.port == old_name:
-                with suppress(Exception):
+                with _carry_on(f"set the port of {other.name!r}"):
                     other.get_property(Keyword.Port).value = new_name
         for role in roles:
-            with suppress(Exception):
+            with _carry_on(f"set the Core {role} device"):
                 self._core.setProperty(Keyword.CoreDevice, role, new_name)
 
         self._dirty = True
@@ -718,7 +730,7 @@ class HardwareSetupPage(TabPage):
     def _on_delay_changed(self, dev: Device, delay_ms: float) -> None:
         dev.delay_ms = delay_ms
         self._dirty = True
-        with suppress(Exception):
+        with _carry_on(f"set the delay of {dev.name!r}"):
             self._core.setDeviceDelayMs(dev.name, delay_ms)
 
     def _on_state_label_changed(self, dev: Device, state: int, label: str) -> None:
@@ -783,7 +795,7 @@ class HardwareSetupPage(TabPage):
         """
         for role, labels in self._role_candidates().items():
             if labels and self._core_role(role) not in labels:
-                with suppress(Exception):
+                with _carry_on(f"set the Core {role} device"):
                     self._core.setProperty(Keyword.CoreDevice, role, labels[-1])
         self._refresh_roles()
 
