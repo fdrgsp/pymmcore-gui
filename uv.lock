@@ -1867,8 +1867,8 @@ wheels = [
 
 [[package]]
 name = "ome-writers"
-version = "0.3.3.dev25+g6506fca17"
-source = { git = "https://github.com/fdrgsp/ome-writers?rev=cite#6506fca1776ace78c591901859f3cc2d949806ed" }
+version = "0.3.3.dev28+g68616ca6c"
+source = { git = "https://github.com/fdrgsp/ome-writers?rev=cite#68616ca6c19ea242b8b0e2909f26c8c849413849" }
 dependencies = [
     { name = "numpy" },
     { name = "pydantic" },
@@ -2650,8 +2650,8 @@ test = [
 
 [[package]]
 name = "pymmcore-plus"
-version = "0.17.3.dev105+g56588c076"
-source = { git = "https://github.com/fdrgsp/pymmcore-plus?rev=cite#56588c0765e0035a9c47dd12c8cfddd2ba26144c" }
+version = "0.17.3.dev112+g82dfda513"
+source = { git = "https://github.com/fdrgsp/pymmcore-plus?rev=cite#82dfda513715d22a836d927ed79bc88fe81d17a4" }
 dependencies = [
     { name = "numpy" },
     { name = "ome-types" },
@@ -2673,8 +2673,8 @@ cli = [
 
 [[package]]
 name = "pymmcore-widgets"
-version = "0.1.dev695+g918eb09d8"
-source = { git = "https://github.com/fdrgsp/pymmcore-widgets?rev=cite#918eb09d887c627d57b14bcbeff4210e0da325ef" }
+version = "0.1.dev697+g9e65bf215"
+source = { git = "https://github.com/fdrgsp/pymmcore-widgets?rev=cite#9e65bf215fcfc65afe8ce7b31a019ad057082a80" }
 dependencies = [
     { name = "psutil" },
     { name = "pymmcore-plus", extra = ["cli"] },
