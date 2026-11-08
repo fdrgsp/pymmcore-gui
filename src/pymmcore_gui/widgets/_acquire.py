@@ -575,6 +575,8 @@ class AcquirePage(TabPage):
         self._live_btn.liveStartedRequested.connect(
             widget.apply_active_channel_for_capture
         )
+        widget.stage_positions.valueChanged.connect(self._sync_explorer_positions)
+        self._sync_explorer_positions()
 
     def _unbind_mda(self) -> None:
         """Undo :meth:`_bind_mda`, leaving the widget itself intact."""
@@ -586,6 +588,9 @@ class AcquirePage(TabPage):
             )
             self._live_btn.liveStartedRequested.disconnect(
                 widget.apply_active_channel_for_capture
+            )
+            widget.stage_positions.valueChanged.disconnect(
+                self._sync_explorer_positions
             )
 
     def _mda_widget_for(self, kind: str) -> QWidget:
@@ -980,6 +985,7 @@ class AcquirePage(TabPage):
         if panel.info.key == PanelKey.STAGE_EXPLORER:
             explorer = cast("ThemedStageExplorer", widget)
             explorer.sendToMDARequested.connect(self._on_stage_explorer_send_to_mda)
+            self._sync_explorer_positions()
         # Connects viewToggled (not toggleViewAction().toggled): pinning a
         # dock to an auto-hide side bar transiently unchecks and re-checks
         # that action without ever emitting viewToggled, so binding the
@@ -1053,6 +1059,15 @@ class AcquirePage(TabPage):
         # Make the result immediately visible and active in the acquisition.
         self._mda.revealAxis("p")
         self.panel_button(PanelKey.MDA).setChecked(True)
+
+    def _sync_explorer_positions(self) -> None:
+        """Give an open Stage Explorer the MDA positions to mark on its map."""
+        if (widget := self._panels[PanelKey.STAGE_EXPLORER].widget) is None:
+            return
+        explorer = cast("ThemedStageExplorer", widget)
+        # missing from pymmcore-widgets releases predating the cite-branch port
+        if hasattr(explorer, "set_mda_positions"):
+            explorer.set_mda_positions(self._mda.stage_positions.value())
 
     def refresh_stage_explorer_pixel_geometry(self) -> None:
         """Refresh an open Stage Explorer after pixel configs are committed."""

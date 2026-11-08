@@ -2067,6 +2067,47 @@ def test_stage_explorer_sends_positions_to_mda(
     assert page.panel_button(PanelKey.MDA).isChecked()
 
 
+def test_stage_explorer_marks_mda_positions(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    """The Explorer's MDA position markers follow the docked MDA editor."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    # positions set before the Explorer exists are picked up when it opens
+    page._mda.stage_positions.setValue(
+        [useq.Position(x=1, y=2), useq.Position(x=3, y=4)]
+    )
+    page._mda.revealAxis("p")  # a flavor swap only carries the axes in use
+    page.panel_button(PanelKey.STAGE_EXPLORER).click()
+    explorer = page.panel_widget(PanelKey.STAGE_EXPLORER)
+    assert isinstance(explorer, ThemedStageExplorer)
+    explorer.show_mda_positions = True
+
+    def marked() -> list[list[float]]:
+        markers: Any = explorer._mda_pos_markers  # vispy internals, loosely typed
+        if markers.parent is None:
+            return []
+        points: list[list[float]] = markers._data["a_position"][:, :2].tolist()
+        return points
+
+    assert marked() == [[1, 2], [3, 4]]
+
+    page._mda.stage_positions.table().removeRow(0)
+    assert marked() == [[3, 4]]
+
+    # the other editor flavor carries the positions over and stays connected
+    old = page._mda
+    page._set_mda_kind(MdaKind.TOPBAR)
+    assert page._mda is not old
+    assert marked() == [[3, 4]]
+    page._mda.stage_positions.setValue([useq.Position(x=5, y=6)])
+    assert marked() == [[5, 6]]
+    old.stage_positions.setValue([useq.Position(x=7, y=8)])  # unbound
+    assert marked() == [[5, 6]]
+
+    # a display toggle: still usable while an acquisition locks the Explorer
+    explorer.setMdaLocked(True)
+    assert explorer.toolBar().show_mda_positions_action.isEnabled()
+
+
 def test_acquire_panel_buttons_match_registry(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:

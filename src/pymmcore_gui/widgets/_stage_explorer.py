@@ -126,6 +126,7 @@ class ThemedStageExplorer(StageExplorer):
         "zoom_to_fit_action",
         "auto_zoom_to_fit_action",
         "show_grid_action",
+        "show_mda_positions_action",
         "map_memory_action",
         "stop_scan_action",
     )
