@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from pymmcore_plus import find_micromanager
+from pymmcore_widgets._busy import BusyOverlay, busy
 from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import set_source_icon, unstyle_widgets
@@ -31,7 +32,6 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 from pymmcore_gui._theme import qcolor, theme
-from pymmcore_gui.widgets._busy import BusyOverlay, busy
 from pymmcore_gui.widgets._tab_page import TabPage
 
 if TYPE_CHECKING:

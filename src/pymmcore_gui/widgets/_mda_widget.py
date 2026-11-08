@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from ome_writers import AcquisitionSettings, OmeTiffFormat, ScratchFormat
 from ome_writers._schema import _ome_stem_suffix
 from pymmcore_widgets import MDAWidget, MDAWidgetCollapsible
+from pymmcore_widgets._busy import BusyOverlay
 from pymmcore_widgets._icons import StandardIcon
 from pymmcore_widgets.mda import (
     CollapsibleCoreMDATabs,
@@ -51,7 +52,6 @@ from pymmcore_gui._qt.QtWidgets import (
 )
 from pymmcore_gui._settings import Settings
 from pymmcore_gui._theme import qcolor, theme
-from pymmcore_gui.widgets._busy import BusyOverlay
 
 from ._mda_tabs import (
     GuiCollapsibleCoreMDATabs,

@@ -317,5 +317,3 @@ PANELS: Final[tuple[PanelInfo, ...]] = (
         unstyle=True,
     ),
 )
-
-PANELS_BY_KEY: Final[Mapping[str, PanelInfo]] = {p.key: p for p in PANELS}

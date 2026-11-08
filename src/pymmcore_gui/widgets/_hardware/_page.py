@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, cast
 
 from pymmcore_plus import CMMCorePlus, DeviceType, FocusDirection, Keyword
 from pymmcore_plus.model import Device, Microscope
+from pymmcore_widgets._busy import BusyOverlay, busy
 from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import set_source_icon
@@ -30,7 +31,6 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 from pymmcore_gui._theme import qcolor, theme
-from pymmcore_gui.widgets._busy import BusyOverlay, busy
 from pymmcore_gui.widgets._hardware._panes import (
     CORE_ROLES,
     AvailableDevicesPane,

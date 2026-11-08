@@ -1817,7 +1817,7 @@ def test_mda_lock_restricts_acquire_page_to_watching(
     assert not toolbar.snap_action.isEnabled()
     assert not toolbar.scan_action.isEnabled()
     assert not toolbar.clear_action.isEnabled()
-    assert not explorer._send_to_mda_action.isEnabled()
+    assert not toolbar.send_to_mda_action.isEnabled()
 
     page.set_mda_lock(False)
 
@@ -1826,7 +1826,7 @@ def test_mda_lock_restricts_acquire_page_to_watching(
     assert page._preferences_btn.isEnabled()
     assert presets.isEnabled()
     assert toolbar.snap_action.isEnabled()
-    assert explorer._send_to_mda_action.isEnabled()
+    assert toolbar.send_to_mda_action.isEnabled()
 
 
 def test_mda_lock_preserves_already_disabled_state(
@@ -5955,13 +5955,6 @@ def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     # Keep this control pixel-consistent with ndv's Qt LUT slider.
     from ndv.views._qt._array_view import SLIDER_STYLE
 
-    assert explorer._contrast_slider._slider.styleSheet() == (
-        SLIDER_STYLE + "SliderLabel { font-size: 10px; color: white;}"
-    )
-    # Older pymmcore-widgets releases do not set the style themselves. The
-    # application fallback must still produce the same control.
-    explorer._contrast_slider._slider.setStyleSheet("")
-    explorer._normalize_style()
     assert explorer._contrast_slider._slider.styleSheet() == (
         SLIDER_STYLE + "SliderLabel { font-size: 10px; color: white;}"
     )

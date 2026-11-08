@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from pymmcore_plus import CMMCorePlus
 from pymmcore_widgets import ConfigGroupsEditor
+from pymmcore_widgets._busy import BusyOverlay, busy
 from pymmcore_widgets._icons import StandardIcon
 from pymmcore_widgets._util import block_core
 from superqt.iconify import QIconifyIcon
@@ -29,7 +30,6 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 from pymmcore_gui._theme import qcolor, theme
-from pymmcore_gui.widgets._busy import BusyOverlay, busy
 from pymmcore_gui.widgets._pixel_configuration import PixelConfigurationWidget
 from pymmcore_gui.widgets._tab_page import TabPage
 
@@ -598,22 +598,15 @@ class ConfigurationsPage(TabPage):
                 self._group_editor.undoStack().clear()
         # PixelConfigurationWidget only rebuilds on the core's
         # systemConfigurationLoaded event and exposes no public refresh, so
-        # invoke its internal rebuild directly (guarded against renames).
+        # invoke its internal rebuild directly.
         # That rebuild reads the core wholesale, so skip it while the user has
         # unsaved pixel edits — for the same reason the group editor's configs
         # aren't reloaded on a plain revisit (see showEvent). A real config
         # load (reload_configs) supersedes those edits and does rebuild.
         if reload_configs or self._pixel_config.isClean():
-            if callable(
-                fn := getattr(self._pixel_config, "_on_sys_config_loaded", None)
-            ):
-                with suppress(Exception):
-                    fn()
-                    # The rebuild replaces every row's cell widget (fresh
-                    # TableDoubleSpinBox instances) with the upstream default
-                    # stylesheet intact -- the one-time sweep in
-                    # _EmbeddedPixelConfig.__init__ only ever covered the rows
-                    # that existed at construction, so anything rebuilt here
-                    # (every time this page is shown, or on a config reload)
-                    # would otherwise keep a stale, theme-unaware appearance.
-                    unstyle_widgets(self._pixel_config)
+            with suppress(Exception):
+                self._pixel_config._on_sys_config_loaded()
+                # The rebuild replaces every row's cell widget with the upstream
+                # default stylesheet intact; the sweep in
+                # _EmbeddedPixelConfig.__init__ only covered the initial rows.
+                unstyle_widgets(self._pixel_config)
