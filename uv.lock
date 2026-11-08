@@ -1867,8 +1867,8 @@ wheels = [
 
 [[package]]
 name = "ome-writers"
-version = "0.3.3.dev30+g80ee1ba1e"
-source = { git = "https://github.com/fdrgsp/ome-writers?rev=cite#80ee1ba1ef7246a33812febaceee6442906c4eff" }
+version = "0.3.3.dev32+g414ed0115"
+source = { git = "https://github.com/fdrgsp/ome-writers?rev=cite#414ed0115e8aa728ff2816449d49756d9708446e" }
 dependencies = [
     { name = "numpy" },
     { name = "pydantic" },
