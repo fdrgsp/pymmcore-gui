@@ -80,6 +80,31 @@ def test_layout_flag_is_forwarded(tmp_path: Path) -> None:
     assert mock_create.call_args.kwargs["layout"] == "My rig"
 
 
+def test_unicore_flag_is_forwarded() -> None:
+    with patch("pymmcore_gui.create_mmgui") as mock_create:
+        result = runner.invoke(app, ["run", "-u"])
+    assert result.exit_code == 0
+    assert mock_create.call_args.kwargs["unicore"] is True
+
+    with patch("pymmcore_gui.create_mmgui") as mock_create:
+        result = runner.invoke(app, ["run"])
+    assert result.exit_code == 0
+    assert mock_create.call_args.kwargs["unicore"] is False
+
+
+def test_unicore_flag_works_without_the_run_command() -> None:
+    """`pymm --unicore` is forwarded to `run`, like `-c` and `-l`."""
+    argv = ["pymm", "--unicore"]
+    with (
+        patch("sys.argv", argv),
+        patch("pymmcore_gui.create_mmgui") as mock_create,
+    ):
+        result = runner.invoke(app, argv[1:])
+
+    assert result.exit_code == 0
+    assert mock_create.call_args.kwargs["unicore"] is True
+
+
 def test_layout_flag_matches_a_saved_name_case_insensitively() -> None:
     """`-l start` must open "Start", and say so rather than claim a default."""
     from pymmcore_gui._layouts import AcquireLayout, save_layout

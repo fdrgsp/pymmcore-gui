@@ -25,6 +25,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 from pymmcore_gui._settings import Settings
+from pymmcore_gui._unicore import config_needs_unicore, is_unicore, startup_core
 
 from . import _sentry
 
@@ -98,6 +99,7 @@ def create_mmgui(
     mm_config: Path | str | Literal[False] | None = None,
     layout: str | None = None,
     mmcore: CMMCorePlus | None = None,
+    unicore: bool = False,
     install_sys_excepthook: bool = True,
     install_sentry: bool = True,
     exec_app: bool = True,
@@ -130,6 +132,14 @@ def create_mmgui(
         will be created (which you may access later with `CMMCorePlus.instance()`).
         Note: you may wish to also pass `mm_config = False` to prevent loading a
         system configuration, if you have already loaded one in your instance.
+    unicore : bool
+        If True, run on pymmcore-plus's `UniMMCore`, which can also
+        load Python device adapters. Without `mmcore`, the global instance is used
+        if it is already a `UniMMCore`; otherwise a new one is created. Passing an
+        `mmcore` that is not a `UniMMCore` raises `ValueError`.
+        Even when False, a new `UniMMCore` is created if the startup config
+        declares Python devices (`#py` lines) and neither `mmcore` nor a global
+        instance exists yet, since the standard core would leave those out.
     install_sys_excepthook : bool
         If True (the default), installs a custom excepthook that does not raise
         sys.exit(). This is necessary to prevent the application from closing when an
@@ -148,6 +158,12 @@ def create_mmgui(
         importable in the format "module.submodule.ClassName".
     """
     global _QAPP
+    if unicore and mmcore is not None and not is_unicore(mmcore):
+        raise ValueError(
+            "`unicore=True` was passed with a `mmcore` that is not a UniMMCore. "
+            "Pass a UniMMCore instance, or omit `mmcore`."
+        )
+
     # Note: in practice this should almost never be None,
     # but in the case of testing, it's conceivable that it could be.
     if (app := QApplication.instance()) is None:
@@ -210,6 +226,10 @@ def create_mmgui(
         mm_config = startup.config or False
         layout = startup.layout
 
+    # Choose the core before the window binds to it (see `_unicore`).
+    if mmcore is None:
+        mmcore = startup_core(unicore, mm_config)
+
     win = window_cls(mmcore=mmcore)
     if hasattr(win, "restore_state"):
         # Custom windows without the startup hook may accept only `show`.
@@ -254,6 +274,13 @@ def _load_startup_config(win: WindowProtocol, config: Path | str) -> None:
     alone -- equally invisible when frozen -- would leave them staring at an
     app that silently didn't do what they asked. Show it instead.
     """
+    if config_needs_unicore(config) and not is_unicore(win.mmcore):
+        warnings.warn(
+            f"{config} declares Python devices (`#py` lines), which the standard "
+            "core ignores. Pass a UniMMCore as `mmcore`, or `unicore=True`.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     try:
         win.mmcore.loadSystemConfiguration(config)
     except Exception as e:

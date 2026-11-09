@@ -60,6 +60,9 @@ def _main(
     layout: str | None = typer.Option(
         None, "-l", "--layout", help="Name of the saved window layout to open with."
     ),
+    unicore: bool = typer.Option(
+        False, "-u", "--unicore", help="Run on UniMMCore (Python device adapters)."
+    ),
 ) -> None:
     """pymm: pymmcore-gui command line (v{version}).
 
@@ -118,6 +121,16 @@ def run(
         "--no-telemetry",
         help="Disable telemetry.",
     ),
+    unicore: bool = typer.Option(
+        False,
+        "-u",
+        "--unicore",
+        help=(
+            "Run on pymmcore-plus's experimental UniMMCore, which can also load "
+            "Python device adapters. Chosen automatically when the startup "
+            "config declares Python devices (lines starting with `#py`)."
+        ),
+    ),
 ) -> None:
     """Run the Micro-Manager GUI (this is the default command)."""
     from pymmcore_gui import create_mmgui
@@ -128,6 +141,7 @@ def run(
     create_mmgui(
         mm_config=mm_config,
         layout=layout,
+        unicore=unicore,
         exec_app=True,
         install_sentry=not no_telemetry,
     )
