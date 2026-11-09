@@ -32,6 +32,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 from pymmcore_gui._theme import qcolor, theme
+from pymmcore_gui._unicore import config_needs_unicore, is_unicore
 from pymmcore_gui.widgets._hardware._panes import (
     CORE_ROLES,
     AvailableDevicesPane,
@@ -287,7 +288,7 @@ class HardwareSetupPage(TabPage):
         path, _ = QFileDialog.getOpenFileName(
             self, "Load hardware configuration", "", CFG_FILTER
         )
-        if not path:
+        if not path or not self._confirm_python_devices_dropped(path):
             return
 
         self._cancel_add()
@@ -394,6 +395,22 @@ class HardwareSetupPage(TabPage):
             QMessageBox.StandardButton.Yes,
         )
         return kept if reply == QMessageBox.StandardButton.Yes else {}
+
+    def _confirm_python_devices_dropped(self, path: str) -> bool:
+        """Ask before loading a config whose Python devices this core ignores."""
+        if not config_needs_unicore(path) or is_unicore(self._core):
+            return True
+        reply = QMessageBox.warning(
+            self,
+            "Python devices need UniMMCore",
+            f"{Path(path).name} declares Python devices (`#py` lines), which the "
+            "standard core ignores.\n\nTo use them, restart pyMM and choose this "
+            "configuration at startup, or launch with `pymm --unicore`.\n\n"
+            "Load it anyway, without them?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return reply == QMessageBox.StandardButton.Yes
 
     def _confirm_discard(self, question: str) -> bool:
         """Ask before throwing away unsaved edits."""
