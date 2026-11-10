@@ -116,6 +116,9 @@ class _FakeViewer(ndv.ArrayViewer):
     def widget(self) -> QWidget:
         return self._widget
 
+    def set_acquisition_running(self, running: bool) -> None:
+        self.acquisition_running = running
+
 
 def test_viewers_manager(
     mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
@@ -144,6 +147,7 @@ def test_viewers_manager(
     assert viewer.data is not None
     assert viewer.display_model.current_index["t"] == 1
     assert viewer.data_wrapper.data_changed.calls > 0
+    assert not viewer.acquisition_running
 
     with qtbot.waitSignal(dummy.destroyed, timeout=1000):
         dummy.deleteLater()
@@ -151,6 +155,36 @@ def test_viewers_manager(
     assert manager.active_viewer is None
     assert not manager._records
     assert not manager._connected
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_acquiring_viewer_disables_save_and_roi(
+    mmcore: CMMCorePlus, qtbot: QtBot, cancel: bool
+) -> None:
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    manager = AcquireViewersManager(CDockManager(parent), mmcore, parent=parent)
+    created: list[MMArrayViewer] = []
+
+    def on_created(viewer: MMArrayViewer) -> None:
+        created.append(viewer)
+        assert viewer._save_btn is not None
+        assert not viewer._save_btn.isEnabled()
+        assert not viewer.widget().add_roi_btn.isEnabled()
+        if cancel:
+            mmcore.mda.cancel()
+
+    manager.mdaViewerCreated.connect(on_created)
+    sequence = MDASequence(
+        time_plan=useq.TIntervalLoops(interval=datetime.timedelta(0), loops=2)
+    )
+    mmcore.mda.run(sequence, output="memory")
+    qtbot.waitUntil(lambda: bool(created))
+
+    viewer = created[0]
+    assert viewer._save_btn is not None
+    qtbot.waitUntil(viewer._save_btn.isEnabled)
+    assert viewer.widget().add_roi_btn.isEnabled()
 
 
 @pytest.mark.parametrize("z_plan", [None, useq.ZRangeAround(range=2, step=1)])

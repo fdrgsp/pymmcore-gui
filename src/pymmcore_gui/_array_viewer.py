@@ -173,6 +173,12 @@ class MMArrayViewer(ndv.ArrayViewer):
         self._mda_sequence = sequence
         self._update_z_buttons()
 
+    def set_acquisition_running(self, running: bool) -> None:
+        """Disable saving and ROI selection while this viewer is acquiring."""
+        if self._save_btn is not None:
+            self._save_btn.setEnabled(not running)
+        self.widget().add_roi_btn.setEnabled(not running)
+
     def _on_dims_changed(self) -> None:
         super()._on_dims_changed()
         # A live run's sink grows its coords as frames arrive, so the z axis

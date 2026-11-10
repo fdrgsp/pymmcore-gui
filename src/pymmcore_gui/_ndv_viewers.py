@@ -172,7 +172,7 @@ class AcquireViewersManager(QObject):
         self._core = mmcore
         self._channel_luts = ChannelLUTMemory()
         self._records: dict[CDockWidget, _ViewerRecord] = {}
-        self._active_viewer: ndv.ArrayViewer | None = None
+        self._active_viewer: MMArrayViewer | None = None
         self._active_dock: CDockWidget | None = None
         self._follow_acquisition = True
         self._connected = True
@@ -648,6 +648,7 @@ class AcquireViewersManager(QObject):
         viewer = MMArrayViewer(
             view, scales=_extract_scales(sequence, meta), auto_hide_z_buttons=True
         )
+        viewer.set_acquisition_running(True)
         self._channel_luts.bind_live_mda(viewer, sequence)
         widget = viewer.widget()
         sha = str(sequence.uid)[:8]
@@ -762,7 +763,9 @@ class AcquireViewersManager(QObject):
         QTimer.singleShot(10, _update)
 
     def _on_sequence_finished(self, sequence: MDASequence) -> None:
-        """Retry releasing a just-finished run's data if its viewer already closed."""
+        """Restore viewer controls and release data if its viewer already closed."""
+        if self._active_viewer is not None:
+            self._active_viewer.set_acquisition_running(False)
         # a cancel mid-search means autofocusFinished may never arrive
         self._showing_autofocus_images = False
         self._on_autofocus_finished()
