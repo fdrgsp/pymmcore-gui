@@ -120,8 +120,10 @@ class ThemedStageExplorer(StageExplorer):
     """Stage Explorer adapted to this app's style and MDA editor."""
 
     MDA_ALLOWED_ACTIONS: ClassVar[tuple[str, ...]] = (
+        "clear_action",
         "zoom_to_fit_action",
         "auto_zoom_to_fit_action",
+        "poll_stage_action",
         "show_grid_action",
         "show_mda_positions_action",
         "map_memory_action",
@@ -129,11 +131,12 @@ class ThemedStageExplorer(StageExplorer):
     )
     """Toolbar actions that stay usable while an acquisition is running.
 
-    Everything else on the toolbar either drives the hardware (snap, stage
-    polling, ROI scanning) or edits state a running acquisition owns (Clear
-    View, Delete ROIs, Send to MDA), so :meth:`setMdaLocked` shuts it off.
-    What is left is pure navigation of what has already been mapped -- the
-    reason the panel stays reachable at all during a run. Stop Scan is the one
+    Everything else on the toolbar either drives the hardware (snap, ROI
+    scanning) or edits state a running acquisition owns (Delete ROIs, Send to
+    MDA), so :meth:`setMdaLocked` shuts it off. What is left is navigation of
+    what has been mapped -- the reason the panel stays reachable at all during
+    a run -- Clear View (display only, like the memory banner's clear), and the
+    stage position marker, which only reads the stage. Stop Scan is the one
     exception that does touch the run: it must stay live so a scan started from
     the Explorer can be cancelled.
     """

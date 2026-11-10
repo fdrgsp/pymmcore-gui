@@ -2103,9 +2103,13 @@ def test_stage_explorer_marks_mda_positions(mmcore: CMMCorePlus, qtbot: QtBot) -
     old.stage_positions.setValue([useq.Position(x=7, y=8)])  # unbound
     assert marked() == [[5, 6]]
 
-    # a display toggle: still usable while an acquisition locks the Explorer
+    # display toggles: still usable while an acquisition locks the Explorer
     explorer.setMdaLocked(True)
-    assert explorer.toolBar().show_mda_positions_action.isEnabled()
+    toolbar = explorer.toolBar()
+    assert toolbar.show_mda_positions_action.isEnabled()
+    assert toolbar.poll_stage_action.isEnabled()
+    assert toolbar.clear_action.isEnabled()
+    assert not toolbar.snap_action.isEnabled()
 
 
 def test_acquire_panel_buttons_match_registry(
