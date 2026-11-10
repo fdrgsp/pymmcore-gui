@@ -1809,14 +1809,15 @@ def test_mda_lock_restricts_acquire_page_to_watching(
     assert page._mda.isEnabled()
     assert page._mda.control_btns.isEnabled()
 
-    # Explorer: navigation only.
+    # Explorer: display only.
     toolbar = explorer.toolBar()
     assert toolbar.zoom_to_fit_action.isEnabled()
     assert toolbar.auto_zoom_to_fit_action.isEnabled()
+    assert toolbar.clear_action.isEnabled()
+    assert toolbar.poll_stage_action.isEnabled()
     assert toolbar.stop_scan_action.isEnabled()
     assert not toolbar.snap_action.isEnabled()
     assert not toolbar.scan_action.isEnabled()
-    assert not toolbar.clear_action.isEnabled()
     assert not toolbar.send_to_mda_action.isEnabled()
 
     page.set_mda_lock(False)
@@ -2103,13 +2104,9 @@ def test_stage_explorer_marks_mda_positions(mmcore: CMMCorePlus, qtbot: QtBot) -
     old.stage_positions.setValue([useq.Position(x=7, y=8)])  # unbound
     assert marked() == [[5, 6]]
 
-    # display toggles: still usable while an acquisition locks the Explorer
+    # a display toggle: still usable while an acquisition locks the Explorer
     explorer.setMdaLocked(True)
-    toolbar = explorer.toolBar()
-    assert toolbar.show_mda_positions_action.isEnabled()
-    assert toolbar.poll_stage_action.isEnabled()
-    assert toolbar.clear_action.isEnabled()
-    assert not toolbar.snap_action.isEnabled()
+    assert explorer.toolBar().show_mda_positions_action.isEnabled()
 
 
 def test_acquire_panel_buttons_match_registry(
