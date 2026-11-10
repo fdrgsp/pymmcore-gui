@@ -25,7 +25,12 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 from pymmcore_gui._settings import Settings
-from pymmcore_gui._unicore import config_needs_unicore, is_unicore, startup_core
+from pymmcore_gui._unicore import (
+    config_needs_unicore,
+    is_unicore,
+    py_devices_dir,
+    startup_core,
+)
 
 from . import _sentry
 
@@ -237,6 +242,10 @@ def create_mmgui(
         QTimer.singleShot(0, lambda: win.restore_state(show=True, **extra))
     else:
         win.show()
+
+    # the config's `#py pyDevice` lines import adapters from this folder
+    if is_unicore(win.mmcore):
+        py_devices_dir()
 
     # if False was passed, don't load any config at all
     if mm_config is not False:

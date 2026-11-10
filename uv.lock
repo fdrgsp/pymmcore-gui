@@ -10,6 +10,7 @@ resolution-markers = [
 
 [manifest]
 constraints = [{ name = "chardet", specifier = "<6" }]
+overrides = [{ name = "pymmcore-plus", extras = ["cli"], git = "https://github.com/fdrgsp/pymmcore-plus?rev=cite-unicore" }]
 
 [[package]]
 name = "aiobotocore"
@@ -2598,7 +2599,7 @@ requires-dist = [
     { name = "ome-writers", extras = ["tensorstore", "tifffile"], git = "https://github.com/fdrgsp/ome-writers?rev=cite" },
     { name = "psutil", specifier = ">=7.2.2" },
     { name = "pydantic-settings", specifier = ">=2.7.1" },
-    { name = "pymmcore-plus", extras = ["cli"], git = "https://github.com/fdrgsp/pymmcore-plus?rev=cite" },
+    { name = "pymmcore-plus", extras = ["cli"], git = "https://github.com/fdrgsp/pymmcore-plus?rev=cite-unicore" },
     { name = "pymmcore-widgets", git = "https://github.com/fdrgsp/pymmcore-widgets?rev=cite" },
     { name = "pyqt6", specifier = "==6.9.1" },
     { name = "pyqt6ads", specifier = "==4.4.0.post2" },
@@ -2650,8 +2651,8 @@ test = [
 
 [[package]]
 name = "pymmcore-plus"
-version = "0.17.3.dev114+ge303a71d1"
-source = { git = "https://github.com/fdrgsp/pymmcore-plus?rev=cite#e303a71d12d29f3184a0747ab8663fc4b28ea07a" }
+version = "0.17.3.dev115+g6e582a59d"
+source = { git = "https://github.com/fdrgsp/pymmcore-plus?rev=cite-unicore#6e582a59d1a8fd60cc7d9d0d60cb15b2ffc1ce70" }
 dependencies = [
     { name = "numpy" },
     { name = "ome-types" },

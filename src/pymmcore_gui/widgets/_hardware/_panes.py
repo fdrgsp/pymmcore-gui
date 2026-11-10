@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 from pymmcore_plus import DeviceType, Keyword
 from pymmcore_widgets._util import combo_box_height, use_combo_row_height
 
-from pymmcore_gui._qt.QtCore import QSize, Qt, Signal
+from pymmcore_gui._qt.QtCore import QEvent, QSize, Qt, Signal
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -16,6 +16,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QTableWidget,
@@ -23,7 +24,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from pymmcore_gui._theme import theme
+from pymmcore_gui._theme import qcolor, theme
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -152,6 +153,13 @@ class AvailableDevicesPane(QWidget):
         self._table = _DeviceTable(self.HEADERS)
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
 
+        # Python device files that couldn't be read (UniMMCore only)
+        self._problem_files: list[tuple[str, str]] = []
+        self._problems = QLabel()
+        self._problems.setWordWrap(True)
+        self._problems.linkActivated.connect(self._show_problems)
+        self._problems.hide()
+
         t = theme()
         # in the heading's row, so this table lines up with the other panes'
         title_row = QHBoxLayout()
@@ -166,6 +174,7 @@ class AvailableDevicesPane(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(t.sp_xs)
         layout.addLayout(title_row)
+        layout.addWidget(self._problems)
         layout.addWidget(self._table, 1)
 
     # ── data ──────────────────────────────────────────────────────
@@ -193,6 +202,41 @@ class AvailableDevicesPane(QWidget):
         self._rebuild_types()
         self._rebuild_table()
         self._apply_filter()
+
+    def set_problems(self, problems: Sequence[tuple[str, str]]) -> None:
+        """Flag Python device files that couldn't be read; hidden when none.
+
+        `problems` holds (file name, what's wrong) pairs. They are listed on
+        hover and in a dialog, not popped up: the list refreshes on every save
+        of a file in that folder, i.e. while the user is still editing it.
+        """
+        self._problem_files = list(problems)
+        if not (n := len(problems)):
+            self._problems.hide()
+            return
+        files = "file" if n == 1 else "files"
+        self._problems.setText(
+            f"⚠ {n} {files} in the Python devices folder couldn't be read. "
+            '<a href="details">Details</a>'
+        )
+        self._problems.setToolTip(self._problems_text())
+        self._color_problems()
+        self._problems.show()
+
+    def _problems_text(self) -> str:
+        return "\n".join(f"{name}: {why}" for name, why in self._problem_files)
+
+    def _show_problems(self) -> None:
+        QMessageBox.warning(self, "Python device files", self._problems_text())
+
+    def _color_problems(self) -> None:
+        amber = qcolor(theme().status_amber).name()
+        self._problems.setStyleSheet(f"color: {amber};")
+
+    def changeEvent(self, a0: QEvent | None) -> None:
+        super().changeEvent(a0)
+        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
+            self._color_problems()  # follow light/dark theme switches
 
     def _is_hub_child(self, dev: AvailableDevice) -> bool:
         """Whether `dev` is reachable as a peripheral rather than on its own."""

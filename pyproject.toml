@@ -63,12 +63,17 @@ dependencies = [
 
 [tool.uv]
 constraint-dependencies = ["chardet<6"]
+# TEMP (cite-unicore): pymmcore-widgets pins pymmcore-plus@cite, so force the
+# branch for everyone. Drop this, and the source below, once merged into cite.
+override-dependencies = [
+    "pymmcore-plus[cli] @ git+https://github.com/fdrgsp/pymmcore-plus@cite-unicore",
+]
 
 [tool.uv.sources]
 ndv = { git = "https://github.com/fdrgsp/ndv", rev = "cite" }
 ome-writers = { git = "https://github.com/fdrgsp/ome-writers", rev = "cite" }
 pymmcore-widgets = { git = "https://github.com/fdrgsp/pymmcore-widgets", rev = "cite" }
-pymmcore-plus = { git = "https://github.com/fdrgsp/pymmcore-plus", rev = "cite" }
+pymmcore-plus = { git = "https://github.com/fdrgsp/pymmcore-plus", rev = "cite-unicore" }  # TEMP: back to "cite" when merged
 useq-schema = { git = "https://github.com/fdrgsp/useq-schema", rev = "cite" }
 
 [dependency-groups]

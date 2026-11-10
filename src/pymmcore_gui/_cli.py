@@ -127,14 +127,25 @@ def run(
         "--unicore",
         help=(
             "Run on pymmcore-plus's experimental UniMMCore, which can also load "
-            "Python device adapters. Chosen automatically when the startup "
-            "config declares Python devices (lines starting with `#py`)."
+            "Python device adapters (`.py` files in pyMM's `devices` folder, "
+            "listed in the Hardware tab). Chosen automatically when the startup "
+            "config declares Python devices (lines starting with `#py`). Not "
+            "available in the standalone app."
         ),
     ),
 ) -> None:
     """Run the Micro-Manager GUI (this is the default command)."""
     from pymmcore_gui import create_mmgui
+    from pymmcore_gui._unicore import unicore_supported
 
+    if unicore and not unicore_supported():
+        typer.secho(
+            "--unicore (Python devices) is only available when running pyMM "
+            "from source (`pymm`), not in the standalone app.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
     if layout is not None:
         layout = _resolve_layout(layout)
     mm_config = "MMConfig_demo.cfg" if demo_config else config

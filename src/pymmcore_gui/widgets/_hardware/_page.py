@@ -23,7 +23,8 @@ from pymmcore_gui._light_sources import (
     parse_channel_comments,
     write_channel_comments,
 )
-from pymmcore_gui._qt.QtCore import QEvent, QSize, Qt
+from pymmcore_gui._qt.QtCore import QEvent, QFileSystemWatcher, QSize, Qt, QUrl
+from pymmcore_gui._qt.QtGui import QDesktopServices
 from pymmcore_gui._qt.QtWidgets import (
     QFileDialog,
     QMessageBox,
@@ -32,7 +33,13 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 from pymmcore_gui._theme import qcolor, theme
-from pymmcore_gui._unicore import config_needs_unicore, is_unicore
+from pymmcore_gui._unicore import (
+    config_needs_unicore,
+    is_unicore,
+    py_devices_dir,
+    scan_py_devices,
+    unicore_supported,
+)
 from pymmcore_gui.widgets._hardware._panes import (
     CORE_ROLES,
     AvailableDevicesPane,
@@ -109,12 +116,28 @@ class HardwareSetupPage(TabPage):
         self._roles_split.setStretchFactor(1, 2)
         self.add_content_widget(self._roles_split)
 
-        self._toolbar_buttons: list[tuple[QPushButton, str]] = []
-        for text, icon, slot in (
+        actions = [
             ("New", "material-symbols:add-box-outline-rounded", self.new_config),
             ("Load…", "material-symbols:upload-rounded", self.load_config),
             ("Save…", "material-symbols:save-outline-rounded", self.save_config),
-        ):
+        ]
+        # Python device adapters: listed from this folder, re-listed on change
+        self._py_watcher: QFileSystemWatcher | None = None
+        if is_unicore(self._core):
+            actions.append(
+                (
+                    "Python Devices…",
+                    "material-symbols:folder-open-outline-rounded",
+                    self.open_py_devices_dir,
+                )
+            )
+            self._py_watcher = QFileSystemWatcher([str(py_devices_dir())], self)
+            self._py_watcher.directoryChanged.connect(self._on_py_devices_changed)
+            self._py_watcher.fileChanged.connect(self._on_py_devices_changed)
+            self._watch_py_files()
+
+        self._toolbar_buttons: list[tuple[QPushButton, str]] = []
+        for text, icon, slot in actions:
             btn = QPushButton(text)
             btn.setProperty("variant", "primary")
             btn.clicked.connect(slot)
@@ -400,13 +423,18 @@ class HardwareSetupPage(TabPage):
         """Ask before loading a config whose Python devices this core ignores."""
         if not config_needs_unicore(path) or is_unicore(self._core):
             return True
+        how = (
+            "To use them, restart pyMM and choose this configuration at startup, "
+            "or launch with `pymm --unicore`."
+            if unicore_supported()
+            else "They are only supported when running pyMM from source "
+            "(`pymm --unicore`), not in the standalone app."
+        )
         reply = QMessageBox.warning(
             self,
             "Python devices need UniMMCore",
             f"{Path(path).name} declares Python devices (`#py` lines), which the "
-            "standard core ignores.\n\nTo use them, restart pyMM and choose this "
-            "configuration at startup, or launch with `pymm --unicore`.\n\n"
-            "Load it anyway, without them?",
+            f"standard core ignores.\n\n{how}\n\nLoad it anyway, without them?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
         )
@@ -426,11 +454,45 @@ class HardwareSetupPage(TabPage):
 
     # ── refresh ───────────────────────────────────────────────────
 
-    def _refresh_all(self) -> None:
-        """Re-read available devices and repopulate every pane."""
+    def _refresh_available(self) -> None:
+        """Re-read the available devices (adapters, plus Python devices)."""
         with _carry_on("list the available devices"):
             self._model.load_available_devices(self._core)
-        self._available.set_devices(self._model.available_devices)
+        devices = list(self._model.available_devices)
+        if self._py_watcher is not None:
+            scan = scan_py_devices()
+            # a loaded hub's peripherals already come from the model, linked
+            # to their hub; don't list them twice
+            listed = {(d.library, d.adapter_name) for d in devices}
+            devices += (
+                d for d in scan.devices if (d.library, d.adapter_name) not in listed
+            )
+            self._available.set_problems(scan.problems)
+        self._available.set_devices(devices)
+
+    def open_py_devices_dir(self) -> None:
+        """Show the Python device adapters folder in the file browser."""
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(py_devices_dir())))
+
+    def _watch_py_files(self) -> None:
+        """Watch each adapter file too: the folder alone misses in-place edits."""
+        if self._py_watcher is None:
+            return
+        if old := self._py_watcher.files():
+            self._py_watcher.removePaths(old)
+        if new := [str(p) for p in py_devices_dir().glob("*.py")]:
+            self._py_watcher.addPaths(new)
+
+    def _on_py_devices_changed(self, _path: str) -> None:
+        self._watch_py_files()
+        # don't pull the list out from under an add in progress; the next
+        # refresh (when the add finishes) picks the change up
+        if self._pending is None:
+            self._refresh_available()
+
+    def _refresh_all(self) -> None:
+        """Re-read available devices and repopulate every pane."""
+        self._refresh_available()
         self._installed.set_devices(self._model.devices)
         self._refresh_roles()
         self._setup.show_empty()
@@ -510,7 +572,10 @@ class HardwareSetupPage(TabPage):
         except Exception as e:
             with _carry_on(f"unload {dev.name!r}"):
                 dev.unload(self._core)
-            self._warn(f"Failed to load {label!r}:\n\n{e}")
+            # UniMMCore rewords a Python adapter's ImportError; the cause says
+            # what is actually missing (e.g. "No module named 'serial'")
+            cause = f"\n\n{e.__cause__}" if e.__cause__ else ""
+            self._warn(f"Failed to load {label!r}:\n\n{e}{cause}")
             return
 
         self._pending = dev
@@ -595,9 +660,7 @@ class HardwareSetupPage(TabPage):
         self._pending = None
         self._dirty = True
         # a new hub exposes child peripherals, so refresh availability first
-        with _carry_on("list the available devices"):
-            self._model.load_available_devices(self._core)
-        self._available.set_devices(self._model.available_devices)
+        self._refresh_available()
         if dev.device_type is DeviceType.Hub:
             self._add_peripherals(dev)
         self._installed.set_devices(self._model.devices)
@@ -625,9 +688,7 @@ class HardwareSetupPage(TabPage):
             self._model.devices.append(child)
             self._dirty = True
 
-        with _carry_on("list the available devices"):
-            self._model.load_available_devices(self._core)
-        self._available.set_devices(self._model.available_devices)
+        self._refresh_available()
         if failures:
             listing = "\n".join(f"  • {n}: {m}" for n, m in failures.items())
             self._warn(f"Some peripherals could not be added:\n\n{listing}")
@@ -661,9 +722,7 @@ class HardwareSetupPage(TabPage):
             with _carry_on(f"unload {victim.name!r}"):
                 victim.unload(self._core)
 
-        with _carry_on("list the available devices"):
-            self._model.load_available_devices(self._core)
-        self._available.set_devices(self._model.available_devices)
+        self._refresh_available()
         self._installed.set_devices(self._model.devices)
         self._sync_roles()
         self._setup.show_empty()

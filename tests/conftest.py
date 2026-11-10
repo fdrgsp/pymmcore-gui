@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import os
+import sys
 
 from pymmcore_gui._settings import Settings
 
@@ -93,6 +94,24 @@ def layouts_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     directory = tmp_path / "layouts"
     monkeypatch.setenv("MMGUI_LAYOUTS_DIR", str(directory))
     return directory
+
+
+@pytest.fixture(autouse=True)
+def py_devices_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[Path]:
+    """Redirect the Python device adapters folder, as `layouts_dir` does.
+
+    It is also put on `sys.path` and its adapters imported, so restore the one
+    and forget the other.
+    """
+    directory = tmp_path / "devices"
+    monkeypatch.setenv("MMGUI_PY_DEVICES_DIR", str(directory))
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    yield directory
+    for name, module in list(sys.modules.items()):
+        if (getattr(module, "__file__", None) or "").startswith(str(directory)):
+            del sys.modules[name]
 
 
 # Initialize the application style for every test that has a QApplication.

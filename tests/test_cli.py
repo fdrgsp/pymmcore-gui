@@ -15,6 +15,8 @@ from pymmcore_gui._cli import app
 if TYPE_CHECKING:
     from pathlib import Path
 
+    import pytest
+
 runner = CliRunner()
 subrun = subprocess.run
 
@@ -103,6 +105,18 @@ def test_unicore_flag_works_without_the_run_command() -> None:
 
     assert result.exit_code == 0
     assert mock_create.call_args.kwargs["unicore"] is True
+
+
+def test_unicore_flag_is_refused_in_the_standalone_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    with patch("pymmcore_gui.create_mmgui") as mock_create:
+        result = runner.invoke(app, ["run", "--unicore"])
+
+    assert result.exit_code == 1
+    assert "only available when running pyMM from source" in result.output
+    mock_create.assert_not_called()
 
 
 def test_layout_flag_matches_a_saved_name_case_insensitively() -> None:
