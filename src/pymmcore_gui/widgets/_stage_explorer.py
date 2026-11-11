@@ -146,6 +146,7 @@ class ThemedStageExplorer(StageExplorer):
         parent: QWidget | None = None,
         mmcore: CMMCorePlus | None = None,
     ) -> None:
+        self._pixel_calibrated = False
         super().__init__(parent=parent, mmcore=mmcore)
 
         self.toolBar().send_to_mda_action.setToolTip(
@@ -183,19 +184,33 @@ class ThemedStageExplorer(StageExplorer):
     def _update_calibration_state(self) -> None:
         """Disable the whole Explorer while there is no pixel calibration."""
         calibrated = self._is_pixel_calibrated()
+        self._pixel_calibrated = calibrated
         self.setEnabled(calibrated)
         self.setToolTip("" if calibrated else _NO_PIXEL_SIZE_MESSAGE)
         self._no_pixel_banner.setVisible(not calibrated)
 
     def _on_config_set(self, group: str, preset: str) -> None:
-        del group, preset
+        properties = {
+            (device, prop) for device, prop, _ in self._mmc.getConfigData(group, preset)
+        }
+        geometry_properties = {
+            (device, prop)
+            for name in self._mmc.getAvailablePixelSizeConfigs()
+            for device, prop, _ in self._mmc.getPixelSizeConfigData(name)
+        }
+        camera = self._mmc.getCameraDevice()
+        geometry_properties.update(
+            (camera, prop)
+            for prop in ("Binning", "TransposeMirrorX", "TransposeMirrorY")
+        )
+        if properties.isdisjoint(geometry_properties):
+            return
         if self._is_pixel_calibrated() != self.isEnabled():
             self.refreshPixelGeometry()
 
     def _fov_w_h(self) -> tuple[float, float]:
         """Return camera-axis FOV dimensions from the active affine transform."""
-        width = self._mmc.getImageWidth()
-        height = self._mmc.getImageHeight()
+        width, height = -2 * self._half_img_shift[:2, 3]
         matrix = self._affine_state.system_affine
         # Each affine column is the stage-space vector for one camera pixel.
         # Its norm remains correct for rotated, mirrored, and sheared
@@ -255,14 +270,14 @@ class ThemedStageExplorer(StageExplorer):
         self._update_calibration_state()
 
     def _update_stage_pos_marker(self, stage_x: float, stage_y: float) -> None:
-        if self._is_pixel_calibrated():
+        if self._pixel_calibrated:
             super()._update_stage_pos_marker(stage_x, stage_y)
         else:
             self._stage_pos_label.setText(f"X: {stage_x:.2f} µm  Y: {stage_y:.2f} µm")
 
     def _add_image_and_update_widget(self, *args: Any, **kwargs: Any) -> None:
         """Drop snapped and MDA frames that cannot be placed without a pixel size."""
-        if self._is_pixel_calibrated():
+        if self._pixel_calibrated:
             super()._add_image_and_update_widget(*args, **kwargs)
 
     def setMdaLocked(self, locked: bool) -> None:
