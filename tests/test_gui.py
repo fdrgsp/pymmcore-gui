@@ -4454,6 +4454,9 @@ def test_acquire_page_adds_sink_backed_mda_tab(
         def widget(self) -> QWidget:
             return self._widget
 
+        def set_acquisition_running(self, running: bool) -> None:
+            pass
+
         def close(self) -> None:
             self.closed = True
 
@@ -4539,6 +4542,9 @@ def test_acquire_viewer_follows_time_and_grid_axes(
         def widget(self) -> QWidget:
             return self._widget
 
+        def set_acquisition_running(self, running: bool) -> None:
+            pass
+
         def close(self) -> None:
             pass
 
@@ -4604,6 +4610,9 @@ def test_acquire_viewer_close_reclaims_space_without_moving_mda(
 
         def widget(self) -> QWidget:
             return self._widget
+
+        def set_acquisition_running(self, running: bool) -> None:
+            pass
 
         def close(self) -> None:
             self.closed = True
@@ -4747,6 +4756,9 @@ def test_acquire_viewer_records_frame_metadata_regardless_of_follow_lock(
         def widget(self) -> QWidget:
             return self._widget
 
+        def set_acquisition_running(self, running: bool) -> None:
+            pass
+
         def close(self) -> None:
             pass
 
@@ -4794,6 +4806,9 @@ class _FakeViewer:
 
     def widget(self) -> QWidget:
         return self._widget
+
+    def set_acquisition_running(self, running: bool) -> None:
+        pass
 
     def close(self) -> None:
         pass
