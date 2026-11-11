@@ -1742,8 +1742,8 @@ wheels = [
 
 [[package]]
 name = "ndv"
-version = "0.1.dev284+g8708bb358"
-source = { git = "https://github.com/fdrgsp/ndv?rev=cite#8708bb35864c80ff52d8da44ffb429377343902f" }
+version = "0.1.dev285+g0ae83c69e"
+source = { git = "https://github.com/fdrgsp/ndv?rev=cite#0ae83c69e8947fa709495ec92d4e44958b25b8d2" }
 dependencies = [
     { name = "cmap" },
     { name = "ihist" },
@@ -1867,8 +1867,8 @@ wheels = [
 
 [[package]]
 name = "ome-writers"
-version = "0.3.3.dev33+g0f2a3d654"
-source = { git = "https://github.com/fdrgsp/ome-writers?rev=cite#0f2a3d65455861dfee0384497506255bb87e5196" }
+version = "0.3.3.dev34+g0518fdd9c"
+source = { git = "https://github.com/fdrgsp/ome-writers?rev=cite#0518fdd9c90ffe1a65ab92b6d73cc6b10abf574f" }
 dependencies = [
     { name = "numpy" },
     { name = "pydantic" },
@@ -2673,8 +2673,8 @@ cli = [
 
 [[package]]
 name = "pymmcore-widgets"
-version = "0.1.dev705+ga1d156897"
-source = { git = "https://github.com/fdrgsp/pymmcore-widgets?rev=cite#a1d156897ee302dcb3ce2166c09316d64fb1666c" }
+version = "0.1.dev707+g8b2b1be63"
+source = { git = "https://github.com/fdrgsp/pymmcore-widgets?rev=cite#8b2b1be63cd4c0ff57ba694d303431a214be4f26" }
 dependencies = [
     { name = "psutil" },
     { name = "pymmcore-plus", extra = ["cli"] },
