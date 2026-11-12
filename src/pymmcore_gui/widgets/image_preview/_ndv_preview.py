@@ -241,6 +241,7 @@ class NDVPreview(ImagePreviewBase):
         index = layout.indexOf(lut_row.auto_clim) + 1  # type: ignore[attr-defined]
         btn = QPushButton(lut_row)
         btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        btn.setProperty("variant", "subtle")
         set_source_icon(btn, QIconifyIcon("mdi:cog-outline"))
         ensure_visible_icon(btn)
         btn.setToolTip("White balance…")

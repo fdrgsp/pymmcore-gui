@@ -460,6 +460,7 @@ def test_color_camera_preview_uses_rgb_mode_with_a_white_balance_button(
     assert preview.viewer.display_model.channel_mode is ChannelMode.RGBA
     btn = preview._white_balance_btn
     assert btn is not None
+    assert btn.property("variant") == "subtle"
     row = btn.parentWidget()
     layout = row._lut_layout  # type: ignore[union-attr]
     assert layout.indexOf(btn) == layout.indexOf(row.auto_clim) + 1  # type: ignore[union-attr]
