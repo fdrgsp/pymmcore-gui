@@ -1,21 +1,39 @@
 from __future__ import annotations
 
+import logging
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 import ndv.models
 from cmap import Colormap
 from ndv.models import LUTModel, RingBuffer
+from superqt import QIconifyIcon
 from superqt.cmap import QColormapComboBox
 
-from pymmcore_gui._array_viewer import MMArrayViewer
+from pymmcore_gui._array_viewer import (
+    MMArrayViewer,
+    ensure_visible_icon,
+    set_source_icon,
+)
 from pymmcore_gui._qt.QtCore import QTimer
-from pymmcore_gui._qt.QtWidgets import QApplication, QVBoxLayout, QWidget
+from pymmcore_gui._qt.QtWidgets import (
+    QApplication,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 from pymmcore_gui._utils import current_channel
+from pymmcore_gui.widgets._white_balance_dialog import WhiteBalanceDialog
 from pymmcore_gui.widgets.image_preview._preview_base import ImagePreviewBase
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     import numpy as np
     import rendercanvas.qt
+    from ndv._types import ChannelKey
+    from ndv.views.bases import LUTView
     from pymmcore_plus import CMMCorePlus
 
     class QRenderWidget(rendercanvas.qt.QRenderWidget, QWidget): ...  # pyright: ignore [reportIncompatibleMethodOverride]
@@ -23,6 +41,7 @@ if TYPE_CHECKING:
 
 # Live preview only needs the most recent frame.
 BUFFER_SIZE = 1
+logger = logging.getLogger(__name__)
 
 
 class NDVPreview(ImagePreviewBase):
@@ -64,6 +83,9 @@ class NDVPreview(ImagePreviewBase):
         self.process_events_on_update = True
         qwdg = self._viewer.widget()
         qwdg.setParent(self)
+        self._white_balance_btn: QPushButton | None = None
+        self._white_balance_dialog: WhiteBalanceDialog | None = None
+        self._install_white_balance_button()
         self._apply_control_visibility()
 
         layout = QVBoxLayout(self)
@@ -130,20 +152,21 @@ class NDVPreview(ImagePreviewBase):
             return  # pragma: no cover
 
         self._core_dtype = core_dtype
-        self._is_rgb = core_dtype[1][-1] == 3
+        shape = core_dtype[1]
+        self._is_rgb = len(shape) == 3 and shape[-1] in (3, 4)
         self._buffer = RingBuffer(max_capacity=BUFFER_SIZE, dtype=core_dtype)
 
     def _apply_viewer_settings(self) -> None:
-        """Assign the buffer and configure its channel axis for composite display."""
+        """Assign the buffer: RGB display for color cameras, composite otherwise."""
         self._viewer.data = self._buffer
         self._buffer_applied = True
         self._viewer.display_model.visible_axes = (1, 2)
         if self._is_rgb:
             self._viewer.display_model.channel_axis = 3
+            self._viewer.display_model.channel_mode = ndv.models.ChannelMode.RGBA
         else:
             self._viewer.display_model.channel_axis = None
-        self._viewer.display_model.channel_mode = ndv.models.ChannelMode.COMPOSITE
-        if not self._is_rgb:
+            self._viewer.display_model.channel_mode = ndv.models.ChannelMode.COMPOSITE
             # Composite mode normally assigns channel 0 the first color in ndv's
             # cycle (green). Camera previews should start as neutral grayscale;
             # users may still select another LUT afterward.
@@ -155,9 +178,10 @@ class NDVPreview(ImagePreviewBase):
         name = current_channel(core) if (core := self._mmc) is not None else ""
 
         if self._is_rgb:
+            assert self._core_dtype is not None
             names = {
                 key: f"{name} {component}" if name else component
-                for key, component in enumerate("RGB")
+                for key, component in enumerate("RGBA"[: self._core_dtype[1][-1]])
             }
         else:
             names = {0: name}
@@ -192,6 +216,61 @@ class NDVPreview(ImagePreviewBase):
         if not self._show_colormap_selector:
             for combo in widget.findChildren(QColormapComboBox):
                 combo.hide()
+
+    def _install_white_balance_button(self) -> None:
+        """Add the button when ndv lazily creates its RGB contrast row."""
+        view = self._viewer._view
+        add_lut_view = view.add_lut_view
+
+        def _add_lut_view(channel: ChannelKey) -> LUTView:
+            lut_view = add_lut_view(channel)
+            if channel == "RGB":
+                try:
+                    self._add_white_balance_button(lut_view.frontend_widget())
+                except AttributeError:
+                    logger.warning(
+                        "Could not add the white-balance button to ndv's RGB controls",
+                        exc_info=True,
+                    )
+            return lut_view
+
+        view.add_lut_view = _add_lut_view  # type: ignore[method-assign,assignment]
+
+    def _add_white_balance_button(self, lut_row: QWidget) -> None:
+        layout = lut_row._lut_layout  # type: ignore[attr-defined]
+        index = layout.indexOf(lut_row.auto_clim) + 1  # type: ignore[attr-defined]
+        btn = QPushButton(lut_row)
+        btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        set_source_icon(btn, QIconifyIcon("mdi:cog-outline"))
+        ensure_visible_icon(btn)
+        btn.setToolTip("White balance…")
+        btn.clicked.connect(self.show_white_balance_dialog)
+        layout.insertWidget(index, btn)
+        self._white_balance_btn = btn
+
+    def show_white_balance_dialog(self) -> WhiteBalanceDialog | None:
+        """Open (or raise) the white-balance dialog."""
+        if (core := self._mmc) is None:
+            return None
+        if self._white_balance_dialog is None:
+            self._white_balance_dialog = WhiteBalanceDialog(
+                core, self, snap_context=self._unrecorded_snaps
+            )
+        dialog = self._white_balance_dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        return dialog
+
+    @contextmanager
+    def _unrecorded_snaps(self) -> Iterator[None]:
+        """Show snaps without adding them to the snap album."""
+        was_recording = self._record_snaps
+        self._record_snaps = False
+        try:
+            yield
+        finally:
+            self._record_snaps = was_recording
 
     def _setup_viewer(self) -> None:
         """Prepare a buffer that is swapped in after its first frame arrives.

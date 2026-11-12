@@ -340,6 +340,22 @@ class SettingsV1(BaseMMSettings):
     colormap names; ndv's numeric LUT indices are deliberately not persisted.
     """
 
+    white_balance: dict[str, dict[str, str]] = Field(default_factory=dict)
+    """Red/blue gain property names for white balance, keyed by camera label."""
+
+    def white_balance_properties(self, camera: str) -> dict[str, str] | None:
+        """Return the white-balance properties chosen for `camera`, if any."""
+        return self.white_balance.get(camera)
+
+    def remember_white_balance_properties(
+        self, camera: str, properties: dict[str, str]
+    ) -> None:
+        """Persist the white-balance properties chosen for `camera`."""
+        if not camera or self.white_balance.get(camera) == properties:
+            return
+        self.white_balance[camera] = dict(properties)
+        self.flush()
+
     def channel_lut(self, group: str, preset: str) -> str | None:
         """Return the remembered colormap name for a microscope channel."""
         return self.channel_luts.get(group, {}).get(preset)

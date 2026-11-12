@@ -46,6 +46,8 @@ class ImagePreviewBase(QWidget):
         # set while an autofocus event is in flight, during which a snapped
         # image is a routine's diagnostic image rather than acquisition data
         self._autofocus_running: bool = False
+        # Exclude calibration frames from the snap album.
+        self._record_snaps: bool = True
         self._mmc: CMMCorePlus | None = None
         self._snapped.connect(self._on_snapped)
         self.attach(mmcore)
@@ -148,7 +150,7 @@ class ImagePreviewBase(QWidget):
         image = core.getImage()
         # Recorded first: a snap made on the GUI thread is displayed synchronously,
         # and displaying processes events, which may well change the channel.
-        if not (during_mda or self._autofocus_running):
+        if self._record_snaps and not (during_mda or self._autofocus_running):
             self.snapRecorded.emit(SnappedImage.capture(core, image))
         self._snapped.emit(image, during_mda)
 
