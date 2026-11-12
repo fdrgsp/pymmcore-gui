@@ -127,12 +127,17 @@ def test_hcs_import_preserves_plan_cells_visibility_and_theme(
     widget.show()
     editor = widget.stage_positions
     table = editor.table()
+    # the HCS wizard replaces the plan's FOV with the current camera FOV on load
+    px = mmcore.getPixelSizeUm()
     plan = useq.WellPlatePlan(
         plate=useq.WellPlate.from_str("96-well"),
         a1_center_xy=(1000, 2000),
         selected_wells=((0, 1), (0, 2)),
         well_points_plan=useq.GridRowsColumns(
-            rows=1, columns=3, fov_width=100, fov_height=100
+            rows=1,
+            columns=3,
+            fov_width=mmcore.getImageWidth() * px,
+            fov_height=mmcore.getImageHeight() * px,
         ),
     )
     editor._hcs.setValue(plan)
