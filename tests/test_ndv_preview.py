@@ -163,9 +163,12 @@ def test_late_roi_set_keeps_buffer_populated_by_auto_snap() -> None:
     assert preview._buffer_applied
 
 
-def test_apply_viewer_settings_keeps_preview_composite() -> None:
-    """Applying a new mono or RGB buffer must not reset the GUI's viewer mode."""
-    for is_rgb, expected_axis in ((False, None), (True, 3)):
+def test_apply_viewer_settings_uses_composite_or_rgb() -> None:
+    """Mono cameras get a gray composite view, color cameras the RGB view."""
+    for is_rgb, expected_axis, mode in (
+        (False, None, ChannelMode.COMPOSITE),
+        (True, 3, ChannelMode.RGBA),
+    ):
         lut = LUTModel(cmap=Colormap("green"))
         display_model = SimpleNamespace(
             visible_axes=None,
@@ -184,29 +187,39 @@ def test_apply_viewer_settings_keeps_preview_composite() -> None:
         NDVPreview._apply_viewer_settings(preview)  # type: ignore[arg-type]
 
         assert display_model.channel_axis == expected_axis
-        assert display_model.channel_mode is ChannelMode.COMPOSITE
+        assert display_model.channel_mode is mode
         expected_cmap = "green" if is_rgb else "gray"
         assert lut.cmap.name.endswith(expected_cmap)
         assert preview._buffer_applied
 
 
-def test_preview_lut_uses_current_channel_name() -> None:
+@pytest.mark.parametrize("shape", [(8, 3), (8, 12, 3), (8, 12, 4)])
+def test_rgb_detection_requires_a_component_axis(shape: tuple[int, ...]) -> None:
+    preview = SimpleNamespace(_core_dtype=None, _buffer=None, _is_rgb=False)
+    NDVPreview._init_buffer(preview, ("uint8", shape))  # type: ignore[arg-type]
+    assert preview._is_rgb == (len(shape) == 3)
+
+
+@pytest.mark.parametrize("components", [None, 3, 4])
+def test_preview_lut_uses_current_channel_name(components: int | None) -> None:
     core = Mock()
     core.getChannelGroup.return_value = "Channel"
     core.getCurrentConfig.return_value = "FITC"
-    lut = LUTModel()
+    luts = {key: LUTModel() for key in range(components or 1)}
     preview = SimpleNamespace(
         _mmc=core,
-        _is_rgb=False,
-        _viewer=SimpleNamespace(display_model=SimpleNamespace(luts={0: lut})),
+        _is_rgb=components is not None,
+        _core_dtype=("uint8", (8, 12, components)) if components else None,
+        _viewer=SimpleNamespace(display_model=SimpleNamespace(luts=luts)),
     )
 
-    NDVPreview._update_channel_name(preview)  # type: ignore[arg-type]
-
-    assert lut.name == "FITC"
-    core.getCurrentConfig.return_value = "DAPI"
-    NDVPreview._update_channel_name(preview)  # type: ignore[arg-type]
-    assert lut.name == "DAPI"
+    for name in ("FITC", "DAPI"):
+        core.getCurrentConfig.return_value = name
+        NDVPreview._update_channel_name(preview)  # type: ignore[arg-type]
+        expected = (
+            [f"{name} {c}" for c in "RGBA"[:components]] if components else [name]
+        )
+        assert [lut.name for lut in luts.values()] == expected
 
 
 def test_autofocus_images_are_shown_during_an_acquisition(
