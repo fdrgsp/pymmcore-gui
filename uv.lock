@@ -1742,8 +1742,8 @@ wheels = [
 
 [[package]]
 name = "ndv"
-version = "0.1.dev285+g0ae83c69e"
-source = { git = "https://github.com/fdrgsp/ndv?rev=cite#0ae83c69e8947fa709495ec92d4e44958b25b8d2" }
+version = "0.1.dev286+g9acc10536"
+source = { git = "https://github.com/fdrgsp/ndv?rev=cite#9acc1053666c705d624d75d233301f73500c698f" }
 dependencies = [
     { name = "cmap" },
     { name = "ihist" },
@@ -2673,8 +2673,8 @@ cli = [
 
 [[package]]
 name = "pymmcore-widgets"
-version = "0.1.dev718+gcc6eea282"
-source = { git = "https://github.com/fdrgsp/pymmcore-widgets?rev=cite#cc6eea28294d98f2f9f751fb6780c0503717a49d" }
+version = "0.1.dev721+g7809766c2"
+source = { git = "https://github.com/fdrgsp/pymmcore-widgets?rev=cite#7809766c2ab263950dd9f3b2744f3272ff27ed9e" }
 dependencies = [
     { name = "psutil" },
     { name = "pymmcore-plus", extra = ["cli"] },

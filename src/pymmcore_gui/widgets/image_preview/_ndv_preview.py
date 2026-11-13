@@ -158,19 +158,21 @@ class NDVPreview(ImagePreviewBase):
 
     def _apply_viewer_settings(self) -> None:
         """Assign the buffer: RGB display for color cameras, composite otherwise."""
-        self._viewer.data = self._buffer
-        self._buffer_applied = True
-        self._viewer.display_model.visible_axes = (1, 2)
-        if self._is_rgb:
-            self._viewer.display_model.channel_axis = 3
-            self._viewer.display_model.channel_mode = ndv.models.ChannelMode.RGBA
-        else:
-            self._viewer.display_model.channel_axis = None
-            self._viewer.display_model.channel_mode = ndv.models.ChannelMode.COMPOSITE
+        model = self._viewer.display_model
+        if not self._is_rgb:
+            # before the new data, which RGB mode (e.g. of a color camera) cannot show
+            model.channel_mode = ndv.models.ChannelMode.COMPOSITE
+            model.channel_axis = None
             # Composite mode normally assigns channel 0 the first color in ndv's
             # cycle (green). Camera previews should start as neutral grayscale;
             # users may still select another LUT afterward.
-            self._viewer.display_model.luts[0].cmap = Colormap("gray")
+            model.luts[0].cmap = Colormap("gray")
+        self._viewer.data = self._buffer
+        self._buffer_applied = True
+        model.visible_axes = (1, 2)
+        if self._is_rgb:
+            model.channel_axis = 3
+            model.channel_mode = ndv.models.ChannelMode.RGBA
         self._apply_control_visibility()
 
     def _update_channel_name(self) -> None:

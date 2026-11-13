@@ -337,6 +337,18 @@ def test_preview_always_hides_z_buttons(mmcore: CMMCorePlus, qtbot: QtBot) -> No
     assert preview.viewer.widget().ndims_btn.isHidden()
 
 
+def test_rgb_then_mono_frames_leave_no_component_slider(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Switching from a color to a mono camera drops the RGB component slider."""
+    preview = NDVPreview(mmcore)
+    qtbot.addWidget(preview)
+    preview.append(np.zeros((8, 12, 3), dtype=np.uint8))
+    preview.append(np.zeros((8, 12), dtype=np.uint16))
+
+    assert set(preview.viewer.widget().dims_sliders._sliders) == {0, 1, 2}
+
+
 def test_preview_records_only_ordinary_snaps(
     mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
 ) -> None:
