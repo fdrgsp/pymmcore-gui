@@ -7486,6 +7486,23 @@ def test_stage_explorer_disabled_without_pixel_size(
     assert not explorer._no_pixel_banner.isVisibleTo(explorer)
 
 
+def test_stage_explorer_disabled_with_pixel_size_for_any_camera(
+    mmcore: CMMCorePlus, qtbot: QtBot, second_camera: str
+) -> None:
+    """With several cameras, the pixel size may be another camera's."""
+    explorer = ThemedStageExplorer(mmcore=mmcore)
+    qtbot.addWidget(explorer)
+    assert not explorer.isEnabled()
+    assert "'Res10x' is for any camera" in explorer._no_pixel_banner._text.text()
+
+    for preset in mmcore.getAvailablePixelSizeConfigs():
+        mmcore.definePixelSizeConfig(preset, "Core", "Camera", "Camera")
+    assert explorer.isEnabled()
+    # the presets are not for the second camera: it has no pixel size
+    mmcore.setProperty("Core", "Camera", second_camera)
+    assert not explorer.isEnabled()
+
+
 def test_stage_explorer_follows_objective_pixel_size(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
@@ -7583,6 +7600,28 @@ def test_run_without_pixel_size_warns_for_grid_plans(
     answers.append(QMessageBox.StandardButton.Ok)
     assert mda.prepare_mda() is not False
     assert not answers
+
+
+def test_run_blocks_grid_plans_with_pixel_size_for_any_camera(
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+    second_camera: str,
+) -> None:
+    from pymmcore_gui._qt.QtWidgets import QMessageBox
+
+    mda = MemoryMDAWidget(mmcore)
+    qtbot.addWidget(mda)
+    mda.save_info.setChecked(False)
+    mda.setValue(useq.MDASequence(grid_plan=useq.GridRowsColumns(rows=2, columns=2)))
+    warning = Mock()
+    monkeypatch.setattr(QMessageBox, "warning", warning)
+
+    assert mda.prepare_mda() is False
+    assert "'Res10x' is for any camera" in warning.call_args.args[2]
+    for preset in mmcore.getAvailablePixelSizeConfigs():
+        mmcore.definePixelSizeConfig(preset, "Core", "Camera", "Camera")
+    assert mda.prepare_mda() is not False
 
 
 def _paints_color(button: QPushButton, color: QColor) -> bool:

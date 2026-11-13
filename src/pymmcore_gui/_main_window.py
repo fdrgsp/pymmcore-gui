@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, cast
 
 from pymmcore_plus import CMMCorePlus, Keyword, find_micromanager
+from pymmcore_widgets._util import pixel_presets_hint, pixel_size_camera_warning
 from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._acquisition_loader import supports_path
@@ -489,6 +490,18 @@ class MicroManagerGUI(QMainWindow):
         self._acquire.layoutReset.connect(self._on_acquire_layout_reset)
         self._acquire.layoutNameChanged.connect(self._on_layout_name_changed)
         self._mmc.events.systemConfigurationLoaded.connect(self._on_config_loaded)
+        # Micro-Manager cannot read a camera's pixel size: warn when the pixel
+        # size presets may give one camera another's
+        self._pixel_presets_hint = ""
+        self._camera = self._mmc.getCameraDevice()
+        self._mmc.events.systemConfigurationLoaded.connect(
+            self._warn_shared_pixel_sizes
+        )
+        self._configurations.pixelConfigurationsApplied.connect(
+            self._warn_shared_pixel_sizes
+        )
+        self._mmc.events.propertyChanged.connect(self._on_property_changed)
+        self._warn_shared_pixel_sizes()
         self._installation.activeInstallChanged.connect(self._on_active_install_changed)
 
         self._mode_tabs.current_changed.connect(self._on_mode_tab_changed)
@@ -646,6 +659,30 @@ class MicroManagerGUI(QMainWindow):
         """
         if cfg := self._mmc.systemConfigurationFile():
             Settings.instance().remember_config(cfg)
+
+    def _warn_shared_pixel_sizes(self, *_: object) -> None:
+        """Suggest a camera for each pixel size preset, once per change."""
+        self._camera = self._mmc.getCameraDevice()
+        hint = pixel_presets_hint(self._mmc)
+        if hint and hint != self._pixel_presets_hint:
+            self._notification_manager.show_warning_message(hint)
+        self._pixel_presets_hint = hint
+
+    def _on_property_changed(self, device: str, prop: str, _value: object) -> None:
+        """Warn when the camera switched to may not have its own pixel size."""
+        if device != Keyword.CoreDevice or prop != Keyword.CoreCamera:
+            return
+        # (MMCore also emits the camera change later, from its own thread)
+        if (camera := self._mmc.getCameraDevice()) == self._camera:
+            return
+        self._camera = camera
+        if warning := pixel_size_camera_warning(self._mmc):
+            self._notification_manager.show_warning_message(warning)
+        elif camera and self._mmc.getPixelSizeUm() <= 0:
+            self._notification_manager.show_warning_message(
+                f"There is no pixel size for {camera!r} with the current settings: "
+                "add a pixel size preset for it in the Pixel Configuration editor."
+            )
 
     def on_startup_configuration_loaded(self) -> None:
         """Land on Acquire after the application loads its initial config."""

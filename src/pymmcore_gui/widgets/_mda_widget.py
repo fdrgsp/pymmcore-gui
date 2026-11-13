@@ -11,6 +11,7 @@ from ome_writers._schema import _ome_stem_suffix
 from pymmcore_widgets import MDAWidget, MDAWidgetCollapsible
 from pymmcore_widgets._busy import BusyOverlay
 from pymmcore_widgets._icons import StandardIcon
+from pymmcore_widgets._util import pixel_size_camera_warning
 from pymmcore_widgets.mda import (
     CollapsibleCoreMDATabs,
     CoreMDATabs,
@@ -845,12 +846,20 @@ class MemoryMDAWidgetBase(_MixinBase):
         """Return a disk path or a scratch sink that supports live viewing."""
         # the check below already reads the sequence
         self._commit_editors()
-        if (
-            self._mmc.getPixelSizeUm() <= 0
-            and self._sequence_uses_grid()
-            and not self._confirm_missing_pixel_size()
-        ):
-            return False
+        if self._sequence_uses_grid():
+            if warning := pixel_size_camera_warning(self._mmc):
+                QMessageBox.warning(
+                    self,
+                    "Pixel Size Not Set for the Camera",
+                    f"{warning}\n\nThis sequence uses a grid plan, whose tiles "
+                    "would not be placed correctly.",
+                )
+                return False
+            if (
+                self._mmc.getPixelSizeUm() <= 0
+                and not self._confirm_missing_pixel_size()
+            ):
+                return False
         output = super().prepare_mda()
         if isinstance(output, bool):
             return output

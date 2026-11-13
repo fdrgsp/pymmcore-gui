@@ -6,7 +6,9 @@ import math
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
+from pymmcore_plus import Keyword
 from pymmcore_widgets import StageExplorer
+from pymmcore_widgets._util import pixel_size_camera_warning
 from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import (
@@ -172,22 +174,32 @@ class ThemedStageExplorer(StageExplorer):
         # emitted with the settled state -- reports a calibration change.
         self._mmc.events.configSet.connect(self._on_config_set)
 
-    def _is_pixel_calibrated(self) -> bool:
-        """Return whether the current objective/resolution has a pixel size.
+    def _unavailable_reason(self) -> str:
+        """Return why the Explorer cannot place images, or "" if it can.
 
-        Without one the core reports a pixel size of 0 and an all-zero affine,
-        which the Explorer cannot turn into a stage-to-pixel transform: the
-        resulting matrix is singular and crashes Vispy.
+        Without a pixel size the core reports 0 and an all-zero affine, which
+        the Explorer cannot turn into a stage-to-pixel transform: the resulting
+        matrix is singular and crashes Vispy. With several cameras, the pixel
+        size must also be the current camera's.
         """
-        return self._mmc.getPixelSizeUm() > 0
+        if self._mmc.getPixelSizeUm() <= 0:
+            return _NO_PIXEL_SIZE_MESSAGE
+        if warning := pixel_size_camera_warning(self._mmc):
+            return f"The Stage Explorer is unavailable: {warning}"
+        return ""
+
+    def _is_pixel_calibrated(self) -> bool:
+        """Return whether the current pixel size can place images."""
+        return not self._unavailable_reason()
 
     def _update_calibration_state(self) -> None:
         """Disable the whole Explorer while there is no pixel calibration."""
-        calibrated = self._is_pixel_calibrated()
-        self._pixel_calibrated = calibrated
-        self.setEnabled(calibrated)
-        self.setToolTip("" if calibrated else _NO_PIXEL_SIZE_MESSAGE)
-        self._no_pixel_banner.setVisible(not calibrated)
+        reason = self._unavailable_reason()
+        self._pixel_calibrated = not reason
+        self.setEnabled(not reason)
+        self.setToolTip(reason)
+        self._no_pixel_banner._text.setText(reason)
+        self._no_pixel_banner.setVisible(bool(reason))
 
     def _on_config_set(self, group: str, preset: str) -> None:
         properties = {
@@ -254,6 +266,12 @@ class ThemedStageExplorer(StageExplorer):
             self._stage_viewer.canvas.update()
         if self._auto_zoom_to_fit:
             self.zoom_to_fit()
+
+    def _on_property_changed(self, device: str, prop: str, value: object) -> None:
+        super()._on_property_changed(device, prop, value)
+        # (the pixel size presets may be for another camera)
+        if device == Keyword.CoreDevice and prop == Keyword.CoreCamera:
+            self.refreshPixelGeometry()
 
     def _on_pixel_size_changed(self, value: float) -> None:
         del value

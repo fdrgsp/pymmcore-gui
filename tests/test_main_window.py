@@ -130,6 +130,25 @@ def test_main_window_notifications(gui: MicroManagerGUI) -> None:
         assert callable(mock_show_error.call_args.kwargs["on_action"])
 
 
+def test_main_window_warns_about_pixel_sizes_for_any_camera(
+    gui: MicroManagerGUI, mmcore: CMMCorePlus, second_camera: str
+) -> None:
+    with patch.object(gui.nm, "show_warning_message") as warn:
+        mmcore.events.systemConfigurationLoaded.emit()
+        assert "Res10x, Res20x, Res40x" in warn.call_args.args[0]
+        mmcore.events.systemConfigurationLoaded.emit()  # (the same suggestion)
+        assert warn.call_count == 1
+
+        mmcore.setProperty("Core", "Camera", second_camera)
+        assert "'Res10x' is for any camera" in warn.call_args.args[0]
+        for preset in mmcore.getAvailablePixelSizeConfigs():
+            mmcore.definePixelSizeConfig(preset, "Core", "Camera", "Camera")
+        mmcore.setProperty("Core", "Camera", "Camera")
+        mmcore.setProperty("Core", "Camera", second_camera)
+        assert "no pixel size for 'Camera2'" in warn.call_args.args[0]
+        assert warn.call_count == 3
+
+
 def test_snap_updates_preview_after_camera_format_changes(
     gui: MicroManagerGUI, qtbot: QtBot
 ) -> None:

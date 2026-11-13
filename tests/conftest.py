@@ -73,6 +73,14 @@ def mmcore() -> Iterator[CMMCorePlus]:
     _mmcore_plus._instance = None
 
 
+@pytest.fixture
+def second_camera(mmcore: CMMCorePlus) -> str:
+    """A second demo camera: the pixel size presets are then for any camera."""
+    mmcore.loadDevice("Camera2", "DemoCamera", "DCam")
+    mmcore.initializeDevice("Camera2")
+    return "Camera2"
+
+
 # fresh default settings for every test
 @pytest.fixture(autouse=True)
 def settings() -> Iterator[Settings]:
