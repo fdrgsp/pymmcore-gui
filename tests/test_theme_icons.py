@@ -1,17 +1,26 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import TYPE_CHECKING
 
 from pymmcore_plus.autofocus import DuoSettings, OughtaFocusSettings
 from pymmcore_widgets.useq_widgets._autofocus_settings import AutofocusSettingsDialog
 
 from pymmcore_gui._array_viewer import _icon_avg_rgb, ensure_visible_icon
-from pymmcore_gui._qt.QtCore import QSize
+from pymmcore_gui._qt.QtCore import QEvent, QSize
 from pymmcore_gui._qt.QtGui import QColor, QIcon, QPixmap
-from pymmcore_gui._qt.QtWidgets import QPushButton
-from pymmcore_gui._theme import DARK_THEME, LIGHT_THEME, qcolor, set_theme, theme
+from pymmcore_gui._qt.QtWidgets import QApplication, QPushButton, QWidget
+from pymmcore_gui._theme import (
+    DARK_THEME,
+    LIGHT_THEME,
+    _events,
+    qcolor,
+    set_theme,
+    theme,
+)
 
 if TYPE_CHECKING:
+    import pytest
     from pytestqt.qtbot import QtBot
 
 
@@ -77,3 +86,39 @@ def test_sweep_keeps_an_icon_swapped_in_by_other_code(qtbot: QtBot) -> None:
     button.setIcon(icon("red"))  # upstream swap, unaware of the stash
     ensure_visible_icon(button)
     assert _icon_avg_rgb(button.icon(), QSize(16, 16)) == (255, 0, 0)
+
+
+class _EventRecorder(QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.received: list[QEvent.Type] = []
+
+    def event(self, a0: QEvent | None) -> bool:
+        if a0 is not None:
+            self.received.append(a0.type())
+        return super().event(a0)
+
+
+def test_event_hooks_dispatch_by_type_and_consume(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(_events, "_hooks", defaultdict(list))
+    widget, other = _EventRecorder(), _EventRecorder()
+    qtbot.addWidget(widget)
+    qtbot.addWidget(other)
+    shown: list[QWidget] = []
+
+    def on_show(w: QWidget, _event: QEvent) -> bool:
+        shown.append(w)
+        return False
+
+    _events.add_event_hook(on_show, QEvent.Type.Show)
+    _events.add_event_hook(on_show, QEvent.Type.Show)  # added once
+    _events.add_event_hook(lambda w, _e: w is widget, QEvent.Type.User)
+    widget.show()
+    assert shown.count(widget) == 1
+    # a hook returning True consumes the event
+    for w in (widget, other):
+        QApplication.sendEvent(w, QEvent(QEvent.Type.User))
+    assert QEvent.Type.User not in widget.received
+    assert QEvent.Type.User in other.received

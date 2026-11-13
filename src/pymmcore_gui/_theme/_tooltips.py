@@ -5,15 +5,15 @@ from __future__ import annotations
 import sys
 from html import escape
 
-from pymmcore_gui._qt.QtCore import QEvent, QObject, QPoint, QRect, Qt
+from pymmcore_gui._qt.QtCore import QEvent, QPoint, QRect, Qt
 from pymmcore_gui._qt.QtGui import QHelpEvent, QTextDocument
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractItemView,
-    QApplication,
     QMenu,
     QToolTip,
     QWidget,
 )
+from pymmcore_gui._theme._events import add_event_hook
 
 _READING_TIME_MS = 30_000
 _WIDTH = 360
@@ -61,59 +61,46 @@ def _wrapped_tooltip(text: str, width: int) -> str | None:
     )
 
 
-class _TooltipFilter(QObject):
-    def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
-        obj, event = a0, a1
-        if not isinstance(obj, QWidget) or event is None:
-            return False
-        if event.type() in (QEvent.Type.Polish, QEvent.Type.Show) and obj.inherits(
-            "QTipLabel"
-        ):
-            # Keep both Qt hit testing and the native tooltip window from
-            # taking hover/focus from the source, including combo popups.
-            obj.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-            obj.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-            if event.type() == QEvent.Type.Polish:
-                obj.setWindowFlag(Qt.WindowType.WindowTransparentForInput)
-        if event.type() != QEvent.Type.ToolTip or not isinstance(event, QHelpEvent):
-            return False
-
-        text, rect = _tooltip_text(obj, event)
-        if not text:
-            return False
-        from . import theme
-
-        width = theme().scaled(_WIDTH)
-        if (screen := obj.screen()) is not None:
-            width = min(width, screen.availableGeometry().width() - 24)
-        wrapped = _wrapped_tooltip(text, max(1, width))
-        if wrapped is None and not _MACOS_TOOLTIP_Y_CORRECTION:
-            return False
-        # Short tooltips keep Qt's default duration; wrapped ones need time to read.
-        duration = (
-            -1 if wrapped is None else max(_READING_TIME_MS, obj.toolTipDuration())
-        )
-        QToolTip.showText(
-            event.globalPos() - QPoint(0, _MACOS_TOOLTIP_Y_CORRECTION),
-            text if wrapped is None else wrapped,
-            obj,
-            rect,
-            duration,
-        )
-        event.accept()
-        return True
+def _on_tip_label_event(obj: QWidget, event: QEvent) -> bool:
+    if obj.inherits("QTipLabel"):
+        # Keep both Qt hit testing and the native tooltip window from
+        # taking hover/focus from the source, including combo popups.
+        obj.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        obj.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        if event.type() == QEvent.Type.Polish:
+            obj.setWindowFlag(Qt.WindowType.WindowTransparentForInput)
+    return False
 
 
-_tooltip_filter: _TooltipFilter | None = None
+def _on_tooltip(obj: QWidget, event: QEvent) -> bool:
+    if not isinstance(event, QHelpEvent):
+        return False
+
+    text, rect = _tooltip_text(obj, event)
+    if not text:
+        return False
+    from . import theme
+
+    width = theme().scaled(_WIDTH)
+    if (screen := obj.screen()) is not None:
+        width = min(width, screen.availableGeometry().width() - 24)
+    wrapped = _wrapped_tooltip(text, max(1, width))
+    if wrapped is None and not _MACOS_TOOLTIP_Y_CORRECTION:
+        return False
+    # Short tooltips keep Qt's default duration; wrapped ones need time to read.
+    duration = -1 if wrapped is None else max(_READING_TIME_MS, obj.toolTipDuration())
+    QToolTip.showText(
+        event.globalPos() - QPoint(0, _MACOS_TOOLTIP_Y_CORRECTION),
+        text if wrapped is None else wrapped,
+        obj,
+        rect,
+        duration,
+    )
+    event.accept()
+    return True
 
 
 def install_tooltips() -> None:
     """Install the GUI-wide long-tooltip handler once per application."""
-    global _tooltip_filter
-    app = QApplication.instance()
-    if not isinstance(app, QApplication):
-        return
-    if _tooltip_filter is not None and _tooltip_filter.parent() is app:
-        return
-    _tooltip_filter = _TooltipFilter(app)
-    app.installEventFilter(_tooltip_filter)
+    add_event_hook(_on_tip_label_event, QEvent.Type.Polish, QEvent.Type.Show)
+    add_event_hook(_on_tooltip, QEvent.Type.ToolTip)

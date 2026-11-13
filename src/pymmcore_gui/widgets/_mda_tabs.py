@@ -10,8 +10,9 @@ from pymmcore_widgets.useq_widgets._z_surface_dialog import ZSurfaceDialog
 from pymmcore_gui._array_viewer import (
     unstyle_widgets,
 )
-from pymmcore_gui._qt.QtCore import QEvent, QObject, Qt
-from pymmcore_gui._qt.QtWidgets import QApplication, QWidget
+from pymmcore_gui._qt.QtCore import QEvent, Qt
+from pymmcore_gui._qt.QtWidgets import QWidget
+from pymmcore_gui._theme._events import add_event_hook
 
 from ._mda_channel_table import MDAChannelTable
 
@@ -65,8 +66,8 @@ def _theme_subsequence_popup(popup: QWidget) -> None:
     popup.setFocus(Qt.FocusReason.OtherFocusReason)
 
 
-class _ThirdPartyWindowThemer(QObject):
-    """Applies the app's styling to windows pymmcore-widgets opens itself.
+def _theme_third_party_window(widget: QWidget, _event: QEvent) -> bool:
+    """Apply the app's styling to windows pymmcore-widgets opens itself.
 
     The position sub-sequence popup, the HCS wizard, the wizard's "New
     Plate" dialog and the Surface Focus dialog are all constructed on demand,
@@ -80,38 +81,23 @@ class _ThirdPartyWindowThemer(QObject):
     selected), after the window's own sweep: any unthemed widget shown inside
     an already-themed window is themed on its first Show too.
     """
-
-    def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
-        if (
-            a1 is None
-            or a1.type() != QEvent.Type.Show
-            or not isinstance(a0, QWidget)
-            or a0.property(_THEMED)
-        ):
-            return False
-        if type(a0).__name__ == "_MDAPopup":
-            _theme_subsequence_popup(a0)
-        elif isinstance(a0, (HCSWizard, CustomPlateWidget, ZSurfaceDialog)) or (
-            (window := a0.window()) is not None and window.property(_THEMED)
-        ):
-            _theme(a0)
+    if widget.property(_THEMED):
         return False
-
-
-_window_themer: _ThirdPartyWindowThemer | None = None
+    if type(widget).__name__ == "_MDAPopup":
+        _theme_subsequence_popup(widget)
+    elif isinstance(widget, (HCSWizard, CustomPlateWidget, ZSurfaceDialog)) or (
+        (window := widget.window()) is not None and window.property(_THEMED)
+    ):
+        _theme(widget)
+    return False
 
 
 def install_third_party_window_theming() -> None:
-    """Install the app-wide filter that themes pymmcore-widgets' own windows.
+    """Install the app-wide hook that themes pymmcore-widgets' own windows.
 
     Idempotent -- safe to call from every ``MemoryMDAWidget`` instance.
     """
-    global _window_themer
-    app = QApplication.instance()
-    if app is None or _window_themer is not None:  # pragma: no cover
-        return
-    _window_themer = _ThirdPartyWindowThemer(app)
-    app.installEventFilter(_window_themer)
+    add_event_hook(_theme_third_party_window, QEvent.Type.Show)
 
 
 __all__ = [
