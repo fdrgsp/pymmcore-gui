@@ -237,7 +237,7 @@ class ThemedStageExplorer(StageExplorer):
     def refreshPixelGeometry(self) -> None:
         """Recompute every Stage Explorer visual derived from pixel calibration."""
         self._update_calibration_state()
-        if not self._is_pixel_calibrated():
+        if not self._pixel_calibrated:
             # Keep the last good geometry: refreshing from a missing
             # calibration would build a singular transform.
             return

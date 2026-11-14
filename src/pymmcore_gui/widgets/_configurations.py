@@ -253,13 +253,10 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
         for attr in ("_status_icon", "_status_label"):
             if (w := getattr(self, attr, None)) is not None:
                 w.hide()
-        old_hint = self._camera_hint
-        if layout := self.layout():
-            layout.removeWidget(old_hint)
-        self._camera_hint = QElidingLabel(old_hint.text(), self)
-        self._camera_hint.setVisible(bool(old_hint.text()))
-        self._camera_hint.setToolTip(old_hint.text())
-        old_hint.deleteLater()
+        # The page shows the camera hint on its toolbar, elided to one line.
+        self._camera_hint.deleteLater()
+        self._camera_hint = QElidingLabel(self)
+        self._update_clean_state()
         unstyle_widgets(self)
 
     def _update_clean_state(self, *_: object) -> None:
