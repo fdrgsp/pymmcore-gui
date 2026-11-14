@@ -690,7 +690,6 @@ class MicroManagerGUI(QMainWindow):
         self._camera = camera
         if warning := pixel_size_camera_warning(self._mmc):
             self._show_pixel_size_warning(warning)
-        # (a Multi Camera only combines the physical cameras: no presets needed)
         elif (
             camera
             and not is_multi_camera(self._mmc, camera)

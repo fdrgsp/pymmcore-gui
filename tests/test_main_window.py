@@ -159,7 +159,7 @@ def test_main_window_warns_about_pixel_sizes_for_any_camera(
 def test_multi_camera_needs_no_pixel_size_presets(
     gui: MicroManagerGUI, mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    """A Multi Camera only combines the physical cameras: it is never warned about."""
+    """Switching to a Multi Camera without its own presets shows no warning."""
     mmcore.loadDevice("Multi", "Utilities", "Multi Camera")
     mmcore.initializeDevice("Multi")
     for preset in mmcore.getAvailablePixelSizeConfigs():
