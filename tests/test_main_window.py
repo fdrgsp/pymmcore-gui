@@ -11,17 +11,20 @@ import useq
 from pymmcore_gui import MicroManagerGUI
 from pymmcore_gui._app import MMQApplication
 from pymmcore_gui._notification_manager import NotificationManager
+from pymmcore_gui._qt.QtCore import QTimer
 from pymmcore_gui._qt.QtGui import QAction
-from pymmcore_gui._qt.QtWidgets import QApplication, QMenu
+from pymmcore_gui._qt.QtWidgets import QApplication, QMenu, QMessageBox
 from pymmcore_gui.widgets._panels import PanelKey
 from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
     from pymmcore_plus import CMMCorePlus
     from pytestqt.qtbot import QtBot
 
+    from pymmcore_gui._qt.QtWidgets import QWidget
     from pymmcore_gui._settings import Settings
 
 
@@ -131,22 +134,63 @@ def test_main_window_notifications(gui: MicroManagerGUI) -> None:
 
 
 def test_main_window_warns_about_pixel_sizes_for_any_camera(
-    gui: MicroManagerGUI, mmcore: CMMCorePlus, second_camera: str
+    gui: MicroManagerGUI, mmcore: CMMCorePlus, second_camera: str, qtbot: QtBot
 ) -> None:
-    with patch.object(gui.nm, "show_warning_message") as warn:
+    with (
+        patch.object(gui.nm, "show_warning_message") as toast,
+        patch.object(QMessageBox, "warning") as show,
+    ):
         mmcore.events.systemConfigurationLoaded.emit()
-        assert "Res10x, Res20x, Res40x" in warn.call_args.args[0]
+        assert "Res10x, Res20x, Res40x" in show.call_args.args[2]
         mmcore.events.systemConfigurationLoaded.emit()  # (the same suggestion)
-        assert warn.call_count == 1
+        assert show.call_count == 1
 
         mmcore.setProperty("Core", "Camera", second_camera)
-        assert "'Res10x' is for any camera" in warn.call_args.args[0]
+        qtbot.waitUntil(lambda: show.call_count == 2)
+        assert "'Res10x' is for any camera" in show.call_args.args[2]
         for preset in mmcore.getAvailablePixelSizeConfigs():
             mmcore.definePixelSizeConfig(preset, "Core", "Camera", "Camera")
         mmcore.setProperty("Core", "Camera", "Camera")
+        qtbot.waitUntil(lambda: gui._camera == "Camera")
         mmcore.setProperty("Core", "Camera", second_camera)
-        assert "no pixel size for 'Camera2'" in warn.call_args.args[0]
-        assert warn.call_count == 3
+        qtbot.waitUntil(lambda: show.call_count == 3)
+        assert "no pixel size for 'Camera2'" in show.call_args.args[2]
+        assert show.call_count == 3
+        toast.assert_not_called()
+
+
+def test_loading_multicamera_config_shows_one_warning(
+    mmcore: CMMCorePlus, second_camera: str, qtbot: QtBot, tmp_path: Path
+) -> None:
+    config = tmp_path / "two_cameras.cfg"
+    mmcore.saveSystemConfiguration(str(config))
+    mmcore.unloadAllDevices()
+    gui = MicroManagerGUI(mmcore=mmcore)
+    qtbot.addWidget(gui)
+    shown: list[QMessageBox] = []
+    warning = QMessageBox.warning
+
+    def dismiss_warning() -> None:
+        box = QApplication.activeModalWidget()
+        assert isinstance(box, QMessageBox)
+        shown.append(box)
+        assert box.icon() == QMessageBox.Icon.Warning
+        assert "Res10x, Res20x, Res40x" in box.text()
+        # Repeated load notifications during the modal loop must stay deduplicated.
+        mmcore.events.systemConfigurationLoaded.emit()
+        box.accept()
+
+    def show_warning(
+        parent: QWidget, title: str, text: str
+    ) -> QMessageBox.StandardButton:
+        QTimer.singleShot(0, dismiss_warning)
+        return warning(parent, title, text)
+
+    with patch.object(QMessageBox, "warning", side_effect=show_warning) as show:
+        mmcore.loadSystemConfiguration(str(config))
+        qtbot.waitUntil(lambda: bool(shown))
+        qtbot.wait(10)
+        assert show.call_count == 1
 
 
 def test_snap_updates_preview_after_camera_format_changes(

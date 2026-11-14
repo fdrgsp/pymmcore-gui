@@ -59,6 +59,8 @@ from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from pymmcore_gui._qt.QtGui import QShowEvent
+
 
 logger = logging.getLogger(__name__)
 
@@ -816,6 +818,10 @@ class PixelCalibrationPanel(QWidget):
         self._start_button.setIconSize(icon_size)
         self._cancel_button.setIcon(QIconifyIcon("mdi:stop-circle-outline", color=red))
         self._cancel_button.setIconSize(icon_size)
+
+    def showEvent(self, a0: QShowEvent | None) -> None:
+        super().showEvent(a0)
+        self.refreshHardware()
 
     def changeEvent(self, a0: QEvent | None) -> None:
         super().changeEvent(a0)

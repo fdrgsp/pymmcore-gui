@@ -6,9 +6,8 @@ import math
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
-from pymmcore_plus import Keyword
 from pymmcore_widgets import StageExplorer
-from pymmcore_widgets._util import pixel_size_camera_warning
+from pymmcore_widgets._util import _CAMERA_GEOMETRY, pixel_size_camera_warning
 from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import (
@@ -211,14 +210,10 @@ class ThemedStageExplorer(StageExplorer):
             for device, prop, _ in self._mmc.getPixelSizeConfigData(name)
         }
         camera = self._mmc.getCameraDevice()
-        geometry_properties.update(
-            (camera, prop)
-            for prop in ("Binning", "TransposeMirrorX", "TransposeMirrorY")
-        )
+        geometry_properties.update((camera, prop) for prop in _CAMERA_GEOMETRY)
         if properties.isdisjoint(geometry_properties):
             return
-        if self._is_pixel_calibrated() != self.isEnabled():
-            self.refreshPixelGeometry()
+        self._fov_observer.request()
 
     def _fov_w_h(self) -> tuple[float, float]:
         """Return camera-axis FOV dimensions from the active affine transform."""
@@ -266,19 +261,6 @@ class ThemedStageExplorer(StageExplorer):
             self._stage_viewer.canvas.update()
         if self._auto_zoom_to_fit:
             self.zoom_to_fit()
-
-    def _on_property_changed(self, device: str, prop: str, value: object) -> None:
-        super()._on_property_changed(device, prop, value)
-        # (the pixel size presets may be for another camera)
-        if device == Keyword.CoreDevice and prop == Keyword.CoreCamera:
-            self.refreshPixelGeometry()
-
-    def _on_pixel_size_changed(self, value: float) -> None:
-        del value
-        self.refreshPixelGeometry()
-
-    def _on_pixel_size_affine_changed(self) -> None:
-        self.refreshPixelGeometry()
 
     def _on_sys_config_loaded(self) -> None:
         # Upstream refreshes the affine and rebuilds the marker unconditionally;
@@ -417,6 +399,7 @@ class ThemedStageExplorer(StageExplorer):
         _recolor(toolbar.zoom_to_fit_action, "mdi:fullscreen")
         _recolor(toolbar.snap_action, "mdi:camera-outline")
         _recolor(toolbar.poll_stage_action, "mdi:map-marker-outline")
+        _recolor(toolbar.show_mda_positions_action, "mdi:map-marker-multiple-outline")
         _recolor(toolbar.show_grid_action, "mdi:grid")
         _recolor(toolbar.map_memory_action, "mdi:memory")
         _recolor(toolbar.delete_rois_action, "mdi:vector-square-remove")

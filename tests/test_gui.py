@@ -5990,6 +5990,7 @@ def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
         toolbar.zoom_to_fit_action,
         toolbar.snap_action,
         toolbar.poll_stage_action,
+        toolbar.show_mda_positions_action,
         toolbar.show_grid_action,
         toolbar.map_memory_action,
         toolbar.delete_rois_action,
@@ -7464,7 +7465,7 @@ def test_stage_explorer_disabled_without_pixel_size(
     assert mmcore.getPixelSizeUm() == 0
     mmcore.events.pixelSizeChanged.emit(0.0)
     mmcore.events.pixelSizeAffineChanged.emit(*mmcore.getPixelSizeAffine())
-    assert not explorer.isEnabled()
+    qtbot.waitUntil(lambda: not explorer.isEnabled())
     assert explorer.toolTip()
     assert explorer._no_pixel_banner.isVisibleTo(explorer)
     assert not explorer._no_pixel_banner._icon.pixmap().isNull()
@@ -7481,7 +7482,7 @@ def test_stage_explorer_disabled_without_pixel_size(
     mmcore.setPixelSizeConfig("Res")
     assert mmcore.getPixelSizeUm() == 1.0
     mmcore.events.pixelSizeChanged.emit(1.0)
-    assert explorer.isEnabled()
+    qtbot.waitUntil(explorer.isEnabled)
     assert not explorer.toolTip()
     assert not explorer._no_pixel_banner.isVisibleTo(explorer)
 
@@ -7497,10 +7498,10 @@ def test_stage_explorer_disabled_with_pixel_size_for_any_camera(
 
     for preset in mmcore.getAvailablePixelSizeConfigs():
         mmcore.definePixelSizeConfig(preset, "Core", "Camera", "Camera")
-    assert explorer.isEnabled()
+    qtbot.waitUntil(explorer.isEnabled)
     # the presets are not for the second camera: it has no pixel size
     mmcore.setProperty("Core", "Camera", second_camera)
-    assert not explorer.isEnabled()
+    qtbot.waitUntil(lambda: not explorer.isEnabled())
 
 
 def test_stage_explorer_follows_objective_pixel_size(

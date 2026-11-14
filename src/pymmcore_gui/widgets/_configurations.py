@@ -14,10 +14,11 @@ from pymmcore_widgets import ConfigGroupsEditor
 from pymmcore_widgets._busy import BusyOverlay, busy
 from pymmcore_widgets._icons import StandardIcon
 from pymmcore_widgets._util import block_core
+from superqt import QElidingLabel
 from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import set_source_icon, unstyle_widgets
-from pymmcore_gui._qt.QtCore import QEvent, QSize, QTimer, Signal
+from pymmcore_gui._qt.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from pymmcore_gui._qt.QtGui import QFont, QPalette
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractSlider,
@@ -252,7 +253,18 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
         for attr in ("_status_icon", "_status_label"):
             if (w := getattr(self, attr, None)) is not None:
                 w.hide()
+        old_hint = self._camera_hint
+        if layout := self.layout():
+            layout.removeWidget(old_hint)
+        self._camera_hint = QElidingLabel(old_hint.text(), self)
+        self._camera_hint.setVisible(bool(old_hint.text()))
+        self._camera_hint.setToolTip(old_hint.text())
+        old_hint.deleteLater()
         unstyle_widgets(self)
+
+    def _update_clean_state(self, *_: object) -> None:
+        super()._update_clean_state()
+        self._camera_hint.setToolTip(self._camera_hint.text())
 
     def apply(self) -> None:
         """Apply the pixel configurations to the core (without closing)."""
@@ -355,10 +367,16 @@ class ConfigurationsPage(TabPage):
         dirty_layout.setSpacing(4)
         dirty_layout.addWidget(self._dirty_icon)
         dirty_layout.addWidget(self._dirty_text)
-        self._apply_dirty_style()
         self._dirty_label.hide()
+        self._camera_hint = self._pixel_config._camera_hint
+        self._camera_hint.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
         self.toolbar.add_stretch()
+        self.toolbar.add_widget(self._camera_hint)
+        self.toolbar._layout.setStretchFactor(self._camera_hint, 1)
         self.toolbar.add_widget(self._dirty_label)
+        self._apply_dirty_style()
 
         # Track the editors independently: saving the selected tab must not
         # silently mark changes in the other tab as persisted.
@@ -537,6 +555,8 @@ class ConfigurationsPage(TabPage):
         pal = self._dirty_text.palette()
         pal.setColor(QPalette.ColorRole.WindowText, color)
         self._dirty_text.setPalette(pal)
+        self._camera_hint.setPalette(pal)
+        self._camera_hint.setMaximumWidth(theme().scaled(700))
 
     def _apply_save_button_icons(self) -> None:
         color = qcolor(theme().text_secondary).name()

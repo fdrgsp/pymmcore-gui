@@ -664,22 +664,30 @@ class MicroManagerGUI(QMainWindow):
         """Suggest a camera for each pixel size preset, once per change."""
         self._camera = self._mmc.getCameraDevice()
         hint = pixel_presets_hint(self._mmc)
-        if hint and hint != self._pixel_presets_hint:
-            self._notification_manager.show_warning_message(hint)
+        changed = hint != self._pixel_presets_hint
         self._pixel_presets_hint = hint
+        if hint and changed:
+            self._show_pixel_size_warning(hint)
+
+    def _show_pixel_size_warning(self, text: str) -> None:
+        QMessageBox.warning(self, "Camera Pixel Size", text)
 
     def _on_property_changed(self, device: str, prop: str, _value: object) -> None:
         """Warn when the camera switched to may not have its own pixel size."""
         if device != Keyword.CoreDevice or prop != Keyword.CoreCamera:
             return
+        # A configuration load also changes the camera; let its warning run first.
+        QTimer.singleShot(0, self._warn_camera_pixel_size)
+
+    def _warn_camera_pixel_size(self) -> None:
         # (MMCore also emits the camera change later, from its own thread)
         if (camera := self._mmc.getCameraDevice()) == self._camera:
             return
         self._camera = camera
         if warning := pixel_size_camera_warning(self._mmc):
-            self._notification_manager.show_warning_message(warning)
+            self._show_pixel_size_warning(warning)
         elif camera and self._mmc.getPixelSizeUm() <= 0:
-            self._notification_manager.show_warning_message(
+            self._show_pixel_size_warning(
                 f"There is no pixel size for {camera!r} with the current settings: "
                 "add a pixel size preset for it in the Pixel Configuration editor."
             )

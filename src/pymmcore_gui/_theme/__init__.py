@@ -104,12 +104,6 @@ def set_theme(t: Theme) -> None:
         app.setPalette(pal)
 
     if isinstance(app, QApplication) and _current_style is not None:
-        # set_zoom() sends every widget a StyleChange event and forces a
-        # relayout -- set_style() (first-ever call only) already relies on
-        # this to make the *initial* theme take effect. A *later* toggle
-        # (this branch) needs the same forced refresh for sizing/spacing.
-        set_zoom(_current_style.zoom_factor)
-
         # QApplication.setPalette() above updates the application-wide
         # palette immediately, but an already-constructed widget's own
         # .palette() only catches up once Qt actually re-polishes it --
@@ -132,6 +126,9 @@ def set_theme(t: Theme) -> None:
                 # dark-theme recolor would stay baked in (and turn
                 # invisible) after switching to light mode.
                 ensure_visible_icon(w)
+
+        # Restore widget-specific colors and metrics after the palette sweep.
+        set_zoom(_current_style.zoom_factor)
 
 
 def set_style(style: MicroscopeStyle) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from copy import deepcopy
 from dataclasses import replace
 from typing import TYPE_CHECKING
 from unittest.mock import patch
@@ -21,18 +22,55 @@ from pymmcore_gui._pixel_calibration._models import (
 )
 from pymmcore_gui._pixel_calibration._routine import _describe_fit
 from pymmcore_gui._qt.QtCore import Qt
+from pymmcore_gui._qt.QtGui import QPalette
 from pymmcore_gui._qt.QtWidgets import (
     QDoubleSpinBox,
     QFrame,
     QPushButton,
 )
-from pymmcore_gui._theme import qcolor, theme
+from pymmcore_gui._theme import DARK_THEME, LIGHT_THEME, qcolor, set_theme, theme
 from pymmcore_gui.widgets._configurations import ConfigurationsPage
 from pymmcore_gui.widgets._toolbars import LiveButton, SnapButton
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
     from pytestqt.qtbot import QtBot
+
+
+def test_camera_hint_uses_page_toolbar(
+    mmcore: CMMCorePlus, qtbot: QtBot, second_camera: str
+) -> None:
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    page.resize(1200, 800)
+    page.show()
+    qtbot.waitExposed(page)
+    hint = page._camera_hint
+    assert hint.parentWidget() is page.toolbar
+    assert hint.isVisible()
+    assert "Res10x, Res20x, Res40x" in hint.text()
+    assert hint.toolTip() == hint.text()
+    assert not hint.wordWrap()
+    assert hint.x() > page.toolbar.width() / 3
+    assert hint.width() > 400
+    assert hint.width() < hint.fontMetrics().horizontalAdvance(hint.text())
+    page._mark_pixel_dirty()
+
+    for appearance in (LIGHT_THEME, DARK_THEME):
+        set_theme(appearance)
+        assert hint.palette().color(QPalette.ColorRole.WindowText) == qcolor(
+            theme().status_amber
+        )
+        assert page._dirty_text.palette().color(
+            QPalette.ColorRole.WindowText
+        ) == qcolor(theme().status_amber)
+        assert page.toolbar.height() == theme().row_height
+
+    mmcore.unloadDevice(second_camera)
+    page._pixel_config._update_clean_state()
+    assert hint.isHidden()
+    assert not hint.toolTip()
+    assert page._dirty_label.isVisible()
 
 
 def _result_for_selected_resolution(
@@ -274,6 +312,43 @@ def test_xy_stage_can_be_selected_when_core_stage_is_unassigned(
 
         assert panel._xy_stage() == "XY"
         assert not panel._unavailable_reason()
+
+
+@pytest.mark.parametrize("dirty", [False, True])
+def test_camera_choices_refresh_when_pixel_tab_is_shown(
+    mmcore: CMMCorePlus, qtbot: QtBot, dirty: bool
+) -> None:
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    page.show()
+    qtbot.waitExposed(page)
+    editor = page._pixel_config
+    panel = editor._calibration_panel
+    if dirty:
+        spin = editor._px_table.table().cellWidget(0, 1)
+        assert isinstance(spin, QDoubleSpinBox)
+        spin.setValue(0.123)
+    presets = deepcopy(editor.value())
+    camera = panel._camera_combo.currentText()
+
+    page.hide()
+    mmcore.loadDevice("Camera2", "DemoCamera", "DCam")
+    mmcore.initializeDevice("Camera2")
+    page._tabs.setCurrentWidget(editor)
+    page.show()
+    qtbot.waitUntil(lambda: panel._camera_combo.findText("Camera2") >= 0)
+    assert panel._camera_combo.currentText() == camera
+    assert editor.value() == presets
+    assert editor.isClean() is not dirty
+
+    panel._camera_combo.setCurrentText("Camera2")
+    page._tabs.setCurrentWidget(page._group_tab)
+    mmcore.unloadDevice("Camera2")
+    page._tabs.setCurrentWidget(editor)
+    qtbot.waitUntil(lambda: panel._camera_combo.findText("Camera2") < 0)
+    assert panel._camera_combo.currentText() == camera
+    assert editor.value() == presets
+    assert editor.isClean() is not dirty
 
 
 def test_error_and_success_summary_use_same_information_area(
