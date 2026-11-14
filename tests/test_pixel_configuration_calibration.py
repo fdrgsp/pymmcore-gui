@@ -21,20 +21,42 @@ from pymmcore_gui._pixel_calibration._models import (
     CalibrationWarning,
 )
 from pymmcore_gui._pixel_calibration._routine import _describe_fit
-from pymmcore_gui._qt.QtCore import Qt
+from pymmcore_gui._qt.QtCore import QEvent, Qt
 from pymmcore_gui._qt.QtGui import QPalette
 from pymmcore_gui._qt.QtWidgets import (
+    QApplication,
     QDoubleSpinBox,
     QFrame,
     QPushButton,
 )
 from pymmcore_gui._theme import DARK_THEME, LIGHT_THEME, qcolor, set_theme, theme
 from pymmcore_gui.widgets._configurations import ConfigurationsPage
+from pymmcore_gui.widgets._tab_page import TabPage
 from pymmcore_gui.widgets._toolbars import LiveButton, SnapButton
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
     from pytestqt.qtbot import QtBot
+
+    from pymmcore_gui._qt.QtWidgets import QWidget
+
+
+def test_configuration_style_change_during_construction(
+    mmcore: CMMCorePlus, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = TabPage.__init__
+
+    def init_with_style_change(page: TabPage, parent: QWidget | None = None) -> None:
+        original(page, parent)
+        qtbot.addWidget(page)
+        QApplication.sendEvent(page, QEvent(QEvent.Type.StyleChange))
+
+    monkeypatch.setattr(TabPage, "__init__", init_with_style_change)
+    page = ConfigurationsPage(mmcore)
+    assert page._dirty_label.isHidden()
+    assert page._dirty_text.palette().color(QPalette.ColorRole.WindowText) == qcolor(
+        theme().status_amber
+    )
 
 
 def test_camera_hint_uses_page_toolbar(

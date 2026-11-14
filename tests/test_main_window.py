@@ -11,7 +11,6 @@ import useq
 from pymmcore_gui import MicroManagerGUI
 from pymmcore_gui._app import MMQApplication
 from pymmcore_gui._notification_manager import NotificationManager
-from pymmcore_gui._qt.QtCore import QTimer
 from pymmcore_gui._qt.QtGui import QAction
 from pymmcore_gui._qt.QtWidgets import QApplication, QMenu, QMessageBox
 from pymmcore_gui.widgets._panels import PanelKey
@@ -24,7 +23,6 @@ if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
     from pytestqt.qtbot import QtBot
 
-    from pymmcore_gui._qt.QtWidgets import QWidget
     from pymmcore_gui._settings import Settings
 
 
@@ -166,36 +164,20 @@ def test_loading_multicamera_config_shows_one_warning(
     mmcore.unloadAllDevices()
     gui = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(gui)
-    shown: list[QMessageBox] = []
-    poll = QTimer(gui)
 
-    def dismiss_warning() -> None:
-        boxes = [box for box in gui.findChildren(QMessageBox) if box.isVisible()]
-        if not boxes:
-            return
-        poll.stop()
-        box = boxes[0]
-        shown.append(box)
-        assert box.icon() == QMessageBox.Icon.Warning
-        assert "Res10x, Res20x, Res40x" in box.text()
-        # Repeated load notifications during the modal loop must stay deduplicated.
+    def repeat_load_notification(*_: object) -> QMessageBox.StandardButton:
         mmcore.events.systemConfigurationLoaded.emit()
-        box.accept()
+        return QMessageBox.StandardButton.Ok
 
-    poll.timeout.connect(dismiss_warning)
-    warning = QMessageBox.warning
-
-    def show_warning(
-        parent: QWidget, title: str, text: str
-    ) -> QMessageBox.StandardButton:
-        poll.start(10)
-        return warning(parent, title, text)
-
-    with patch.object(QMessageBox, "warning", side_effect=show_warning) as show:
+    with patch.object(
+        QMessageBox, "warning", side_effect=repeat_load_notification
+    ) as show:
         mmcore.loadSystemConfiguration(str(config))
-        qtbot.waitUntil(lambda: bool(shown))
+        qtbot.waitUntil(lambda: show.call_count > 0)
         qtbot.wait(10)
-        assert show.call_count == 1
+        show.assert_called_once()
+        assert show.call_args.args[:2] == (gui, "Camera Pixel Size")
+        assert "Res10x, Res20x, Res40x" in show.call_args.args[2]
 
 
 def test_snap_updates_preview_after_camera_format_changes(

@@ -566,7 +566,11 @@ class ConfigurationsPage(TabPage):
             btn.setIconSize(QSize(size, size))
 
     def changeEvent(self, a0: QEvent | None) -> None:
-        if a0 is not None and a0.type() == QEvent.Type.StyleChange:
+        if (
+            a0 is not None
+            and a0.type() == QEvent.Type.StyleChange
+            and hasattr(self, "_camera_hint")
+        ):
             self._apply_dirty_style()
             self._apply_save_button_icons()
         super().changeEvent(a0)
