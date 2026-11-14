@@ -91,6 +91,7 @@ class DeviceSetupPane(QWidget):
     addRequested = Signal(str)  # label typed by the user
     addConfirmed = Signal()  # pre-init configured, finish adding
     addCancelled = Signal()
+    peripheralsRequested = Signal(object)  # installed hub
     propertyChanged = Signal(object, str)  # (Property, new value)
     delayChanged = Signal(object, float)  # (Device, delay in ms)
     renameRequested = Signal(object, str)  # (Device, new label)
@@ -101,9 +102,6 @@ class DeviceSetupPane(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
-        # "Add Device" is rebuilt from scratch by show_available() every time
-        # (see _reset), so this tracks whichever instance currently exists —
-        # or None the rest of the time — for changeEvent to re-theme.
         self._add_btn: QPushButton | None = None
 
         self._title = pane_title("Device Setup")
@@ -152,15 +150,9 @@ class DeviceSetupPane(QWidget):
         def _emit_add() -> None:
             self.addRequested.emit(label_edit.text())
 
-        add_btn = QPushButton("Add Device")
-        add_btn.setProperty("variant", "primary")
-        add_btn.clicked.connect(_emit_add)
         label_edit.returnPressed.connect(_emit_add)
-        self._add_btn = add_btn
-        self._apply_add_icon()
-
         self._body_layout.addStretch()
-        self._body_layout.addWidget(add_btn)
+        self._add_button("Add Device", _emit_add)
 
     def show_pending(
         self,
@@ -273,6 +265,10 @@ class DeviceSetupPane(QWidget):
             self._body_layout.addLayout(form)
 
         self._body_layout.addStretch()
+        if dev.device_type is DeviceType.Hub:
+            self._add_button(
+                "Peripherals…", lambda: self.peripheralsRequested.emit(dev)
+            )
 
     # ── building blocks ───────────────────────────────────────────
 
@@ -281,6 +277,13 @@ class DeviceSetupPane(QWidget):
         self._title.setText(title)
         _clear_layout(self._body_layout)
         self._add_btn = None
+
+    def _add_button(self, text: str, callback: Callable[[], None]) -> None:
+        self._add_btn = QPushButton(text)
+        self._add_btn.setProperty("variant", "primary")
+        self._add_btn.clicked.connect(callback)
+        self._apply_add_icon()
+        self._body_layout.addWidget(self._add_btn)
 
     def _apply_add_icon(self) -> None:
         if self._add_btn is None:

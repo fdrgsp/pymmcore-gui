@@ -6351,6 +6351,89 @@ def test_selecting_an_installed_device_abandons_a_pending_add(
     assert page._setup._title.text() == installed.name
 
 
+@pytest.mark.parametrize("label", ["DHub", "Camera"])
+def test_installed_hub_offers_peripherals_in_the_add_device_position(
+    mmcore: CMMCorePlus, qtbot: QtBot, label: str
+) -> None:
+    page = HardwareSetupPage(mmcore)
+    qtbot.addWidget(page)
+    _select_available_adapter(page, "DCam")
+    pane = page._setup
+    assert pane._add_btn is not None
+    assert pane._add_btn.text() == "Add Device"
+    index = pane._body_layout.count() - 1
+    item = pane._body_layout.itemAt(index)
+    assert item is not None
+    assert item.widget() is pane._add_btn
+
+    page._on_installed_selected(page.model.get_device(label))
+    if label == "DHub":
+        assert pane._add_btn is not None
+        assert pane._add_btn.text() == "Peripherals…"
+        assert pane._add_btn.property("variant") == "primary"
+        assert not pane._add_btn.icon().isNull()
+        index = pane._body_layout.count() - 1
+        item = pane._body_layout.itemAt(index)
+        assert item is not None
+        assert item.widget() is pane._add_btn
+    else:
+        assert pane._add_btn is None
+
+
+@pytest.mark.parametrize("accept", [True, False])
+def test_existing_hub_peripherals_can_be_added(
+    mmcore: CMMCorePlus, qtbot: QtBot, accept: bool
+) -> None:
+    page = HardwareSetupPage(mmcore)
+    qtbot.addWidget(page)
+    page._on_remove_requested(page.model.get_device("Camera"))
+    table = page._installed._table
+    for row in range(table.rowCount()):
+        if (item := table.item(row, 0)) and item.text() == "DHub":
+            table.selectRow(row)
+            break
+    before = {dev.name for dev in page.model.devices}
+
+    def choose_camera(dialog: PeripheralsDialog) -> int:
+        adapters = [
+            item.text()
+            for row in range(dialog._table.rowCount())
+            if (item := dialog._table.item(row, 1))
+        ]
+        assert "DStage" not in adapters  # already installed on this hub
+        row = adapters.index("DCam")
+        item = dialog._table.item(row, 0)
+        assert item is not None
+        item.setText("AddedCamera")
+        item.setCheckState(Qt.CheckState.Checked)
+        return QDialog.DialogCode.Accepted if accept else QDialog.DialogCode.Rejected
+
+    assert page._setup._add_btn is not None
+    with patch.object(PeripheralsDialog, "exec", choose_camera):
+        page._setup._add_btn.click()
+
+    expected = before | {"AddedCamera"} if accept else before
+    assert {dev.name for dev in page.model.devices} == expected
+    assert set(mmcore.getLoadedDevices()) - {"Core"} == expected
+    installed = {
+        item.text() for row in range(table.rowCount()) if (item := table.item(row, 0))
+    }
+    assert installed == expected
+    if accept:
+        assert mmcore.getParentLabel("AddedCamera") == "DHub"
+        assert page.model.get_device("AddedCamera").initialized
+        assert _role_combo(page, "Camera").currentText() == "AddedCamera"
+        assert page.is_dirty()
+        dialog = PeripheralsDialog(page.model.get_device("DHub"), page.model)
+        qtbot.addWidget(dialog)
+        remaining = {
+            item.text()
+            for row in range(dialog._table.rowCount())
+            if (item := dialog._table.item(row, 1))
+        }
+        assert "DCam" not in remaining
+
+
 def _focus_direction_combo(page: HardwareSetupPage) -> QComboBox | None:
     combos = [
         c

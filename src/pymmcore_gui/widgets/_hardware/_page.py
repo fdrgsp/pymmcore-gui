@@ -130,6 +130,7 @@ class HardwareSetupPage(TabPage):
         self._setup.addRequested.connect(self._begin_add)
         self._setup.addConfirmed.connect(self._finish_add)
         self._setup.addCancelled.connect(self._cancel_add)
+        self._setup.peripheralsRequested.connect(self._add_peripherals)
         self._setup.propertyChanged.connect(self._on_property_changed)
         self._setup.delayChanged.connect(self._on_delay_changed)
         self._setup.renameRequested.connect(self._rename_device)
@@ -598,16 +599,19 @@ class HardwareSetupPage(TabPage):
         with _carry_on("list the available devices"):
             self._model.load_available_devices(self._core)
         self._available.set_devices(self._model.available_devices)
-        if dev.device_type is DeviceType.Hub:
-            self._add_peripherals(dev)
         self._installed.set_devices(self._model.devices)
         self._sync_roles()
+        if dev.device_type is DeviceType.Hub:
+            self._add_peripherals(dev)
         self._setup.show_installed(dev, self._port_device_for(dev))
 
     def _add_peripherals(self, hub: Device) -> None:
-        """Offer to add the peripherals belonging to a freshly added hub."""
+        """Offer to add the hub's remaining peripherals."""
         dlg = PeripheralsDialog(hub, self._model, self)
-        if not dlg.has_peripherals() or not dlg.exec():
+        if not dlg.has_peripherals():
+            self._warn(f"There are no available peripheral devices for {hub.name!r}.")
+            return
+        if not dlg.exec():
             return
 
         failures: dict[str, str] = {}
@@ -628,6 +632,8 @@ class HardwareSetupPage(TabPage):
         with _carry_on("list the available devices"):
             self._model.load_available_devices(self._core)
         self._available.set_devices(self._model.available_devices)
+        self._installed.set_devices(self._model.devices)
+        self._sync_roles()
         if failures:
             listing = "\n".join(f"  • {n}: {m}" for n, m in failures.items())
             self._warn(f"Some peripherals could not be added:\n\n{listing}")
