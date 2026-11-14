@@ -167,12 +167,14 @@ def test_loading_multicamera_config_shows_one_warning(
     gui = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(gui)
     shown: list[QMessageBox] = []
-    warning = QMessageBox.warning
+    poll = QTimer(gui)
 
     def dismiss_warning() -> None:
-        if not isinstance(box := QApplication.activeModalWidget(), QMessageBox):
-            QTimer.singleShot(10, dismiss_warning)  # (not yet shown on macOS)
+        boxes = [box for box in gui.findChildren(QMessageBox) if box.isVisible()]
+        if not boxes:
             return
+        poll.stop()
+        box = boxes[0]
         shown.append(box)
         assert box.icon() == QMessageBox.Icon.Warning
         assert "Res10x, Res20x, Res40x" in box.text()
@@ -180,10 +182,13 @@ def test_loading_multicamera_config_shows_one_warning(
         mmcore.events.systemConfigurationLoaded.emit()
         box.accept()
 
+    poll.timeout.connect(dismiss_warning)
+    warning = QMessageBox.warning
+
     def show_warning(
         parent: QWidget, title: str, text: str
     ) -> QMessageBox.StandardButton:
-        QTimer.singleShot(0, dismiss_warning)
+        poll.start(10)
         return warning(parent, title, text)
 
     with patch.object(QMessageBox, "warning", side_effect=show_warning) as show:
