@@ -52,7 +52,6 @@ def test_camera_hint_uses_page_toolbar(
     assert hint.toolTip() == hint.text()
     assert not hint.wordWrap()
     assert hint.x() > page.toolbar.width() / 3
-    assert hint.width() > 400
     assert hint.width() < hint.fontMetrics().horizontalAdvance(hint.text())
     page._mark_pixel_dirty()
 

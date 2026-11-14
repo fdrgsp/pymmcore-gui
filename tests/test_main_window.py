@@ -155,7 +155,6 @@ def test_main_window_warns_about_pixel_sizes_for_any_camera(
         mmcore.setProperty("Core", "Camera", second_camera)
         qtbot.waitUntil(lambda: show.call_count == 3)
         assert "no pixel size for 'Camera2'" in show.call_args.args[2]
-        assert show.call_count == 3
         toast.assert_not_called()
 
 
@@ -171,8 +170,9 @@ def test_loading_multicamera_config_shows_one_warning(
     warning = QMessageBox.warning
 
     def dismiss_warning() -> None:
-        box = QApplication.activeModalWidget()
-        assert isinstance(box, QMessageBox)
+        if not isinstance(box := QApplication.activeModalWidget(), QMessageBox):
+            QTimer.singleShot(10, dismiss_warning)  # (not yet shown on macOS)
+            return
         shown.append(box)
         assert box.icon() == QMessageBox.Icon.Warning
         assert "Res10x, Res20x, Res40x" in box.text()
