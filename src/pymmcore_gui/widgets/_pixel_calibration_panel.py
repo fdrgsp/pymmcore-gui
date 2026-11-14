@@ -68,6 +68,7 @@ logger = logging.getLogger(__name__)
 # reporting something other than a calibration/test-frame attempt).
 _DIAGNOSTICS_UNCHANGED = object()
 _WARNING = "Warning: "  # result lines shown in amber, behind a ⚠
+_Icon = Literal["error", "success", "warning"]
 
 
 def _pixel_size_line(label: str, fit: AffineFitResult, raw_pixel_size_um: float) -> str:
@@ -156,7 +157,7 @@ class _CalibrationDisplayState:
     progress: int
     message: str
     preserve_newlines: bool
-    icon: Literal["error", "success"] | None
+    icon: _Icon | None
     diagnostics: _DiagnosticsState
     rejected_result: PixelCalibrationResult | None
 
@@ -723,7 +724,7 @@ class PixelCalibrationPanel(QWidget):
         self._result_text.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
         )
-        self._result_icon_kind: Literal["error", "success"] | None = None
+        self._result_icon_kind: _Icon | None = None
         self._result_plain_message = ""
         self._result_preserve_newlines = False
         self._set_result_message("No calibration result")
@@ -1449,6 +1450,10 @@ class PixelCalibrationPanel(QWidget):
         if result.warnings:
             lines.append("")
             lines.extend(_WARNING + warning.message for warning in result.warnings)
+            lines.append(
+                "The sample may lack detail: use one with dense, high-contrast "
+                "structure, in focus and evenly lit, then calibrate again."
+            )
         lines.append("")
         lines.append(
             f"Applied automatically to {self._target.resolution_id!r}. Use "
@@ -1456,7 +1461,9 @@ class PixelCalibrationPanel(QWidget):
             '"Save to file" to also save it to the .cfg file.'
         )
         self._set_result_message(
-            "\n".join(lines), preserve_newlines=True, icon="success"
+            "\n".join(lines),
+            preserve_newlines=True,
+            icon="warning" if result.warnings else "success",
         )
         self._phase_label.setText("Result applied; configuration is dirty")
         self._progress.setValue(1000)
@@ -1578,7 +1585,7 @@ class PixelCalibrationPanel(QWidget):
         message: str,
         *,
         preserve_newlines: bool = False,
-        icon: Literal["error", "success"] | None = None,
+        icon: _Icon | None = None,
     ) -> None:
         r"""Show result text in the scrollable information area.
 
@@ -1590,7 +1597,7 @@ class PixelCalibrationPanel(QWidget):
         ``_result_plain_message`` keeps the un-annotated original.
 
         ``icon`` puts a small status glyph in front of the text -- red for
-        ``"error"``, green for ``"success"`` -- matching the outcome; other
+        ``"error"``, amber for ``"warning"``, green for ``"success"``; other
         messages (in-progress, informational) pass none and show no icon.
         """
         self._result_plain_message = message
@@ -1618,13 +1625,14 @@ class PixelCalibrationPanel(QWidget):
         )
         lines = [html.escape(line) for line in text.split("\n")]
         kind = self._result_icon_kind
-        if kind is not None and lines:
-            color = qcolor(
-                theme().status_green if kind == "success" else theme().status_red
-            ).name()
-            glyph = "✓" if kind == "success" else "⚠"
-            lines[0] = f'<span style="color: {color};">{glyph}</span> {lines[0]}'
         amber = qcolor(theme().status_amber).name()
+        if kind is not None and lines:
+            color, glyph = {
+                "success": (qcolor(theme().status_green).name(), "✓"),
+                "warning": (amber, "⚠"),
+                "error": (qcolor(theme().status_red).name(), "⚠"),
+            }[kind]
+            lines[0] = f'<span style="color: {color};">{glyph}</span> {lines[0]}'
         lines = [
             f'<span style="color: {amber};">⚠ {line.removeprefix(_WARNING)}</span>'
             if line.startswith(_WARNING)

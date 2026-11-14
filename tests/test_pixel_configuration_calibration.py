@@ -313,9 +313,10 @@ def test_result_warnings_are_highlighted(mmcore: CMMCorePlus, qtbot: QtBot) -> N
     )
 
     amber = qcolor(theme().status_amber).name()
-    assert f'<span style="color: {amber};">⚠ {warning.message}</span>' in (
-        panel._result_text.text()
-    )
+    text = panel._result_text.text()
+    assert text.startswith(f'<span style="color: {amber};">⚠</span> Calibration')
+    assert f'<span style="color: {amber};">⚠ {warning.message}</span>' in text
+    assert "The sample may lack detail" in text
 
 
 def test_test_position_residuals_are_shown_after_fitting(
