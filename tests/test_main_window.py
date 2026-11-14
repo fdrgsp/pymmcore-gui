@@ -156,20 +156,20 @@ def test_main_window_warns_about_pixel_sizes_for_any_camera(
         toast.assert_not_called()
 
 
-def test_multi_camera_needs_no_pixel_size_presets(
+def test_multi_camera_is_only_warned_about_when_used(
     gui: MicroManagerGUI, mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    """Switching to a Multi Camera without its own presets shows no warning."""
+    """A loaded Multi Camera needs no presets until it becomes the camera."""
     mmcore.loadDevice("Multi", "Utilities", "Multi Camera")
     mmcore.initializeDevice("Multi")
     for preset in mmcore.getAvailablePixelSizeConfigs():
         mmcore.definePixelSizeConfig(preset, "Core", "Camera", "Camera")
     with patch.object(QMessageBox, "warning") as show:
         mmcore.events.systemConfigurationLoaded.emit()
-        mmcore.setProperty("Core", "Camera", "Multi")
-        qtbot.waitUntil(lambda: gui._camera == "Multi")
-        assert mmcore.getPixelSizeUm() == 0
         show.assert_not_called()
+        mmcore.setProperty("Core", "Camera", "Multi")
+        qtbot.waitUntil(lambda: show.call_count == 1)
+        assert "no pixel size for 'Multi'" in show.call_args.args[2]
 
 
 def test_loading_multicamera_config_shows_one_warning(
