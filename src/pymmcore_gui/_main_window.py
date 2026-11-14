@@ -10,7 +10,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, cast
 
 from pymmcore_plus import CMMCorePlus, Keyword, find_micromanager
-from pymmcore_widgets._util import pixel_presets_hint, pixel_size_camera_warning
+from pymmcore_widgets._util import (
+    is_multi_camera,
+    pixel_presets_hint,
+    pixel_size_camera_warning,
+)
 from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._acquisition_loader import supports_path
@@ -686,7 +690,12 @@ class MicroManagerGUI(QMainWindow):
         self._camera = camera
         if warning := pixel_size_camera_warning(self._mmc):
             self._show_pixel_size_warning(warning)
-        elif camera and self._mmc.getPixelSizeUm() <= 0:
+        # (a Multi Camera only combines the physical cameras: no presets needed)
+        elif (
+            camera
+            and not is_multi_camera(self._mmc, camera)
+            and self._mmc.getPixelSizeUm() <= 0
+        ):
             self._show_pixel_size_warning(
                 f"There is no pixel size for {camera!r} with the current settings: "
                 "add a pixel size preset for it in the Pixel Configuration editor."

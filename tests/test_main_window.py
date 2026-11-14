@@ -156,6 +156,22 @@ def test_main_window_warns_about_pixel_sizes_for_any_camera(
         toast.assert_not_called()
 
 
+def test_multi_camera_needs_no_pixel_size_presets(
+    gui: MicroManagerGUI, mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A Multi Camera only combines the physical cameras: it is never warned about."""
+    mmcore.loadDevice("Multi", "Utilities", "Multi Camera")
+    mmcore.initializeDevice("Multi")
+    for preset in mmcore.getAvailablePixelSizeConfigs():
+        mmcore.definePixelSizeConfig(preset, "Core", "Camera", "Camera")
+    with patch.object(QMessageBox, "warning") as show:
+        mmcore.events.systemConfigurationLoaded.emit()
+        mmcore.setProperty("Core", "Camera", "Multi")
+        qtbot.waitUntil(lambda: gui._camera == "Multi")
+        assert mmcore.getPixelSizeUm() == 0
+        show.assert_not_called()
+
+
 def test_loading_multicamera_config_shows_one_warning(
     mmcore: CMMCorePlus, second_camera: str, qtbot: QtBot, tmp_path: Path
 ) -> None:
