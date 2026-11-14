@@ -13,6 +13,7 @@ from pymmcore_gui._app import MMQApplication
 from pymmcore_gui._notification_manager import NotificationManager
 from pymmcore_gui._qt.QtGui import QAction
 from pymmcore_gui._qt.QtWidgets import QApplication, QMenu, QMessageBox
+from pymmcore_gui._utils import NO_PIXEL_SIZE
 from pymmcore_gui.widgets._panels import PanelKey
 from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 
@@ -152,7 +153,7 @@ def test_main_window_warns_about_pixel_sizes_for_any_camera(
         qtbot.waitUntil(lambda: gui._camera == "Camera")
         mmcore.setProperty("Core", "Camera", second_camera)
         qtbot.waitUntil(lambda: show.call_count == 3)
-        assert "no pixel size for 'Camera2'" in show.call_args.args[2]
+        assert show.call_args.args[2] == f"Camera 'Camera2': {NO_PIXEL_SIZE}"
         toast.assert_not_called()
 
 
@@ -169,7 +170,7 @@ def test_multi_camera_is_only_warned_about_when_used(
         show.assert_not_called()
         mmcore.setProperty("Core", "Camera", "Multi")
         qtbot.waitUntil(lambda: show.call_count == 1)
-        assert "no pixel size for 'Multi'" in show.call_args.args[2]
+        assert show.call_args.args[2] == f"Camera 'Multi': {NO_PIXEL_SIZE}"
 
 
 def test_loading_multicamera_config_shows_one_warning(

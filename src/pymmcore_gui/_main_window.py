@@ -72,6 +72,7 @@ from pymmcore_gui._theme import (
 )
 from pymmcore_gui._theme._dark import DARK_THEME
 from pymmcore_gui._theme._light import LIGHT_THEME
+from pymmcore_gui._utils import NO_PIXEL_SIZE
 from pymmcore_gui.widgets._acquire import AcquirePage
 from pymmcore_gui.widgets._configurations import ConfigurationsPage
 from pymmcore_gui.widgets._hardware import HardwareSetupPage
@@ -687,10 +688,7 @@ class MicroManagerGUI(QMainWindow):
         if warning := pixel_size_camera_warning(self._mmc):
             self._show_pixel_size_warning(warning)
         elif camera and self._mmc.getPixelSizeUm() <= 0:
-            self._show_pixel_size_warning(
-                f"There is no pixel size for {camera!r} with the current settings: "
-                "add a pixel size preset for it in the Pixel Configuration editor."
-            )
+            self._show_pixel_size_warning(f"Camera {camera!r}: {NO_PIXEL_SIZE}")
 
     def on_startup_configuration_loaded(self) -> None:
         """Land on Acquire after the application loads its initial config."""

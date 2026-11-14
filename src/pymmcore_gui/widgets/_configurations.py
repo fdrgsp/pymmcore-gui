@@ -256,12 +256,16 @@ class _EmbeddedPixelConfig(PixelConfigurationWidget):
         # The page shows the camera hint on its toolbar, elided to one line.
         self._camera_hint.deleteLater()
         self._camera_hint = QElidingLabel(self)
+        self._camera_hint_icon = QLabel(self)
         self._update_clean_state()
         unstyle_widgets(self)
 
     def _update_clean_state(self, *_: object) -> None:
         super()._update_clean_state()
-        self._camera_hint.setToolTip(self._camera_hint.text())
+        hint = self._camera_hint.text()
+        self._camera_hint.setToolTip(hint)
+        if hasattr(self, "_camera_hint_icon"):
+            self._camera_hint_icon.setVisible(bool(hint))
 
     def apply(self) -> None:
         """Apply the pixel configurations to the core (without closing)."""
@@ -366,10 +370,12 @@ class ConfigurationsPage(TabPage):
         dirty_layout.addWidget(self._dirty_text)
         self._dirty_label.hide()
         self._camera_hint = self._pixel_config._camera_hint
+        self._camera_hint_icon = self._pixel_config._camera_hint_icon
         self._camera_hint.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
         self.toolbar.add_stretch()
+        self.toolbar.add_widget(self._camera_hint_icon)
         self.toolbar.add_widget(self._camera_hint)
         self.toolbar._layout.setStretchFactor(self._camera_hint, 1)
         self.toolbar.add_widget(self._dirty_label)
@@ -548,7 +554,9 @@ class ConfigurationsPage(TabPage):
         color = qcolor(theme().status_amber)
         icon = QIconifyIcon("mdi:alert", color=color.name())
         size = self._dirty_text.fontMetrics().height()
-        self._dirty_icon.setPixmap(icon.pixmap(size, size))
+        pixmap = icon.pixmap(size, size)
+        self._dirty_icon.setPixmap(pixmap)
+        self._camera_hint_icon.setPixmap(pixmap)
         pal = self._dirty_text.palette()
         pal.setColor(QPalette.ColorRole.WindowText, color)
         self._dirty_text.setPalette(pal)

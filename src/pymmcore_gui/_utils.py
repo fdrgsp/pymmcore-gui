@@ -17,6 +17,10 @@ if TYPE_CHECKING:
     from useq import MDAEvent
 
 GH_REPO_URL = "http://github.com/pymmcore-plus/pymmcore-gui"
+NO_PIXEL_SIZE = (
+    "No pixel size configuration matches the current settings. Add one in the "
+    "Pixel Configuration Editor (Configurations tab)."
+)
 
 
 def connect_direct(signal: Any, callback: Callable[..., Any]) -> None:

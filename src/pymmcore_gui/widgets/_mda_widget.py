@@ -11,7 +11,7 @@ from ome_writers._schema import _ome_stem_suffix
 from pymmcore_widgets import MDAWidget, MDAWidgetCollapsible
 from pymmcore_widgets._busy import BusyOverlay
 from pymmcore_widgets._icons import StandardIcon
-from pymmcore_widgets._util import pixel_size_camera_warning
+from pymmcore_widgets._util import fov_pixel_size_warning
 from pymmcore_widgets.mda import (
     CollapsibleCoreMDATabs,
     CoreMDATabs,
@@ -53,6 +53,7 @@ from pymmcore_gui._qt.QtWidgets import (
 )
 from pymmcore_gui._settings import Settings
 from pymmcore_gui._theme import qcolor, theme
+from pymmcore_gui._utils import NO_PIXEL_SIZE
 
 from ._mda_tabs import (
     GuiCollapsibleCoreMDATabs,
@@ -826,40 +827,21 @@ class MemoryMDAWidgetBase(_MixinBase):
             for pos in sequence.stage_positions
         )
 
-    def _confirm_missing_pixel_size(self) -> bool:
-        """Ask before running a grid plan that has no pixel size to scale it."""
-        response = QMessageBox.warning(
-            self,
-            "No Pixel Size",
-            "The current objective/resolution preset has no pixel size, but this "
-            "sequence uses a grid plan. A grid's spacing and overlap come from the "
-            "camera's field of view, which needs the pixel size, so the tiles would "
-            "not be placed correctly. Set a pixel size in the Pixel Configuration "
-            "Editor (Configurations tab) first."
-            "\n\nRun anyway?",
-            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        return bool(response == QMessageBox.StandardButton.Ok)
-
     def prepare_mda(self) -> bool | SingleOutput | None:
         """Return a disk path or a scratch sink that supports live viewing."""
         # the check below already reads the sequence
         self._commit_editors()
-        if self._sequence_uses_grid():
-            if warning := pixel_size_camera_warning(self._mmc):
-                QMessageBox.warning(
-                    self,
-                    "Pixel Size Not Set for the Camera",
-                    f"{warning}\n\nThis sequence uses a grid plan, whose tiles "
-                    "would not be placed correctly.",
-                )
-                return False
-            if (
-                self._mmc.getPixelSizeUm() <= 0
-                and not self._confirm_missing_pixel_size()
-            ):
-                return False
+        if self._sequence_uses_grid() and (
+            problem := fov_pixel_size_warning(self._mmc, NO_PIXEL_SIZE)
+        ):
+            QMessageBox.warning(
+                self,
+                "Pixel Size Needed for the Grid",
+                f"{problem}\n\nThis sequence uses a grid plan, whose spacing and "
+                "overlap come from the camera's field of view, so its tiles would "
+                "not be placed correctly.",
+            )
+            return False
         output = super().prepare_mda()
         if isinstance(output, bool):
             return output

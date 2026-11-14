@@ -7,7 +7,7 @@ from contextlib import suppress
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from pymmcore_widgets import StageExplorer
-from pymmcore_widgets._util import _CAMERA_GEOMETRY, pixel_size_camera_warning
+from pymmcore_widgets._util import _CAMERA_GEOMETRY, fov_pixel_size_warning
 from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import (
@@ -26,18 +26,13 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 from pymmcore_gui._theme import qcolor, theme
+from pymmcore_gui._utils import NO_PIXEL_SIZE
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
     from vispy.app.canvas import MouseEvent
 
     from pymmcore_gui._qt.QtGui import QAction, QActionGroup, QPaintEvent
-
-_NO_PIXEL_SIZE_MESSAGE = (
-    "The Stage Explorer is unavailable: the current objective/resolution preset "
-    "has no pixel size. Select a calibrated preset, or set a pixel size for this "
-    "one in the Pixel Configuration Editor (Configurations tab)."
-)
 
 
 class _PixmapWidget(QWidget):
@@ -73,7 +68,7 @@ class _NoPixelSizeBanner(QWidget):
         super().__init__(parent)
         self.setAutoFillBackground(True)
         self._icon = _PixmapWidget()
-        self._text = QLabel(_NO_PIXEL_SIZE_MESSAGE)
+        self._text = QLabel()
         self._text.setWordWrap(True)
 
         layout = QHBoxLayout(self)
@@ -181,10 +176,8 @@ class ThemedStageExplorer(StageExplorer):
         matrix is singular and crashes Vispy. With several cameras, the pixel
         size must also be the current camera's.
         """
-        if self._mmc.getPixelSizeUm() <= 0:
-            return _NO_PIXEL_SIZE_MESSAGE
-        if warning := pixel_size_camera_warning(self._mmc):
-            return f"The Stage Explorer is unavailable: {warning}"
+        if reason := fov_pixel_size_warning(self._mmc, NO_PIXEL_SIZE):
+            return f"The Stage Explorer is unavailable: {reason}"
         return ""
 
     def _is_pixel_calibrated(self) -> bool:

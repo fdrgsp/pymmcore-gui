@@ -75,6 +75,9 @@ def test_camera_hint_uses_page_toolbar(
     assert not hint.wordWrap()
     assert hint.x() > page.toolbar.width() / 3
     assert hint.width() < hint.fontMetrics().horizontalAdvance(hint.text())
+    icon = page._camera_hint_icon
+    assert icon.isVisible()
+    assert icon.pixmap().cacheKey() == page._dirty_icon.pixmap().cacheKey()
     page._mark_pixel_dirty()
 
     for appearance in (LIGHT_THEME, DARK_THEME):
@@ -90,6 +93,7 @@ def test_camera_hint_uses_page_toolbar(
     mmcore.unloadDevice(second_camera)
     page._pixel_config._update_clean_state()
     assert hint.isHidden()
+    assert icon.isHidden()
     assert not hint.toolTip()
     assert page._dirty_label.isVisible()
 

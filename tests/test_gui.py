@@ -89,6 +89,7 @@ from pymmcore_gui._theme import (
 from pymmcore_gui._theme._dark import DARK_THEME
 from pymmcore_gui._theme._light import LIGHT_THEME
 from pymmcore_gui._theme._pixel_sizes import is_self_sized
+from pymmcore_gui._utils import NO_PIXEL_SIZE
 from pymmcore_gui.widgets._acquire import (
     _MDA_DOCK_WIDTH,
     _TOOLS_DOCK_MAX_WIDTH,
@@ -7638,52 +7639,32 @@ def test_stage_explorer_follows_objective_pixel_size(
     ],
     ids=["rows_columns", "width_height", "position_subsequence", "no_grid"],
 )
-def test_run_without_pixel_size_warns_for_grid_plans(
+def test_run_without_pixel_size_blocks_grid_plans(
     mmcore: CMMCorePlus,
     qtbot: QtBot,
     monkeypatch: pytest.MonkeyPatch,
     sequence: useq.MDASequence,
     warns: bool,
 ) -> None:
-    """A grid needs the FOV (hence the pixel size): confirm before running one."""
+    """A grid needs the FOV, hence the pixel size: it cannot run without one."""
     from pymmcore_gui._qt.QtWidgets import QMessageBox
 
     mda = MemoryMDAWidget(mmcore)
     qtbot.addWidget(mda)
     mda.save_info.setChecked(False)
     mda.setValue(sequence)
+    warning = Mock()
+    monkeypatch.setattr(QMessageBox, "warning", warning)
 
-    answers: list[QMessageBox.StandardButton] = []
-
-    def fake_warning(
-        parent: object,
-        title: str,
-        text: str,
-        buttons: object,
-        default: QMessageBox.StandardButton,
-    ) -> QMessageBox.StandardButton:
-        assert title == "No Pixel Size"
-        assert default == QMessageBox.StandardButton.Cancel
-        return answers.pop(0)
-
-    monkeypatch.setattr(QMessageBox, "warning", fake_warning)
-
-    # calibrated: never asks
     assert mmcore.getPixelSizeUm() > 0
     assert mda.prepare_mda() is not False
 
     mmcore.deletePixelSizeConfig(mmcore.getCurrentPixelSizeConfig())
     assert mmcore.getPixelSizeUm() == 0
-
-    if not warns:
-        assert mda.prepare_mda() is not False
-        return
-
-    answers.append(QMessageBox.StandardButton.Cancel)
-    assert mda.prepare_mda() is False
-    answers.append(QMessageBox.StandardButton.Ok)
-    assert mda.prepare_mda() is not False
-    assert not answers
+    assert (mda.prepare_mda() is False) == warns
+    assert warning.called == warns
+    if warns:
+        assert NO_PIXEL_SIZE in warning.call_args.args[2]
 
 
 def test_run_blocks_grid_plans_with_pixel_size_for_any_camera(
