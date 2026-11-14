@@ -15,7 +15,10 @@ from pymmcore_gui._pixel_calibration import (
     HardwareFingerprint,
     PixelCalibrationResult,
 )
-from pymmcore_gui._pixel_calibration._models import CalibrationObservation
+from pymmcore_gui._pixel_calibration._models import (
+    CalibrationObservation,
+    CalibrationWarning,
+)
 from pymmcore_gui._pixel_calibration._routine import _describe_fit
 from pymmcore_gui._qt.QtCore import Qt
 from pymmcore_gui._qt.QtWidgets import (
@@ -23,6 +26,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QFrame,
     QPushButton,
 )
+from pymmcore_gui._theme import qcolor, theme
 from pymmcore_gui.widgets._configurations import ConfigurationsPage
 from pymmcore_gui.widgets._toolbars import LiveButton, SnapButton
 
@@ -296,6 +300,22 @@ def test_error_and_success_summary_use_same_information_area(
     assert not panel._diagnostics.grab().isNull()
     assert "one test position's residual" in panel._diagnostics.toolTip()
     assert "(dx, dy)" in panel._diagnostics.toolTip()
+
+
+def test_result_warnings_are_highlighted(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+    panel = page._pixel_config._calibration_panel
+    warning = CalibrationWarning("anisotropy", "Camera-axis pixel sizes differ by 9%.")
+
+    panel._on_result(
+        replace(_result_for_selected_resolution(page), warnings=(warning,))
+    )
+
+    amber = qcolor(theme().status_amber).name()
+    assert f'<span style="color: {amber};">⚠ {warning.message}</span>' in (
+        panel._result_text.text()
+    )
 
 
 def test_test_position_residuals_are_shown_after_fitting(

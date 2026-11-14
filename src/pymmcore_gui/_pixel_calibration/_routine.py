@@ -366,10 +366,19 @@ def _sub_image(
     return out
 
 
-def _subtract_minimum(patch: NDArray[np.floating]) -> NDArray[np.float64]:
-    """Java's ``subtractMinimum``: remove the patch's own offset."""
+def _remove_background(patch: NDArray[np.floating]) -> NDArray[np.float64]:
+    """Subtract the patch's best-fit quadratic surface.
+
+    Java only subtracts the minimum. Vignetting and uneven illumination do not
+    move with the stage, so on a faint sample they pull the correlation peak
+    toward zero shift, and the calibration overestimates the pixel size.
+    """
     result = np.asarray(patch, dtype=np.float64)
-    return result - float(result.min())
+    y, x = np.mgrid[: result.shape[0], : result.shape[1]] / max(result.shape)
+    basis = np.stack([np.ones_like(x), x, y, x * x, x * y, y * y], axis=-1)
+    basis = basis.reshape(-1, 6)
+    coefficients = np.linalg.lstsq(basis, result.ravel(), rcond=None)[0]
+    return np.asarray(result - (basis @ coefficients).reshape(result.shape))
 
 
 def cross_correlate(
@@ -676,7 +685,7 @@ class _Tracker:
                 "the tracked region would be under 16 pixels across."
             )
         self.side = side
-        self.reference = _subtract_minimum(
+        self.reference = _remove_background(
             _sub_image(
                 frame,
                 -side // 2 + self.width // 2,
@@ -719,7 +728,7 @@ class _Tracker:
         frame = self.snap_at(target)
         if frame.shape != (self.height, self.width):
             raise PixelCalibrationError("The camera image size changed mid-calibration")
-        found = _subtract_minimum(
+        found = _remove_background(
             _sub_image(
                 frame,
                 int((self.width - self.side) // 2 - float(expected_shift[0])),

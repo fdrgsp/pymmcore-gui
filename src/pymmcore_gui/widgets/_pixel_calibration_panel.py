@@ -67,6 +67,7 @@ logger = logging.getLogger(__name__)
 # "not applicable, don't touch the graph" (the default, for direct callers
 # reporting something other than a calibration/test-frame attempt).
 _DIAGNOSTICS_UNCHANGED = object()
+_WARNING = "Warning: "  # result lines shown in amber, behind a ⚠
 
 
 def _pixel_size_line(label: str, fit: AffineFitResult, raw_pixel_size_um: float) -> str:
@@ -1436,9 +1437,6 @@ class PixelCalibrationPanel(QWidget):
         self._set_pending_rejected_result(None)
         self._diagnostics.setResult(result)
         fit = result.fit
-        warning_text = " · ".join(
-            f"Warning: {warning.message}" for warning in result.warnings
-        )
         lines = [
             "Calibration successful",
             "",
@@ -1448,8 +1446,9 @@ class PixelCalibrationPanel(QWidget):
             "",
             *_measurement_lines(fit),
         ]
-        if warning_text:
-            lines.extend(["", warning_text])
+        if result.warnings:
+            lines.append("")
+            lines.extend(_WARNING + warning.message for warning in result.warnings)
         lines.append("")
         lines.append(
             f"Applied automatically to {self._target.resolution_id!r}. Use "
@@ -1625,6 +1624,13 @@ class PixelCalibrationPanel(QWidget):
             ).name()
             glyph = "✓" if kind == "success" else "⚠"
             lines[0] = f'<span style="color: {color};">{glyph}</span> {lines[0]}'
+        amber = qcolor(theme().status_amber).name()
+        lines = [
+            f'<span style="color: {amber};">⚠ {line.removeprefix(_WARNING)}</span>'
+            if line.startswith(_WARNING)
+            else line
+            for line in lines
+        ]
         self._result_text.setText("<br>".join(lines))
 
     def _on_thread_finished(self) -> None:
