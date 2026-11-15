@@ -637,6 +637,7 @@ class AcquirePage(TabPage):
         sequence = MDASequenceWidget.value(outgoing)
         save_info = dict(outgoing.save_info.value())
         tiff_layout = outgoing.tiffLayout()
+        stitching = outgoing.stitchingRequest()
 
         self._unbind_mda()
         self._mda_kind = kind
@@ -644,6 +645,7 @@ class AcquirePage(TabPage):
         widget.setValue(sequence)
         widget.save_info.setValue(save_info)
         widget.setTiffLayout(tiff_layout)
+        widget.setStitchingRequest(stitching)
         self._bind_mda(widget)
 
         panel = self._panels[PanelKey.MDA]

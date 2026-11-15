@@ -87,6 +87,7 @@ if TYPE_CHECKING:
 
     from pymmcore_gui._app import MMQApplication
     from pymmcore_gui._notification_manager import Notification
+    from pymmcore_gui._stitching._session import StitchingSession
     from pymmcore_gui.widgets._exception_log import ExceptionLog
 
 
@@ -488,9 +489,7 @@ class MicroManagerGUI(QMainWindow):
         )
 
         self._acquire.mdaRunningChanged.connect(self._on_mda_running)
-        self._acquire.mdaSettingsIgnored.connect(
-            self._notification_manager.show_warning_message
-        )
+        self._stitching = self._create_stitching_session()
         self._acquire.layoutReset.connect(self._on_acquire_layout_reset)
         self._acquire.layoutNameChanged.connect(self._on_layout_name_changed)
         self._mmc.events.systemConfigurationLoaded.connect(self._on_config_loaded)
@@ -526,6 +525,15 @@ class MicroManagerGUI(QMainWindow):
             row.addWidget(self._status_message, 1)
             status_bar.messageChanged.connect(self._status_message.setText)
             status_bar.addPermanentWidget(content, 1)
+            if self._stitching is not None:
+                from pymmcore_gui.widgets._stitching_status import (
+                    StitchingStatusButton,
+                )
+
+                self._stitching_status = StitchingStatusButton(
+                    self._stitching.controller, status_bar
+                )
+                status_bar.addPermanentWidget(self._stitching_status)
             status_bar.addPermanentWidget(self._bell_button)
             self._stack.currentChanged.connect(self._update_mda_status_visibility)
             self._update_mda_status_visibility()
@@ -541,6 +549,47 @@ class MicroManagerGUI(QMainWindow):
     def acquire(self) -> AcquirePage:
         """Return the window's Acquire page."""
         return self._acquire
+
+    @property
+    def stitching(self) -> StitchingSession | None:
+        """Background stitching, or None without the optional package."""
+        return self._stitching
+
+    def _create_stitching_session(self) -> StitchingSession | None:
+        """Stitch saved grid acquisitions, if multiview-stitcher is installed."""
+        from pymmcore_gui._stitching import is_available
+
+        if not is_available():
+            return None
+        from pymmcore_gui._stitching._session import StitchingSession
+
+        return StitchingSession(
+            self._mmc,
+            self._notification_manager,
+            self._acquire.viewers.open_acquisition_async,
+            parent=self,
+        )
+
+    def _ready_to_close_while_stitching(self) -> bool:
+        """Ask before quitting cancels background stitching (plan §3.4)."""
+        if self._stitching is None:
+            return True
+        controller = self._stitching.controller
+        if not (active := controller.active_jobs):
+            return True
+        running = controller.running_job
+        first = running or active[0]
+        percent = round(first.progress.fraction * 100) if running else 0
+        text = f"{first.title} is {percent} % stitched"
+        if (queued := len(active) - 1) > 0:
+            text += f" ({queued} more job{'s' if queued > 1 else ''} queued)"
+        return self._confirm(
+            "Stitching in progress",
+            f"{text}.\n\nQuitting now cancels it and deletes the partial "
+            "mosaic. The acquisition itself is not affected.",
+            accept="Cancel stitching and quit",
+            reject="Keep working",
+        )
 
     def _add_menu_bar(self) -> None:
         """Build the application menu bar.
@@ -1041,6 +1090,10 @@ class MicroManagerGUI(QMainWindow):
             if a0 is not None:
                 a0.ignore()
             return
+        if not self._ready_to_close_while_stitching():
+            if a0 is not None:
+                a0.ignore()
+            return
         # Restoration is part of the calibration transaction.  Do not destroy
         # its worker (or ask the user to save) until that transaction has ended.
         self._configurations.shutdownCalibration()
@@ -1066,6 +1119,8 @@ class MicroManagerGUI(QMainWindow):
                     a0.ignore()
                 return
         self._save_state()
+        if self._stitching is not None:
+            self._stitching.shutdown()
         self._acquire.shutdown()
         super().closeEvent(a0)
 

@@ -30,6 +30,8 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
+from pymmcore_gui._stitching._models import StitchSettingsV1
+
 APP_NAME = "pymmcore-gui"
 USER_DATA_DIR = Path(user_data_dir(appname=APP_NAME))
 USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -307,6 +309,8 @@ class SettingsV1(BaseMMSettings):
         default_factory=ModernWindowSettingsV1
     )
     scratch: ScratchSettingsV1 = Field(default_factory=ScratchSettingsV1)
+    stitching: StitchSettingsV1 = Field(default_factory=StitchSettingsV1)
+    """Stitching settings a new sequence starts from (the last ones accepted)."""
 
     send_error_reports: bool | None = None
     """Whether to send error reports to the developers, None means undecided."""

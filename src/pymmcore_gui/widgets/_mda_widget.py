@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager, suppress
+import os
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -18,6 +19,7 @@ from pymmcore_widgets.mda import (
     SectionMetrics,
 )
 from pymmcore_widgets.mda._collapsible_mda import _ClickableLabel
+from pymmcore_widgets.useq_widgets import MDASequenceWidget
 from pymmcore_widgets.useq_widgets._positions import MDAButton
 from superqt.iconify import QIconifyIcon
 
@@ -42,17 +44,27 @@ from pymmcore_gui._qt.QtGui import QPainter, QPixmap
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
+    QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QToolButton,
     QWidget,
 )
-from pymmcore_gui._sequence_support import drop_unsupported
 from pymmcore_gui._settings import Settings
+from pymmcore_gui._stitching import is_available as stitching_available
+from pymmcore_gui._stitching._models import (
+    METADATA_KEY,
+    METADATA_NAMESPACE,
+    SequenceStitchingV1,
+    request_from,
+    with_request,
+)
 from pymmcore_gui._theme import qcolor, theme
 from pymmcore_gui._utils import NO_PIXEL_SIZE
 
@@ -63,7 +75,7 @@ from ._mda_tabs import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator
+    from collections.abc import Iterable
 
     import useq
     from pymmcore_plus import CMMCorePlus
@@ -122,6 +134,46 @@ TIFF_LAYOUT_TOOLTIP = (
     "Hover an entry for what it means."
 )
 
+STITCHING_TOOLTIP = (
+    "After the acquisition completes, fuse each grid into one mosaic, saved as "
+    "<i>&lt;name&gt;_stitched.ome.zarr</i> next to the acquisition. It runs in "
+    "the background; its progress is shown in the status bar."
+)
+STITCHING_NO_OVERLAP_TOOLTIP = (
+    "<br><br><b>The grid has no overlap</b>, so tiles are placed by stage "
+    "position only: registration needs neighbouring tiles to overlap."
+)
+
+
+def _grids(sequence: useq.MDASequence) -> list[Any]:
+    """The sequence's grid plans: the global one and those of its positions."""
+    grids = [sequence.grid_plan] if sequence.grid_plan is not None else []
+    grids += [
+        pos.sequence.grid_plan
+        for pos in sequence.stage_positions
+        if pos.sequence is not None and pos.sequence.grid_plan is not None
+    ]
+    return grids
+
+
+def _has_mosaic(sequence: useq.MDASequence) -> bool:
+    """Whether stitching `sequence` would produce at least one mosaic."""
+    from pymmcore_gui._stitching._inputs import plan_groups
+
+    try:
+        return bool(plan_groups(sequence))
+    except Exception:  # pragma: no cover - a half-edited sequence
+        return False
+
+
+def _grids_overlap(sequence: useq.MDASequence) -> bool:
+    """Whether any grid of `sequence` asks for overlapping tiles."""
+    for grid in _grids(sequence):
+        overlap = getattr(grid, "overlap", (0.0, 0.0))
+        if max(overlap) > 0:
+            return True
+    return False
+
 
 def _section_metrics() -> SectionMetrics:
     """The app's zoom-scaled spacing for the collapsible presentation."""
@@ -138,14 +190,6 @@ def _section_metrics() -> SectionMetrics:
         footer_margin_h=t.sp_sm,
         footer_margin_top=t.sp_xxs,
         footer_margin_bottom=t.sp_xs,
-    )
-
-
-def _uses_grid(sequence: useq.MDASequence) -> bool:
-    """Whether `sequence` has a grid plan, global or per position."""
-    return sequence.grid_plan is not None or any(
-        pos.sequence is not None and pos.sequence.grid_plan is not None
-        for pos in sequence.stage_positions
     )
 
 
@@ -201,7 +245,6 @@ class MemoryMDAWidgetBase(_MixinBase):
         _sequenceStartedInGui: Any
         _sequenceFinishedInGui: Any
         mdaLockChanged: Any
-        settingsIgnored: Any
 
     # ----------- Override type hints in superclass -----------
     # _create_tab_widget above always installs an MDAChannelTable, which adds
@@ -214,7 +257,6 @@ class MemoryMDAWidgetBase(_MixinBase):
 
     def __init__(self, mmcore: CMMCorePlus, parent: QWidget | None = None) -> None:
         self._restoring_sequence = False
-        self._drop_unsupported = False
         self._cancel_requested = False
         self._mda_locked = False
         super().__init__(parent=parent, mmcore=mmcore)
@@ -237,6 +279,7 @@ class MemoryMDAWidgetBase(_MixinBase):
                 break
         combo.setCurrentText("ome-tiff")
         self._install_ome_tiff_options()
+        self._install_stitching_option()
 
         # Match the application's persistently visible action buttons.
         for btn in (
@@ -434,39 +477,13 @@ class MemoryMDAWidgetBase(_MixinBase):
 
     def setValue(self, value: useq.MDASequence) -> None:
         """Restore an MDA sequence, keeping its own channel settings."""
-        dropped: list[str] = []
-        if self._drop_unsupported:
-            value, dropped = drop_unsupported(value, self._mmc)
         self._restoring_sequence = True
         try:
             super().setValue(value)
         finally:
             self._restoring_sequence = False
+        self._restore_stitching_request(value)
         self._flavor_refresh_summaries()
-        if dropped:
-            self.settingsIgnored.emit(
-                "Ignored MDA settings this configuration can't run: "
-                f"{'; '.join(dropped)}."
-            )
-
-    @contextmanager
-    def _dropping_unsupported(self) -> Iterator[None]:
-        previous = self._drop_unsupported
-        self._drop_unsupported = True
-        try:
-            yield
-        finally:
-            self._drop_unsupported = previous
-
-    def load(self, file: str | Path | None = None) -> None:
-        """Load an MDA file, leaving out what this configuration can't run."""
-        with self._dropping_unsupported():
-            super().load(file)
-
-    def loadSequence(self, sequence: useq.MDASequence) -> None:
-        """Load a sequence, omitting unsupported settings and reporting them."""
-        with self._dropping_unsupported():
-            self.setValue(sequence)
 
     def refresh_channel_table(self) -> None:
         """Refresh core-backed channel choices, keeping the rows."""
@@ -766,6 +783,13 @@ class MemoryMDAWidgetBase(_MixinBase):
     def _apply_themed_icons(self, *_: object) -> None:
         """Apply the app's semantic green/red to every MDA action icon."""
         self._apply_themed_section_icons()
+        if hasattr(self, "_stitching_settings_btn"):
+            set_source_icon(
+                self._stitching_settings_btn,
+                QIconifyIcon(
+                    "mdi:cog-outline", color=qcolor(theme().text_primary).name()
+                ),
+            )
         self._flavor_apply_tab_icons()
         set_icon_tint(self.af_axis.settings_button, qcolor(theme().text_primary))
         green = qcolor(theme().status_green).name()
@@ -836,6 +860,10 @@ class MemoryMDAWidgetBase(_MixinBase):
         visible = self._is_ome_tiff_selected()
         self._tiff_layout_label.setVisible(visible)
         self._tiff_layout_combo.setVisible(visible)
+        self._repin_save_height()
+
+    def _repin_save_height(self) -> None:
+        """Refit the Saving section after one of its rows appeared or disappeared."""
         # SaveGroupBox pins its own height to avoid jiggling when toggled, so the
         # pin has to be recomputed whenever a row appears or disappears.
         self.save_info.setMinimumHeight(0)
@@ -857,20 +885,133 @@ class MemoryMDAWidgetBase(_MixinBase):
             raise ValueError(f"Unknown OME-TIFF layout {mode!r}")
         self._tiff_layout_combo.setCurrentIndex(idx)
 
+    # ------------------------- stitching option (plan §3.1) -------------------------
+
+    def _install_stitching_option(self) -> None:
+        """Add "Also save a stitched mosaic" and its ⚙ to the Saving section.
+
+        The row exists only with the optional multiview-stitcher package, and
+        is shown only while the sequence has a grid to stitch. The request is
+        stored in the sequence's metadata (see `value`), so saved MDA files
+        and reused runs keep it, and the run itself carries it to the
+        stitching session.
+        """
+        self._stitching_available = stitching_available()
+        self._stitching_request = SequenceStitchingV1(
+            settings=Settings.instance().stitching
+        )
+        self._stitching_label = QLabel("Stitching:")
+        self._stitching_check = QCheckBox("Also save a stitched mosaic")
+        self._stitching_settings_btn = QToolButton()
+        self._stitching_settings_btn.setToolTip("Stitching settings…")
+        self._stitching_settings_btn.setProperty("variant", "subtle")
+        self._stitching_row = QWidget()
+        row = QHBoxLayout(self._stitching_row)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(self._stitching_check)
+        row.addWidget(self._stitching_settings_btn)
+        row.addStretch()
+
+        layout = cast("QGridLayout", self.save_info.layout())
+        layout.addWidget(self._stitching_label, 3, 0)
+        layout.addWidget(self._stitching_row, 3, 1, 1, 3)
+        self._stitching_check.toggled.connect(self._on_stitching_toggled)
+        self._stitching_settings_btn.clicked.connect(self.edit_stitching_settings)
+        self.valueChanged.connect(self._sync_stitching_option)
+        self.stage_positions.valueChanged.connect(self._sync_stitching_option)
+        self._sync_stitching_option()
+
+    def _sync_stitching_option(self, *_: object) -> None:
+        """Show the row only when there is a grid to stitch."""
+        editor_sequence = MDASequenceWidget.value(self)
+        visible = self._stitching_available and _has_mosaic(editor_sequence)
+        tip = STITCHING_TOOLTIP
+        if visible and not _grids_overlap(editor_sequence):
+            tip += STITCHING_NO_OVERLAP_TOOLTIP
+        self._stitching_check.setToolTip(tip)
+        if visible != self._stitching_row.isVisibleTo(self.save_info):
+            self._stitching_label.setVisible(visible)
+            self._stitching_row.setVisible(visible)
+            self._repin_save_height()
+
+    def _on_stitching_toggled(self, checked: bool) -> None:
+        self.setStitchingRequest(
+            self._stitching_request.model_copy(update={"enabled": checked})
+        )
+
+    def stitchingRequest(self) -> SequenceStitchingV1:
+        """Whether to stitch, and how; stored in `value().metadata`."""
+        return self._stitching_request
+
+    def setStitchingRequest(self, request: SequenceStitchingV1) -> None:
+        """Set whether to stitch and with which settings."""
+        changed = request != self._stitching_request
+        self._stitching_request = request
+        if self._stitching_check.isChecked() != request.enabled:
+            self._stitching_check.setChecked(request.enabled)
+        if changed:
+            self.valueChanged.emit()
+
+    def edit_stitching_settings(self) -> bool:
+        """Open the ⚙ dialog; return whether the settings were accepted.
+
+        Accepted settings also become the defaults of new sequences.
+        """
+        from pymmcore_gui.widgets._stitching_dialog import StitchingSettingsDialog
+
+        channels = [c.config for c in MDASequenceWidget.value(self).channels]
+        dialog = StitchingSettingsDialog(
+            self._stitching_request.settings,
+            channels,
+            max_threads=os.cpu_count() or 1,
+            parent=cast("QWidget", self),
+        )
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return False
+            settings = dialog.value()
+        finally:
+            dialog.deleteLater()
+        self.setStitchingRequest(
+            self._stitching_request.model_copy(update={"settings": settings})
+        )
+        prefs = Settings.instance()
+        prefs.stitching = settings
+        prefs.flush()
+        return True
+
+    def _restore_stitching_request(self, sequence: useq.MDASequence) -> None:
+        """Take the request a restored sequence carries, or start unchecked."""
+        if not hasattr(self, "_stitching_request"):
+            return  # upstream's __init__, before the row exists
+        stored = (sequence.metadata.get(METADATA_NAMESPACE) or {}).get(METADATA_KEY)
+        if stored is not None:
+            request = request_from(sequence.metadata)
+        else:
+            request = SequenceStitchingV1(settings=Settings.instance().stitching)
+        self.setStitchingRequest(request)
+
+    def value(self) -> useq.MDASequence:
+        """The sequence to run, carrying the stitching request in its metadata."""
+        val = super().value()
+        if getattr(self, "_stitching_available", False):
+            meta = with_request(val.metadata, self._stitching_request)
+            val.metadata[METADATA_NAMESPACE] = meta[METADATA_NAMESPACE]
+        return val
+
+    def _sequence_uses_grid(self) -> bool:
+        """Whether the sequence to run has a grid plan, global or per position."""
+        sequence = self.value()
+        return sequence.grid_plan is not None or any(
+            pos.sequence is not None and pos.sequence.grid_plan is not None
+            for pos in sequence.stage_positions
+        )
+
     def prepare_mda(self) -> bool | SingleOutput | None:
         """Return a disk path or a scratch sink that supports live viewing."""
+        # the check below already reads the sequence
         self._commit_editors()
-        sequence = self.value()
-        if dropped := drop_unsupported(sequence, self._mmc)[1]:
-            QMessageBox.warning(
-                self,
-                "Not Available in This Configuration",
-                "The loaded configuration cannot run these MDA settings:\n\n"
-                + "\n".join(f"• {item}" for item in dropped)
-                + "\n\nChange or remove them, then run again.",
-            )
-            return False
-        if _uses_grid(sequence) and (
+        if self._sequence_uses_grid() and (
             problem := fov_pixel_size_warning(self._mmc, NO_PIXEL_SIZE)
         ):
             QMessageBox.warning(
@@ -920,9 +1061,6 @@ class MemoryMDAWidget(MemoryMDAWidgetBase, MDAWidgetCollapsible):
     can never outlive the acquisition.
     """
 
-    settingsIgnored = Signal(str)
-    """Emitted with a message when `load`/`loadSequence` left settings out."""
-
     def _create_tab_widget(self) -> CollapsibleCoreMDATabs:
         return GuiCollapsibleCoreMDATabs(None, self._mmc)
 
@@ -965,9 +1103,6 @@ class TopbarMemoryMDAWidget(MemoryMDAWidgetBase, MDAWidget):
     missed ``sequenceFinished`` also releases the rest of the GUI -- the lock
     can never outlive the acquisition.
     """
-
-    settingsIgnored = Signal(str)
-    """Emitted with a message when `load`/`loadSequence` left settings out."""
 
     def _create_tab_widget(self) -> CoreMDATabs:
         return GuiCoreMDATabs(None, self._mmc)
