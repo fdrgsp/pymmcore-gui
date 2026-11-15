@@ -103,6 +103,15 @@ def layouts_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return directory
 
 
+# throw-away stitching job registry for every test
+@pytest.fixture(autouse=True)
+def stitch_jobs_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Keep stitching job directories out of the real user data directory."""
+    directory = tmp_path / "stitch-jobs"
+    monkeypatch.setenv("MMGUI_STITCH_JOBS_DIR", str(directory))
+    return directory
+
+
 # Initialize the application style for every test that has a QApplication.
 @pytest.fixture(autouse=True)
 def _init_gui_theme() -> None:
