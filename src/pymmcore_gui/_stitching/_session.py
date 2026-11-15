@@ -26,9 +26,14 @@ from pymmcore_gui._stitching._controller import (
 from pymmcore_gui._stitching._inputs import (
     acquisition_stem,
     build_job,
+    build_restitch_job,
     calibration_from_summary,
 )
-from pymmcore_gui._stitching._models import StitchSettingsV1, request_from
+from pymmcore_gui._stitching._models import (
+    ProvenanceV1,
+    StitchSettingsV1,
+    request_from,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -249,6 +254,34 @@ class StitchingSession(QObject):
             settings,
         )
 
+    def submit_restitch(
+        self,
+        mosaic: Path,
+        provenance: ProvenanceV1,
+        source: Path,
+        settings: StitchSettingsV1,
+    ) -> StitchJob | None:
+        """Stitch a mosaic's tiles again with `settings` (plan §7, phase 3b)."""
+        pid, create_time = own_process_identity()
+        try:
+            job = build_restitch_job(
+                job_id=self._controller.new_job_id(),
+                provenance=provenance,
+                source=source,
+                mosaic=mosaic,
+                settings=settings,
+                parent_pid=pid,
+                parent_create_time=create_time,
+                memory_cap_bytes=default_memory_cap(),
+            )
+            return self._controller.submit(job, title=_mosaic_title(mosaic))
+        except Exception as e:
+            logger.exception("Could not queue re-stitching %s", mosaic)
+            self._notifications.show_warning_message(
+                f"{mosaic.name} was not re-stitched: {e}"
+            )
+            return None
+
     def _queue(
         self,
         source: Path,
@@ -303,6 +336,8 @@ class StitchingSession(QObject):
             for g in result.groups
             if (s := g.fallback_summary)
         ]
+        if any(g.reused_registration for g in result.groups):
+            notes.append("Reused the earlier registration.")
         if notes:
             message += "\n" + "\n".join(notes)
 
@@ -335,6 +370,13 @@ class StitchingSession(QObject):
         except Exception as e:  # pragma: no cover - reported, never raised
             logger.exception("Could not open %s", path)
             self._notifications.show_warning_message(f"Could not open {path.name}: {e}")
+
+
+def _mosaic_title(mosaic: Path) -> str:
+    for ext in (".ome.zarr", ".ome.tiff", ".ome.tif"):
+        if mosaic.name.endswith(ext):
+            return mosaic.name.removesuffix(ext)
+    return mosaic.name
 
 
 def _reveal(path: Path) -> None:

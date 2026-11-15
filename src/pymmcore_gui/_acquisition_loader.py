@@ -8,6 +8,7 @@ parameter reuse and faithful re-export; missing metadata does not prevent viewin
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -67,6 +68,9 @@ class LoadedAcquisition:
         The file or directory this was opened from.
     title : str
         A display title for the viewer tab (`source_path.name`).
+    stitching : Mapping | None
+        For a stitched mosaic, the GUI's own root metadata, which records how
+        it was made (see `_stitching._models.read_provenance`); else None.
     """
 
     wrapper: OMETiffWrapper | OMEZarrWrapper
@@ -74,6 +78,7 @@ class LoadedAcquisition:
     record: AcquisitionRecord | None
     source_path: Path
     title: str
+    stitching: Mapping[str, Any] | None = None
 
     def close(self) -> None:
         """Release the wrapper's underlying file handle(s)/zarr store."""
@@ -117,7 +122,23 @@ def open_acquisition(path: str | Path) -> LoadedAcquisition:
         record=record,
         source_path=path,
         title=path.name,
+        stitching=_stitching_metadata(wrapper),
     )
+
+
+def _stitching_metadata(
+    wrapper: OMETiffWrapper | OMEZarrWrapper,
+) -> Mapping[str, Any] | None:
+    """The GUI's root metadata if it says this is a stitched mosaic."""
+    from pymmcore_gui._stitching._models import METADATA_NAMESPACE, PROVENANCE_KEY
+
+    try:
+        meta = wrapper.global_metadata(METADATA_NAMESPACE)
+    except Exception:
+        return None
+    if isinstance(meta, Mapping) and PROVENANCE_KEY in meta:
+        return meta
+    return None
 
 
 def _recover_summary_metadata(

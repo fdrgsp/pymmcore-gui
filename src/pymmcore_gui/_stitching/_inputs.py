@@ -27,10 +27,13 @@ from pymmcore_gui._stitching._models import (
     Alignment,
     GroupV1,
     OutputFormat,
+    ProvenanceV1,
+    SavedRegistrationV1,
     StitchJobV1,
     StitchSettingsV1,
     TileV1,
     is_tiff_output,
+    same_registration,
     tmp_paths_for,
 )
 
@@ -355,6 +358,65 @@ def build_job(
         ),
         z_step_um=abs(step) if step else None,
         channel_names=[c.config for c in sequence.channels],
+        settings=settings,
+        threads=settings.worker_threads or default_threads(),
+        memory_cap_bytes=memory_cap_bytes,
+        parent_pid=parent_pid,
+        parent_create_time=parent_create_time,
+    )
+
+
+def build_restitch_job(
+    *,
+    job_id: str,
+    provenance: ProvenanceV1,
+    source: Path,
+    mosaic: Path,
+    settings: StitchSettingsV1,
+    parent_pid: int | None = None,
+    parent_create_time: float | None = None,
+    memory_cap_bytes: int | None = None,
+) -> StitchJobV1:
+    """Stitch a mosaic's tiles again with new settings (§7, phase 3b).
+
+    Everything about the tiles comes from the mosaic's provenance; `source`
+    is where its acquisition is now (it may have moved). The new mosaic goes
+    next to `mosaic` as a new version, never over it. The earlier
+    registration is passed on when no registration setting changed; the
+    worker still checks that the source is the data it was made from.
+    """
+    source = Path(os.path.abspath(source))
+    fmt = output_format_for(source, settings.output_format)
+    extension = TIFF_EXTENSION if fmt == OutputFormat.OME_TIFF else ZARR_EXTENSION
+    output = unique_output(
+        mosaic.parent, acquisition_stem(source), provenance.group, extension=extension
+    )
+    saved = None
+    if (
+        settings.alignment == Alignment.REGISTER
+        and provenance.transforms
+        and same_registration(provenance.settings, settings)
+    ):
+        saved = SavedRegistrationV1(
+            transforms=provenance.transforms,
+            info={**provenance.registration, "components": provenance.groups},
+            source_fingerprint=provenance.source_fingerprint,
+        )
+    return StitchJobV1(
+        job_id=job_id,
+        source=source,
+        groups=[
+            GroupV1(
+                name=provenance.group,
+                tiles=list(provenance.tiles),
+                output=output,
+                saved_registration=saved,
+            )
+        ],
+        pixel_size_um=provenance.pixel_size_um,
+        linear_part=provenance.linear_part,
+        z_step_um=provenance.z_step_um,
+        channel_names=list(provenance.channel_names),
         settings=settings,
         threads=settings.worker_threads or default_threads(),
         memory_cap_bytes=memory_cap_bytes,

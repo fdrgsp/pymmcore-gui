@@ -5,6 +5,7 @@ worker refuses a job version it does not know. Only pydantic is imported here,
 so both processes can use this module.
 """
 
+from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
@@ -86,6 +87,23 @@ class StitchSettingsV1(_Model):
     low_priority: bool = True
 
 
+REGISTRATION_SETTINGS = (
+    "alignment",
+    "reg_channel",
+    "reg_binning",
+    "z_max_projection",
+    "register_every_timepoint",
+    "reject_poor_matches",
+    "quality_threshold",
+)
+"""The settings that change the registration; the rest only change fusion."""
+
+
+def same_registration(a: StitchSettingsV1, b: StitchSettingsV1) -> bool:
+    """Whether `a` and `b` would register the tiles the same way."""
+    return all(getattr(a, f) == getattr(b, f) for f in REGISTRATION_SETTINGS)
+
+
 class SequenceStitchingV1(_Model):
     """What a sequence asks for, stored in its metadata (see `request_from`)."""
 
@@ -144,6 +162,30 @@ class TileV1(_Model):
     """Stage Z of the first plane of a z-stack (0 without a stack)."""
 
 
+class SavedRegistrationV1(_Model):
+    """A previous run's registration, for a re-stitch to reuse (§7, phase 3b).
+
+    The worker reuses it only if the source still matches
+    `source_fingerprint` when the job runs; otherwise it registers again.
+    """
+
+    transforms: dict[str, list[list[list[float]]]]
+    """Per timepoint ("all", or the index), each tile's correction matrix."""
+    info: dict[str, Any] = Field(default_factory=dict)
+    """What that registration found (pairs, rejections, groups)."""
+    source_fingerprint: dict[str, Any]
+
+
+def same_source(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """Whether two source fingerprints describe the same data.
+
+    The path is left out, so data that were moved (not changed) still match.
+    """
+    return {k: v for k, v in a.items() if k != "path"} == {
+        k: v for k, v in b.items() if k != "path"
+    }
+
+
 class GroupV1(_Model):
     """Tiles fused into one mosaic."""
 
@@ -154,6 +196,7 @@ class GroupV1(_Model):
     """Final path of the mosaic; the worker writes `<output>.tmp` first.
 
     Its extension says the format: `.ome.zarr` or `.ome.tiff`."""
+    saved_registration: SavedRegistrationV1 | None = None
 
     @property
     def tmp_output(self) -> Path:
@@ -300,6 +343,8 @@ class GroupResultV1(_Model):
     """Tiles with no accepted pair, left at their stage position."""
     n_components: int = 1
     """Separately aligned groups of tiles (1 when everything is connected)."""
+    reused_registration: bool = False
+    """The registration came from the mosaic being re-stitched."""
 
     @property
     def fallback_summary(self) -> str:
@@ -317,6 +362,46 @@ class GroupResultV1(_Model):
                 f"mosaic aligned in {self.n_components - self.isolated_tiles} groups"
             )
         return ", ".join(parts)
+
+
+class ProvenanceV1(_Model):
+    """How a mosaic was made: `attrs[METADATA_NAMESPACE][PROVENANCE_KEY]`.
+
+    Read back to re-stitch it (§7, phase 3b).
+    """
+
+    schema_version: Literal[1] = SCHEMA_VERSION
+    source: Path
+    source_fingerprint: dict[str, Any] = Field(default_factory=dict)
+    group: str = ""
+    tiles: list[TileV1] = Field(min_length=1)
+    settings: StitchSettingsV1 = Field(default_factory=StitchSettingsV1)
+    pixel_size_um: float = Field(gt=0)
+    linear_part: tuple[tuple[float, float], tuple[float, float]]
+    z_step_um: float | None = None
+    channel_names: list[str] = Field(default_factory=list)
+    transforms: dict[str, list[list[list[float]]]] | None = None
+    registration: dict[str, Any] = Field(default_factory=dict)
+    groups: list[list[int]] | None = None
+    """Tiles aligned together (registration components)."""
+
+
+class ProvenanceError(ValueError):
+    """A mosaic's provenance can't be used; the message says why."""
+
+
+def read_provenance(metadata: Any) -> ProvenanceV1:
+    """Read the provenance from a mosaic's `global_metadata(METADATA_NAMESPACE)`."""
+    raw = metadata.get(PROVENANCE_KEY) if isinstance(metadata, Mapping) else None
+    if not isinstance(raw, dict):
+        raise ProvenanceError("it doesn't record how it was stitched")
+    version = raw.get("schema_version")
+    if isinstance(version, int) and version > SCHEMA_VERSION:
+        raise ProvenanceError("it was made by a newer version of pymmcore-gui")
+    try:
+        return ProvenanceV1.model_validate(raw)
+    except ValueError as e:
+        raise ProvenanceError(f"its stitching record is unreadable ({e})") from e
 
 
 class StitchResultV1(_Model):

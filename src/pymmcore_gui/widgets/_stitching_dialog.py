@@ -64,6 +64,7 @@ class StitchingSettingsDialog(QDialog):
         max_threads: int = 1,
         title: str = "Stitching Settings",
         accept_text: str = "OK",
+        note: str = "",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -215,6 +216,10 @@ class StitchingSettingsDialog(QDialog):
         buttons.addWidget(self.ok_btn)
 
         layout = QVBoxLayout(self)
+        self.note_label = QLabel(note)
+        self.note_label.setWordWrap(True)
+        self.note_label.setVisible(bool(note))
+        layout.addWidget(self.note_label)
         layout.addWidget(align_box)
         layout.addWidget(blend_box)
         layout.addWidget(output_box)

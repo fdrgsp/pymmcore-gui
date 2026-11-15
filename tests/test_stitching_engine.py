@@ -421,3 +421,96 @@ def test_tiff_name_taken_meanwhile_gets_a_new_version(tmp_path: Path) -> None:
     job.groups[0].output.write_bytes(b"")  # appeared after the job was built
     result, _ = _run(job)
     assert result.groups[0].output.name == "run_stitched-2.ome.tiff"
+
+
+# ------------------------------ re-stitching ------------------------------
+
+
+def _restitch(
+    first: Any, source: Path, **settings: Any
+) -> tuple[Any, list[ProgressEvent]]:
+    from pymmcore_gui._stitching._inputs import build_restitch_job
+    from pymmcore_gui._stitching._models import read_provenance
+
+    mosaic = first.groups[0].output
+    prov = read_provenance({"stitching": _provenance(mosaic)})
+    job = build_restitch_job(
+        job_id="again",
+        provenance=prov,
+        source=source,
+        mosaic=mosaic,
+        settings=prov.settings.model_copy(update=settings),
+    )
+    return _run(job.model_copy(update={"threads": 2}))
+
+
+@pytest.fixture
+def stitched(tmp_path: Path) -> tuple[SynthAcquisition, Any]:
+    seq = grid_sequence(2, 3, S, P)
+    acq = write_grid(tmp_path / "run.ome.zarr", seq, shape=S, pixel_size=P)
+    first, _ = _run(_job(acq))
+    return acq, first
+
+
+def test_restitch_reuses_registration_when_only_fusion_changes(
+    stitched: tuple[SynthAcquisition, Any],
+) -> None:
+    from pymmcore_gui._stitching._models import Blending
+
+    acq, first = stitched
+    again, events = _restitch(first, acq.path, blending=Blending.MAX)
+    (group,) = again.groups
+    assert group.reused_registration
+    assert group.n_pairs == first.groups[0].n_pairs
+    assert group.output.name == "run_stitched-2.ome.zarr"
+    assert any(e.text == "Reusing the earlier registration" for e in events)
+    assert not any(e.text.startswith("Registering") for e in events)
+    old, new = _provenance(first.groups[0].output), _provenance(group.output)
+    assert new["transforms"] == old["transforms"]
+    assert new["settings"]["blending"] == "max"
+    # the first mosaic is untouched
+    assert first.groups[0].output.exists()
+
+
+def test_restitch_registers_again_when_registration_settings_change(
+    stitched: tuple[SynthAcquisition, Any],
+) -> None:
+    acq, first = stitched
+    again, events = _restitch(first, acq.path, quality_threshold=0.3)
+    assert not again.groups[0].reused_registration
+    assert any(e.text.startswith("Registering") for e in events)
+
+
+def test_restitch_registers_again_when_the_data_changed(
+    stitched: tuple[SynthAcquisition, Any],
+) -> None:
+    acq, first = stitched
+    extra = acq.path / "notes.txt"  # the acquisition's directory changed
+    extra.write_text("changed")
+    again, _ = _restitch(first, acq.path)
+    assert not again.groups[0].reused_registration
+
+
+def test_restitch_reuses_registration_of_moved_data(
+    stitched: tuple[SynthAcquisition, Any], tmp_path: Path
+) -> None:
+    acq, first = stitched
+    moved = tmp_path / "elsewhere" / acq.path.name
+    moved.parent.mkdir()
+    acq.path.rename(moved)
+    again, _ = _restitch(first, moved)
+    (group,) = again.groups
+    assert group.reused_registration
+    # still next to the mosaic it re-stitches, named after the acquisition
+    assert group.output.parent == first.groups[0].output.parent
+    assert _provenance(group.output)["source"] == str(moved)
+
+
+def test_restitch_into_the_other_format(
+    stitched: tuple[SynthAcquisition, Any],
+) -> None:
+    acq, first = stitched
+    again, _ = _restitch(first, acq.path, output_format=OutputFormat.OME_TIFF)
+    (group,) = again.groups
+    assert group.output.name == "run_stitched.ome.tiff"
+    assert group.reused_registration

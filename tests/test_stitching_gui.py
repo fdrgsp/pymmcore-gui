@@ -703,3 +703,176 @@ def test_stitch_button_matches_the_other_viewer_buttons(
     assert viewer._stitch_btn.property("variant") == viewer._save_btn.property(
         "variant"
     )
+
+
+# ----------------------------- Re-stitch (3b) -----------------------------
+
+
+def _fake_mosaic(
+    qtbot: QtBot, mmcore: CMMCorePlus, tmp_path: Path, **prov: Any
+) -> Path:
+    """A saved run carrying a mosaic's provenance, as if stitched from `raw`."""
+    import zarr
+
+    raw = tmp_path / "raw.ome.zarr"
+    raw.mkdir()
+    mosaic = _saved_run(qtbot, mmcore, tmp_path / "raw_stitched.ome.zarr", grid=False)
+    record = {
+        "schema_version": 1,
+        "source": str(raw),
+        "source_fingerprint": {"kind": "directory", "size": 1},
+        "group": "",
+        "tiles": [
+            {"position_index": i, "stage_x_um": 100.0 * i, "stage_y_um": 0.0}
+            for i in range(2)
+        ],
+        "settings": StitchSettingsV1(blending=Blending.MAX).model_dump(mode="json"),
+        "pixel_size_um": 1.0,
+        "linear_part": [[1.0, 0.0], [0.0, 1.0]],
+        "z_step_um": None,
+        "channel_names": ["DAPI"],
+        "transforms": {"all": [np.eye(3).tolist(), np.eye(3).tolist()]},
+        "registration": {"n_pairs": 1, "rejected_pairs": 0},
+        "groups": [[0, 1]],
+        **prov,
+    }
+    root = zarr.open_group(str(mosaic), mode="r+")
+    root.attrs["pymmcore_gui"] = {"stitching": record}
+    return mosaic
+
+
+def test_reopened_mosaic_offers_restitch(
+    qtbot: QtBot,
+    gui_with_stitching: Any,
+    mmcore: CMMCorePlus,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        StitchingSettingsDialog, "exec", lambda _: QDialog.DialogCode.Rejected
+    )
+    gui = gui_with_stitching
+    mosaic = _fake_mosaic(qtbot, mmcore, tmp_path)
+    viewer = gui.acquire.viewers.open_acquisition(mosaic)
+    assert viewer._stitch_btn is not None
+    assert "again" in viewer._stitch_btn.toolTip()
+    assert viewer._stitch_menu_text == "Re-stitch…"
+    with qtbot.waitSignal(gui.acquire.viewers.restitchRequested) as blocker:
+        viewer._stitch_btn.click()
+    assert blocker.args is not None
+    assert blocker.args[0].path == mosaic
+
+
+def _restitch_request(mosaic: Path) -> Any:
+    from pymmcore_gui._acquisition_loader import open_acquisition
+    from pymmcore_gui._ndv_viewers import StitchedMosaic
+
+    loaded = open_acquisition(mosaic)
+    try:
+        assert loaded.stitching is not None
+        return StitchedMosaic(mosaic, dict(loaded.stitching), loaded.title)
+    finally:
+        loaded.close()
+
+
+def _accept_with(
+    monkeypatch: pytest.MonkeyPatch, change: dict[str, Any] | None = None
+) -> list[StitchingSettingsDialog]:
+    shown: list[StitchingSettingsDialog] = []
+
+    def accept(dialog: StitchingSettingsDialog) -> int:
+        shown.append(dialog)
+        if change:
+            dialog.setValue(dialog.value().model_copy(update=change))
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(StitchingSettingsDialog, "exec", accept)
+    return shown
+
+
+def test_restitch_starts_from_the_mosaic_settings(
+    qtbot: QtBot,
+    gui_with_stitching: Any,
+    mmcore: CMMCorePlus,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    settings: Settings,
+) -> None:
+    gui = gui_with_stitching
+    mosaic = _fake_mosaic(qtbot, mmcore, tmp_path)
+    shown = _accept_with(monkeypatch, {"blending": Blending.AVERAGE})
+    handle = gui._restitch(_restitch_request(mosaic))
+    assert handle is not None
+    assert shown[0].windowTitle() == "Re-stitch raw_stitched.ome.zarr"
+    assert shown[0].note_label.isVisibleTo(shown[0])
+    job = handle.job
+    assert job.source == tmp_path / "raw.ome.zarr"
+    assert job.settings.blending == Blending.AVERAGE
+    # only blending changed: the earlier registration rides along
+    group = job.groups[0]
+    assert group.saved_registration is not None
+    assert group.output.parent == mosaic.parent
+    assert group.output.name == "raw_stitched-2.ome.zarr"
+    # re-stitching doesn't change the defaults of new sequences
+    assert settings.stitching == StitchSettingsV1()
+
+
+def test_restitch_registers_again_after_an_alignment_change(
+    qtbot: QtBot,
+    gui_with_stitching: Any,
+    mmcore: CMMCorePlus,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mosaic = _fake_mosaic(qtbot, mmcore, tmp_path)
+    _accept_with(monkeypatch, {"reg_binning": 2})
+    handle = gui_with_stitching._restitch(_restitch_request(mosaic))
+    assert handle is not None
+    assert handle.job.groups[0].saved_registration is None
+
+
+def test_restitch_asks_for_a_moved_acquisition(
+    qtbot: QtBot,
+    gui_with_stitching: Any,
+    mmcore: CMMCorePlus,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gui = gui_with_stitching
+    mosaic = _fake_mosaic(qtbot, mmcore, tmp_path)
+    request = _restitch_request(mosaic)
+    moved = tmp_path / "moved" / "raw.ome.zarr"
+    moved.parent.mkdir()
+    (tmp_path / "raw.ome.zarr").rename(moved)
+    _accept_with(monkeypatch)
+
+    asked: list[Path] = []
+
+    def give_up(missing: Path) -> None:
+        asked.append(missing)
+
+    monkeypatch.setattr(gui, "_locate_source", give_up)
+    assert gui._restitch(request) is None  # the user gave up
+    assert asked == [tmp_path / "raw.ome.zarr"]
+
+    monkeypatch.setattr(gui, "_locate_source", lambda p: moved)
+    handle = gui._restitch(request)
+    assert handle is not None
+    assert handle.job.source == moved
+
+
+def test_mosaic_from_a_newer_version_is_refused(
+    qtbot: QtBot,
+    gui_with_stitching: Any,
+    mmcore: CMMCorePlus,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gui = gui_with_stitching
+    mosaic = _fake_mosaic(qtbot, mmcore, tmp_path, schema_version=2)
+    shown = _accept_with(monkeypatch)
+    assert gui._restitch(_restitch_request(mosaic)) is None
+    assert not shown
+    last = gui.nm.notifications()[-1]
+    assert last.severity == "warning"
+    assert "newer version" in last.message

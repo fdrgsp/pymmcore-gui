@@ -26,6 +26,7 @@ from pymmcore_plus.mda import OmeWritersSink, frame_meta_to_ome
 from superqt import QIconifyIcon
 from useq import SoftwareAutofocus
 
+from pymmcore_gui import _stitching
 from pymmcore_gui._acquisition_loader import open_acquisition as _open_acquisition
 from pymmcore_gui._array_viewer import (
     MMArrayViewer,
@@ -114,6 +115,16 @@ class SavedAcquisition:
     title: str
 
 
+@dataclass(frozen=True)
+class StitchedMosaic:
+    """A reopened mosaic, as "Re-stitch…" needs it."""
+
+    path: Path
+    metadata: dict[str, Any]
+    """Its `global_metadata(METADATA_NAMESPACE)`, holding the provenance."""
+    title: str
+
+
 @dataclass
 class _ViewerRecord:
     viewer: ndv.ArrayViewer
@@ -173,6 +184,8 @@ class AcquireViewersManager(QObject):
     reuseMDARequested = Signal(object, str)
     stitchRequested = Signal(object)
     """A reopened grid acquisition's "Stitch…" was chosen (a `SavedAcquisition`)."""
+    restitchRequested = Signal(object)
+    """A reopened mosaic's "Re-stitch…" was chosen (a `StitchedMosaic`)."""
 
     def __init__(
         self,
@@ -638,6 +651,17 @@ class AcquireViewersManager(QObject):
                 title=loaded.title,
             )
             viewer.set_stitch_callback(lambda: self.stitchRequested.emit(saved))
+        elif loaded.stitching is not None and _stitching.is_available():
+            mosaic = StitchedMosaic(
+                path=loaded.source_path,
+                metadata=dict(loaded.stitching),
+                title=loaded.title,
+            )
+            viewer.set_stitch_callback(
+                lambda: self.restitchRequested.emit(mosaic),
+                tooltip="Stitch again with other settings…",
+                menu_text="Re-stitch…",
+            )
         # So the Save button re-exports this acquisition's *real* recovered
         # metadata (dimensions, physical scale, channel names, summary
         # metadata) instead of falling back to stamping the microscope's

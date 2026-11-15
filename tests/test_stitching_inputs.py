@@ -393,3 +393,89 @@ def test_tiff_output_temporaries(tmp_path: Path) -> None:
     (tmp_path / "a_stitched.ome.tiff.zarr.tmp").mkdir()
     out = _inputs.unique_output(tmp_path, "a", extension=".ome.tiff")
     assert out.name == "a_stitched-2.ome.tiff"
+
+
+# ------------------------------ re-stitching ------------------------------
+
+
+def _record(**kw: Any) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "source": "/data/run.ome.zarr",
+        "tiles": [{"position_index": 0, "stage_x_um": 0, "stage_y_um": 0}],
+        "pixel_size_um": 0.5,
+        "linear_part": [[0.5, 0], [0, 0.5]],
+        **kw,
+    }
+
+
+def test_read_provenance() -> None:
+    from pymmcore_gui._stitching._models import ProvenanceError, read_provenance
+
+    prov = read_provenance({"stitching": _record()})
+    assert prov.source == Path("/data/run.ome.zarr")
+    assert prov.transforms is None
+    assert prov.channel_names == []  # older records lack it
+    for bad, why in [
+        (None, "doesn't record"),
+        ({}, "doesn't record"),
+        ({"stitching": _record(schema_version=2)}, "newer version"),
+        ({"stitching": _record(tiles=[])}, "unreadable"),
+    ]:
+        with pytest.raises(ProvenanceError, match=why):
+            read_provenance(bad)
+
+
+def test_same_registration_ignores_fusion_settings() -> None:
+    from pymmcore_gui._stitching._models import (
+        Blending,
+        OutputFormat,
+        StitchSettingsV1,
+        same_registration,
+    )
+
+    base = StitchSettingsV1()
+    fusion_only = base.model_copy(
+        update={
+            "blending": Blending.AVERAGE,
+            "blend_width_um": 5.0,
+            "output_format": OutputFormat.OME_TIFF,
+            "worker_threads": 2,
+            "open_when_done": False,
+        }
+    )
+    assert same_registration(base, fusion_only)
+    for field, value in [("reg_binning", 2), ("quality_threshold", 0.5)]:
+        assert not same_registration(base, base.model_copy(update={field: value}))
+
+
+def test_same_source_ignores_the_path() -> None:
+    from pymmcore_gui._stitching._models import same_source
+
+    a = {"path": "/a/run", "kind": "directory", "size": 10, "mtime_ns": 5}
+    assert same_source(a, {**a, "path": "/b/run"})
+    assert not same_source(a, {**a, "size": 11})
+
+
+def test_restitch_job_drops_the_registration_for_stage_only(tmp_path: Path) -> None:
+    from pymmcore_gui._stitching._models import (
+        Alignment,
+        StitchSettingsV1,
+        read_provenance,
+    )
+
+    prov = read_provenance(
+        {"stitching": _record(transforms={"all": [np.eye(3).tolist()]})}
+    )
+    mosaic = tmp_path / "run_stitched.ome.zarr"
+    kw: dict[str, Any] = {
+        "job_id": "j",
+        "provenance": prov,
+        "source": tmp_path / "run.ome.zarr",
+        "mosaic": mosaic,
+    }
+    kept = _inputs.build_restitch_job(settings=StitchSettingsV1(), **kw)
+    assert kept.groups[0].saved_registration is not None
+    stage = StitchSettingsV1(alignment=Alignment.STAGE)
+    dropped = _inputs.build_restitch_job(settings=stage, **kw)
+    assert dropped.groups[0].saved_registration is None

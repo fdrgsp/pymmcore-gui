@@ -47,6 +47,7 @@ from pymmcore_gui._qt.QtOpenGLWidgets import QOpenGLWidget
 from pymmcore_gui._qt.QtWidgets import (
     QApplication,
     QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -87,7 +88,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from pymmcore_gui._app import MMQApplication
-    from pymmcore_gui._ndv_viewers import SavedAcquisition
+    from pymmcore_gui._ndv_viewers import SavedAcquisition, StitchedMosaic
     from pymmcore_gui._notification_manager import Notification
     from pymmcore_gui._stitching._controller import StitchJob
     from pymmcore_gui._stitching._session import StitchingSession
@@ -494,6 +495,7 @@ class MicroManagerGUI(QMainWindow):
         self._acquire.mdaRunningChanged.connect(self._on_mda_running)
         self._stitching = self._create_stitching_session()
         self._acquire.viewers.stitchRequested.connect(self._stitch_saved)
+        self._acquire.viewers.restitchRequested.connect(self._restitch)
         self._acquire.layoutReset.connect(self._on_acquire_layout_reset)
         self._acquire.layoutNameChanged.connect(self._on_layout_name_changed)
         self._mmc.events.systemConfigurationLoaded.connect(self._on_config_loaded)
@@ -603,6 +605,94 @@ class MicroManagerGUI(QMainWindow):
         return self._stitching.submit_saved(
             saved.source, saved.sequence, saved.summary, settings
         )
+
+    def _restitch(self, mosaic: StitchedMosaic) -> StitchJob | None:
+        """Stitch a mosaic again with other settings (phase 3b)."""
+        if self._stitching is None:
+            return None
+        from pymmcore_gui._stitching._models import ProvenanceError, read_provenance
+        from pymmcore_gui.widgets._stitching_dialog import StitchingSettingsDialog
+
+        try:
+            provenance = read_provenance(mosaic.metadata)
+        except ProvenanceError as e:
+            self._notification_manager.show_warning_message(
+                f"{mosaic.title} can't be re-stitched: {e}."
+            )
+            return None
+        source = provenance.source
+        if not source.exists():
+            located = self._locate_source(source)
+            if located is None:
+                return None
+            source = located
+
+        dialog = StitchingSettingsDialog(
+            provenance.settings,
+            provenance.channel_names,
+            max_threads=os.cpu_count() or 1,
+            title=f"Re-stitch {mosaic.title}",
+            accept_text="Stitch",
+            note=(
+                "A new mosaic is saved next to this one; this one is kept. The "
+                "earlier registration is reused unless an alignment setting "
+                "changes or the acquisition has changed since."
+            ),
+            parent=self,
+        )
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return None
+            settings = dialog.value()
+        finally:
+            dialog.deleteLater()
+        return self._stitching.submit_restitch(
+            mosaic.path, provenance, source, settings
+        )
+
+    def _locate_source(self, missing: Path) -> Path | None:
+        """Ask where a mosaic's acquisition went; None if the user gives up."""
+        from pymmcore_gui._acquisition_loader import supports_path
+
+        if not self._confirm_locate(missing):
+            return None
+        start = str(missing.parent if missing.parent.exists() else Path.home())
+        if missing.name.lower().endswith((".tif", ".tiff")):
+            found, _ = QFileDialog.getOpenFileName(
+                self,
+                f"Locate {missing.name}",
+                start,
+                "OME-TIFF (*.ome.tif *.ome.tiff)",
+            )
+        else:
+            found = QFileDialog.getExistingDirectory(
+                self, f"Locate {missing.name}", start
+            )
+        if not found:
+            return None
+        path = Path(found)
+        if not supports_path(path):
+            self._notification_manager.show_warning_message(
+                f"{path.name} is not an acquisition pymmcore-gui can read."
+            )
+            return None
+        return path
+
+    def _confirm_locate(self, missing: Path) -> bool:
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Question)
+        msg.setWindowTitle("Acquisition not found")
+        msg.setText(
+            "The acquisition this mosaic was stitched from is no longer at\n"
+            f"{missing}\n\nLocate it to stitch the mosaic again."
+        )
+        locate = msg.addButton("Locate…", QMessageBox.ButtonRole.AcceptRole)
+        msg.addButton(QMessageBox.StandardButton.Cancel)
+        if locate is not None:
+            locate.setProperty("variant", "primary")
+            msg.setDefaultButton(locate)
+        msg.exec()
+        return msg.clickedButton() is locate
 
     def _ready_to_close_while_stitching(self) -> bool:
         """Ask before quitting cancels background stitching (plan §3.4)."""

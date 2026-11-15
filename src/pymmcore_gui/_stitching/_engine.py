@@ -39,6 +39,7 @@ from pymmcore_gui._stitching._models import (
     StitchJobV1,
     StitchResultV1,
     is_tiff_output,
+    same_source,
 )
 
 if TYPE_CHECKING:
@@ -455,6 +456,30 @@ def _register(
     return by_t, info
 
 
+def _reusable(
+    group: GroupV1, images: _GroupImages, fingerprint: dict[str, Any]
+) -> dict[Any, list[np.ndarray]] | None:
+    """The saved registration, if it still fits this source and these tiles."""
+    saved = group.saved_registration
+    if saved is None or not same_source(saved.source_fingerprint, fingerprint):
+        return None
+    by_t: dict[Any, list[np.ndarray]] = {}
+    for key, stored in saved.transforms.items():
+        t = None if key == "all" else int(key)
+        by_t[t] = [np.asarray(m, dtype=float) for m in stored]
+    n_dims = len(images.spacing) + 1
+    allowed = [None] if images.t_coords is None else [None, *images.t_coords]
+    if not by_t or (None in by_t and len(by_t) > 1):
+        return None
+    for t, matrices in by_t.items():
+        if t not in allowed or len(matrices) != len(group.tiles):
+            return None
+        if any(m.shape != (n_dims, n_dims) for m in matrices):
+            return None
+    logger.info("Reusing the saved registration of %d tiles", len(group.tiles))
+    return by_t
+
+
 def _apply_corrections(images: _GroupImages, by_t: dict[Any, list[np.ndarray]]) -> None:
     import xarray as xr
     from multiview_stitcher import msi_utils, param_utils
@@ -583,6 +608,8 @@ def _provenance(
         "settings": job.settings.model_dump(mode="json"),
         "pixel_size_um": job.pixel_size_um,
         "linear_part": [list(r) for r in job.linear_part],
+        "z_step_um": job.z_step_um,
+        "channel_names": list(job.channel_names),
         "transforms": None
         if transforms is None
         else {
@@ -669,7 +696,15 @@ def _stitch_group(
 
     transforms: dict[Any, list[np.ndarray]] | None = None
     info: dict[str, Any] = {}
-    if register:
+    reused = False
+    saved = _reusable(group, images, fingerprint) if register else None
+    if saved is not None:
+        progress.set(Phase.REGISTERING, message="Reusing the earlier registration")
+        transforms, reused = saved, True
+        if group.saved_registration is not None:
+            info = dict(group.saved_registration.info)
+        _apply_corrections(images, transforms)
+    elif register:
         transforms, info = _register(images, job, progress)
         _apply_corrections(images, transforms)
 
@@ -696,6 +731,7 @@ def _stitch_group(
         rejected_pairs=info.get("rejected_pairs", 0),
         isolated_tiles=info.get("isolated_tiles", 0) if register else 0,
         n_components=len(components),
+        reused_registration=reused,
     )
 
 

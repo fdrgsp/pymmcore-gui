@@ -135,6 +135,7 @@ class MMArrayViewer(ndv.ArrayViewer):
         # Set by the viewer manager (see `set_stitch_callback`) for a reopened
         # grid acquisition: offers "Stitch…" as a button and in the menu.
         self._stitch_callback: Callable[[], None] | None = None
+        self._stitch_menu_text = "Stitch…"
         self._stitch_btn: QPushButton | None = None
 
         self._key_filter = _KeyFilter(self)
@@ -177,18 +178,26 @@ class MMArrayViewer(ndv.ArrayViewer):
         self._mda_sequence = sequence
         self._update_z_buttons()
 
-    def set_stitch_callback(self, callback: Callable[[], None] | None) -> None:
-        """Offer "Stitch…" (button and context menu), calling `callback`."""
+    def set_stitch_callback(
+        self,
+        callback: Callable[[], None] | None,
+        *,
+        tooltip: str = "Stitch the grid into a mosaic…",
+        menu_text: str = "Stitch…",
+    ) -> None:
+        """Offer stitching (button and context menu), calling `callback`.
+
+        A raw grid acquisition offers "Stitch…"; a mosaic, "Re-stitch…".
+        """
         self._stitch_callback = callback
+        self._stitch_menu_text = menu_text
         if callback is not None and self._stitch_btn is None:
             with suppress(Exception):
                 self._stitch_btn = _add_viewer_button(
-                    self,
-                    "mdi:vector-combine",
-                    "Stitch the grid into a mosaic…",
-                    self._request_stitch,
+                    self, "mdi:vector-combine", tooltip, self._request_stitch
                 )
         if self._stitch_btn is not None:
+            self._stitch_btn.setToolTip(tooltip)
             self._stitch_btn.setVisible(callback is not None)
 
     def _request_stitch(self) -> None:
@@ -250,25 +259,25 @@ class MMArrayViewer(ndv.ArrayViewer):
         self.display_model.visible_axes = _ORTHO_VIEWS[(idx + 1) % len(_ORTHO_VIEWS)]
 
     def _show_context_menu(self, global_pos: Any) -> bool:
-        """Offer sequence reuse when the viewer has an associated acquisition."""
-        if self.mda_sequence is None:
+        """Offer sequence reuse and stitching, when they apply to this data."""
+        if self.mda_sequence is None and self._stitch_callback is None:
             return False
 
         menu = QMenu(self.widget())
-        action = menu.addAction("Re-use MDA…")
-        if action is None:
-            return False
-        # Disabled during a run: the sequence just recovered/observed could
-        # otherwise replace the parameters for an acquisition already in
-        # progress out from under it.
-        action.setEnabled(
-            self._reuse_mda_callback is not None
-            and not CMMCorePlus.instance().mda.is_running()
-        )
-        if callback := self._reuse_mda_callback:
-            action.triggered.connect(callback)
+        if self.mda_sequence is not None:
+            action = menu.addAction("Re-use MDA…")
+            if action is not None:
+                # Disabled during a run: the sequence just recovered/observed
+                # could otherwise replace the parameters for an acquisition
+                # already in progress out from under it.
+                action.setEnabled(
+                    self._reuse_mda_callback is not None
+                    and not CMMCorePlus.instance().mda.is_running()
+                )
+                if callback := self._reuse_mda_callback:
+                    action.triggered.connect(callback)
         if self._stitch_callback is not None:
-            stitch = menu.addAction("Stitch…")
+            stitch = menu.addAction(self._stitch_menu_text)
             if stitch is not None:
                 stitch.triggered.connect(self._request_stitch)
         menu.exec(global_pos)
