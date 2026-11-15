@@ -9,6 +9,7 @@ from pymmcore_gui._qt.QtCore import QEvent, QPoint, QRect, Qt
 from pymmcore_gui._qt.QtGui import QHelpEvent, QTextDocument
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractItemView,
+    QHeaderView,
     QMenu,
     QToolTip,
     QWidget,
@@ -26,8 +27,30 @@ _WIDTH = 360
 _MACOS_TOOLTIP_Y_CORRECTION = 24 if sys.platform == "darwin" else 0
 
 
+def _header_tooltip(
+    header: QHeaderView, viewport: QWidget, pos: QPoint
+) -> tuple[str, QRect]:
+    # QHeaderView re-declares indexAt/visualRect as protected, and PyQt refuses
+    # protected calls on C++-created headers, so use the public section API.
+    model = header.model()
+    section = header.logicalIndexAt(pos)
+    if model is None or section < 0:
+        return "", QRect()
+    orientation = header.orientation()
+    text = model.headerData(section, orientation, Qt.ItemDataRole.ToolTipRole)
+    start = header.sectionViewportPosition(section)
+    size = header.sectionSize(section)
+    if orientation == Qt.Orientation.Horizontal:
+        rect = QRect(start, 0, size, viewport.height())
+    else:
+        rect = QRect(0, start, viewport.width(), size)
+    return (text if isinstance(text, str) else "", rect)
+
+
 def _tooltip_text(widget: QWidget, event: QHelpEvent) -> tuple[str, QRect]:
     parent = widget.parentWidget()
+    if isinstance(parent, QHeaderView) and widget is parent.viewport():
+        return _header_tooltip(parent, widget, event.pos())
     if isinstance(parent, QAbstractItemView) and widget is parent.viewport():
         index = parent.indexAt(event.pos())
         text = index.data(Qt.ItemDataRole.ToolTipRole)
