@@ -25,7 +25,9 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - run: uv sync
+      # with the optional stitching extra, so its modules are type-checked
+      # against the real packages
+      - run: uv sync --extra stitching
       - uses: pre-commit/action@v3.0.1
         with:
           extra_args: --all-files --verbose
@@ -58,6 +60,11 @@ jobs:
           - os: windows-latest
             python-version: "3.13"
             qt: "PySide6"
+          # one leg with the optional stitching extra; elsewhere its tests skip
+          - os: macos-latest
+            python-version: "3.13"
+            qt: ""
+            extras: "--extra stitching"
 
     steps:
       - uses: actions/checkout@v6
@@ -78,7 +85,7 @@ jobs:
           if [[ "${{ matrix.qt }}" == "PySide6" ]]; then
             uv sync --group PySide6 --no-install-package PyQt6 --no-install-package PyQt6Ads
           else
-            uv sync
+            uv sync ${{ matrix.extras }}
           fi
 
       - uses: pymmcore-plus/setup-mm-test-adapters@main

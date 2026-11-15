@@ -53,6 +53,12 @@ dependencies = [
     "useq-schema>=0.9.2",
 ]
 
+[project.optional-dependencies]
+# Stitch grid acquisitions into a mosaic after they finish. Only the stitching
+# worker process imports it (see pymmcore_gui._stitching). The package is
+# pre-alpha: widen the range deliberately, after testing.
+stitching = ["multiview-stitcher>=0.1.63,<0.2"]
+
 # TO USE pymmcore-nano, you need to add pymmcore-nano to dependencies
 # and uncomment the override-dependencies line below
 # currently, pymmcore-nano has some issues related to threading that need to be solved
@@ -174,6 +180,14 @@ module = [
     "rendercanvas.*",
     "pytestqt.*",
     "vispy.*",
+    # the optional `stitching` extra: only pymmcore_gui._stitching._engine
+    # (and its tests) import these, and a base install lacks them
+    "multiview_stitcher.*",
+    "networkx.*",
+    "scipy.*",
+    "xarray.*",
+    "zarr.*",
+    "dask.*",
 ]
 ignore_missing_imports = true
 
