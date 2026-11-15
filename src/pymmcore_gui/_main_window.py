@@ -577,7 +577,7 @@ class MicroManagerGUI(QMainWindow):
         )
 
     def _stitch_saved(self, saved: SavedAcquisition) -> StitchJob | None:
-        """Ask for the settings, then stitch a reopened acquisition (phase 3a)."""
+        """Choose settings and stitch a saved acquisition."""
         if self._stitching is None:
             return None
         from pymmcore_gui._stitching._models import stored_request
@@ -607,7 +607,7 @@ class MicroManagerGUI(QMainWindow):
         )
 
     def _restitch(self, mosaic: StitchedMosaic) -> StitchJob | None:
-        """Stitch a mosaic again with other settings (phase 3b)."""
+        """Stitch a mosaic again with new settings."""
         if self._stitching is None:
             return None
         from pymmcore_gui._stitching._models import ProvenanceError, read_provenance
@@ -695,7 +695,7 @@ class MicroManagerGUI(QMainWindow):
         return msg.clickedButton() is locate
 
     def _ready_to_close_while_stitching(self) -> bool:
-        """Ask before quitting cancels background stitching (plan §3.4)."""
+        """Ask before quitting cancels background stitching."""
         if self._stitching is None:
             return True
         controller = self._stitching.controller

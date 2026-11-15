@@ -1,12 +1,7 @@
-"""Which tiles form which mosaic, and reading them from the saved acquisition.
+"""Plan mosaic groups in acquisition storage order and read lazy tile arrays.
 
-GUI side (`plan_groups`, `build_job`): from the `MDASequence` alone, list each
-mosaic's tiles with their index along the saved store's position axis. The
-order mirrors how ome-writers flattens (stage position, grid point) into that
-axis (`ome_writers._useq._build_positions`); a test keeps the two in step.
-
-Worker side (`open_tiles`): open the store with the GUI's own OME wrappers and
-hand out one lazy dask array per tile.
+Position indices follow ome-writers' flattening of stage positions and grid
+points; tests check that both implementations agree.
 """
 
 from __future__ import annotations
@@ -34,12 +29,10 @@ from pymmcore_gui._stitching._models import (
     TileV1,
     is_tiff_output,
     same_registration,
-    tmp_paths_for,
 )
+from pymmcore_gui._stitching._paths import acquisition_stem, unique_path
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     import dask.array
     import useq
 
@@ -47,11 +40,6 @@ if TYPE_CHECKING:
     from pymmcore_gui._ome_zarr_wrapper import OMEZarrWrapper
 
 STITCHED_SUFFIX = "_stitched"
-OUTPUT_EXTENSION = ".ome.zarr"
-_KNOWN_EXTENSIONS = (".ome.zarr", ".ome.tiff", ".ome.tif", ".zarr", ".tiff", ".tif")
-
-
-# ------------------------------ GUI side ------------------------------
 
 
 @dataclass(frozen=True)
@@ -91,11 +79,18 @@ def z_step(sequence: useq.MDASequence) -> float | None:
     offsets = [float(v) for v in sequence.z_plan]
     if len(offsets) < 2:
         return None
-    return offsets[1] - offsets[0]
+    steps = np.diff(offsets)
+    if (
+        not np.isfinite(steps).all()
+        or steps[0] == 0
+        or not np.allclose(steps, steps[0], rtol=1e-6, atol=1e-9)
+    ):
+        raise ValueError("Stitching requires evenly spaced Z planes.")
+    return float(steps[0])
 
 
 def plan_groups(sequence: useq.MDASequence) -> list[PlannedGroup]:
-    """The mosaics a finished `sequence` produces (§3.6), in store order.
+    """The mosaics a finished `sequence` produces, in store order.
 
     - a global grid without stage positions: one mosaic;
     - a global relative grid x N stage positions: one mosaic per position;
@@ -194,15 +189,6 @@ def plan_groups(sequence: useq.MDASequence) -> list[PlannedGroup]:
     return groups
 
 
-def acquisition_stem(source: Path) -> str:
-    """`expt_001` for `expt_001.ome.zarr`, `expt_001.ome.tiff` or `expt_001/`."""
-    name = source.name
-    for ext in _KNOWN_EXTENSIONS:
-        if name.lower().endswith(ext):
-            return name[: -len(ext)]
-    return name
-
-
 def _safe(name: str) -> str:
     return re.sub(r"[^\w.-]+", "_", name).strip("_") or "pos"
 
@@ -225,24 +211,13 @@ def unique_output(
     stem: str,
     group_name: str = "",
     taken: set[Path] | None = None,
-    extension: str = OUTPUT_EXTENSION,
+    extension: str = ZARR_EXTENSION,
 ) -> Path:
-    """`<dir>/<stem>_stitched[_<group>]<extension>`, never an existing path (§3.5)."""
+    """`<dir>/<stem>_stitched[_<group>]<extension>`, never an existing path."""
     base = f"{stem}{STITCHED_SUFFIX}"
     if group_name:
         base += f"_{_safe(group_name)}"
-    taken = taken or set()
-    n = 1
-    while True:
-        name = base if n == 1 else f"{base}-{n}"
-        path = directory / f"{name}{extension}"
-        if (
-            path not in taken
-            and not path.exists()
-            and not any(t.exists() for t in tmp_paths_for(path))
-        ):
-            return path
-        n += 1
+    return unique_path(directory / f"{base}{extension}", taken or ())
 
 
 @dataclass(frozen=True)
@@ -255,7 +230,7 @@ class SavedCalibration:
 
 
 def calibration_from_summary(summary: Any) -> SavedCalibration | None:
-    """Read §5.1's inputs from pymmcore-plus summary metadata (reopened data).
+    """Recover the pixel-to-stage calibration from saved summary metadata.
 
     pymmcore-plus records the pixel affine only when it isn't the identity,
     and the camera's mirror flags among the device properties. None when
@@ -294,7 +269,7 @@ def calibration_from_summary(summary: Any) -> SavedCalibration | None:
 
 
 def default_threads() -> int:
-    """Half the CPU cores, at least one (§4.4)."""
+    """Half the CPU cores, at least one."""
     return max(1, (os.cpu_count() or 2) // 2)
 
 
@@ -314,7 +289,7 @@ def build_job(
     """The job for a finished, saved `sequence`, or None if it has no mosaic.
 
     When `tile_shape_yx` is known and no two tiles overlap, registration
-    can't work, so alignment falls back to stage positions only (§3.1).
+    can't work, so alignment falls back to stage positions only.
     """
     groups = plan_groups(sequence)
     if not groups:
@@ -327,7 +302,6 @@ def build_job(
         overlaps = [
             _geometry.overlap_fraction(
                 linear,
-                pixel_size_um,
                 tile_shape_yx,
                 [(t.stage_x_um, t.stage_y_um) for t in g.tiles],
             )
@@ -356,7 +330,7 @@ def build_job(
             (float(linear[0, 0]), float(linear[0, 1])),
             (float(linear[1, 0]), float(linear[1, 1])),
         ),
-        z_step_um=abs(step) if step else None,
+        z_step_um=step,
         channel_names=[c.config for c in sequence.channels],
         settings=settings,
         threads=settings.worker_threads or default_threads(),
@@ -377,7 +351,7 @@ def build_restitch_job(
     parent_create_time: float | None = None,
     memory_cap_bytes: int | None = None,
 ) -> StitchJobV1:
-    """Stitch a mosaic's tiles again with new settings (§7, phase 3b).
+    """Stitch a mosaic's tiles again with new settings.
 
     Everything about the tiles comes from the mosaic's provenance; `source`
     is where its acquisition is now (it may have moved). The new mosaic goes
@@ -423,9 +397,6 @@ def build_restitch_job(
         parent_pid=parent_pid,
         parent_create_time=parent_create_time,
     )
-
-
-# ----------------------------- worker side -----------------------------
 
 
 SPATIAL_AND_NONSPATIAL = ("t", "c", "z", "y", "x")
@@ -571,7 +542,3 @@ def open_tiles(source: Path) -> OpenedTiles:
         _p_axis=p_axis,
         _lock=lock,
     )
-
-
-def tile_centers(tiles: Sequence[TileV1]) -> list[tuple[float, float]]:
-    return [(t.stage_x_um, t.stage_y_um) for t in tiles]

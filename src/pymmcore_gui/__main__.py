@@ -1,9 +1,4 @@
-"""Entry point for `python -m pymmcore_gui`, the `pymm`/`mmgui` scripts and the bundle.
-
-The stitching worker is launched through this same entry point (the frozen app
-has no other), so its argument is caught before anything else is imported:
-the CLI module pulls in typer and the GUI, and the worker must stay Qt-free.
-"""
+"""Dispatch the headless worker before importing the GUI command line."""
 
 import sys
 

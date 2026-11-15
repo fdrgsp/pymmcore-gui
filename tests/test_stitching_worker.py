@@ -181,7 +181,6 @@ def test_watchdog_exits_when_the_gui_is_gone(
     )
     exited = threading.Event()
     codes: list[int] = []
-    orphaned: list[bool] = []
 
     def fake_exit(code: int) -> None:
         codes.append(code)
@@ -189,10 +188,9 @@ def test_watchdog_exits_when_the_gui_is_gone(
 
     monkeypatch.setattr(_worker, "WATCHDOG_INTERVAL_S", 0.01)
     monkeypatch.setattr(os, "_exit", fake_exit)
-    _worker._start_watchdog(job, on_orphaned=lambda: orphaned.append(True))
+    _worker._start_watchdog(job)
     assert exited.wait(5)
     assert codes == [_worker.EXIT_ORPHANED]
-    assert orphaned == [True]
 
 
 def test_progress_writer_throttles(

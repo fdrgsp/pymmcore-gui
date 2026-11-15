@@ -1,4 +1,4 @@
-"""Pixel -> stage transforms and tile placement (§5 of the plan). numpy only.
+"""Pixel -> stage transforms and tile placement. numpy only.
 
 Conventions:
 
@@ -27,13 +27,10 @@ STALE_SCALE_TOLERANCE = 0.1
 """An affine whose scale is further than this from the pixel size is stale."""
 
 MAX_TILES_GLOBAL_OPTIMIZATION = 100
-"""Above this many tiles, `linear_two_pass` resolves twice as fast (§2)."""
+"""Above this many tiles, `linear_two_pass` resolves twice as fast."""
 
 REGISTRATION_TARGET_PX = 1024
 """Auto binning brings the longest tile side to at most this many pixels."""
-
-
-# ------------------------------- §5.1 -------------------------------
 
 
 def linear_from_mm_affine(affine: Sequence[float]) -> np.ndarray:
@@ -117,9 +114,6 @@ def linear_part(
     return uncalibrated_linear(pixel_size_um, mirror_x, mirror_y)
 
 
-# ------------------------------- §5.2 -------------------------------
-
-
 def tile_affine(
     linear: np.ndarray,
     pixel_size_um: float,
@@ -165,9 +159,6 @@ def lift_2d_to_3d(affine_yx: np.ndarray) -> np.ndarray:
     return m
 
 
-# ------------------------------- §6.1 -------------------------------
-
-
 def anchor_corrections(
     corrections: Sequence[np.ndarray],
     centers: np.ndarray,
@@ -207,9 +198,6 @@ def anchor_corrections(
     return out
 
 
-# ----------------------------- registration -----------------------------
-
-
 def auto_binning(
     shape_yx: tuple[int, int], target_px: int = REGISTRATION_TARGET_PX
 ) -> int:
@@ -230,7 +218,6 @@ def resolution_method(n_tiles: int) -> str:
 
 def overlap_fraction(
     linear: np.ndarray,
-    pixel_size_um: float,
     shape_yx: tuple[int, int],
     centers_xy_um: Sequence[tuple[float, float]],
 ) -> float:
@@ -238,14 +225,14 @@ def overlap_fraction(
 
     Two tiles overlap by `min(ox, oy)`, `ox`/`oy` being the overlapping share
     of the width and height (a side-by-side neighbour has `oy` = 1). Used to
-    decide whether registration can work at all (§3.1). Tiles are compared in
+    decide whether registration can work at all. Tiles are compared in
     the camera frame, where they are axis-aligned rectangles.
     """
     if len(centers_xy_um) < 2:
         return 0.0
     inv = np.linalg.inv(np.asarray(linear, dtype=float))
     # stage offsets -> pixel offsets (column, row)
-    pts = np.array([inv @ np.asarray(c, dtype=float) for c in centers_xy_um])
+    pts = np.asarray(centers_xy_um, dtype=float) @ inv.T
     rows, cols = shape_yx
     best = 0.0
     for i in range(len(pts) - 1):

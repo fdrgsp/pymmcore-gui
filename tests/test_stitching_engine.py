@@ -18,12 +18,13 @@ import zarr
 
 from _stitch_synth import grid_sequence, write_grid
 from pymmcore_gui._acquisition_loader import open_acquisition
-from pymmcore_gui._stitching._engine import StitchError, run_stitch
+from pymmcore_gui._stitching._engine import run_stitch
 from pymmcore_gui._stitching._inputs import build_job
 from pymmcore_gui._stitching._models import (
     Alignment,
     OutputFormat,
     ProgressEvent,
+    StitchError,
     StitchJobV1,
     StitchSettingsV1,
     tmp_paths_for,
@@ -414,6 +415,37 @@ def test_ome_tiff_records_physical_pixel_size(tmp_path: Path) -> None:
     assert 'PhysicalSizeXUnit="&#181;m"' in xml
 
 
+def test_tiff_conversion_bounds_reads_for_wide_images(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pymmcore_gui._stitching import _tiff_output
+
+    monkeypatch.setattr(_tiff_output, "TILE", 16)
+    data = np.arange(35 * 1027, dtype="uint16").reshape(35, 1027)
+    budget = 16 * 32 * data.dtype.itemsize
+    reads = []
+
+    class Array:
+        shape = data.shape
+        dtype = data.dtype
+        chunks = (16, 16)
+
+        def __getitem__(self, key: Any) -> np.ndarray:
+            chunk = np.asarray(data[key])
+            reads.append(chunk.nbytes)
+            return chunk
+
+    tiles = list(_tiff_output._plane_tiles(Array(), ["y", "x"], budget, lambda: None))
+    expected = [
+        data[y : y + 16, x : x + 16]
+        for y in range(0, 35, 16)
+        for x in range(0, 1027, 16)
+    ]
+    assert max(reads) <= budget
+    for actual, reference in zip(tiles, expected, strict=True):
+        np.testing.assert_array_equal(actual, reference)
+
+
 def test_tiff_name_taken_meanwhile_gets_a_new_version(tmp_path: Path) -> None:
     seq = grid_sequence(2, 2, S, P)
     acq = write_grid(tmp_path / "run.ome.zarr", seq, shape=S, pixel_size=P)
@@ -514,3 +546,97 @@ def test_restitch_into_the_other_format(
     (group,) = again.groups
     assert group.output.name == "run_stitched.ome.tiff"
     assert group.reused_registration
+
+
+@pytest.mark.parametrize(
+    "corruption", ["missing-time", "invalid-time", "nan", "ragged"]
+)
+def test_invalid_saved_registration_is_recomputed(
+    tmp_path: Path, corruption: str
+) -> None:
+    from pymmcore_gui._stitching._inputs import build_restitch_job
+    from pymmcore_gui._stitching._models import read_provenance
+
+    seq = grid_sequence(2, 2, S, P, t=2)
+    acq = write_grid(tmp_path / "run.ome.zarr", seq, shape=S, pixel_size=P)
+    first, _ = _run(_job(acq, register_every_timepoint=True))
+    mosaic = first.groups[0].output
+    record = _provenance(mosaic)
+    transforms = record["transforms"]
+    if corruption == "missing-time":
+        transforms.pop("1")
+    elif corruption == "invalid-time":
+        transforms["bad"] = transforms.pop("1")
+    elif corruption == "nan":
+        transforms["0"][0][0][0] = float("nan")
+    else:
+        transforms["0"][0][0].pop()
+    prov = read_provenance({"stitching": record})
+    job = build_restitch_job(
+        job_id="again",
+        provenance=prov,
+        source=acq.path,
+        mosaic=mosaic,
+        settings=prov.settings,
+    )
+    again, _ = _run(job.model_copy(update={"threads": 2}))
+    assert not again.groups[0].reused_registration
+    assert _shift_errors(acq, _provenance(again.groups[0].output), key="0").max() < P
+
+
+def test_descending_z_stack_keeps_its_physical_orientation(tmp_path: Path) -> None:
+    seq = grid_sequence(2, 2, S, P, z=3)
+    assert seq.z_plan is not None
+    descending = seq.model_copy(
+        update={"z_plan": seq.z_plan.model_copy(update={"go_up": False})}
+    )
+    up = write_grid(tmp_path / "up.ome.zarr", seq, shape=S, pixel_size=P)
+    down = write_grid(tmp_path / "down.ome.zarr", descending, shape=S, pixel_size=P)
+    up_result, _ = _run(_job(up, alignment=Alignment.STAGE))
+    down_result, _ = _run(_job(down, alignment=Alignment.STAGE))
+    up_data = np.squeeze(_zarr_levels(up_result.groups[0].output)[0])
+    down_data = np.squeeze(_zarr_levels(down_result.groups[0].output)[0])
+    np.testing.assert_array_equal(down_data, up_data[::-1])
+
+
+def _workers(tmp_path: Path, overlap: float, linear: np.ndarray, cap_gb: float) -> int:
+    from types import SimpleNamespace
+
+    from pymmcore_gui._stitching._engine import _blocks_in_flight
+
+    job = build_job(
+        job_id="test",
+        sequence=grid_sequence(10, 10, 2048, 1, overlap=overlap),
+        source=tmp_path / "raw.ome.zarr",
+        pixel_size_um=1,
+        linear_part=linear,
+        settings=StitchSettingsV1(worker_threads=8),
+        memory_cap_bytes=int(cap_gb * 1024**3),
+    )
+    assert job is not None
+    images: Any = SimpleNamespace(
+        linear=linear,
+        group=job.groups[0],
+        opened=SimpleNamespace(dtype=np.dtype("uint16"), shape_yx=(2048, 2048)),
+        has_z=False,
+        arrays=[None] * 100,
+    )
+    return _blocks_in_flight(job, images)
+
+
+def test_fusion_memory_budget_accounts_for_dense_overlap(tmp_path: Path) -> None:
+    sparse = _workers(tmp_path, 10, np.eye(2), cap_gb=2)
+    dense = _workers(tmp_path, 90, np.eye(2), cap_gb=2)
+    assert sparse > dense == 1
+
+
+@pytest.mark.parametrize("deg", [0.2, 2, 90])
+def test_fusion_memory_budget_ignores_camera_rotation(
+    tmp_path: Path, deg: float
+) -> None:
+    """A calibrated camera is always slightly rotated; that changes nothing."""
+    # 10 % overlap: a 2048² block touches 3x3 tiles, ~0.5 GB a block
+    assert _workers(tmp_path, 10, _rot(deg), cap_gb=16) == 8
+    assert _workers(tmp_path, 10, _rot(deg), cap_gb=2) == _workers(
+        tmp_path, 10, np.eye(2), cap_gb=2
+    )

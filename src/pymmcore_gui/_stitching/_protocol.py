@@ -1,9 +1,6 @@
-"""The job directory: the only channel between the GUI and the worker.
+"""Atomic job-directory communication between the GUI and worker.
 
-Nothing goes through the worker's stdio: PyInstaller's windowed Windows build
-can leave `sys.stdout`/`sys.stderr`/`sys.stdin` as `None`. Every file is
-written atomically (a temp file, then `os.replace`), so a reader never sees a
-half-written one.
+Files replace stdio, which can be unavailable in a Windows windowed bundle.
 """
 
 from __future__ import annotations
@@ -15,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from pymmcore_gui._stitching._models import (
     OwnerV1,
@@ -49,7 +46,7 @@ def read_model(path: Path, cls: type[M]) -> M | None:
     """Return the model stored at `path`, or None if missing or unreadable."""
     try:
         return cls.model_validate_json(path.read_bytes())
-    except (OSError, ValidationError, ValueError):
+    except (OSError, ValueError):
         return None
 
 

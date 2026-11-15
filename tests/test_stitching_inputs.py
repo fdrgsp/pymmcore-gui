@@ -136,6 +136,13 @@ def test_z_origin_and_step() -> None:
     assert _inputs.z_step(top_down) in (-2, 2)
 
 
+@pytest.mark.parametrize("positions", [[0, 1, 3], [0, 0, 1], [0, 1, 0]])
+def test_nonuniform_z_planes_are_rejected(positions: list[float]) -> None:
+    sequence = _seq(grid_plan=GRID, z_plan={"relative": positions})
+    with pytest.raises(ValueError, match="evenly spaced"):
+        _inputs.z_step(sequence)
+
+
 @pytest.mark.parametrize(
     ("name", "stem"),
     [
@@ -146,7 +153,9 @@ def test_z_origin_and_step() -> None:
     ],
 )
 def test_acquisition_stem(name: str, stem: str) -> None:
-    assert _inputs.acquisition_stem(Path(name)) == stem
+    from pymmcore_gui._stitching._paths import acquisition_stem
+
+    assert acquisition_stem(Path(name)) == stem
 
 
 def test_unique_output_never_overwrites(tmp_path: Path) -> None:
@@ -234,6 +243,9 @@ def test_request_round_trip_through_sequence_metadata() -> None:
     [
         None,
         {},
+        {"pymmcore_gui": "invalid"},
+        {"pymmcore_gui": [1, 2]},
+        {"pymmcore_gui": 42},
         {"pymmcore_gui": {"stitching": "yes"}},
         {"pymmcore_gui": {"stitching": {"enabled": True, "schema_version": 99}}},
         {"pymmcore_gui": {"stitching": {"enabled": "maybe"}}},

@@ -1,21 +1,4 @@
-"""Stitch grid acquisitions into a mosaic, in a separate worker process.
-
-Layout (see docs/plans/STITCHING.md):
-
-- `_models`: versioned pydantic models shared by the GUI and the worker.
-- `_protocol`: the job directory and its files, the only channel between them.
-- `_geometry`: pure pixel -> stage transforms, tile placement and anchoring.
-- `_inputs`: which tiles form which mosaic, and reading them from a saved store.
-- `_engine`: registration and fusion; the only module importing
-  `multiview_stitcher`.
-- `_worker`: the worker process's entry point.
-- `_controller`: the GUI side -- queue, process, progress, cleanup.
-- `_session`: acquisitions in, toasts and viewers out (GUI side).
-
-Everything except `_controller` and `_session` stays importable without Qt:
-the worker runs it, and loading Qt there would cost startup time and memory
-for nothing.
-"""
+"""Optional grid stitching. Worker modules must remain importable without Qt."""
 
 from __future__ import annotations
 
@@ -33,11 +16,16 @@ def is_available() -> bool:
 
 def can_stitch(sequence: useq.MDASequence | None) -> bool:
     """Whether stitching is installed and `sequence` would give a mosaic."""
-    if sequence is None or not is_available():
+    return is_available() and has_mosaic(sequence)
+
+
+def has_mosaic(sequence: useq.MDASequence | None) -> bool:
+    """Whether a sequence contains a supported grid with multiple tiles."""
+    if sequence is None:
         return False
     from pymmcore_gui._stitching._inputs import plan_groups
 
     try:
         return bool(plan_groups(sequence))
-    except Exception:  # pragma: no cover - a sequence we can't interpret
+    except (TypeError, ValueError):
         return False

@@ -1,13 +1,8 @@
-"""Register and fuse a job's mosaics. The only module importing multiview_stitcher.
-
-Every call into the package goes through here, so an upstream API change is
-fixed in one place (the dependency is pinned `<0.2`, see pyproject.toml).
-"""
+"""Registration and fusion adapter for multiview-stitcher."""
 
 from __future__ import annotations
 
 import contextlib
-import json
 import logging
 import math
 import os
@@ -27,20 +22,20 @@ from pymmcore_gui._stitching._inputs import OpenedTiles, open_tiles
 from pymmcore_gui._stitching._models import (
     METADATA_NAMESPACE,
     PROVENANCE_KEY,
-    SCHEMA_VERSION,
-    TIFF_EXTENSION,
-    ZARR_EXTENSION,
     Alignment,
     Blending,
     GroupResultV1,
     GroupV1,
     Phase,
     ProgressEvent,
+    ProvenanceV1,
+    StitchError,
     StitchJobV1,
     StitchResultV1,
     is_tiff_output,
     same_source,
 )
+from pymmcore_gui._stitching._paths import remove_path, unique_path
 
 if TYPE_CHECKING:
     import networkx as nx
@@ -54,18 +49,11 @@ STAGE_KEY = "stage"
 
 OUTPUT_CHUNK_2D = 2048
 """Output block side in 2D. Measured on a 10x10 grid of 2048² tiles read from
-disk (§13): 1024 -> 75 s of fusion, 2048 -> 27 s, 4096 -> 45 s (too few
+disk: 1024 -> 75 s of fusion, 2048 -> 27 s, 4096 -> 45 s (too few
 blocks to keep the threads busy)."""
 _PYRAMID_STEPS = 1000
 BLOCK_MEMORY_FACTOR = 2
 OUTPUT_CHUNK_3D = {"z": 8, "y": 512, "x": 512}
-
-
-class StitchError(Exception):
-    """A failure with a message meant for the user (no traceback needed)."""
-
-
-# --------------------------------- helpers ---------------------------------
 
 
 def _mvs_version() -> str:
@@ -76,7 +64,7 @@ def _mvs_version() -> str:
 
 
 def source_fingerprint(source: Path) -> dict[str, Any]:
-    """Enough about the raw data to notice it moved or changed (§3.5, §7)."""
+    """Enough about the raw data to notice it moved or changed."""
     source = Path(source)
     st = source.stat()
     if source.is_file():
@@ -192,15 +180,16 @@ def _track_block_batches(progress: _Progress) -> Iterator[None]:
     from multiview_stitcher import misc_utils
 
     original = misc_utils.ndindex_batches
-    level = [0]
+    level = 0
 
     def wrapped(nblocks: Any, n_batch: Any) -> Any:
+        nonlocal level
         total = int(np.prod(nblocks))
-        if level[0] == 0:
+        if level == 0:
             progress.set(Phase.FUSING, total=total)
         else:
-            progress.set_pyramid_level(level[0], total)
-        level[0] += 1
+            progress.set_pyramid_level(level, total)
+        level += 1
         return original(nblocks, n_batch)
 
     misc_utils.ndindex_batches = wrapped
@@ -208,9 +197,6 @@ def _track_block_batches(progress: _Progress) -> Iterator[None]:
         yield
     finally:
         misc_utils.ndindex_batches = original
-
-
-# ------------------------------- tile images -------------------------------
 
 
 def _sim(
@@ -265,7 +251,7 @@ class _GroupImages:
             ]:
                 self.channels = list(named)
         self.t_coords = list(range(sizes["t"])) if "t" in sizes else None
-        self.z_step = job.z_step_um or 1.0
+        self.z_step = abs(job.z_step_um or 1.0)
         self.spacing = {"y": p, "x": p}
         if self.has_z:
             self.spacing = {"z": self.z_step, **self.spacing}
@@ -285,6 +271,8 @@ class _GroupImages:
                     tile.stage_z_um if self.has_z else None,
                 )
             )
+            if self.has_z and (job.z_step_um or 0) < 0:
+                self.affines[-1][0, 0] = -1
         self.data_dims = [d for d in self.dims if d != "z" or self.has_z]
         self.msims = [
             _msim(
@@ -316,12 +304,9 @@ class _GroupImages:
             yx = [tile.stage_y_um, tile.stage_x_um]
             if ndim == 3:
                 nz = self.opened.sizes().get("z", 1)
-                yx = [tile.stage_z_um + (nz - 1) / 2 * self.z_step, *yx]
+                yx = [tile.stage_z_um + (nz - 1) / 2 * (self.job.z_step_um or 1), *yx]
             rows.append(yx)
         return np.array(rows)
-
-
-# ------------------------------- registration -------------------------------
 
 
 def _pairwise_executor(
@@ -420,8 +405,7 @@ def _register(
             ),
         )
     except mv_graph.NotEnoughOverlapError:
-        # No pair overlaps, or every pair was rejected: upstream raises
-        # instead of leaving the tiles where they are. Same thing (§6.1).
+        # No usable edges remain; preserve every tile's stage placement.
         logger.warning("registration found no usable overlap")
         by_t: dict[Any, list[np.ndarray]] = {
             None: [np.eye(ndim + 1) for _ in range(n_tiles)]
@@ -429,7 +413,6 @@ def _register(
         components = [[i] for i in range(n_tiles)]
         accepted = 0
     else:
-        # the graph after the quality filter: what remains are accepted pairs
         graph: nx.Graph = res["pairwise_registration"]["graph"]
         graph.add_nodes_from(range(n_tiles))
         components = [sorted(c) for c in nx.connected_components(graph)]
@@ -464,17 +447,26 @@ def _reusable(
     if saved is None or not same_source(saved.source_fingerprint, fingerprint):
         return None
     by_t: dict[Any, list[np.ndarray]] = {}
-    for key, stored in saved.transforms.items():
-        t = None if key == "all" else int(key)
-        by_t[t] = [np.asarray(m, dtype=float) for m in stored]
-    n_dims = len(images.spacing) + 1
-    allowed = [None] if images.t_coords is None else [None, *images.t_coords]
-    if not by_t or (None in by_t and len(by_t) > 1):
+    try:
+        for key, stored in saved.transforms.items():
+            t = None if key == "all" else int(key)
+            by_t[t] = [np.asarray(m, dtype=float) for m in stored]
+    except (TypeError, ValueError, OverflowError):
         return None
-    for t, matrices in by_t.items():
-        if t not in allowed or len(matrices) != len(group.tiles):
+    n_dims = len(images.spacing) + 1
+    expected_times = set(images.t_coords or [0])
+    if set(by_t) != {None} and set(by_t) != expected_times:
+        return None
+    for matrices in by_t.values():
+        if len(matrices) != len(group.tiles):
             return None
-        if any(m.shape != (n_dims, n_dims) for m in matrices):
+        if any(
+            m.shape != (n_dims, n_dims)
+            or not np.isfinite(m).all()
+            or not np.allclose(m[-1], np.eye(n_dims)[-1])
+            or np.linalg.det(m[:-1, :-1]) == 0
+            for m in matrices
+        ):
             return None
     logger.info("Reusing the saved registration of %d tiles", len(group.tiles))
     return by_t
@@ -497,9 +489,6 @@ def _apply_corrections(images: _GroupImages, by_t: dict[Any, list[np.ndarray]]) 
         )
 
 
-# ---------------------------------- fusion ----------------------------------
-
-
 def _fusion_func(blending: Blending) -> Callable[..., Any]:
     from multiview_stitcher import fusion
 
@@ -515,9 +504,10 @@ def _blocks_in_flight(job: StitchJobV1, images: _GroupImages) -> int:
     """Blocks fused at once: the thread budget, lowered to fit the memory cap.
 
     A block holds its float output plus the planes it reads from every tile
-    it touches (one dask chunk per full plane). Neighbouring tiles overlap by
-    at least ~10 %, so a block of side `b` touches up to
-    `(ceil(b / (0.9 * tile)) + 1)²` of them.
+    it touches (one dask chunk per full plane). Blocks and the grid of tile
+    centres are both aligned with the stage axes, so the tiles are counted
+    there: per axis, a window of width `w` holds at most `floor(w / step) + 1`
+    centres of a grid with that step.
     """
     n = job.threads
     if job.memory_cap_bytes is None:
@@ -532,9 +522,16 @@ def _blocks_in_flight(job: StitchJobV1, images: _GroupImages) -> int:
         side = (OUTPUT_CHUNK_2D, OUTPUT_CHUNK_2D)
         out_px = OUTPUT_CHUNK_2D**2
         planes = 1
-    touched = (math.ceil(side[0] / (0.9 * rows)) + 1) * (
-        math.ceil(side[1] / (0.9 * cols)) + 1
-    )
+    centers = np.array([(t.stage_x_um, t.stage_y_um) for t in images.group.tiles])
+    centers, counts = np.unique(centers.round(3), axis=0, return_counts=True)
+    block_um = np.array(side[::-1]) * job.pixel_size_um
+    tile_um = np.abs(images.linear) @ np.array([cols, rows])  # (x, y) footprint
+    touched = int(counts.max())
+    for axis in range(2):
+        gaps = np.diff(np.unique(centers[:, axis]))
+        if gaps.size:
+            window = block_um[axis] + tile_um[axis]
+            touched *= math.floor(window / gaps.min()) + 1
     touched = min(touched, len(images.arrays))
     estimate = out_px * 8 + touched * planes * rows * cols * (itemsize + 4)
     # multiview-stitcher's own intermediates (float copies, blending weights)
@@ -594,33 +591,28 @@ def _provenance(
     info: dict[str, Any],
     fingerprint: dict[str, Any],
 ) -> dict[str, Any]:
-    """How the mosaic was made (§3.5), as JSON-ready data."""
+    """How the mosaic was made, as JSON-ready data."""
 
     def _t_key(t: Any) -> str:
         return "all" if t is None else str(int(t))
 
-    record = {
-        "schema_version": SCHEMA_VERSION,
-        "source": str(job.source),
-        "source_fingerprint": fingerprint,
-        "group": group.name,
-        "tiles": [t.model_dump(mode="json") for t in group.tiles],
-        "settings": job.settings.model_dump(mode="json"),
-        "pixel_size_um": job.pixel_size_um,
-        "linear_part": [list(r) for r in job.linear_part],
-        "z_step_um": job.z_step_um,
-        "channel_names": list(job.channel_names),
-        "transforms": None
+    return ProvenanceV1(
+        source=job.source,
+        source_fingerprint=fingerprint,
+        group=group.name,
+        tiles=group.tiles,
+        settings=job.settings,
+        pixel_size_um=job.pixel_size_um,
+        linear_part=job.linear_part,
+        z_step_um=job.z_step_um,
+        channel_names=job.channel_names,
+        transforms=None
         if transforms is None
-        else {
-            _t_key(t): [np.asarray(m).round(6).tolist() for m in corr]
-            for t, corr in transforms.items()
-        },
-        "registration": {k: v for k, v in info.items() if k != "components"},
-        "groups": info.get("components"),
-        "multiview_stitcher_version": _mvs_version(),
-    }
-    return cast("dict[str, Any]", json.loads(json.dumps(record)))
+        else {_t_key(t): [m.tolist() for m in corr] for t, corr in transforms.items()},
+        registration={k: v for k, v in info.items() if k != "components"},
+        groups=info.get("components"),
+        multiview_stitcher_version=_mvs_version(),
+    ).model_dump(mode="json")
 
 
 def _write_provenance(url: Path, record: dict[str, Any]) -> None:
@@ -634,16 +626,6 @@ def _write_provenance(url: Path, record: dict[str, Any]) -> None:
     root.attrs[METADATA_NAMESPACE] = ns
 
 
-def _remove(path: Path) -> None:
-    """Delete a directory tree or a file, if present."""
-    import shutil
-
-    if path.is_dir():
-        shutil.rmtree(path)
-    elif path.exists():
-        path.unlink()
-
-
 def _convert_to_tiff(
     fused: Path, tmp: Path, group: GroupV1, record: dict[str, Any], progress: _Progress
 ) -> None:
@@ -651,7 +633,7 @@ def _convert_to_tiff(
     from pymmcore_gui._stitching._tiff_output import zarr_to_ome_tiff
 
     progress.set(Phase.CONVERTING)
-    _remove(tmp)
+    remove_path(tmp)
     zarr_to_ome_tiff(
         fused,
         tmp,
@@ -661,26 +643,14 @@ def _convert_to_tiff(
             Phase.CONVERTING, total=total, done=done
         ),
     )
-    _remove(fused)
+    remove_path(fused)
 
 
 def _move_into_place(tmp: Path, final: Path) -> Path:
-    """Rename the finished `.tmp` mosaic; never overwrite (§3.5)."""
-    extension = next(
-        (e for e in (ZARR_EXTENSION, TIFF_EXTENSION) if final.name.endswith(e)),
-        final.suffix,
-    )
-    stem = final.name.removesuffix(extension)
-    target = final
-    n = 2
-    while target.exists():
-        target = final.with_name(f"{stem}-{n}{extension}")
-        n += 1
+    """Rename the finished `.tmp` mosaic; never overwrite."""
+    target = unique_path(final, check_temporary=False)
     os.replace(tmp, target)
     return target
-
-
-# ----------------------------------- run -----------------------------------
 
 
 def _stitch_group(
@@ -710,7 +680,7 @@ def _stitch_group(
 
     fused = group.fused_tmp
     for path in group.tmp_paths:
-        _remove(path)
+        remove_path(path)
     _fuse(images, job, REG_KEY if register else STAGE_KEY, fused, progress)
 
     record = _provenance(job, group, transforms, info, fingerprint)
@@ -757,16 +727,12 @@ def run_stitch(job: StitchJobV1, report: Reporter) -> StitchResultV1:
                 f"The acquisition has {opened.n_positions} positions, but the "
                 f"grid needs {needed + 1}. Was the run interrupted?"
             )
-        if (
-            job.settings.alignment == Alignment.REGISTER
-            and opened.sizes().get("z", 1) > 1
-            and not job.z_step_um
-        ):
+        if opened.sizes().get("z", 1) > 1 and not job.z_step_um:
             raise StitchError("The z-stack's step is unknown.")
         fingerprint = source_fingerprint(job.source)
         results = []
         # Parallelism comes from our own thread pools; nested dask threads
-        # would oversubscribe the budget (§4.4). Library warnings are shown
+        # would oversubscribe the budget. Library warnings are shown
         # once each (in the worker, that is its log), never raised.
         with warnings.catch_warnings(), dask.config.set(scheduler="synchronous"):
             warnings.simplefilter("default")

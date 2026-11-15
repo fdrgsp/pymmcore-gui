@@ -1,4 +1,4 @@
-"""Stitching progress in the status bar, with a popover per job (plan §3.3)."""
+"""Background stitching status and per-job progress controls."""
 
 from __future__ import annotations
 

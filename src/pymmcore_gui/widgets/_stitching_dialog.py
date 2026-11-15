@@ -1,4 +1,4 @@
-"""The ⚙ stitching settings dialog (plan §3.2)."""
+"""Stitching settings dialog."""
 
 from __future__ import annotations
 
@@ -71,7 +71,6 @@ class StitchingSettingsDialog(QDialog):
         self.setWindowTitle(title)
         self._channels = list(dict.fromkeys(channels))
 
-        # ------------------------------ alignment ------------------------------
         self.register_radio = QRadioButton("Refine with registration")
         self.register_radio.setToolTip(
             "Start from the stage positions, then correct each tile's position "
@@ -144,7 +143,6 @@ class StitchingSettingsDialog(QDialog):
         align_box = QGroupBox("Alignment")
         align_box.setLayout(align_form)
 
-        # ------------------------------ blending ------------------------------
         self.blending_combo = QComboBox()
         for blending, label in BLENDING_LABELS.items():
             self.blending_combo.addItem(label, blending)
@@ -163,7 +161,6 @@ class StitchingSettingsDialog(QDialog):
         blend_box = QGroupBox("Blending")
         blend_box.setLayout(blend_form)
 
-        # ------------------------------ output ------------------------------
         self.format_combo = QComboBox()
         for fmt, label in FORMAT_LABELS.items():
             self.format_combo.addItem(label, fmt)
@@ -188,7 +185,6 @@ class StitchingSettingsDialog(QDialog):
         output_box = QGroupBox("Output")
         output_box.setLayout(output_layout)
 
-        # ------------------------------ performance ------------------------------
         self.threads_spin = QSpinBox()
         self.threads_spin.setRange(0, max(max_threads, 1))
         self.threads_spin.setSpecialValueText(AUTO)
@@ -203,7 +199,6 @@ class StitchingSettingsDialog(QDialog):
         perf_box = QGroupBox("Performance")
         perf_box.setLayout(perf_form)
 
-        # ------------------------------ buttons ------------------------------
         self.defaults_btn = QPushButton("Restore Defaults")
         self.cancel_btn = QPushButton("Cancel")
         self.ok_btn = QPushButton(accept_text)
@@ -233,8 +228,6 @@ class StitchingSettingsDialog(QDialog):
         self.ok_btn.clicked.connect(self.accept)
 
         self.setValue(settings)
-
-    # ------------------------------ value ------------------------------
 
     def setValue(self, settings: StitchSettingsV1) -> None:
         """Show `settings` in the editors."""

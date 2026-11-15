@@ -1,16 +1,12 @@
-"""GUI side of stitching: a queue of jobs, one worker process at a time (§4).
+"""Queue worker processes, poll progress files and clean up temporary outputs.
 
-The controller writes each job to its own directory in the registry, starts
-the worker with `QProcess`, polls `progress.json` while it runs, and reads
-`result.json`/`error.json` when it exits. It never blocks the GUI thread on
-the worker or on deleting a large partial mosaic.
+Workers and background cleanup never block the GUI thread during a job.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import shutil
 import sys
 import time
 import uuid
@@ -29,11 +25,13 @@ from pymmcore_gui._qt.QtCore import (
     Signal,
 )
 from pymmcore_gui._stitching._models import (
+    GroupV1,
     ProgressEvent,
     StitchErrorV1,
     StitchJobV1,
     StitchResultV1,
 )
+from pymmcore_gui._stitching._paths import cleanup_paths, remove_path, unique_path
 from pymmcore_gui._stitching._protocol import (
     JobDir,
     process_alive,
@@ -57,11 +55,8 @@ MEMORY_CAP_SHARE = 0.25
 """Share of the RAM available at submit time that fusion may keep in flight."""
 
 
-# ------------------------------ launching ------------------------------
-
-
 def worker_command(job_dir: Path) -> tuple[str, list[str]]:
-    """Program and arguments starting the worker on `job_dir` (§4.2).
+    """Program and arguments starting the worker on `job_dir`.
 
     In development `sys.executable` is Python, so run the package; frozen,
     it is the app itself, whose entry point dispatches the same argument.
@@ -105,7 +100,7 @@ def default_memory_cap() -> int:
 def capture_linear_part(core: CMMCorePlus) -> tuple[float, np.ndarray] | None:
     """Pixel size and `A` for the current camera state, as the Stage Explorer has it.
 
-    Called at `sequenceStarted` for a fresh run (§5.1). None without a pixel
+    Called at `sequenceStarted` for a fresh run. None without a pixel
     size: the grid could not have been planned then either.
     """
     import numpy as np
@@ -123,9 +118,6 @@ def capture_linear_part(core: CMMCorePlus) -> tuple[float, np.ndarray] | None:
     return float(state.pixel_size_um), np.array(state.system_affine[:2, :2])
 
 
-# ------------------------------ background deletes ------------------------------
-
-
 class _Task(QRunnable):
     def __init__(self, func: Callable[[], Any]) -> None:
         super().__init__()
@@ -136,14 +128,6 @@ class _Task(QRunnable):
             self._func()
         except Exception:  # pragma: no cover
             logger.exception("stitching cleanup failed")
-
-
-def _rmtree(path: Path) -> None:
-    """Delete a directory tree or a file (a partial OME-TIFF), if present."""
-    if path.is_dir():
-        shutil.rmtree(path, ignore_errors=True)
-    elif path.exists():
-        path.unlink(missing_ok=True)
 
 
 def cleanup_stale_jobs(registry: Path, *, now: float | None = None) -> list[Path]:
@@ -166,33 +150,31 @@ def cleanup_stale_jobs(registry: Path, *, now: float | None = None) -> list[Path
         if owner is not None and process_alive(owner.pid, owner.create_time):
             continue
         job = jobdir.read_job()
-        if (
-            job is not None
-            and job.parent_pid is not None
-            and job.parent_pid != os.getpid()
-            and process_alive(job.parent_pid, job.parent_create_time)
-        ):
-            continue  # queued in another running instance
-        if job is not None:
-            for tmp in job.tmp_outputs:
-                if tmp.exists():
-                    _rmtree(tmp)
-                    removed.append(tmp)
-        failed = jobdir.error_file.exists() or (
-            job is not None and not jobdir.result_file.exists() and owner is not None
-        )
         try:
             age = now - entry.stat().st_mtime
         except OSError:
             continue
+        if job is None and owner is None and age < KEEP_FAILED_LOGS_S:
+            continue  # being created now, or a crashed submit: aged out below
+        if (
+            job is not None
+            and job.parent_pid is not None
+            and process_alive(job.parent_pid, job.parent_create_time)
+        ):
+            continue
+        if job is not None:
+            for tmp in job.tmp_outputs:
+                if tmp.exists():
+                    remove_path(tmp)
+                    removed.append(tmp)
+        failed = jobdir.error_file.exists() or (
+            job is not None and not jobdir.result_file.exists() and owner is not None
+        )
         if failed and age < KEEP_FAILED_LOGS_S:
             continue
-        _rmtree(entry)
+        remove_path(entry)
         removed.append(entry)
     return removed
-
-
-# ---------------------------------- jobs ----------------------------------
 
 
 class JobState(Enum):
@@ -297,8 +279,6 @@ class StitchingController(QObject):
             registry = self._registry
             self._pool.start(_Task(lambda: cleanup_stale_jobs(registry)))
 
-    # ------------------------------ queries ------------------------------
-
     @property
     def registry(self) -> Path:
         return self._registry
@@ -330,8 +310,6 @@ class StitchingController(QObject):
     def job(self, job_id: str) -> StitchJob | None:
         return next((j for j in self._jobs if j.id == job_id), None)
 
-    # ------------------------------ actions ------------------------------
-
     def new_job_id(self) -> str:
         return uuid.uuid4().hex
 
@@ -339,7 +317,39 @@ class StitchingController(QObject):
         """Queue `job`; it starts when no other job is running."""
         jobdir = JobDir(self._registry / job.job_id)
         jobdir.path.mkdir(parents=True, exist_ok=False)
-        write_model(jobdir.job_file, job)
+        if job.parent_pid is None:
+            pid, created = own_process_identity()
+            job = job.model_copy(
+                update={"parent_pid": pid, "parent_create_time": created}
+            )
+        # Each output name is reserved by creating its `.tmp` directory next to
+        # the acquisition. `job.json` lists it *before* it is created, so if the
+        # GUI dies mid-submit, startup cleanup finds the reservation through
+        # the dead job. Only names already reserved, plus the one being tried,
+        # are listed: never one that may belong to another job.
+        reserved: list[Path] = []
+        try:
+            groups: list[GroupV1] = []
+            for group in job.groups:
+                while True:
+                    candidate = group.model_copy(
+                        update={"output": unique_path(group.output)}
+                    )
+                    write_model(
+                        jobdir.job_file,
+                        job.model_copy(update={"groups": [*groups, candidate]}),
+                    )
+                    try:
+                        candidate.tmp_output.mkdir()
+                    except FileExistsError:
+                        continue  # taken meanwhile: list the next name instead
+                    reserved.append(candidate.tmp_output)
+                    groups.append(candidate)
+                    break
+            job = job.model_copy(update={"groups": groups})
+        except Exception:
+            cleanup_paths([*reserved, jobdir.path])
+            raise
         handle = StitchJob(job=job, dir=jobdir, title=title or job.source.name)
         self._jobs.append(handle)
         self.changed.emit()
@@ -381,8 +391,6 @@ class StitchingController(QObject):
         if job.state.is_done and job in self._jobs:
             self._jobs.remove(job)
             self.changed.emit()
-
-    # ------------------------------ internals ------------------------------
 
     def _set_state(self, handle: StitchJob, state: JobState) -> None:
         if state not in _TRANSITIONS[handle.state]:
@@ -483,9 +491,6 @@ class StitchingController(QObject):
         path = handle.dir.path
 
         def work() -> None:
-            for p in tmp:
-                _rmtree(p)
-            if not keep_dir:
-                _rmtree(path)
+            cleanup_paths(tmp if keep_dir else [*tmp, path])
 
         self._pool.start(_Task(work))

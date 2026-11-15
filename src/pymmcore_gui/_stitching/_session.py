@@ -1,10 +1,6 @@
-"""Acquisitions in, mosaics out: the GUI side of stitching (plan §3.3-§3.5).
+"""Queue completed, saved acquisitions and report stitching results in the GUI.
 
-`StitchingSession` watches the core's MDA runs. A run whose sequence asks
-for stitching (`SequenceStitchingV1` in its metadata) and was saved to disk
-becomes a job once the runner has closed the data store, which it does
-before emitting `sequenceFinished`. Outcomes are reported as toasts, and
-finished mosaics are opened in viewers if the settings ask for it.
+The runner closes its data sink before emitting sequenceFinished.
 """
 
 from __future__ import annotations
@@ -24,7 +20,6 @@ from pymmcore_gui._stitching._controller import (
     own_process_identity,
 )
 from pymmcore_gui._stitching._inputs import (
-    acquisition_stem,
     build_job,
     build_restitch_job,
     calibration_from_summary,
@@ -34,6 +29,7 @@ from pymmcore_gui._stitching._models import (
     StitchSettingsV1,
     request_from,
 )
+from pymmcore_gui._stitching._paths import acquisition_stem
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -163,10 +159,8 @@ class StitchingSession(QObject):
         self._controller.cancel_all()
         self._controller.wait_for_idle(timeout_ms)
 
-    # ------------------------ runner thread ------------------------
-
     def _on_sequence_started(self, sequence: useq.MDASequence, *_: object) -> None:
-        # Read now: the pixel configuration may change after the run (§5.1).
+        # Read now: the pixel configuration may change after the run.
         self._calibration = None
         if request_from(sequence.metadata).enabled:
             self._calibration = capture_linear_part(self._core)
@@ -192,8 +186,6 @@ class StitchingSession(QObject):
                 stores_events=stores_events,
             )
         )
-
-    # ------------------------ GUI thread ------------------------
 
     def _submit(self, run: FinishedRun) -> StitchJob | None:
         """Queue a job for `run`, or say why it is not stitched."""
@@ -234,7 +226,7 @@ class StitchingSession(QObject):
         summary: Any,
         settings: StitchSettingsV1,
     ) -> StitchJob | None:
-        """Stitch an acquisition saved earlier (plan §7, phase 3a).
+        """Stitch an acquisition saved earlier.
 
         The pixel -> stage mapping comes from its summary metadata, as it
         was when the data were acquired.
@@ -261,7 +253,7 @@ class StitchingSession(QObject):
         source: Path,
         settings: StitchSettingsV1,
     ) -> StitchJob | None:
-        """Stitch a mosaic's tiles again with `settings` (plan §7, phase 3b)."""
+        """Stitch a mosaic's tiles again with `settings`."""
         pid, create_time = own_process_identity()
         try:
             job = build_restitch_job(
@@ -274,7 +266,7 @@ class StitchingSession(QObject):
                 parent_create_time=create_time,
                 memory_cap_bytes=default_memory_cap(),
             )
-            return self._controller.submit(job, title=_mosaic_title(mosaic))
+            return self._controller.submit(job, title=acquisition_stem(mosaic))
         except Exception as e:
             logger.exception("Could not queue re-stitching %s", mosaic)
             self._notifications.show_warning_message(
@@ -370,13 +362,6 @@ class StitchingSession(QObject):
         except Exception as e:  # pragma: no cover - reported, never raised
             logger.exception("Could not open %s", path)
             self._notifications.show_warning_message(f"Could not open {path.name}: {e}")
-
-
-def _mosaic_title(mosaic: Path) -> str:
-    for ext in (".ome.zarr", ".ome.tiff", ".ome.tif"):
-        if mosaic.name.endswith(ext):
-            return mosaic.name.removesuffix(ext)
-    return mosaic.name
 
 
 def _reveal(path: Path) -> None:

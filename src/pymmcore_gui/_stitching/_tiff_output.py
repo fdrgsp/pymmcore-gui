@@ -1,15 +1,7 @@
-"""Write a fused OME-Zarr mosaic as a tiled, pyramidal OME-TIFF.
+"""Convert fused OME-Zarr into a tiled, pyramidal BigTIFF.
 
-multiview-stitcher streams fusion only into Zarr, so an OME-TIFF mosaic is
-fused into a temporary OME-Zarr first and copied here: one BigTIFF, each
-plane tiled, the lower-resolution levels as SubIFDs of their full-resolution
-plane (what OME-TIFF readers expect of a pyramid). The data are read in
-bands of rows, so memory stays bounded by `band_bytes` however large the
-mosaic.
-
-How the mosaic was made is stored like ome-writers stores pymmcore-plus's
-summary metadata: as a `MapAnnotation` in the GUI's namespace, which
-`OMETiffWrapper.global_metadata` reads back.
+Planes are read in bands. Provenance is stored in an OME MapAnnotation
+that OMETiffWrapper.global_metadata can recover.
 """
 
 from __future__ import annotations
@@ -28,7 +20,7 @@ if TYPE_CHECKING:
 TILE = 512
 """Side of the square tiles each plane is stored in."""
 BAND_BYTES = 256 * 1024**2
-"""Upper bound on the data read at once while copying."""
+"""Read budget while copying, with a minimum of one TIFF tile."""
 
 OME_NS = "http://www.openmicroscopy.org/Schemas/OME/2016-06"
 _PIXEL_TYPES = {
@@ -137,23 +129,29 @@ def _plane_tiles(
         else TILE
     )
     band = max(unit, (band_bytes // max(row_bytes, 1)) // unit * unit)
+    columns = width
+    if min(band, height) * row_bytes > band_bytes:
+        band = TILE
+        columns = max(TILE, band_bytes // (min(TILE, height) * array.dtype.itemsize))
+        columns = columns // TILE * TILE
     for t in range(shape.get("t", 1)):
         for c in range(shape.get("c", 1)):
             for z in range(shape.get("z", 1)):
                 plane = {"t": t, "c": c, "z": z}
                 for y0 in range(0, height, band):
-                    key = tuple(
-                        slice(y0, min(y0 + band, height))
-                        if ax == "y"
-                        else slice(None)
-                        if ax == "x"
-                        else plane[ax]
-                        for ax in axes
-                    )
-                    rows = np.asarray(array[key])
-                    for ty in range(0, rows.shape[0], TILE):
-                        for tx in range(0, width, TILE):
-                            yield rows[ty : ty + TILE, tx : tx + TILE]
+                    for x0 in range(0, width, columns):
+                        key = tuple(
+                            slice(y0, min(y0 + band, height))
+                            if ax == "y"
+                            else slice(x0, min(x0 + columns, width))
+                            if ax == "x"
+                            else plane[ax]
+                            for ax in axes
+                        )
+                        rows = np.asarray(array[key])
+                        for ty in range(0, rows.shape[0], TILE):
+                            for tx in range(0, rows.shape[1], TILE):
+                                yield rows[ty : ty + TILE, tx : tx + TILE]
                 on_plane()
 
 
@@ -164,7 +162,7 @@ def zarr_to_ome_tiff(
     name: str,
     annotations: dict[str, dict[str, Any]] | None = None,
     progress: Callable[[int, int], None] | None = None,
-    band_bytes: int = BAND_BYTES,
+    band_bytes: int | None = None,
 ) -> None:
     """Copy the OME-Zarr mosaic `src` into the pyramidal OME-TIFF `dst`.
 
@@ -175,6 +173,9 @@ def zarr_to_ome_tiff(
     import tifffile
     import zarr
 
+    band_bytes = BAND_BYTES if band_bytes is None else band_bytes
+    if band_bytes <= 0:
+        raise ValueError("band_bytes must be positive")
     root = zarr.open_group(str(src), mode="r")
     arrays, axes, scale_list = _levels(root)
     sizes = dict.fromkeys(_OME_ORDER, 1)

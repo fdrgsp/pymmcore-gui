@@ -1,9 +1,6 @@
-"""The stitching worker process, started with the `_stitch-worker DIR` argument.
+"""Headless worker: read job.json, report progress and write a result or error.
 
-It never imports Qt (a test checks `sys.modules`). Its whole interface is the
-job directory (see `_protocol`): it reads `job.json`, rewrites
-`progress.json`, writes `result.json` or `error.json` last, and exits 0 or 1.
-Everything libraries print goes to `worker.log`.
+Communication uses files; library output is redirected to worker.log.
 """
 
 from __future__ import annotations
@@ -15,7 +12,7 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TextIO
+from typing import TYPE_CHECKING, TextIO
 
 if TYPE_CHECKING:
     from pymmcore_gui._stitching._models import ProgressEvent, StitchJobV1
@@ -33,7 +30,7 @@ THREAD_ENV_VARS = (
     "VECLIB_MAXIMUM_THREADS",
     "NUMEXPR_NUM_THREADS",
 )
-"""Math libraries stay single-threaded: our own pools spend the budget (§4.4).
+"""Math libraries stay single-threaded: our own pools spend the budget.
 The controller sets these in the worker's environment; `worker_main` sets them
 again (without overriding) for a worker started by hand."""
 
@@ -89,7 +86,7 @@ def _lower_priority() -> None:
             proc.nice(10)
 
 
-def _start_watchdog(job: StitchJobV1, on_orphaned: Any = None) -> None:
+def _start_watchdog(job: StitchJobV1) -> None:
     """Exit when the GUI process is gone (or its PID was reused)."""
     if job.parent_pid is None:
         return
@@ -102,8 +99,7 @@ def _start_watchdog(job: StitchJobV1, on_orphaned: Any = None) -> None:
             time.sleep(WATCHDOG_INTERVAL_S)
             if not process_alive(pid, created):
                 print("GUI process is gone; stopping.", flush=True)
-                if on_orphaned is not None:
-                    on_orphaned()
+                # Startup cleanup removes temporaries after this process exits.
                 os._exit(EXIT_ORPHANED)
                 return  # only reached when tests replace os._exit
 
@@ -141,13 +137,9 @@ class _ProgressWriter:
 
 
 def _remove_tmp_outputs(job: StitchJobV1) -> None:
-    import shutil
+    from pymmcore_gui._stitching._paths import cleanup_paths
 
-    for tmp in job.tmp_outputs:
-        if tmp.is_dir():
-            shutil.rmtree(tmp, ignore_errors=True)
-        elif tmp.exists():
-            tmp.unlink(missing_ok=True)
+    cleanup_paths(job.tmp_outputs)
 
 
 def worker_main(argv: list[str]) -> int:
@@ -178,6 +170,7 @@ def _run(jobdir: JobDir) -> int:
     from pymmcore_gui._stitching._models import (
         SCHEMA_VERSION,
         OwnerV1,
+        StitchError,
         StitchErrorV1,
         StitchJobV1,
     )
@@ -212,7 +205,7 @@ def _run(jobdir: JobDir) -> int:
     except ValueError as e:
         return fail(f"Invalid job: {e}")
 
-    _start_watchdog(job, on_orphaned=lambda: _remove_tmp_outputs(job))
+    _start_watchdog(job)
     if job.settings.low_priority:
         _lower_priority()
 
@@ -223,15 +216,15 @@ def _run(jobdir: JobDir) -> int:
             "Stitching needs the optional 'multiview-stitcher' package: "
             "pip install 'pymmcore-gui[stitching]'"
         )
-    from pymmcore_gui._stitching._engine import StitchError, run_stitch
-
     progress = _ProgressWriter(jobdir)
     try:
+        from pymmcore_gui._stitching._engine import run_stitch
+
         result = run_stitch(job, progress)
     except StitchError as e:
         _remove_tmp_outputs(job)
         return fail(str(e))
-    except BaseException as e:
+    except Exception as e:
         _remove_tmp_outputs(job)
         return fail(f"{type(e).__name__}: {e}", traceback.format_exc())
     progress.flush()

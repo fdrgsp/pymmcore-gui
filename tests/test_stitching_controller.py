@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pytest
@@ -19,7 +19,7 @@ import useq
 
 from _stitch_fakes import fake_controller, write_fake_worker
 from pymmcore_gui._stitching import _controller as ctrl_mod
-from pymmcore_gui._stitching import is_available
+from pymmcore_gui._stitching import _paths, is_available
 from pymmcore_gui._stitching._controller import (
     JobState,
     StitchingController,
@@ -185,14 +185,14 @@ def test_cancel_waits_for_exit_then_deletes_off_the_gui_thread(
     qtbot.waitUntil(lambda: all(t.exists() for t in tmps), timeout=20_000)
 
     deleted_on: list[tuple[Path, bool]] = []
-    original = ctrl_mod._rmtree
+    original = _paths.remove_path
 
     def spy(path: Path) -> None:
         # the worker must be gone before anything is deleted
         deleted_on.append((path, threading.current_thread() is threading.main_thread()))
         original(path)
 
-    monkeypatch.setattr(ctrl_mod, "_rmtree", spy)
+    monkeypatch.setattr(_paths, "remove_path", spy)
     with qtbot.waitSignal(ctrl.jobCancelled, timeout=20_000):
         ctrl.cancel(handle)
         assert _state(handle) == JobState.CANCELLING
@@ -217,6 +217,25 @@ def test_cancel_queued_job(qtbot: QtBot, tmp_path: Path, fake_worker: Path) -> N
     assert a.state == JobState.CANCELLED
     ctrl.forget(a)
     assert ctrl.jobs == [b]
+
+
+def test_queued_job_cannot_delete_another_jobs_output(
+    qtbot: QtBot, tmp_path: Path, fake_worker: Path
+) -> None:
+    ctrl = _make_controller(qtbot, tmp_path, fake_worker, "hang")
+    first_job = _job(tmp_path, "first")
+    first = ctrl.submit(first_job)
+    qtbot.waitUntil(lambda: first.state == JobState.RUNNING)
+    qtbot.waitUntil(lambda: first.progress.done == 1)
+    second = ctrl.submit(first_job.model_copy(update={"job_id": "second"}))
+    assert first.job.groups[0].output != second.job.groups[0].output
+    marker = first.job.groups[0].tmp_output / "keep"
+    marker.write_text("running")
+    ctrl.cancel(second)
+    assert ctrl._pool.waitForDone(5000)
+    assert marker.read_text() == "running"
+    ctrl.cancel(first)
+    _wait_done(qtbot, ctrl)
 
 
 def test_invalid_transition_raises(tmp_path: Path, qtbot: QtBot) -> None:
@@ -307,6 +326,15 @@ def test_cleanup_stale_jobs(tmp_path: Path) -> None:
         "queued",
         parent=(me.ppid(), psutil.Process(me.ppid()).create_time()),
     )
+    this_gui, this_tmp = _registry_entry(
+        registry, tmp_path, "just-queued", parent=(me.pid, me.create_time())
+    )
+    being_created = registry / "being-created"
+    being_created.mkdir()
+    abandoned = registry / "abandoned"  # a submit that crashed long ago
+    abandoned.mkdir()
+    long_ago = time.time() - 10 * 86400
+    os.utime(abandoned, (long_ago, long_ago))
     # a user's own file that merely looks like a partial mosaic
     lookalike = tmp_path / "data" / "mine_stitched.ome.zarr.tmp"
     lookalike.mkdir(parents=True)
@@ -319,8 +347,11 @@ def test_cleanup_stale_jobs(tmp_path: Path) -> None:
     assert not failed_tmp.exists() and failed.path.exists()  # log kept
     assert not old_tmp.exists() and not old.path.exists()
     assert other_tmp.exists() and other_gui.path.exists()
+    assert this_tmp.exists() and this_gui.path.exists()
+    assert being_created.exists()
+    assert not abandoned.exists()
     assert lookalike.exists()
-    assert set(removed) == {crashed_tmp, failed_tmp, old_tmp, old.path}
+    assert set(removed) == {crashed_tmp, failed_tmp, old_tmp, old.path, abandoned}
 
 
 def subprocess_pid_that_exited() -> int:
@@ -400,3 +431,42 @@ def test_cleanup_removes_partial_ome_tiff_mosaics(tmp_path: Path) -> None:
     assert fused in removed
     assert not partial_tiff.exists()
     assert not fused.exists()
+
+
+class _Died(BaseException):
+    """Stands in for the GUI process dying: no `except Exception` runs."""
+
+
+def test_reservation_made_before_a_crash_is_cleaned_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pathlib
+
+    registry = tmp_path / "registry"
+    ctrl = StitchingController(
+        registry=registry, command=worker_command, cleanup_on_start=False
+    )
+    job = _job(tmp_path, "crashed", n_positions=2).model_copy(
+        update={"parent_pid": subprocess_pid_that_exited(), "parent_create_time": 1.0}
+    )
+    reservations: list[Path] = []
+    original_mkdir = pathlib.Path.mkdir
+
+    def die_after_the_second_reservation(self: Path, *a: Any, **kw: Any) -> None:
+        original_mkdir(self, *a, **kw)
+        if self.name.endswith(".tmp"):
+            reservations.append(self)
+            if len(reservations) == 2:
+                raise _Died
+
+    monkeypatch.setattr(pathlib.Path, "mkdir", die_after_the_second_reservation)
+    with pytest.raises(_Died):
+        ctrl.submit(job)
+    monkeypatch.undo()
+    assert len(reservations) == 2
+    assert all(r.is_dir() for r in reservations)
+
+    removed = cleanup_stale_jobs(registry)
+    assert set(reservations) <= set(removed)
+    assert not any(r.exists() for r in reservations)
+    assert not (registry / job.job_id).exists()

@@ -57,6 +57,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 from pymmcore_gui._settings import Settings
+from pymmcore_gui._stitching import has_mosaic
 from pymmcore_gui._stitching import is_available as stitching_available
 from pymmcore_gui._stitching._models import (
     METADATA_NAMESPACE,
@@ -154,16 +155,6 @@ def _grids(sequence: useq.MDASequence) -> list[Any]:
         if pos.sequence is not None and pos.sequence.grid_plan is not None
     ]
     return grids
-
-
-def _has_mosaic(sequence: useq.MDASequence) -> bool:
-    """Whether stitching `sequence` would produce at least one mosaic."""
-    from pymmcore_gui._stitching._inputs import plan_groups
-
-    try:
-        return bool(plan_groups(sequence))
-    except Exception:  # pragma: no cover - a half-edited sequence
-        return False
 
 
 def _grids_overlap(sequence: useq.MDASequence) -> bool:
@@ -885,17 +876,8 @@ class MemoryMDAWidgetBase(_MixinBase):
             raise ValueError(f"Unknown OME-TIFF layout {mode!r}")
         self._tiff_layout_combo.setCurrentIndex(idx)
 
-    # ------------------------- stitching option (plan §3.1) -------------------------
-
     def _install_stitching_option(self) -> None:
-        """Add "Also save a stitched mosaic" and its ⚙ to the Saving section.
-
-        The row exists only with the optional multiview-stitcher package, and
-        is shown only while the sequence has a grid to stitch. The request is
-        stored in the sequence's metadata (see `value`), so saved MDA files
-        and reused runs keep it, and the run itself carries it to the
-        stitching session.
-        """
+        """Add the stitching checkbox and settings button to the Saving section."""
         self._stitching_available = stitching_available()
         self._stitching_request = SequenceStitchingV1(
             settings=Settings.instance().stitching
@@ -924,7 +906,7 @@ class MemoryMDAWidgetBase(_MixinBase):
     def _sync_stitching_option(self, *_: object) -> None:
         """Show the row only when there is a grid to stitch."""
         editor_sequence = MDASequenceWidget.value(self)
-        visible = self._stitching_available and _has_mosaic(editor_sequence)
+        visible = self._stitching_available and has_mosaic(editor_sequence)
         tip = STITCHING_TOOLTIP
         if visible and not _grids_overlap(editor_sequence):
             tip += STITCHING_NO_OVERLAP_TOOLTIP

@@ -288,6 +288,6 @@ def test_overlap_fraction(deg: float) -> None:
     # neighbours 180 px apart along the camera's x: 10 % overlap
     step = lin @ np.array([180.0, 0.0])
     centers = [(0.0, 0.0), (float(step[0]), float(step[1]))]
-    assert geo.overlap_fraction(lin, p, shape, centers) == pytest.approx(0.1)
+    assert geo.overlap_fraction(lin, shape, centers) == pytest.approx(0.1)
     far = lin @ np.array([250.0, 0.0])
-    assert geo.overlap_fraction(lin, p, shape, [(0, 0), tuple(far)]) == 0
+    assert geo.overlap_fraction(lin, shape, [(0, 0), tuple(far)]) == 0

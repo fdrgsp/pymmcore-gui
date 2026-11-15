@@ -1,9 +1,4 @@
-"""Versioned models exchanged between the GUI and the stitching worker.
-
-Every model the worker reads or writes carries a `schema_version`, and the
-worker refuses a job version it does not know. Only pydantic is imported here,
-so both processes can use this module.
-"""
+"""Settings, jobs, progress and provenance shared by the GUI and worker."""
 
 from collections.abc import Mapping
 from enum import StrEnum
@@ -29,7 +24,8 @@ class _Model(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
 
-# ----------------------------- user settings -----------------------------
+class StitchError(Exception):
+    """A stitching failure whose message can be shown without a traceback."""
 
 
 class Alignment(StrEnum):
@@ -72,7 +68,7 @@ class StitchSettingsV1(_Model):
     reg_binning: Literal[1, 2, 4, 8] | None = None
     """Binning applied for registration. None picks it per tile size."""
     z_max_projection: bool = True
-    """Register z-stacks on their max projection (XY only, see §6.2)."""
+    """Register z-stacks on their max projection (XY only)."""
     register_every_timepoint: bool = False
     """Register each timepoint, instead of reusing the first one's result."""
     reject_poor_matches: bool = True
@@ -118,8 +114,8 @@ def request_from(metadata: dict[str, Any] | None) -> SequenceStitchingV1:
     Anything missing or malformed reads as "not enabled", so an MDA file from
     another version never starts a job by accident.
     """
-    raw = ((metadata or {}).get(METADATA_NAMESPACE) or {}).get(METADATA_KEY)
-    if not isinstance(raw, dict):
+    raw = _stored_request(metadata)
+    if not isinstance(raw, Mapping):
         return SequenceStitchingV1()
     try:
         return SequenceStitchingV1.model_validate(raw)
@@ -129,9 +125,14 @@ def request_from(metadata: dict[str, Any] | None) -> SequenceStitchingV1:
 
 def stored_request(metadata: dict[str, Any] | None) -> SequenceStitchingV1 | None:
     """The request stored in `metadata`, or None if it has none at all."""
-    if ((metadata or {}).get(METADATA_NAMESPACE) or {}).get(METADATA_KEY) is None:
+    if _stored_request(metadata) is None:
         return None
     return request_from(metadata)
+
+
+def _stored_request(metadata: dict[str, Any] | None) -> Any:
+    namespace = (metadata or {}).get(METADATA_NAMESPACE)
+    return namespace.get(METADATA_KEY) if isinstance(namespace, Mapping) else None
 
 
 def with_request(
@@ -139,13 +140,11 @@ def with_request(
 ) -> dict[str, Any]:
     """Return a copy of `metadata` with `request` stored in it."""
     out = dict(metadata or {})
-    ns = dict(out.get(METADATA_NAMESPACE) or {})
+    existing = out.get(METADATA_NAMESPACE)
+    ns = dict(existing) if isinstance(existing, Mapping) else {}
     ns[METADATA_KEY] = request.model_dump(mode="json")
     out[METADATA_NAMESPACE] = ns
     return out
-
-
-# --------------------------------- the job --------------------------------
 
 
 class TileV1(_Model):
@@ -163,7 +162,7 @@ class TileV1(_Model):
 
 
 class SavedRegistrationV1(_Model):
-    """A previous run's registration, for a re-stitch to reuse (§7, phase 3b).
+    """A previous run's registration, for a re-stitch to reuse.
 
     The worker reuses it only if the source still matches
     `source_fingerprint` when the job runs; otherwise it registers again.
@@ -238,17 +237,17 @@ class StitchJobV1(_Model):
     groups: list[GroupV1] = Field(min_length=1)
     pixel_size_um: float = Field(gt=0)
     linear_part: tuple[tuple[float, float], tuple[float, float]]
-    """`A`: camera pixel (column, row) -> stage (x, y) in µm, see §5.1."""
-    z_step_um: float | None = Field(default=None, gt=0)
-    """Distance between planes, for z-stacks."""
+    """`A`: camera pixel (column, row) -> stage (x, y) in µm"""
+    z_step_um: float | None = Field(default=None, allow_inf_nan=False)
+    """Signed distance between planes, negative for descending stacks."""
     channel_names: list[str] = Field(default_factory=list)
     """The sequence's channels, used when the saved file doesn't name them
     (OME-TIFF drops a single channel's axis)."""
     settings: StitchSettingsV1 = Field(default_factory=StitchSettingsV1)
     threads: int = Field(default=1, ge=1)
-    """Resolved thread budget (see §4.4)."""
+    """Resolved worker thread budget."""
     memory_cap_bytes: int | None = Field(default=None, gt=0)
-    """Upper bound on the data in flight during fusion."""
+    """Memory budget used to limit concurrent fusion blocks."""
     parent_pid: int | None = None
     """The GUI's PID. The worker exits when that process is gone."""
     parent_create_time: float | None = None
@@ -257,9 +256,6 @@ class StitchJobV1(_Model):
     @property
     def tmp_outputs(self) -> list[Path]:
         return [p for g in self.groups for p in g.tmp_paths]
-
-
-# ---------------------------- worker -> GUI ----------------------------
 
 
 class Phase(StrEnum):
@@ -367,7 +363,7 @@ class GroupResultV1(_Model):
 class ProvenanceV1(_Model):
     """How a mosaic was made: `attrs[METADATA_NAMESPACE][PROVENANCE_KEY]`.
 
-    Read back to re-stitch it (§7, phase 3b).
+    Read back to re-stitch it.
     """
 
     schema_version: Literal[1] = SCHEMA_VERSION
@@ -384,6 +380,7 @@ class ProvenanceV1(_Model):
     registration: dict[str, Any] = Field(default_factory=dict)
     groups: list[list[int]] | None = None
     """Tiles aligned together (registration components)."""
+    multiview_stitcher_version: str = "unknown"
 
 
 class ProvenanceError(ValueError):
