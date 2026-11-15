@@ -3,7 +3,9 @@
 Status: proposal, not started. Written 2026-11-15 against `cite` and
 pymmcore-plus `cite` (`6e582a5`). **Revised the same day after an external
 review:** runtime core swapping is dropped. The core is chosen once, at
-startup, and the `--py-devices` flag is gone. §14 records why.
+startup, and the `--py-devices` flag is gone. §14 records why. A second
+review tightened the folder-repair rule, module ownership, the loader's
+error boundary and the safeguards before a load.
 
 ## TL;DR
 
@@ -20,10 +22,11 @@ startup, and the `--py-devices` flag is gone. §14 records why.
   can't be fully loaded. pyMM explains how to get them: close pyMM and reopen
   it with `pymm -c scope.cfg` (or `pymm -u`). It offers "Load without the
   Python devices" or "Cancel". pyMM doesn't restart itself.
-- **Broken devices are skipped, never fatal.** That tolerance has to live
-  **inside pymmcore-plus's loader** (§4.3). A device can fail at import, at
-  construction or at initialization, and the loader keeps running device code
-  after initialization. Checking in the GUI after the load is too late.
+- **Broken Python devices are skipped, never fatal.** That tolerance has to
+  live **inside pymmcore-plus's loader** (§4.3). A device can fail at import,
+  construction, initialization or later in the load, and the loader keeps
+  running device code after initialization. Checking in the GUI after the
+  load is too late. C++ device failures still fail the load, as today.
 - **Missing dependencies get a precise message.** It names the package and
   the Python environment it must be installed in (§3.4). Dependencies must be
   installed in pyMM's environment before running `pymm`.
@@ -122,9 +125,14 @@ activates the folder, loads with tolerance, and reports. A script that calls
 A small `PyDeviceFolder` session object, owned by the main window, is the only
 code that touches `sys.path` or `sys.modules` for device files:
 
-- It holds the folder path, the `sys.path` entry it appended, and the **names
-  of the modules it imported**. Purging removes exactly those names; it never
-  scans `sys.modules` by `__file__`.
+- It holds the folder path and the `sys.path` entry it appended.
+- **The folder's modules are defined by location:** every module in
+  `sys.modules` whose file (`__spec__.origin`) resolves inside the folder,
+  worked out at purge time. That includes `_helper.py` files imported by a
+  device, modules imported by the config loader, imports done later inside a
+  device's code, and subpackages. Tracking only the names the scan imported
+  would miss them, so after a folder switch a device could import a stale
+  helper from the old folder. Checking every loaded module is cheap.
 - **Appending** to `sys.path`, rather than prepending, means a file can't
   shadow an installed module. A clash is reported instead (§3.4).
 - **It never purges a module that a loaded device uses.** Purging is allowed
@@ -159,8 +167,9 @@ the user docs say "don't touch hardware at import time; do it in
 ### 3.4 Errors, and missing dependencies in particular
 
 Each problem becomes a `PyDeviceProblem(file_or_label, stage, exc)`
-dataclass. `stage` is `import`, `construct` or `initialize`. The message is
-formatted from the exception:
+dataclass. A scan problem has `stage="import"`. A load problem wraps the
+loader's `PyDeviceLoadError` (§4.3), whose `stage` is passed through. The
+message is formatted from the stage and the exception:
 
 <!-- markdownlint-disable MD013 -->
 | Cause | Message |
@@ -173,6 +182,9 @@ formatted from the exception:
 | class missing / not a `Device` | "no class `MyCam` in `my_cam.py`" / "`MyCam` is not a UniMMCore device" |
 | constructor raised | "could not create `MyCam`: `…`" |
 | `initialize()` raised | "failed to initialize: `…`" |
+| setting failed after init (`property`, `startup`) | "`Power` = 10 on Laser failed: `…`; the device was kept" |
+| `busy()` raised while waiting (`wait`) | "stopped responding while loading: `…`" |
+| `shutdown()` raised while removing it (`unload`) | appended to the device's entry: "…and its shutdown also failed: `…`" |
 <!-- markdownlint-enable MD013 -->
 
 **Missing dependency.** Device files often need third-party packages (vendor
@@ -219,23 +231,43 @@ existing `#@LightSource` / `#@Exposure` convention:
 - It is written as an absolute path. A hand-edited relative path resolves
   against the cfg's directory, so a config and its folder can move together.
 - Save writes it whenever a folder is active.
-- On load, a cfg's path replaces the active folder (subject to §3.2). A cfg
-  without the line keeps the active folder. A path that doesn't exist is
-  reported, and the devices that needed it are skipped.
+- **On load, which folder is used:**
+  - If the cfg's path exists, it replaces the active folder (subject to
+    §3.2).
+  - A cfg without the line keeps the active folder.
+  - **If the cfg's path doesn't exist** (the folder moved), the active folder
+    is used when there is one, and the summary says "`/old/path` not found,
+    used `/new/path`". With no active folder, the devices that needed it are
+    skipped, and the summary offers **Locate folder…**: browse to the new
+    location, which becomes the active folder, and retry the load.
+  - Either way, the next Save writes the new path, which repairs the config.
+    A stale path never overrides a folder the user has just chosen.
 
 ### 4.2 Loading in the GUI
 
-`load_configuration(path)`:
+`load_configuration(path)` runs these steps in order. **Nothing is unloaded
+until steps 1–4 pass**, and stopping at any of them leaves the session as it
+was:
 
-1. If the cfg has `#py` lines and the core is standard, ask (§2). "Load
-   without them" loads the C++ part with the native loader, which skips `#py`
-   lines. The message gives the exact relaunch command, with the cfg's full
-   path, so it can be copied.
-2. On UniMMCore: unload the current devices, apply the cfg's folder (§3.2),
-   then call the tolerant loader (§4.3), collecting skipped devices.
-3. Show one summary listing each skipped device and its reason (§3.4 wording,
-   Details expandable). Remember the skipped labels for the save warning
-   (§8).
+1. **Validate and read the file.** It must exist and be readable. Parse its
+   `#@PyDevicesPath` and `#py` lines now, so every later decision uses this
+   one read.
+2. **Refuse during hardware work.** Refuse while an acquisition, pixel
+   calibration, autofocus or white balance runs, with a message naming the
+   operation.
+3. **Confirm unsaved edits.** Ask about unsaved hardware edits (the Hardware
+   tab's `_confirm_discard`) and configuration edits (the Configurations
+   page's dirty state). Startup skips this step: nothing is edited yet.
+4. **Standard core with `#py` lines:** ask (§2). "Load without them" loads
+   the C++ part with the native loader, which skips `#py` lines. The message
+   gives the exact relaunch command, with the cfg's full path, so it can be
+   copied.
+5. **Stop live mode**, then on UniMMCore unload the current devices, resolve
+   and apply the folder (§4.1, §3.2), and call the tolerant loader (§4.3),
+   collecting `PyDeviceLoadError`s.
+6. **Show one summary** listing each skipped device and its reason (§3.4
+   wording, Details expandable), plus folder notes from §4.1. Remember the
+   skipped labels for the save warning (§8).
 
 ### 4.3 Tolerant loading belongs in the loader (pymmcore-plus)
 
@@ -245,36 +277,69 @@ running code on the failed device (§1). So the tolerance goes into
 `UniMMCore.loadSystemConfiguration`:
 
 ```python
+Stage = Literal[
+    "import", "construct", "initialize", "property", "startup", "wait", "unload"
+]
+
+
+@dataclass(frozen=True)
+class PyDeviceLoadError:
+    label: str
+    stage: Stage
+    exc: BaseException
+    line_no: int | None = None  # None for stages not tied to one line
+    line: str = ""
+
+
 def loadSystemConfiguration(
     self,
     fileName: str | Path = "MMConfig_demo.cfg",
     *,
-    on_device_error: Callable[[str, BaseException], None] | None = None,
+    on_device_error: Callable[[PyDeviceLoadError], None] | None = None,
 ) -> None: ...
 ```
 
-- With `on_device_error=None`, behaviour is unchanged: the load raises.
-- With a callback, a Python device that fails is **skipped**, the callback
-  gets `(label, exc)`, and the load continues:
-  - **at its `pyDevice` line**: import, class lookup, constructor, or
-    `loadPyDevice` fails.
-  - **right after `Core,Initialize,1`**: each Python device's initialization
-    state is checked. Failed ones are unloaded *before* any later line,
-    `System/Startup` or `waitForSystem` touches them.
-- Every later `#py` line that references a skipped label is skipped: its
+**Without a callback, behaviour is kept as it is today.** That isn't simply
+"raises": today an `initialize()` error is only logged, and the load then
+raises or not depending on what touches the device next.
+
+**With a callback**, the loader:
+
+- **Reads the whole file first.** It parses every line before running any,
+  so it knows each Python device's parent even when the `Parent` line comes
+  after the device lines.
+- **Skips a Python device that fails, and continues:**
+  - `import` / `construct`, at its `pyDevice` line: import, class lookup,
+    constructor or `loadPyDevice` fails.
+  - `initialize`, right after `Core,Initialize,1`: every Python device's
+    initialization state is checked. Failed devices are unloaded *before*
+    any later line, `System/Startup` or waiting touches them.
+  - `wait`: in tolerant mode the final wait goes through Python devices one
+    at a time, so a `busy()` that raises is pinned to its device, which is
+    then unloaded.
+- **Failed hub:** its Python peripherals are unloaded too, peripherals before
+  the hub, even if they were already created. Each is reported against the
+  hub's failure.
+- **Every later `#py` line that references a skipped label is skipped:** its
   properties, delay, focus direction, labels, config-group and pixel-size
-  settings, `Core` roles whose value is the label, and `Parent`. A skipped
-  Python hub also skips its Python peripherals.
-- `exc` is the original exception. A `ModuleNotFoundError` for a dependency
-  keeps its `.name` (this also fixes the rewording in
+  settings, `Core` roles whose value is the label, and `Parent`.
+- **A setting that fails after initialization** on a *healthy* Python device
+  (a post-init `Property` line or a `System/Startup` setting) skips only that
+  line. It is reported as `property` / `startup`, and the device is kept.
+- **Removal always completes.** If a failed device's `shutdown()` raises
+  while it is being unloaded, the error is reported (`unload`) and the device
+  is removed anyway: the manager drops it in a `finally`.
+- **`exc` is the original exception.** A `ModuleNotFoundError` for a
+  dependency keeps its `.name` (this also fixes the rewording in
   `_get_py_device_instance`).
-- C++ devices keep today's behaviour: a failure fails the load. That is out
-  of scope.
+- **C++ devices are out of scope:** a C++ failure still fails the load, as
+  today.
 - `systemConfigurationFile()` and the `systemConfigurationLoaded` event stay
   correct, because the core does its own bookkeeping.
 
 A callback, rather than a new return value, keeps the base class's
-signature. The GUI collects the calls into `PyDeviceProblem`s.
+signature. The GUI wraps each `PyDeviceLoadError` in a `PyDeviceProblem`
+(§3.4).
 
 ### 4.4 Adding a device in the Hardware tab
 
@@ -379,10 +444,12 @@ Available devices table, and is always visible:
 
 1. **Done.** `e303a71` and `6e582a5` were merged into `cite` and pinned in the
    gui (`3a96413`).
-2. **Required.** Tolerant loading with `on_device_error` (§4.3), including the
-   check after initialization and the original exception for missing
-   dependencies. Test it there, including the review's failing-`busy()`
-   shutter.
+2. **Required.** Tolerant loading with `on_device_error` and
+   `PyDeviceLoadError` (§4.3): read the whole file first, check
+   initialization right after `Core,Initialize,1`, cascade from a failed hub,
+   wait on devices one at a time, guarantee removal when `shutdown()` raises,
+   and pass on the original exception for missing dependencies. Test it
+   there, including the review's failing-`busy()` shutter.
 
 Nothing else is needed upstream. Without a swap, there is no reassignment of
 the global core and no hand-made copy of the loader's bookkeeping.
@@ -422,22 +489,34 @@ the global core and no hand-made copy of the loader's bookkeeping.
 
 ## 13. Tests
 
-- **Loader (plus).** A Python device that fails at import, at construction,
-  and at initialization (including one whose `busy()` then raises) is skipped
-  with its exception. Every `#py` line referencing it is skipped, including a
-  hub's peripherals. C++ devices and the rest of the file load. With no
-  callback, the load raises as before.
+- **Loader (plus).** A Python device that fails at each stage (`import`,
+  `construct`, `initialize`, `wait`, including one whose `busy()` raises
+  after a failed `initialize()`) is skipped, and the callback gets the right
+  `stage`. Every `#py` line referencing it is skipped. A hub that fails at
+  initialization unloads its already-created peripherals, even when the
+  `Parent` lines come after the device lines. A device whose `shutdown()`
+  raises during removal is still removed, and an `unload` error is reported.
+  A failing post-init property on a healthy device skips only that line.
+  C++ devices and the rest of the file load. With no callback, behaviour
+  matches today's.
 - **Scan.** Valid device, `_helper.py` skipped, a class from another module
   not listed, syntax error, missing dependency (the message names the package
   and `sys.executable`), exception at import, name clash, bad file name.
 - **Folder.** Load re-imports an edited file when no device from it is
-  loaded, and doesn't purge a module a loaded device uses. Switching folders
-  is refused while the current folder's devices are loaded. A cancelled GUI
-  load leaves `sys.path` and `sys.modules` unchanged.
+  loaded, and doesn't purge a module a loaded device uses. A `_helper.py`
+  imported by a device is purged on a folder switch, so it isn't served stale
+  to the new folder's devices. Switching folders is refused while the current
+  folder's devices are loaded. A cancelled GUI load leaves `sys.path` and
+  `sys.modules` unchanged. **Moved folder:** a cfg whose saved path no longer
+  exists uses the active folder and says so. With no active folder, **Locate
+  folder…** retries the load. The next save writes the new path.
 - **Startup matrix.** Every row of §2, with `sys.frozen` monkeypatched for
   the standalone column.
 - **GUI loads.** The standard-core prompt and its "load without them" path.
-  The message names the relaunch command with the cfg's path.
+  The message names the relaunch command with the cfg's path. Each pre-unload
+  check (missing or unreadable file, refused during an acquisition or
+  calibration, cancelled unsaved-edits prompt) leaves the current devices
+  loaded and the folder unchanged. Live mode is stopped before unloading.
   On UniMMCore, a standard cfg loads, and a `#py` cfg with a broken device
   shows the summary.
 - **Add flow.** A device whose `initialize()` raises is unloaded and reported
