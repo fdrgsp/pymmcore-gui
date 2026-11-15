@@ -6251,6 +6251,7 @@ def test_hardware_toolbar_buttons_use_primary_style(
         "Save…",
     ]
     assert all(button.property("variant") == "primary" for button in buttons)
+    assert all(button.focusPolicy() == Qt.FocusPolicy.NoFocus for button in buttons)
     assert page._available._type.itemText(0) == "All Types"
     assert not any(
         label.text() == "Type:" for label in page._available.findChildren(QLabel)

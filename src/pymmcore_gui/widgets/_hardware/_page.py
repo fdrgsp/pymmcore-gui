@@ -117,6 +117,7 @@ class HardwareSetupPage(TabPage):
         ):
             btn = QPushButton(text)
             btn.setProperty("variant", "primary")
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             btn.clicked.connect(slot)
             self.toolbar.add_widget(btn)
             self._toolbar_buttons.append((btn, icon))
