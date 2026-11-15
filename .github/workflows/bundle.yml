@@ -30,7 +30,7 @@ jobs:
 
       - name: Install the project
         # Stitching stays out of the bundle for now (+~325 MB, unverified
-        # PyInstaller hooks): see docs/plans/STITCHING.md §8.
+        # PyInstaller hooks): see docs/architecture/STITCHING.md §10.
         run: uv sync --all-extras --no-extra stitching --dev
         env:
           UV_LOCKED: ${{ github.ref_name == 'main' && 1 || 0 }}

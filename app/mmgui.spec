@@ -107,7 +107,7 @@ a = Analysis(
         "tkinter",
         "Tkinter",
         "matplotlib",
-        # Stitching is not offered in the bundle (docs/plans/STITCHING.md §8).
+        # Stitching is not offered in the bundle (docs/architecture/STITCHING.md §10).
         # Excluded even when the build environment has the optional extra:
         # without the package the GUI hides every stitching control, and the
         # engine (the only module importing it) must not drag in its
