@@ -685,3 +685,19 @@ def test_submit_saved_needs_a_pixel_size(
     )
     assert "no pixel size" in toasts.shown[-1][1]
     assert not session.controller.jobs
+
+
+def test_stitch_button_matches_the_other_viewer_buttons(
+    qtbot: QtBot,
+    gui_with_stitching: Any,
+    mmcore: CMMCorePlus,
+    tmp_path: Path,
+) -> None:
+    source = _saved_run(qtbot, mmcore, tmp_path / "run.ome.zarr")
+    viewer = gui_with_stitching.acquire.viewers.open_acquisition(source)
+    assert viewer._stitch_btn is not None
+    assert viewer._save_btn is not None
+    assert viewer._stitch_btn.property("variant") == "subtle"
+    assert viewer._stitch_btn.property("variant") == viewer._save_btn.property(
+        "variant"
+    )

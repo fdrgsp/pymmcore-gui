@@ -588,6 +588,9 @@ def _add_viewer_button(
     btn.clicked.connect(slot)
 
     btn_layout.insertWidget(btn_layout.indexOf(q_widget.ndims_btn) + 1, btn)
+    # Styled here rather than left to the viewer's one-time `unstyle_widgets`
+    # pass: a button added after construction (e.g. "Stitch…") would miss it.
+    unstyle_widgets(btn)
     return btn
 
 
