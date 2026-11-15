@@ -6,6 +6,7 @@ multiview-stitcher: availability is patched where the GUI checks it.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -713,8 +714,6 @@ def _fake_mosaic(
     qtbot: QtBot, mmcore: CMMCorePlus, tmp_path: Path, **prov: Any
 ) -> Path:
     """A saved run carrying a mosaic's provenance, as if stitched from `raw`."""
-    import zarr
-
     raw = tmp_path / "raw.ome.zarr"
     raw.mkdir()
     mosaic = _saved_run(qtbot, mmcore, tmp_path / "raw_stitched.ome.zarr", grid=False)
@@ -737,8 +736,12 @@ def _fake_mosaic(
         "groups": [[0, 1]],
         **prov,
     }
-    root = zarr.open_group(str(mosaic), mode="r+")
-    root.attrs["pymmcore_gui"] = {"stitching": record}
+    # the store is zarr v3; edit its root metadata directly (no zarr package
+    # needed: the GUI reads stores with yaozarrs)
+    meta_file = mosaic / "zarr.json"
+    meta = json.loads(meta_file.read_text())
+    meta.setdefault("attributes", {})["pymmcore_gui"] = {"stitching": record}
+    meta_file.write_text(json.dumps(meta))
     return mosaic
 
 
@@ -895,11 +898,25 @@ def _grid_seq(mmcore: CMMCorePlus, grid: bool = True) -> useq.MDASequence:
 
 
 def _run_in_gui(
-    qtbot: QtBot, gui: Any, mmcore: CMMCorePlus, seq: useq.MDASequence, output: Any
+    qtbot: QtBot,
+    gui: Any,
+    mmcore: CMMCorePlus,
+    seq: useq.MDASequence,
+    output: Any,
+    *,
+    cancel: bool = False,
 ) -> Any:
     viewers = gui.acquire.viewers
-    with qtbot.waitSignal(mmcore.mda.events.sequenceFinished, timeout=30_000):
-        mmcore.run_mda(seq, output=output)
+    if cancel:
+        # cancelled from here once the (long) run has started: a handler on
+        # frameReady would run too late with Qt signals, which are queued
+        with qtbot.waitSignal(mmcore.mda.events.sequenceStarted, timeout=30_000):
+            mmcore.run_mda(seq, output=output)
+        with qtbot.waitSignal(mmcore.mda.events.sequenceFinished, timeout=30_000):
+            mmcore.mda.cancel()
+    else:
+        with qtbot.waitSignal(mmcore.mda.events.sequenceFinished, timeout=30_000):
+            mmcore.run_mda(seq, output=output)
     qtbot.waitUntil(lambda: mmcore.mda.status.phase.value == "idle", timeout=10_000)
     qtbot.wait(50)  # the queued GUI-thread relay of sequenceFinished
     assert viewers.active_viewer is not None
@@ -951,16 +968,13 @@ def test_no_stitch_for_a_cancelled_run(
             "time_plan": useq.TIntervalLoops(interval=timedelta(seconds=0.5), loops=20)
         }
     )
-
-    def cancel_early(*_: object) -> None:
-        mmcore.mda.cancel()
-
-    mmcore.mda.events.frameReady.connect(cancel_early)
-    try:
-        viewer = _run_in_gui(
-            qtbot, gui_with_stitching, mmcore, seq, str(tmp_path / "run.ome.zarr")
-        )
-    finally:
-        mmcore.mda.events.frameReady.disconnect(cancel_early)
+    viewer = _run_in_gui(
+        qtbot,
+        gui_with_stitching,
+        mmcore,
+        seq,
+        str(tmp_path / "run.ome.zarr"),
+        cancel=True,
+    )
     assert str(mmcore.mda.status.finish_reason) == "canceled"
     assert viewer._stitch_btn is None

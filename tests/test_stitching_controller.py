@@ -37,6 +37,8 @@ from pymmcore_gui._stitching._models import (
 from pymmcore_gui._stitching._protocol import JobDir, write_model
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from pytestqt.qtbot import QtBot
 
 
@@ -70,10 +72,36 @@ def _job(tmp_path: Path, job_id: str = "j1", n_positions: int = 0) -> StitchJobV
     return job
 
 
+_ALIVE: list[StitchingController] = []
+
+
+@pytest.fixture(autouse=True)
+def _controllers_outlive_the_test() -> Iterator[None]:
+    """Keep each test's controllers until teardown, then stop their workers.
+
+    PySide6 crashes if a controller is destroyed when the test function
+    returns while events from a `qtbot.waitSignal` on it are still pending;
+    pytest-qt processes those right after the test body.
+    """
+    yield
+    while _ALIVE:
+        ctrl = _ALIVE.pop()
+        ctrl.cancel_all()
+        ctrl.wait_for_idle(10_000)
+
+
+def _controller(**kwargs: Any) -> StitchingController:
+    ctrl = StitchingController(**kwargs)
+    _ALIVE.append(ctrl)
+    return ctrl
+
+
 def _make_controller(
     qtbot: QtBot, tmp_path: Path, script: Path, modes: dict[str, str] | str
 ) -> StitchingController:
-    return fake_controller(tmp_path, script, modes)
+    ctrl = fake_controller(tmp_path, script, modes)
+    _ALIVE.append(ctrl)
+    return ctrl
 
 
 def _state(handle: StitchJob) -> JobState:
@@ -162,7 +190,7 @@ def test_abnormal_exit_reports_log_tail(
 
 
 def test_failed_to_start(qtbot: QtBot, tmp_path: Path) -> None:
-    ctrl = StitchingController(
+    ctrl = _controller(
         registry=tmp_path / "registry",
         command=lambda d: (str(tmp_path / "no-such-program"), []),
         cleanup_on_start=False,
@@ -239,14 +267,18 @@ def test_queued_job_cannot_delete_another_jobs_output(
 
 
 def test_invalid_transition_raises(tmp_path: Path, qtbot: QtBot) -> None:
-    ctrl = StitchingController(
+    ctrl = _controller(
         registry=tmp_path / "registry",
         command=lambda d: (sys.executable, ["-c", "pass"]),
         cleanup_on_start=False,
     )
-    handle = ctrl.submit(_job(tmp_path))
+    ctrl.submit(_job(tmp_path, "first"))
+    # Queued behind the first. (The first may already be running: on Windows
+    # QProcess.start() emits `started` before it returns.)
+    queued = ctrl.submit(_job(tmp_path, "second"))
+    assert queued.state == JobState.QUEUED
     with pytest.raises(RuntimeError):
-        ctrl._set_state(handle, JobState.FINISHED)  # from Starting
+        ctrl._set_state(queued, JobState.FINISHED)
     _wait_done(qtbot, ctrl)
 
 
@@ -384,7 +416,7 @@ def test_real_worker_end_to_end(qtbot: QtBot, tmp_path: Path) -> None:
         parent_create_time=created,
     )
     assert job is not None
-    ctrl = StitchingController(registry=tmp_path / "registry", cleanup_on_start=False)
+    ctrl = _controller(registry=tmp_path / "registry", cleanup_on_start=False)
     with (
         qtbot.waitSignals([ctrl.jobFinished], raising=True, timeout=120_000),
         qtbot.assertNotEmitted(ctrl.jobFailed),
@@ -443,7 +475,7 @@ def test_reservation_made_before_a_crash_is_cleaned_up(
     import pathlib
 
     registry = tmp_path / "registry"
-    ctrl = StitchingController(
+    ctrl = _controller(
         registry=registry, command=worker_command, cleanup_on_start=False
     )
     job = _job(tmp_path, "crashed", n_positions=2).model_copy(
