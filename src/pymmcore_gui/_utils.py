@@ -8,8 +8,6 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import psutil
 
-from pymmcore_gui._qt.QtCore import Qt
-
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
@@ -29,6 +27,10 @@ def connect_direct(signal: Any, callback: Callable[..., Any]) -> None:
     A psygnal signaler has no connection-type argument; it calls back on the
     emitting thread regardless, which is what the direct connection asks Qt for.
     """
+    # Imported here so this module stays importable without Qt: the stitching
+    # worker reads acquisitions through the OME wrappers, which use it.
+    from pymmcore_gui._qt.QtCore import Qt
+
     try:
         signal.connect(callback, Qt.ConnectionType.DirectConnection)
     except TypeError:  # pragma: no cover - psygnal signaler

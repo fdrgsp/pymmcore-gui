@@ -3,6 +3,7 @@
 import os
 import sys
 from importlib.metadata import PackageNotFoundError, version
+from typing import TYPE_CHECKING, Any
 
 try:
     __version__: str = version("pymmcore-gui")
@@ -50,8 +51,26 @@ if sys.platform == "win32":
         with contextlib.suppress(OSError):
             ctypes.WinDLL(dll)
 
-from ._app import create_mmgui
-from ._main_window import MicroManagerGUI
+# The GUI classes are imported on first access, not here. Python runs this file
+# before any submodule, so an eager import would load Qt into every process that
+# touches the package -- including the stitching worker, which must stay Qt-free
+# (see pymmcore_gui._stitching).
+if TYPE_CHECKING:
+    from ._app import create_mmgui
+    from ._main_window import MicroManagerGUI
+
+
+def __getattr__(name: str) -> Any:
+    if name == "create_mmgui":
+        from ._app import create_mmgui
+
+        return create_mmgui
+    if name == "MicroManagerGUI":
+        from ._main_window import MicroManagerGUI
+
+        return MicroManagerGUI
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "MicroManagerGUI",
