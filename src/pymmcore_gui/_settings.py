@@ -100,7 +100,7 @@ class MMGuiUserPrefsSource(PydanticBaseSettingsSource):
 
     def __call__(self) -> dict[str, Any]:
         """Return Settings values for this source."""
-        if os.getenv("MMGUI_NO_SETTINGS"):  # pragma: no cover
+        if os.getenv("PYMM_NO_SETTINGS"):  # pragma: no cover
             return {}
         values = self._read_settings()
         return _good_data_only(SettingsV1, values, warn=True)
@@ -456,7 +456,7 @@ class SettingsV1(BaseMMSettings):
         If `timeout` is not None, block until the write is complete, or until the
         timeout is reached.
         """
-        if TESTING or os.getenv("MMGUI_NO_SETTINGS"):  # pragma: no cover
+        if TESTING or os.getenv("PYMM_NO_SETTINGS"):  # pragma: no cover
             return
         # write in another thread, so we don't block the main thread
         thread = threading.Thread(target=self._write_settings)
@@ -509,7 +509,7 @@ Settings = SettingsV1
 def reset_to_defaults() -> None:
     """Erase user settings and reset to defaults."""
     global _GLOBAL_SETTINGS
-    if TESTING or os.getenv("MMGUI_NO_SETTINGS"):  # pragma: no cover
+    if TESTING or os.getenv("PYMM_NO_SETTINGS"):  # pragma: no cover
         return
     SETTINGS_FILE_NAME.unlink(missing_ok=True)
     _GLOBAL_SETTINGS = SettingsV1()

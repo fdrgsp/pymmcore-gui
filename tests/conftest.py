@@ -99,7 +99,7 @@ def layouts_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     the developer's actual ``USER_DATA_DIR/layouts``.
     """
     directory = tmp_path / "layouts"
-    monkeypatch.setenv("MMGUI_LAYOUTS_DIR", str(directory))
+    monkeypatch.setenv("PYMM_LAYOUTS_DIR", str(directory))
     return directory
 
 

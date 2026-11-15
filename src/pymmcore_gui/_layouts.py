@@ -121,11 +121,11 @@ def _str_set(value: object) -> frozenset[str]:
 def layouts_dir() -> Path:
     """Return the directory holding saved layouts, creating it if needed.
 
-    ``MMGUI_LAYOUTS_DIR`` overrides the location. This is read on every call
+    ``PYMM_LAYOUTS_DIR`` overrides the location. This is read on every call
     (not captured at import) so tests -- which would otherwise scribble in the
     developer's real user data directory -- can redirect it with a fixture.
     """
-    directory = Path(os.environ.get("MMGUI_LAYOUTS_DIR") or LAYOUTS_DIR)
+    directory = Path(os.environ.get("PYMM_LAYOUTS_DIR") or LAYOUTS_DIR)
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 

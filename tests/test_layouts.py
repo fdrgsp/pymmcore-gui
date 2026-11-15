@@ -2,7 +2,7 @@
 
 Layouts are files rather than settings keys (see ``pymmcore_gui._layouts``),
 so the autouse ``layouts_dir`` fixture in ``conftest.py`` redirects
-``MMGUI_LAYOUTS_DIR`` at a tmp_path for every test here.
+``PYMM_LAYOUTS_DIR`` at a tmp_path for every test here.
 """
 
 from __future__ import annotations

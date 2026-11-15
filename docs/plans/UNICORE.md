@@ -475,7 +475,7 @@ the global core and no hand-made copy of the loader's bookkeeping.
 <!-- markdownlint-disable MD013 -->
 | `cite-unicore` | This plan |
 | --- | --- |
-| fixed folder `USER_DATA_DIR/devices` + `MMGUI_PY_DEVICES_DIR` | **dropped**: folder from the cfg line or the Hardware tab row |
+| fixed folder `USER_DATA_DIR/devices` + `PYMM_PY_DEVICES_DIR` | **dropped**: folder from the cfg line or the Hardware tab row |
 | AST scan, base-name table | **dropped**: import scan (§3.3) |
 | file watcher | **dropped**: explicit Load |
 | "Python Devices…" button that opens the folder | **replaced** by the path row |

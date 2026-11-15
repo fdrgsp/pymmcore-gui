@@ -463,15 +463,15 @@ def ndv_excepthook(
                 py_db.stop_on_unhandled_exception(py_db, thread, additional_info, arg)
             finally:
                 additional_info.is_tracing -= 1
-    # otherwise, if MMGUI_DEBUG_EXCEPTIONS is set, drop into pdb
-    elif os.getenv("MMGUI_DEBUG_EXCEPTIONS"):
+    # otherwise, if PYMM_DEBUG_EXCEPTIONS is set, drop into pdb
+    elif os.getenv("PYMM_DEBUG_EXCEPTIONS"):
         import pdb  # noqa: T100
 
         pdb.post_mortem(tb)
 
-    # after handling the exception, exit if MMGUI_EXIT_ON_EXCEPTION is set
-    if os.getenv("MMGUI_EXIT_ON_EXCEPTION"):
-        print("\nMMGUI_EXIT_ON_EXCEPTION is set, exiting.")
+    # after handling the exception, exit if PYMM_EXIT_ON_EXCEPTION is set
+    if os.getenv("PYMM_EXIT_ON_EXCEPTION"):
+        print("\nPYMM_EXIT_ON_EXCEPTION is set, exiting.")
         sys.exit(1)
 
 
