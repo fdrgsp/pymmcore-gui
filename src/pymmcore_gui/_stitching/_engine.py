@@ -28,6 +28,8 @@ from pymmcore_gui._stitching._models import (
     METADATA_NAMESPACE,
     PROVENANCE_KEY,
     SCHEMA_VERSION,
+    TIFF_EXTENSION,
+    ZARR_EXTENSION,
     Alignment,
     Blending,
     GroupResultV1,
@@ -36,6 +38,7 @@ from pymmcore_gui._stitching._models import (
     ProgressEvent,
     StitchJobV1,
     StitchResultV1,
+    is_tiff_output,
 )
 
 if TYPE_CHECKING:
@@ -559,16 +562,14 @@ def _fuse(
         pool.shutdown(wait=True, cancel_futures=True)
 
 
-def _write_provenance(
-    url: Path,
+def _provenance(
     job: StitchJobV1,
     group: GroupV1,
     transforms: dict[Any, list[np.ndarray]] | None,
     info: dict[str, Any],
     fingerprint: dict[str, Any],
-) -> None:
-    """Record how the mosaic was made in its root attributes (§3.5)."""
-    import zarr
+) -> dict[str, Any]:
+    """How the mosaic was made (§3.5), as JSON-ready data."""
 
     def _t_key(t: Any) -> str:
         return "all" if t is None else str(int(t))
@@ -592,20 +593,61 @@ def _write_provenance(
         "groups": info.get("components"),
         "multiview_stitcher_version": _mvs_version(),
     }
+    return cast("dict[str, Any]", json.loads(json.dumps(record)))
+
+
+def _write_provenance(url: Path, record: dict[str, Any]) -> None:
+    """Store `record` in an OME-Zarr mosaic's root attributes."""
+    import zarr
+
     root = zarr.open_group(str(url), mode="r+")
     existing = root.attrs.get(METADATA_NAMESPACE)
     ns = dict(existing) if isinstance(existing, dict) else {}
-    ns[PROVENANCE_KEY] = json.loads(json.dumps(record))
+    ns[PROVENANCE_KEY] = record
     root.attrs[METADATA_NAMESPACE] = ns
+
+
+def _remove(path: Path) -> None:
+    """Delete a directory tree or a file, if present."""
+    import shutil
+
+    if path.is_dir():
+        shutil.rmtree(path)
+    elif path.exists():
+        path.unlink()
+
+
+def _convert_to_tiff(
+    fused: Path, tmp: Path, group: GroupV1, record: dict[str, Any], progress: _Progress
+) -> None:
+    """Copy the fused OME-Zarr into the OME-TIFF at `tmp`, then delete it."""
+    from pymmcore_gui._stitching._tiff_output import zarr_to_ome_tiff
+
+    progress.set(Phase.CONVERTING)
+    _remove(tmp)
+    zarr_to_ome_tiff(
+        fused,
+        tmp,
+        name=group.output.name,
+        annotations={METADATA_NAMESPACE: {PROVENANCE_KEY: record}},
+        progress=lambda done, total: progress.set(
+            Phase.CONVERTING, total=total, done=done
+        ),
+    )
+    _remove(fused)
 
 
 def _move_into_place(tmp: Path, final: Path) -> Path:
     """Rename the finished `.tmp` mosaic; never overwrite (§3.5)."""
+    extension = next(
+        (e for e in (ZARR_EXTENSION, TIFF_EXTENSION) if final.name.endswith(e)),
+        final.suffix,
+    )
+    stem = final.name.removesuffix(extension)
     target = final
     n = 2
     while target.exists():
-        stem = final.name.removesuffix(".ome.zarr")
-        target = final.with_name(f"{stem}-{n}.ome.zarr")
+        target = final.with_name(f"{stem}-{n}{extension}")
         n += 1
     os.replace(tmp, target)
     return target
@@ -631,16 +673,19 @@ def _stitch_group(
         transforms, info = _register(images, job, progress)
         _apply_corrections(images, transforms)
 
-    tmp = group.tmp_output
-    if tmp.exists():
-        import shutil
+    fused = group.fused_tmp
+    for path in group.tmp_paths:
+        _remove(path)
+    _fuse(images, job, REG_KEY if register else STAGE_KEY, fused, progress)
 
-        shutil.rmtree(tmp)
-    _fuse(images, job, REG_KEY if register else STAGE_KEY, tmp, progress)
-
-    progress.set(Phase.FINISHING)
-    _write_provenance(tmp, job, group, transforms, info, fingerprint)
-    final = _move_into_place(tmp, group.output)
+    record = _provenance(job, group, transforms, info, fingerprint)
+    if is_tiff_output(group.output):
+        _convert_to_tiff(fused, group.tmp_output, group, record, progress)
+        progress.set(Phase.FINISHING)
+    else:
+        progress.set(Phase.FINISHING)
+        _write_provenance(fused, record)
+    final = _move_into_place(group.tmp_output, group.output)
     components = info.get("components") or [list(range(len(group.tiles)))]
     return GroupResultV1(
         name=group.name,

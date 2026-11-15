@@ -367,3 +367,36 @@ def test_real_worker_end_to_end(qtbot: QtBot, tmp_path: Path) -> None:
     finally:
         loaded.close()
     _wait_done(qtbot, ctrl)
+
+
+def test_cleanup_removes_partial_ome_tiff_mosaics(tmp_path: Path) -> None:
+    """An OME-TIFF job leaves a file and a fused OME-Zarr; both go."""
+    seq = useq.MDASequence(grid_plan=GRID)
+    job = build_job(
+        job_id="tiff",
+        sequence=seq,
+        source=tmp_path / "data" / "run.ome.tiff",
+        pixel_size_um=1.0,
+        linear_part=np.eye(2),
+    )
+    assert job is not None
+    out = job.groups[0].output
+    assert out.name == "run_stitched.ome.tiff"
+    partial_tiff, fused = job.tmp_outputs
+    partial_tiff.parent.mkdir(parents=True)
+    partial_tiff.write_bytes(b"II*\0")
+    fused.mkdir()
+
+    registry = tmp_path / "registry"
+    jd = JobDir(registry / job.job_id)
+    jd.path.mkdir(parents=True)
+    write_model(jd.job_file, job)
+    write_model(
+        jd.owner_file, OwnerV1(pid=subprocess_pid_that_exited(), create_time=1.0)
+    )
+
+    removed = cleanup_stale_jobs(registry)
+    assert partial_tiff in removed
+    assert fused in removed
+    assert not partial_tiff.exists()
+    assert not fused.exists()

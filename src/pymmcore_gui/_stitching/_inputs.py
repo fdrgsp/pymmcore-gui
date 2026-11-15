@@ -22,12 +22,16 @@ import numpy as np
 
 from pymmcore_gui._stitching import _geometry
 from pymmcore_gui._stitching._models import (
+    TIFF_EXTENSION,
+    ZARR_EXTENSION,
     Alignment,
     GroupV1,
+    OutputFormat,
     StitchJobV1,
     StitchSettingsV1,
     TileV1,
-    tmp_path_for,
+    is_tiff_output,
+    tmp_paths_for,
 )
 
 if TYPE_CHECKING:
@@ -200,10 +204,27 @@ def _safe(name: str) -> str:
     return re.sub(r"[^\w.-]+", "_", name).strip("_") or "pos"
 
 
+def output_format_for(source: Path, choice: OutputFormat) -> OutputFormat:
+    """Resolve "same as the acquisition" to OME-Zarr or OME-TIFF."""
+    if choice != OutputFormat.SAME:
+        return choice
+    if is_tiff_output(source):
+        return OutputFormat.OME_TIFF
+    if source.is_dir() and not source.name.lower().endswith(".zarr"):
+        # ome-writers' one-file-per-position OME-TIFF layout is a directory
+        if any(is_tiff_output(f) for f in source.iterdir()):
+            return OutputFormat.OME_TIFF
+    return OutputFormat.OME_ZARR
+
+
 def unique_output(
-    directory: Path, stem: str, group_name: str = "", taken: set[Path] | None = None
+    directory: Path,
+    stem: str,
+    group_name: str = "",
+    taken: set[Path] | None = None,
+    extension: str = OUTPUT_EXTENSION,
 ) -> Path:
-    """`<dir>/<stem>_stitched[_<group>].ome.zarr`, never an existing path (§3.5)."""
+    """`<dir>/<stem>_stitched[_<group>]<extension>`, never an existing path (§3.5)."""
     base = f"{stem}{STITCHED_SUFFIX}"
     if group_name:
         base += f"_{_safe(group_name)}"
@@ -211,8 +232,12 @@ def unique_output(
     n = 1
     while True:
         name = base if n == 1 else f"{base}-{n}"
-        path = directory / f"{name}{OUTPUT_EXTENSION}"
-        if path not in taken and not path.exists() and not tmp_path_for(path).exists():
+        path = directory / f"{name}{extension}"
+        if (
+            path not in taken
+            and not path.exists()
+            and not any(t.exists() for t in tmp_paths_for(path))
+        ):
             return path
         n += 1
 
@@ -309,10 +334,12 @@ def build_job(
             settings = settings.model_copy(update={"alignment": Alignment.STAGE})
 
     stem = acquisition_stem(source)
+    fmt = output_format_for(source, settings.output_format)
+    extension = TIFF_EXTENSION if fmt == OutputFormat.OME_TIFF else ZARR_EXTENSION
     taken: set[Path] = set()
     job_groups = []
     for g in groups:
-        out = unique_output(source.parent, stem, g.name, taken)
+        out = unique_output(source.parent, stem, g.name, taken, extension)
         taken.add(out)
         job_groups.append(GroupV1(name=g.name, tiles=list(g.tiles), output=out))
 

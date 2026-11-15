@@ -20,7 +20,12 @@ from pymmcore_gui._qt.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from pymmcore_gui._stitching._models import Alignment, Blending, StitchSettingsV1
+from pymmcore_gui._stitching._models import (
+    Alignment,
+    Blending,
+    OutputFormat,
+    StitchSettingsV1,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -32,6 +37,12 @@ BLENDING_LABELS: dict[Blending, str] = {
     Blending.SMOOTH: "Smooth (weighted average)",
     Blending.MAX: "Maximum",
     Blending.AVERAGE: "Average",
+}
+
+FORMAT_LABELS: dict[OutputFormat, str] = {
+    OutputFormat.SAME: "Same as the acquisition",
+    OutputFormat.OME_ZARR: "OME-Zarr",
+    OutputFormat.OME_TIFF: "OME-TIFF",
 }
 
 Binning = Literal[1, 2, 4, 8]
@@ -152,14 +163,25 @@ class StitchingSettingsDialog(QDialog):
         blend_box.setLayout(blend_form)
 
         # ------------------------------ output ------------------------------
+        self.format_combo = QComboBox()
+        for fmt, label in FORMAT_LABELS.items():
+            self.format_combo.addItem(label, fmt)
+        self.format_combo.setToolTip(
+            "OME-Zarr is written directly. OME-TIFF is written as OME-Zarr first "
+            "and then copied into one tiled, pyramidal OME-TIFF file, which "
+            "takes a little longer and briefly needs twice the disk space."
+        )
         self.open_check = QCheckBox("Open the mosaic in a viewer when done")
         output_note = QLabel(
-            "Mosaics are saved as OME-Zarr next to the acquisition, as "
-            "<i>&lt;name&gt;_stitched.ome.zarr</i>. Existing files are never "
-            "overwritten."
+            "Mosaics are saved next to the acquisition, as "
+            "<i>&lt;name&gt;_stitched</i>. Existing files are never overwritten."
         )
         output_note.setWordWrap(True)
+        format_form = QFormLayout()
+        format_form.setContentsMargins(0, 0, 0, 0)
+        format_form.addRow("Format:", self.format_combo)
         output_layout = QVBoxLayout()
+        output_layout.addLayout(format_form)
         output_layout.addWidget(self.open_check)
         output_layout.addWidget(output_note)
         output_box = QGroupBox("Output")
@@ -240,6 +262,9 @@ class StitchingSettingsDialog(QDialog):
         )
         self.blend_width_spin.setValue(settings.blend_width_um or 0.0)
         self.open_check.setChecked(settings.open_when_done)
+        self.format_combo.setCurrentIndex(
+            self.format_combo.findData(settings.output_format)
+        )
         self.threads_spin.setValue(settings.worker_threads or 0)
         self.low_priority_check.setChecked(settings.low_priority)
         self._sync_enabled()
@@ -265,6 +290,7 @@ class StitchingSettingsDialog(QDialog):
                 "blending": Blending(self.blending_combo.currentData()),
                 "blend_width_um": width if width > 0 else None,
                 "open_when_done": self.open_check.isChecked(),
+                "output_format": OutputFormat(self.format_combo.currentData()),
                 "worker_threads": threads if threads > 0 else None,
                 "low_priority": self.low_priority_check.isChecked(),
             }

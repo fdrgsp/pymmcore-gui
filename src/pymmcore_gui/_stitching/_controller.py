@@ -33,7 +33,6 @@ from pymmcore_gui._stitching._models import (
     StitchErrorV1,
     StitchJobV1,
     StitchResultV1,
-    tmp_path_for,
 )
 from pymmcore_gui._stitching._protocol import (
     JobDir,
@@ -140,8 +139,11 @@ class _Task(QRunnable):
 
 
 def _rmtree(path: Path) -> None:
-    if path.exists():
+    """Delete a directory tree or a file (a partial OME-TIFF), if present."""
+    if path.is_dir():
         shutil.rmtree(path, ignore_errors=True)
+    elif path.exists():
+        path.unlink(missing_ok=True)
 
 
 def cleanup_stale_jobs(registry: Path, *, now: float | None = None) -> list[Path]:
@@ -477,7 +479,7 @@ class StitchingController(QObject):
         self, handle: StitchJob, *, keep_dir: bool, outputs: bool = True
     ) -> None:
         """Delete the partial mosaics (and the job dir) off the GUI thread."""
-        tmp = [tmp_path_for(g.output) for g in handle.job.groups] if outputs else []
+        tmp = handle.job.tmp_outputs if outputs else []
         path = handle.dir.path
 
         def work() -> None:

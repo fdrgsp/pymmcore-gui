@@ -331,3 +331,65 @@ def test_process_alive() -> None:
     assert process_alive(os.getpid(), me.create_time())
     assert not process_alive(os.getpid(), me.create_time() - 1000)  # reused PID
     assert not process_alive(2**22 + 12345, None)
+
+
+# ------------------------------ output format ------------------------------
+
+
+def test_output_format_follows_the_acquisition(tmp_path: Path) -> None:
+    from pymmcore_gui._stitching._models import OutputFormat
+
+    same = OutputFormat.SAME
+    zarr_src = tmp_path / "a.ome.zarr"
+    zarr_src.mkdir()
+    assert _inputs.output_format_for(zarr_src, same) == OutputFormat.OME_ZARR
+    assert _inputs.output_format_for(tmp_path / "a.ome.tif", same) == (
+        OutputFormat.OME_TIFF
+    )
+    # ome-writers' one-file-per-position layout is a directory of OME-TIFFs
+    per_position = tmp_path / "run"
+    per_position.mkdir()
+    (per_position / "run_p000.ome.tiff").touch()
+    assert _inputs.output_format_for(per_position, same) == OutputFormat.OME_TIFF
+    # an explicit choice wins
+    assert _inputs.output_format_for(per_position, OutputFormat.OME_ZARR) == (
+        OutputFormat.OME_ZARR
+    )
+
+
+def test_build_job_names_the_output_by_format(tmp_path: Path) -> None:
+    from pymmcore_gui._stitching._models import OutputFormat, StitchSettingsV1
+
+    seq = useq.MDASequence(grid_plan=GRID)
+    for source, choice, name in [
+        ("a.ome.tiff", OutputFormat.SAME, "a_stitched.ome.tiff"),
+        ("b.ome.zarr", OutputFormat.SAME, "b_stitched.ome.zarr"),
+        ("c.ome.zarr", OutputFormat.OME_TIFF, "c_stitched.ome.tiff"),
+        ("d.ome.tiff", OutputFormat.OME_ZARR, "d_stitched.ome.zarr"),
+    ]:
+        job = _inputs.build_job(
+            job_id="j",
+            sequence=seq,
+            source=tmp_path / source,
+            pixel_size_um=1.0,
+            linear_part=np.eye(2),
+            settings=StitchSettingsV1(output_format=choice),
+        )
+        assert job is not None
+        assert job.groups[0].output.name == name
+
+
+def test_tiff_output_temporaries(tmp_path: Path) -> None:
+    from pymmcore_gui._stitching._models import tmp_paths_for
+
+    tiff = tmp_path / "a_stitched.ome.tiff"
+    assert tmp_paths_for(tiff) == [
+        tmp_path / "a_stitched.ome.tiff.tmp",
+        tmp_path / "a_stitched.ome.tiff.zarr.tmp",
+    ]
+    zarr = tmp_path / "a_stitched.ome.zarr"
+    assert tmp_paths_for(zarr) == [tmp_path / "a_stitched.ome.zarr.tmp"]
+    # a leftover temporary of either kind keeps the name from being reused
+    (tmp_path / "a_stitched.ome.tiff.zarr.tmp").mkdir()
+    out = _inputs.unique_output(tmp_path, "a", extension=".ome.tiff")
+    assert out.name == "a_stitched-2.ome.tiff"

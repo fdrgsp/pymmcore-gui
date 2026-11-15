@@ -45,6 +45,22 @@ class Blending(StrEnum):
     AVERAGE = "average"
 
 
+class OutputFormat(StrEnum):
+    SAME = "same"
+    """The acquisition's own format."""
+    OME_ZARR = "ome-zarr"
+    OME_TIFF = "ome-tiff"
+
+
+ZARR_EXTENSION = ".ome.zarr"
+TIFF_EXTENSION = ".ome.tiff"
+
+
+def is_tiff_output(path: Path) -> bool:
+    """Whether a mosaic at `path` is written as OME-TIFF (else OME-Zarr)."""
+    return path.name.lower().endswith((".tif", ".tiff"))
+
+
 class StitchSettingsV1(_Model):
     """What the user can choose in the stitching settings dialog."""
 
@@ -64,6 +80,7 @@ class StitchSettingsV1(_Model):
     blend_width_um: float | None = Field(default=None, gt=0)
     """Width of the blended band at tile edges. None uses the default."""
     open_when_done: bool = True
+    output_format: OutputFormat = OutputFormat.SAME
     worker_threads: int | None = Field(default=None, ge=1)
     """One thread budget for the worker. None means half the CPU cores."""
     low_priority: bool = True
@@ -134,16 +151,38 @@ class GroupV1(_Model):
     """Short label (the stage position's name), empty for a single mosaic."""
     tiles: list[TileV1] = Field(min_length=1)
     output: Path
-    """Final path of the mosaic; the worker writes `<output>.tmp` first."""
+    """Final path of the mosaic; the worker writes `<output>.tmp` first.
+
+    Its extension says the format: `.ome.zarr` or `.ome.tiff`."""
 
     @property
     def tmp_output(self) -> Path:
         return tmp_path_for(self.output)
 
+    @property
+    def fused_tmp(self) -> Path:
+        return fused_tmp_for(self.output)
+
+    @property
+    def tmp_paths(self) -> list[Path]:
+        return tmp_paths_for(self.output)
+
 
 def tmp_path_for(output: Path) -> Path:
     """Where a mosaic is written before it is renamed into place."""
     return output.with_name(output.name + ".tmp")
+
+
+def fused_tmp_for(output: Path) -> Path:
+    """The OME-Zarr that fusion writes; for OME-TIFF, converted afterwards."""
+    if is_tiff_output(output):
+        return output.with_name(output.name + ".zarr.tmp")
+    return tmp_path_for(output)
+
+
+def tmp_paths_for(output: Path) -> list[Path]:
+    """Everything the worker may leave behind while writing `output`."""
+    return list(dict.fromkeys((tmp_path_for(output), fused_tmp_for(output))))
 
 
 class StitchJobV1(_Model):
@@ -174,7 +213,7 @@ class StitchJobV1(_Model):
 
     @property
     def tmp_outputs(self) -> list[Path]:
-        return [g.tmp_output for g in self.groups]
+        return [p for g in self.groups for p in g.tmp_paths]
 
 
 # ---------------------------- worker -> GUI ----------------------------
@@ -186,6 +225,7 @@ class Phase(StrEnum):
     REGISTERING = "registering"
     FUSING = "fusing"
     PYRAMID = "pyramid"
+    CONVERTING = "converting"
     FINISHING = "finishing"
 
     @property
@@ -199,6 +239,7 @@ _PHASE_LABELS = {
     Phase.REGISTERING: "Registering",
     Phase.FUSING: "Fusing",
     Phase.PYRAMID: "Writing pyramid",
+    Phase.CONVERTING: "Writing OME-TIFF",
     Phase.FINISHING: "Finishing",
 }
 
@@ -207,8 +248,9 @@ _PHASE_WEIGHTS = {
     Phase.STARTING: 0.0,
     Phase.READING: 0.02,
     Phase.REGISTERING: 0.38,
-    Phase.FUSING: 0.45,
-    Phase.PYRAMID: 0.12,
+    Phase.FUSING: 0.42,
+    Phase.PYRAMID: 0.10,
+    Phase.CONVERTING: 0.05,
     Phase.FINISHING: 0.03,
 }
 

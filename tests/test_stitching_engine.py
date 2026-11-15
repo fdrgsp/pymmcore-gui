@@ -22,9 +22,11 @@ from pymmcore_gui._stitching._engine import StitchError, run_stitch
 from pymmcore_gui._stitching._inputs import build_job
 from pymmcore_gui._stitching._models import (
     Alignment,
+    OutputFormat,
     ProgressEvent,
     StitchJobV1,
     StitchSettingsV1,
+    tmp_paths_for,
 )
 
 if TYPE_CHECKING:
@@ -68,7 +70,18 @@ def _attrs(path: Path) -> Any:
 
 
 def _provenance(path: Path) -> Any:
-    return _attrs(path)["pymmcore_gui"]["stitching"]
+    """The mosaic's provenance, from its zarr attributes or OME-TIFF annotation."""
+    if path.is_dir():
+        return _attrs(path)["pymmcore_gui"]["stitching"]
+    from pymmcore_gui._ome_tiff_wrapper import OMETiffWrapper
+
+    wrapper = OMETiffWrapper(path)
+    try:
+        meta = wrapper.global_metadata("pymmcore_gui")
+        assert meta is not None
+        return meta["stitching"]
+    finally:
+        wrapper.close()
 
 
 def _shift_errors(acq: SynthAcquisition, prov: dict, key: str = "all") -> np.ndarray:
@@ -101,8 +114,10 @@ def test_registration_recovers_jitter(
     assert group.n_pairs == 12
     assert group.rejected_pairs == group.isolated_tiles == 0
     assert group.n_components == 1
-    assert group.output.name == "run_stitched.ome.zarr"
-    assert not group.output.with_name(group.output.name + ".tmp").exists()
+    # the mosaic keeps the acquisition's format
+    ext = ".ome.zarr" if fmt == "ome-zarr" else ".ome.tiff"
+    assert group.output.name == f"run_stitched{ext}"
+    assert not any(p.exists() for p in tmp_paths_for(group.output))
 
     prov = _provenance(group.output)
     assert _shift_errors(acq, prov).max() < 0.5 * P
@@ -113,8 +128,12 @@ def test_registration_recovers_jitter(
     # the GUI's reopen path reads the mosaic
     loaded = open_acquisition(group.output)
     try:
-        assert loaded.wrapper.dims == ("t", "c", "y", "x")
-        assert list(loaded.wrapper.coords["c"]) == list(channels)
+        dims = loaded.wrapper.dims
+        assert dims[-2:] == ("y", "x")
+        if "c" in dims:
+            assert list(loaded.wrapper.coords["c"]) == list(channels)
+        else:  # OME-TIFF readers drop a single channel's axis
+            assert len(channels) == 1
     finally:
         loaded.close()
 
@@ -316,3 +335,89 @@ def test_unreadable_source_is_a_clear_error(tmp_path: Path) -> None:
     assert job is not None
     with pytest.raises(StitchError, match="Could not read"):
         run_stitch(job, lambda e: None)
+
+
+# ------------------------------ OME-TIFF output ------------------------------
+
+
+def _tiff_levels(path: Path) -> list[np.ndarray]:
+    import tifffile
+
+    with tifffile.TiffFile(path) as tf:
+        assert tf.is_ome
+        return [np.asarray(level.asarray()) for level in tf.series[0].levels]
+
+
+def _zarr_levels(path: Path) -> list[np.ndarray]:
+    root = zarr.open_group(str(path), mode="r")
+    paths = [d["path"] for d in _attrs(path)["multiscales"][0]["datasets"]]
+    return [np.asarray(root[p]) for p in paths]
+
+
+@pytest.mark.parametrize("z", [1, 3])
+def test_ome_tiff_mosaic_equals_the_ome_zarr_one(
+    tmp_path: Path, z: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pymmcore_gui._ome_tiff_wrapper import OMETiffWrapper
+    from pymmcore_gui._stitching import _tiff_output
+
+    # small tiles and bands, so tiling and banding are exercised on a small mosaic
+    monkeypatch.setattr(_tiff_output, "TILE", 32)
+    monkeypatch.setattr(_tiff_output, "BAND_BYTES", 32 * 300 * 2)
+    seq = grid_sequence(2, 3, S, P, channels=("A", "B"), z=z)
+    acq = write_grid(tmp_path / "run.ome.zarr", seq, shape=S, pixel_size=P)
+    as_zarr, _ = _run(_job(acq, output_format=OutputFormat.OME_ZARR))
+    as_tiff, events = _run(_job(acq, output_format=OutputFormat.OME_TIFF))
+    zpath, tpath = as_zarr.groups[0].output, as_tiff.groups[0].output
+    assert tpath.name == "run_stitched.ome.tiff"
+    assert tpath.is_file()
+    assert not any(p.exists() for p in tmp_paths_for(tpath))
+
+    # same pixels at every level (tifffile drops singleton axes)
+    zarr_levels, tiff_levels = _zarr_levels(zpath), _tiff_levels(tpath)
+    assert len(tiff_levels) == len(zarr_levels)
+    for zl, tl in zip(zarr_levels, tiff_levels, strict=True):
+        np.testing.assert_array_equal(np.squeeze(zl), np.squeeze(tl))
+
+    # the same registration recorded, where the GUI's reader finds it
+    zprov, tprov = _provenance(zpath), _provenance(tpath)
+    assert tprov["transforms"] == zprov["transforms"]
+    assert tprov["tiles"] == zprov["tiles"]
+
+    wrapper = OMETiffWrapper(tpath)
+    try:
+        assert list(wrapper.coords["c"]) == ["A", "B"]
+        assert wrapper.sizes()["y"] == zarr_levels[0].shape[-2]
+    finally:
+        wrapper.close()
+
+    texts = [e.text for e in events]
+    assert any(t.startswith("Writing OME-TIFF") for t in texts)
+    fractions = [e.fraction for e in events]
+    assert fractions == sorted(fractions)
+
+
+def test_ome_tiff_records_physical_pixel_size(tmp_path: Path) -> None:
+    import tifffile
+
+    seq = grid_sequence(2, 2, S, P)
+    acq = write_grid(tmp_path / "run.ome.zarr", seq, shape=S, pixel_size=P)
+    result, _ = _run(_job(acq, output_format=OutputFormat.OME_TIFF))
+    with tifffile.TiffFile(result.groups[0].output) as tf:
+        xml = tf.ome_metadata or ""
+    import re
+
+    sizes = dict(re.findall(r'PhysicalSize([XYZ])="([^"]+)"', xml))
+    assert set(sizes) == {"X", "Y"}  # no z-stack
+    assert float(sizes["X"]) == pytest.approx(P)
+    assert float(sizes["Y"]) == pytest.approx(P)
+    assert 'PhysicalSizeXUnit="&#181;m"' in xml
+
+
+def test_tiff_name_taken_meanwhile_gets_a_new_version(tmp_path: Path) -> None:
+    seq = grid_sequence(2, 2, S, P)
+    acq = write_grid(tmp_path / "run.ome.zarr", seq, shape=S, pixel_size=P)
+    job = _job(acq, alignment=Alignment.STAGE, output_format=OutputFormat.OME_TIFF)
+    job.groups[0].output.write_bytes(b"")  # appeared after the job was built
+    result, _ = _run(job)
+    assert result.groups[0].output.name == "run_stitched-2.ome.tiff"

@@ -144,8 +144,10 @@ def _remove_tmp_outputs(job: StitchJobV1) -> None:
     import shutil
 
     for tmp in job.tmp_outputs:
-        if tmp.exists():
+        if tmp.is_dir():
             shutil.rmtree(tmp, ignore_errors=True)
+        elif tmp.exists():
+            tmp.unlink(missing_ok=True)
 
 
 def worker_main(argv: list[str]) -> int:

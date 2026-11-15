@@ -21,6 +21,7 @@ from pymmcore_gui._stitching._controller import JobState, StitchingController
 from pymmcore_gui._stitching._models import (
     Alignment,
     Blending,
+    OutputFormat,
     SequenceStitchingV1,
     StitchSettingsV1,
     request_from,
@@ -212,6 +213,7 @@ def test_dialog_round_trip(qtbot: QtBot) -> None:
         blending=Blending.MAX,
         blend_width_um=12.5,
         open_when_done=False,
+        output_format=OutputFormat.OME_TIFF,
         worker_threads=3,
         low_priority=False,
     )

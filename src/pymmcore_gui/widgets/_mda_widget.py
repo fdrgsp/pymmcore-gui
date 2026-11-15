@@ -135,8 +135,9 @@ TIFF_LAYOUT_TOOLTIP = (
 
 STITCHING_TOOLTIP = (
     "After the acquisition completes, fuse each grid into one mosaic, saved as "
-    "<i>&lt;name&gt;_stitched.ome.zarr</i> next to the acquisition. It runs in "
-    "the background; its progress is shown in the status bar."
+    "<i>&lt;name&gt;_stitched</i> next to the acquisition, in its format unless "
+    "the settings say otherwise. It runs in the background; its progress is "
+    "shown in the status bar."
 )
 STITCHING_NO_OVERLAP_TOOLTIP = (
     "<br><br><b>The grid has no overlap</b>, so tiles are placed by stage "
