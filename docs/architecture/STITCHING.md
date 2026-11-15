@@ -338,7 +338,7 @@ windowed Windows bundle may have none. Every file is written atomically.
 <!-- markdownlint-enable MD013 -->
 
 Job directories live in `<user data dir>/stitch-jobs`
-(`MMGUI_STITCH_JOBS_DIR` overrides it; the tests do).
+(`PYMM_STITCH_JOBS_DIR` overrides it; the tests do).
 
 **Watchdog.** Every 2 s the worker checks that the GUI (PID and start time)
 still runs, and exits with code 3 if not.

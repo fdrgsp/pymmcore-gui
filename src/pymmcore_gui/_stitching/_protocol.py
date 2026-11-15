@@ -111,13 +111,13 @@ class JobDir:
         return "\n".join(text.splitlines()[-max_lines:])
 
 
-REGISTRY_ENV_VAR = "MMGUI_STITCH_JOBS_DIR"
+REGISTRY_ENV_VAR = "PYMM_STITCH_JOBS_DIR"
 
 
 def registry_dir() -> Path:
     """`<user data dir>/stitch-jobs`, where every job directory lives.
 
-    `MMGUI_STITCH_JOBS_DIR` overrides the location (the tests use it).
+    `PYMM_STITCH_JOBS_DIR` overrides the location (the tests use it).
     """
     if override := os.environ.get(REGISTRY_ENV_VAR):
         return Path(override)

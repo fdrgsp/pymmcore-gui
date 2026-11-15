@@ -108,7 +108,7 @@ def layouts_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def stitch_jobs_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Keep stitching job directories out of the real user data directory."""
     directory = tmp_path / "stitch-jobs"
-    monkeypatch.setenv("MMGUI_STITCH_JOBS_DIR", str(directory))
+    monkeypatch.setenv("PYMM_STITCH_JOBS_DIR", str(directory))
     return directory
 
 
