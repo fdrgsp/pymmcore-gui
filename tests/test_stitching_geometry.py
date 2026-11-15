@@ -137,6 +137,54 @@ def test_fresh_and_metadata_paths_agree_with_stage_explorer(setup: str) -> None:
     np.testing.assert_allclose(fresh, from_metadata, atol=1e-12)
 
 
+@pytest.mark.parametrize(
+    "setup", ["plain", "binning2", "mirror", "calibrated90", "calibrated30m"]
+)
+def test_saved_summary_metadata_agrees_with_a_fresh_run(setup: str) -> None:
+    """Reopened data (phase 3a) is placed as the run itself would have been."""
+    from pymmcore_plus.metadata import summary_metadata
+
+    from pymmcore_gui._stitching._controller import capture_linear_part
+    from pymmcore_gui._stitching._inputs import calibration_from_summary
+
+    core = CMMCorePlus()
+    core.loadSystemConfiguration()
+    cam = core.getCameraDevice()
+    preset = core.getCurrentPixelSizeConfig()
+    core.setPixelSizeUm(preset, 0.5)
+    if setup == "binning2":
+        core.setProperty(cam, "Binning", "2")
+    if setup in ("mirror", "calibrated30m"):
+        core.setProperty(cam, "TransposeMirrorX", "1")
+    if setup == "calibrated90":
+        core.setPixelSizeAffine(preset, _mm(0.5 * _rot(90)))
+    if setup == "calibrated30m":
+        core.setPixelSizeAffine(preset, _mm(0.5 * _rot(30) @ np.diag([-1, 1])))
+    core.setPixelSizeConfig(preset)
+
+    fresh = capture_linear_part(core)
+    assert fresh is not None
+    # through JSON, as it comes back from a saved store
+    import json
+
+    meta = json.loads(json.dumps(summary_metadata(core, cached=False), default=str))
+    saved = calibration_from_summary(meta)
+    assert saved is not None
+    assert saved.pixel_size_um == pytest.approx(fresh[0])
+    np.testing.assert_allclose(saved.linear_part, fresh[1], atol=1e-12)
+    assert saved.tile_shape_yx == (core.getImageHeight(), core.getImageWidth())
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [None, {}, {"image_infos": []}, {"image_infos": [{"width": 4, "height": 4}]}],
+)
+def test_summary_without_pixel_size_gives_nothing(summary: object) -> None:
+    from pymmcore_gui._stitching._inputs import calibration_from_summary
+
+    assert calibration_from_summary(summary) is None
+
+
 # ------------------------------- §5.2 -------------------------------
 
 

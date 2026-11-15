@@ -217,6 +217,54 @@ def unique_output(
         n += 1
 
 
+@dataclass(frozen=True)
+class SavedCalibration:
+    """How a saved acquisition's pixels map to the stage, from its metadata."""
+
+    pixel_size_um: float
+    linear_part: np.ndarray
+    tile_shape_yx: tuple[int, int]
+
+
+def calibration_from_summary(summary: Any) -> SavedCalibration | None:
+    """Read §5.1's inputs from pymmcore-plus summary metadata (reopened data).
+
+    pymmcore-plus records the pixel affine only when it isn't the identity,
+    and the camera's mirror flags among the device properties. None when
+    the metadata has no image info or no pixel size.
+    """
+    if not isinstance(summary, dict):
+        return None
+    infos = summary.get("image_infos") or []
+    if not infos or not isinstance(info := infos[0], dict):
+        return None
+    try:
+        pixel_size = float(info.get("pixel_size_um") or 0)
+        shape = (int(info["height"]), int(info["width"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if pixel_size <= 0:
+        return None
+    affine = info.get("pixel_size_affine") or _geometry.DEFAULT_MM_AFFINE
+    camera = info.get("camera_label")
+    props: dict[str, str] = {}
+    for device in summary.get("devices") or []:
+        if isinstance(device, dict) and device.get("label") == camera:
+            props = {
+                str(prop.get("name")): str(prop.get("value"))
+                for prop in device.get("properties") or []
+                if isinstance(prop, dict)
+            }
+            break
+    linear = _geometry.linear_part(
+        pixel_size,
+        tuple(float(v) for v in affine),
+        mirror_x=props.get("TransposeMirrorX") == "1",
+        mirror_y=props.get("TransposeMirrorY") == "1",
+    )
+    return SavedCalibration(pixel_size, linear, shape)
+
+
 def default_threads() -> int:
     """Half the CPU cores, at least one (§4.4)."""
     return max(1, (os.cpu_count() or 2) // 2)

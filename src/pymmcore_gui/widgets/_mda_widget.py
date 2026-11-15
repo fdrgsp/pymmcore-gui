@@ -59,10 +59,9 @@ from pymmcore_gui._qt.QtWidgets import (
 from pymmcore_gui._settings import Settings
 from pymmcore_gui._stitching import is_available as stitching_available
 from pymmcore_gui._stitching._models import (
-    METADATA_KEY,
     METADATA_NAMESPACE,
     SequenceStitchingV1,
-    request_from,
+    stored_request,
     with_request,
 )
 from pymmcore_gui._theme import qcolor, theme
@@ -984,11 +983,9 @@ class MemoryMDAWidgetBase(_MixinBase):
         """Take the request a restored sequence carries, or start unchecked."""
         if not hasattr(self, "_stitching_request"):
             return  # upstream's __init__, before the row exists
-        stored = (sequence.metadata.get(METADATA_NAMESPACE) or {}).get(METADATA_KEY)
-        if stored is not None:
-            request = request_from(sequence.metadata)
-        else:
-            request = SequenceStitchingV1(settings=Settings.instance().stitching)
+        request = stored_request(sequence.metadata) or SequenceStitchingV1(
+            settings=Settings.instance().stitching
+        )
         self.setStitchingRequest(request)
 
     def value(self) -> useq.MDASequence:

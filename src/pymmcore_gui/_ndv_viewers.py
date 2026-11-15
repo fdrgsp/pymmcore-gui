@@ -45,6 +45,7 @@ from pymmcore_gui._qt.QtCore import (
     Signal,
 )
 from pymmcore_gui._qt.QtWidgets import QMenu, QPushButton, QSplitter
+from pymmcore_gui._stitching import can_stitch
 from pymmcore_gui._utils import autofocus_kind, connect_direct
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
 from pymmcore_gui.widgets.image_preview._snap_album import (
@@ -100,6 +101,17 @@ class _OpenAcquisitionTask(QRunnable):
             self.signals.finished.emit(loaded)
         finally:
             self.signals.done.emit()
+
+
+@dataclass(frozen=True)
+class SavedAcquisition:
+    """A reopened acquisition, as "Stitch…" needs it."""
+
+    source: Path
+    sequence: MDASequence
+    summary: Any
+    """Its pymmcore-plus summary metadata, if recovered."""
+    title: str
 
 
 @dataclass
@@ -159,6 +171,8 @@ class AcquireViewersManager(QObject):
     # (MDASequence, source_title) -- emitted when the user picks "Re-use
     # MDA…" on either a live MDA viewer or a reopened acquisition's viewer.
     reuseMDARequested = Signal(object, str)
+    stitchRequested = Signal(object)
+    """A reopened grid acquisition's "Stitch…" was chosen (a `SavedAcquisition`)."""
 
     def __init__(
         self,
@@ -616,6 +630,14 @@ class AcquireViewersManager(QObject):
             viewer._reuse_mda_callback = lambda: self.reuseMDARequested.emit(
                 sequence, title
             )
+        if can_stitch(loaded.sequence) and loaded.sequence is not None:
+            saved = SavedAcquisition(
+                source=loaded.source_path,
+                sequence=loaded.sequence,
+                summary=loaded.record.summary_meta if loaded.record else None,
+                title=loaded.title,
+            )
+            viewer.set_stitch_callback(lambda: self.stitchRequested.emit(saved))
         # So the Save button re-exports this acquisition's *real* recovered
         # metadata (dimensions, physical scale, channel names, summary
         # metadata) instead of falling back to stamping the microscope's

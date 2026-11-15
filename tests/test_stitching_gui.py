@@ -7,6 +7,7 @@ multiview-stitcher: availability is patched where the GUI checks it.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -33,7 +34,6 @@ from pymmcore_gui.widgets._stitching_status import StitchingStatusButton
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
-    from pathlib import Path
 
     from pymmcore_plus import CMMCorePlus
     from pytestqt.qtbot import QtBot
@@ -518,6 +518,9 @@ def gui_with_stitching(
     )
     gui = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(gui)
+    # closing with a job left running asks first: say "quit" unless a test
+    # answers itself
+    monkeypatch.setattr(gui, "_confirm", lambda *a, **k: True)
     yield gui
     if gui.stitching is not None:
         gui.stitching.shutdown()
@@ -565,3 +568,120 @@ def test_close_asks_while_stitching(
     assert gui.close()
     assert handle.state == JobState.CANCELLED
     assert not session.controller.is_busy()
+
+
+# ----------------------- "Stitch…" on reopened data (3a) -----------------------
+
+
+def _saved_run(
+    qtbot: QtBot, mmcore: CMMCorePlus, path: Path, grid: bool = True
+) -> Path:
+    """Acquire and save a small run; on the runner thread, as the GUI does."""
+    w, h = mmcore.getImageWidth(), mmcore.getImageHeight()
+    p = mmcore.getPixelSizeUm()
+    seq = useq.MDASequence(
+        grid_plan=useq.GridRowsColumns(
+            rows=1, columns=2, overlap=(10, 10), fov_width=w * p, fov_height=h * p
+        )
+        if grid
+        else None,
+        channels=(useq.Channel(config="DAPI", exposure=10),),
+    )
+    with qtbot.waitSignal(mmcore.mda.events.sequenceFinished, timeout=30_000):
+        mmcore.run_mda(seq, output=str(path))
+    qtbot.waitUntil(lambda: mmcore.mda.status.phase.value == "idle", timeout=10_000)
+    sink = mmcore.mda.get_sink()
+    assert sink is not None
+    return Path(sink.settings.output_path)  # type: ignore[attr-defined]
+
+
+def test_reopened_grid_offers_stitch(
+    qtbot: QtBot,
+    gui_with_stitching: Any,
+    mmcore: CMMCorePlus,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the window answers the request with the settings dialog; decline it
+    monkeypatch.setattr(
+        StitchingSettingsDialog, "exec", lambda _: QDialog.DialogCode.Rejected
+    )
+    gui = gui_with_stitching
+    source = _saved_run(qtbot, mmcore, tmp_path / "run.ome.zarr")
+    viewer = gui.acquire.viewers.open_acquisition(source)
+    assert viewer._stitch_btn is not None
+    assert not viewer._stitch_btn.isHidden()
+    with qtbot.waitSignal(gui.acquire.viewers.stitchRequested) as blocker:
+        viewer._stitch_btn.click()
+    assert blocker.args is not None
+    saved = blocker.args[0]
+    assert saved.source == source
+    assert saved.sequence.grid_plan is not None
+    assert saved.summary["image_infos"]
+
+    plain = _saved_run(qtbot, mmcore, tmp_path / "plain.ome.zarr", grid=False)
+    assert gui.acquire.viewers.open_acquisition(plain)._stitch_btn is None
+
+
+def test_stitch_saved_asks_then_queues(
+    qtbot: QtBot,
+    gui_with_stitching: Any,
+    mmcore: CMMCorePlus,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from pymmcore_gui._acquisition_loader import open_acquisition
+    from pymmcore_gui._ndv_viewers import SavedAcquisition
+
+    gui = gui_with_stitching
+    mmcore.setProperty(mmcore.getCameraDevice(), "TransposeMirrorY", "1")
+    source = _saved_run(qtbot, mmcore, tmp_path / "run.ome.tiff")
+    loaded = open_acquisition(source)
+    assert loaded.sequence is not None
+    assert loaded.record is not None
+    saved = SavedAcquisition(
+        source, loaded.sequence, loaded.record.summary_meta, loaded.title
+    )
+    loaded.close()
+
+    titles: list[str] = []
+
+    def decline(dialog: StitchingSettingsDialog) -> int:
+        titles.append(dialog.windowTitle())
+        return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(StitchingSettingsDialog, "exec", decline)
+    assert gui._stitch_saved(saved) is None
+    assert titles == [f"Stitch {loaded.title}"]
+    assert not gui.stitching.controller.jobs
+
+    chosen = StitchSettingsV1(alignment=Alignment.STAGE)
+
+    def accept(dialog: StitchingSettingsDialog) -> int:
+        dialog.setValue(chosen)
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(StitchingSettingsDialog, "exec", accept)
+    handle = gui._stitch_saved(saved)
+    assert handle is not None
+    job = handle.job
+    assert job.source == source
+    assert job.settings == chosen
+    assert settings.stitching == chosen
+    p = mmcore.getPixelSizeUm()
+    np.testing.assert_allclose(np.array(job.linear_part), np.diag([p, -p]))
+    assert job.channel_names == ["DAPI"]
+
+
+def test_submit_saved_needs_a_pixel_size(
+    make_session: Callable[[str], StitchingSession], toasts: Toasts, tmp_path: Path
+) -> None:
+    session = make_session("ok")
+    seq = useq.MDASequence(grid_plan=GRID)
+    assert (
+        session.submit_saved(tmp_path / "x.ome.zarr", seq, {}, StitchSettingsV1())
+        is None
+    )
+    assert "no pixel size" in toasts.shown[-1][1]
+    assert not session.controller.jobs

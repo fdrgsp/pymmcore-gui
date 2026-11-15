@@ -10,16 +10,34 @@ Layout (see docs/plans/STITCHING.md):
   `multiview_stitcher`.
 - `_worker`: the worker process's entry point.
 - `_controller`: the GUI side -- queue, process, progress, cleanup.
+- `_session`: acquisitions in, toasts and viewers out (GUI side).
 
-Everything except `_controller` stays importable without Qt: the worker runs
-it, and loading Qt there would cost startup time and memory for nothing.
+Everything except `_controller` and `_session` stays importable without Qt:
+the worker runs it, and loading Qt there would cost startup time and memory
+for nothing.
 """
 
 from __future__ import annotations
 
 import importlib.util
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import useq
 
 
 def is_available() -> bool:
     """Whether the optional `multiview-stitcher` dependency is installed."""
     return importlib.util.find_spec("multiview_stitcher") is not None
+
+
+def can_stitch(sequence: useq.MDASequence | None) -> bool:
+    """Whether stitching is installed and `sequence` would give a mosaic."""
+    if sequence is None or not is_available():
+        return False
+    from pymmcore_gui._stitching._inputs import plan_groups
+
+    try:
+        return bool(plan_groups(sequence))
+    except Exception:  # pragma: no cover - a sequence we can't interpret
+        return False

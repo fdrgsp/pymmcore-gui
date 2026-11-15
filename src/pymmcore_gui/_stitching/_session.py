@@ -23,8 +23,12 @@ from pymmcore_gui._stitching._controller import (
     default_memory_cap,
     own_process_identity,
 )
-from pymmcore_gui._stitching._inputs import acquisition_stem, build_job
-from pymmcore_gui._stitching._models import request_from
+from pymmcore_gui._stitching._inputs import (
+    acquisition_stem,
+    build_job,
+    calibration_from_summary,
+)
+from pymmcore_gui._stitching._models import StitchSettingsV1, request_from
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -209,16 +213,62 @@ class StitchingSession(QObject):
             )
             return None
         pixel_size, linear = run.calibration
+        return self._queue(
+            run.source,
+            run.sequence,
+            pixel_size,
+            linear,
+            run.tile_shape_yx,
+            request_from(run.sequence.metadata).settings,
+        )
+
+    def submit_saved(
+        self,
+        source: Path,
+        sequence: useq.MDASequence,
+        summary: Any,
+        settings: StitchSettingsV1,
+    ) -> StitchJob | None:
+        """Stitch an acquisition saved earlier (plan §7, phase 3a).
+
+        The pixel -> stage mapping comes from its summary metadata, as it
+        was when the data were acquired.
+        """
+        name = acquisition_stem(source)
+        if (cal := calibration_from_summary(summary)) is None:
+            self._notifications.show_warning_message(
+                f"{name} can't be stitched: its metadata has no pixel size."
+            )
+            return None
+        return self._queue(
+            source,
+            sequence,
+            cal.pixel_size_um,
+            cal.linear_part,
+            cal.tile_shape_yx,
+            settings,
+        )
+
+    def _queue(
+        self,
+        source: Path,
+        sequence: useq.MDASequence,
+        pixel_size: float,
+        linear: np.ndarray,
+        tile_shape_yx: tuple[int, int] | None,
+        settings: StitchSettingsV1,
+    ) -> StitchJob | None:
+        name = acquisition_stem(source)
         pid, create_time = own_process_identity()
         try:
             job = build_job(
                 job_id=self._controller.new_job_id(),
-                sequence=run.sequence,
-                source=run.source,
+                sequence=sequence,
+                source=source,
                 pixel_size_um=pixel_size,
                 linear_part=linear,
-                tile_shape_yx=run.tile_shape_yx,
-                settings=request_from(run.sequence.metadata).settings,
+                tile_shape_yx=tile_shape_yx,
+                settings=settings,
                 parent_pid=pid,
                 parent_create_time=create_time,
                 memory_cap_bytes=default_memory_cap(),
@@ -227,7 +277,7 @@ class StitchingSession(QObject):
                 return None  # no grid with more than one tile
             return self._controller.submit(job, title=name)
         except Exception as e:
-            logger.exception("Could not queue stitching for %s", run.source)
+            logger.exception("Could not queue stitching for %s", source)
             self._notifications.show_warning_message(f"{name} was not stitched: {e}")
             return None
 

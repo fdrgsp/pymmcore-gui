@@ -132,6 +132,10 @@ class MMArrayViewer(ndv.ArrayViewer):
         # save (see _save_data). The manager that created this viewer uses
         # it to rename this viewer's dock/tab to the saved filename.
         self._on_saved: Callable[[str], None] | None = None
+        # Set by the viewer manager (see `set_stitch_callback`) for a reopened
+        # grid acquisition: offers "Stitch…" as a button and in the menu.
+        self._stitch_callback: Callable[[], None] | None = None
+        self._stitch_btn: QPushButton | None = None
 
         self._key_filter = _KeyFilter(self)
         widget = self.widget()
@@ -172,6 +176,24 @@ class MMArrayViewer(ndv.ArrayViewer):
     def mda_sequence(self, sequence: MDASequence | None) -> None:
         self._mda_sequence = sequence
         self._update_z_buttons()
+
+    def set_stitch_callback(self, callback: Callable[[], None] | None) -> None:
+        """Offer "Stitch…" (button and context menu), calling `callback`."""
+        self._stitch_callback = callback
+        if callback is not None and self._stitch_btn is None:
+            with suppress(Exception):
+                self._stitch_btn = _add_viewer_button(
+                    self,
+                    "mdi:vector-combine",
+                    "Stitch the grid into a mosaic…",
+                    self._request_stitch,
+                )
+        if self._stitch_btn is not None:
+            self._stitch_btn.setVisible(callback is not None)
+
+    def _request_stitch(self) -> None:
+        if callback := self._stitch_callback:
+            callback()
 
     def set_acquisition_running(self, running: bool) -> None:
         """Disable saving and ROI selection while this viewer is acquiring."""
@@ -245,6 +267,10 @@ class MMArrayViewer(ndv.ArrayViewer):
         )
         if callback := self._reuse_mda_callback:
             action.triggered.connect(callback)
+        if self._stitch_callback is not None:
+            stitch = menu.addAction("Stitch…")
+            if stitch is not None:
+                stitch.triggered.connect(self._request_stitch)
         menu.exec(global_pos)
         return True
 

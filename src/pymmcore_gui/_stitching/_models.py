@@ -92,6 +92,13 @@ def request_from(metadata: dict[str, Any] | None) -> SequenceStitchingV1:
         return SequenceStitchingV1()
 
 
+def stored_request(metadata: dict[str, Any] | None) -> SequenceStitchingV1 | None:
+    """The request stored in `metadata`, or None if it has none at all."""
+    if ((metadata or {}).get(METADATA_NAMESPACE) or {}).get(METADATA_KEY) is None:
+        return None
+    return request_from(metadata)
+
+
 def with_request(
     metadata: dict[str, Any] | None, request: SequenceStitchingV1
 ) -> dict[str, Any]:

@@ -51,10 +51,12 @@ class StitchingSettingsDialog(QDialog):
         channels: Sequence[str] = (),
         *,
         max_threads: int = 1,
+        title: str = "Stitching Settings",
+        accept_text: str = "OK",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Stitching Settings")
+        self.setWindowTitle(title)
         self._channels = list(dict.fromkeys(channels))
 
         # ------------------------------ alignment ------------------------------
@@ -181,7 +183,7 @@ class StitchingSettingsDialog(QDialog):
         # ------------------------------ buttons ------------------------------
         self.defaults_btn = QPushButton("Restore Defaults")
         self.cancel_btn = QPushButton("Cancel")
-        self.ok_btn = QPushButton("OK")
+        self.ok_btn = QPushButton(accept_text)
         self.ok_btn.setDefault(True)
         self.ok_btn.setProperty("variant", "primary")
         buttons = QHBoxLayout()

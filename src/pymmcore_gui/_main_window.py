@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from contextlib import suppress
 from datetime import datetime
@@ -86,7 +87,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from pymmcore_gui._app import MMQApplication
+    from pymmcore_gui._ndv_viewers import SavedAcquisition
     from pymmcore_gui._notification_manager import Notification
+    from pymmcore_gui._stitching._controller import StitchJob
     from pymmcore_gui._stitching._session import StitchingSession
     from pymmcore_gui.widgets._exception_log import ExceptionLog
 
@@ -490,6 +493,7 @@ class MicroManagerGUI(QMainWindow):
 
         self._acquire.mdaRunningChanged.connect(self._on_mda_running)
         self._stitching = self._create_stitching_session()
+        self._acquire.viewers.stitchRequested.connect(self._stitch_saved)
         self._acquire.layoutReset.connect(self._on_acquire_layout_reset)
         self._acquire.layoutNameChanged.connect(self._on_layout_name_changed)
         self._mmc.events.systemConfigurationLoaded.connect(self._on_config_loaded)
@@ -568,6 +572,36 @@ class MicroManagerGUI(QMainWindow):
             self._notification_manager,
             self._acquire.viewers.open_acquisition_async,
             parent=self,
+        )
+
+    def _stitch_saved(self, saved: SavedAcquisition) -> StitchJob | None:
+        """Ask for the settings, then stitch a reopened acquisition (phase 3a)."""
+        if self._stitching is None:
+            return None
+        from pymmcore_gui._stitching._models import stored_request
+        from pymmcore_gui.widgets._stitching_dialog import StitchingSettingsDialog
+
+        prefs = Settings.instance()
+        # how it was meant to be stitched, else the current defaults
+        request = stored_request(saved.sequence.metadata)
+        dialog = StitchingSettingsDialog(
+            request.settings if request else prefs.stitching,
+            [c.config for c in saved.sequence.channels],
+            max_threads=os.cpu_count() or 1,
+            title=f"Stitch {saved.title}",
+            accept_text="Stitch",
+            parent=self,
+        )
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return None
+            settings = dialog.value()
+        finally:
+            dialog.deleteLater()
+        prefs.stitching = settings
+        prefs.flush()
+        return self._stitching.submit_saved(
+            saved.source, saved.sequence, saved.summary, settings
         )
 
     def _ready_to_close_while_stitching(self) -> bool:
