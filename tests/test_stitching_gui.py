@@ -7,6 +7,7 @@ multiview-stitcher: availability is patched where the GUI checks it.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -876,3 +877,90 @@ def test_mosaic_from_a_newer_version_is_refused(
     last = gui.nm.notifications()[-1]
     assert last.severity == "warning"
     assert "newer version" in last.message
+
+
+# --------------------- "Stitch…" on a finished run's viewer ---------------------
+
+
+def _grid_seq(mmcore: CMMCorePlus, grid: bool = True) -> useq.MDASequence:
+    w, h = mmcore.getImageWidth(), mmcore.getImageHeight()
+    p = mmcore.getPixelSizeUm()
+    return useq.MDASequence(
+        grid_plan=useq.GridRowsColumns(
+            rows=1, columns=2, overlap=(10, 10), fov_width=w * p, fov_height=h * p
+        )
+        if grid
+        else None
+    )
+
+
+def _run_in_gui(
+    qtbot: QtBot, gui: Any, mmcore: CMMCorePlus, seq: useq.MDASequence, output: Any
+) -> Any:
+    viewers = gui.acquire.viewers
+    with qtbot.waitSignal(mmcore.mda.events.sequenceFinished, timeout=30_000):
+        mmcore.run_mda(seq, output=output)
+    qtbot.waitUntil(lambda: mmcore.mda.status.phase.value == "idle", timeout=10_000)
+    qtbot.wait(50)  # the queued GUI-thread relay of sequenceFinished
+    assert viewers.active_viewer is not None
+    return viewers.active_viewer
+
+
+def test_finished_grid_run_offers_stitch(
+    qtbot: QtBot,
+    gui_with_stitching: Any,
+    mmcore: CMMCorePlus,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        StitchingSettingsDialog, "exec", lambda _: QDialog.DialogCode.Rejected
+    )
+    gui = gui_with_stitching
+    seq = _grid_seq(mmcore)
+    viewer = _run_in_gui(qtbot, gui, mmcore, seq, str(tmp_path / "run.ome.zarr"))
+    assert viewer._stitch_btn is not None
+    assert not viewer._stitch_btn.isHidden()
+    with qtbot.waitSignal(gui.acquire.viewers.stitchRequested) as blocker:
+        viewer._stitch_btn.click()
+    assert blocker.args is not None
+    saved = blocker.args[0]
+    assert saved.source == tmp_path / "run.ome.zarr"
+    assert saved.summary["image_infos"]
+
+
+@pytest.mark.parametrize("case", ["memory", "no-grid"])
+def test_no_stitch_for_unsaved_or_gridless_runs(
+    qtbot: QtBot,
+    gui_with_stitching: Any,
+    mmcore: CMMCorePlus,
+    tmp_path: Path,
+    case: str,
+) -> None:
+    seq = _grid_seq(mmcore, grid=case != "no-grid")
+    output = "memory" if case == "memory" else str(tmp_path / "run.ome.zarr")
+    viewer = _run_in_gui(qtbot, gui_with_stitching, mmcore, seq, output)
+    assert viewer._stitch_btn is None
+
+
+def test_no_stitch_for_a_cancelled_run(
+    qtbot: QtBot, gui_with_stitching: Any, mmcore: CMMCorePlus, tmp_path: Path
+) -> None:
+    seq = _grid_seq(mmcore).model_copy(
+        update={
+            "time_plan": useq.TIntervalLoops(interval=timedelta(seconds=0.5), loops=20)
+        }
+    )
+
+    def cancel_early(*_: object) -> None:
+        mmcore.mda.cancel()
+
+    mmcore.mda.events.frameReady.connect(cancel_early)
+    try:
+        viewer = _run_in_gui(
+            qtbot, gui_with_stitching, mmcore, seq, str(tmp_path / "run.ome.zarr")
+        )
+    finally:
+        mmcore.mda.events.frameReady.disconnect(cancel_early)
+    assert str(mmcore.mda.status.finish_reason) == "canceled"
+    assert viewer._stitch_btn is None

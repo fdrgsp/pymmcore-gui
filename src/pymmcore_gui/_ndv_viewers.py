@@ -818,6 +818,41 @@ class AcquireViewersManager(QObject):
         if (sink := self._pending_release) is not None:
             self._pending_release = None
             self._release_sink(sink)
+        if self._active_dock is not None and (
+            record := self._records.get(self._active_dock)
+        ):
+            self._offer_stitch_after_run(record, sequence)
+
+    def _offer_stitch_after_run(
+        self, record: _ViewerRecord, sequence: MDASequence
+    ) -> None:
+        """Give a finished run's viewer "Stitch…", as a reopened one would have.
+
+        Only for a completed grid run whose data store is on disk and closed
+        (the runner closes it before `sequenceFinished`).
+        """
+        viewer, sink = record.viewer, record.sink
+        if not isinstance(viewer, MMArrayViewer) or not isinstance(
+            sink, OmeWritersSink
+        ):
+            return
+        if isinstance(sink.settings.format, ScratchFormat) or sink.stores_events:
+            return
+        if str(self._core.mda.status.finish_reason) != "completed":
+            return
+        if not can_stitch(sequence):
+            return
+        try:
+            source = Path(sink.settings.output_path)
+        except ValueError:  # pragma: no cover - the store was never set up
+            return
+        saved = SavedAcquisition(
+            source=source,
+            sequence=sequence,
+            summary=sink.summary_meta,
+            title=source.name,
+        )
+        viewer.set_stitch_callback(lambda: self.stitchRequested.emit(saved))
 
     def close_all_viewers(self) -> None:
         """Close every open viewer dock, releasing whatever each one holds.
