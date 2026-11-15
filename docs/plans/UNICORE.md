@@ -184,7 +184,7 @@ message is formatted from the stage and the exception:
 | `initialize()` raised | "failed to initialize: `…`" |
 | setting failed after init (`property`, `startup`) | "`Power` = 10 on Laser failed: `…`; the device was kept" |
 | `busy()` raised while waiting (`wait`) | "stopped responding while loading: `…`" |
-| `shutdown()` raised while removing it (`unload`) | appended to the device's entry: "…and its shutdown also failed: `…`" |
+| `shutdown()` raised while removing it (`unload`) | appended to the device's entry: "…and its shutdown also failed: `…`; hardware resources may still be held" |
 <!-- markdownlint-enable MD013 -->
 
 **Missing dependency.** Device files often need third-party packages (vendor
@@ -212,7 +212,8 @@ environment before running `pymm`. pyMM never installs anything. The message:
   section holding the tracebacks.
 - A persistent amber line above the Available devices table ("⚠ 2 files
   couldn't be used. Details") stays until the next Load.
-- A configuration load that skipped devices shows one summary dialog.
+- A configuration load with any problems shows one summary dialog, including
+  failed settings on devices that were kept.
 
 ## 4. The `.cfg`
 
@@ -258,16 +259,19 @@ was:
 3. **Confirm unsaved edits.** Ask about unsaved hardware edits (the Hardware
    tab's `_confirm_discard`) and configuration edits (the Configurations
    page's dirty state). Startup skips this step: nothing is edited yet.
-4. **Standard core with `#py` lines:** ask (§2). "Load without them" loads
-   the C++ part with the native loader, which skips `#py` lines. The message
-   gives the exact relaunch command, with the cfg's full path, so it can be
-   copied.
-5. **Stop live mode**, then on UniMMCore unload the current devices, resolve
-   and apply the folder (§4.1, §3.2), and call the tolerant loader (§4.3),
-   collecting `PyDeviceLoadError`s.
-6. **Show one summary** listing each skipped device and its reason (§3.4
-   wording, Details expandable), plus folder notes from §4.1. Remember the
-   skipped labels for the save warning (§8).
+4. **Standard core with `#py` lines:** ask (§2). "Load without them" only
+   records the decision to continue; nothing loads yet. The message gives
+   the exact relaunch command, with the cfg's full path, so it can be copied.
+5. **Stop live mode on either core before loading.** On the standard core,
+   call the native loader, which skips `#py` lines. On UniMMCore, unload the
+   current devices, resolve and apply the folder (§4.1, §3.2), and call the
+   tolerant loader (§4.3), collecting `PyDeviceLoadError`s.
+6. **Show one summary of all load problems:** skipped devices and their
+   reasons, failed settings on devices that were kept, and any shutdown
+   failures (§3.4 wording, Details expandable), plus folder notes from §4.1.
+   Track load problems separately from skipped device labels, retaining both
+   for the save warning (§8). A failed setting is reported even when no
+   device was skipped.
 
 ### 4.3 Tolerant loading belongs in the loader (pymmcore-plus)
 
@@ -326,9 +330,16 @@ raises or not depending on what touches the device next.
 - **A setting that fails after initialization** on a *healthy* Python device
   (a post-init `Property` line or a `System/Startup` setting) skips only that
   line. It is reported as `property` / `startup`, and the device is kept.
-- **Removal always completes.** If a failed device's `shutdown()` raises
-  while it is being unloaded, the error is reported (`unload`) and the device
-  is removed anyway: the manager drops it in a `finally`.
+- **Removal from the core always completes.** If a failed device's
+  `shutdown()` raises while it is being unloaded, the error is reported
+  (`unload`). Cleanup in `finally` paths removes the manager's device entry
+  and clears the core's roles, cached state, presets and other configuration
+  references to it; dropping the dictionary entry alone is insufficient.
+  This guarantees logical removal, not release of physical hardware. The
+  summary says that hardware resources may still be held when shutdown
+  fails, and how to recover: "If this device's port or camera is still busy,
+  restart pyMM before loading again." Reloading in the same session would
+  likely fail again on the busy port.
 - **`exc` is the original exception.** A `ModuleNotFoundError` for a
   dependency keeps its `.name` (this also fixes the rewording in
   `_get_py_device_instance`).
@@ -428,6 +439,10 @@ Available devices table, and is always visible:
   app) would delete them from the file. The warning reads: "Saving over
   `scope.cfg` removes 2 Python devices that didn't load (Laser, Filter). Save
   anyway, or Save As…?"
+  The warning also covers settings that failed to load on devices that were
+  kept, even when no device was skipped: "Laser loaded, but `Power = 10`
+  failed. Saving over `scope.cfg` may replace or remove that setting. Save
+  anyway, or Save As…?" When both occurred, combine them in one warning.
 
 ## 9. Standalone app
 
@@ -447,9 +462,10 @@ Available devices table, and is always visible:
 2. **Required.** Tolerant loading with `on_device_error` and
    `PyDeviceLoadError` (§4.3): read the whole file first, check
    initialization right after `Core,Initialize,1`, cascade from a failed hub,
-   wait on devices one at a time, guarantee removal when `shutdown()` raises,
-   and pass on the original exception for missing dependencies. Test it
-   there, including the review's failing-`busy()` shutter.
+   wait on devices one at a time, guarantee logical removal and cleanup of
+   core references when `shutdown()` raises, and pass on the original
+   exception for missing dependencies. Test it there, including the review's
+   failing-`busy()` shutter.
 
 Nothing else is needed upstream. Without a swap, there is no reassignment of
 the global core and no hand-made copy of the loader's bookkeeping.
@@ -479,7 +495,7 @@ the global core and no hand-made copy of the loader's bookkeeping.
    `PyDeviceProblem` and its message formatting, reading and writing
    `#@PyDevicesPath`, and the frozen guard.
 3. **Startup**: `startup_core` with the frozen guard, `load_configuration`,
-   the skipped-devices summary.
+   the load-problems summary.
 4. **Hardware tab**: the row, Load, banner, Py badge, the Add-flow
    initialization check, the standard-core prompt, the
    path line on save, the overwrite warning, the status bar chip.
@@ -495,7 +511,9 @@ the global core and no hand-made copy of the loader's bookkeeping.
   `stage`. Every `#py` line referencing it is skipped. A hub that fails at
   initialization unloads its already-created peripherals, even when the
   `Parent` lines come after the device lines. A device whose `shutdown()`
-  raises during removal is still removed, and an `unload` error is reported.
+  raises during removal is still removed, its core roles, cached state,
+  presets and other configuration references are cleared, and an `unload`
+  error is reported without claiming that physical hardware was released.
   A failing post-init property on a healthy device skips only that line.
   C++ devices and the rest of the file load. With no callback, behaviour
   matches today's.
@@ -516,13 +534,17 @@ the global core and no hand-made copy of the loader's bookkeeping.
   The message names the relaunch command with the cfg's path. Each pre-unload
   check (missing or unreadable file, refused during an acquisition or
   calibration, cancelled unsaved-edits prompt) leaves the current devices
-  loaded and the folder unchanged. Live mode is stopped before unloading.
+  loaded and the folder unchanged. On both cores, live mode is stopped before
+  any configuration load or device unloading begins.
   On UniMMCore, a standard cfg loads, and a `#py` cfg with a broken device
-  shows the summary.
+  shows the summary. A failed setting on a device that was kept also shows
+  the summary when no device was skipped.
 - **Add flow.** A device whose `initialize()` raises is unloaded and reported
   before anything polls it.
 - **Save.** Round-trip of `#py` lines plus `#@PyDevicesPath`. The channel
-  comments and the path line coexist. The overwrite warning appears.
+  comments and the path line coexist. The overwrite warning appears for
+  skipped devices, failed settings on devices that were kept, and both
+  together in one warning.
 - **Smoke test by hand on UniMMCore** (pymmcore-widgets may call C++-only
   APIs): snap, live, MDA with a Python camera, Stage Explorer with a Python XY
   stage, pixel calibration, Configurations page editing a Python device's
