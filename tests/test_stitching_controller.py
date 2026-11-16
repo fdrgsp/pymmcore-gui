@@ -220,6 +220,8 @@ def test_a_finished_process_does_not_keep_its_controller_alive(
     )
     with qtbot.waitSignal(ctrl.jobFailed, timeout=20_000):
         ctrl.submit(_job(tmp_path))
+    # no event loop yet: the process's deferred delete stays pending
+    assert ctrl.wait_for_idle()
     ref = weakref.ref(ctrl)
     del ctrl
     qtbot.wait(10)  # runs the process's deferred delete
