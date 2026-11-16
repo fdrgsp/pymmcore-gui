@@ -11,13 +11,15 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from weakref import ref
 
 import numpy as np
 import pytest
 import useq
 
 from _stitch_fakes import fake_controller, write_fake_worker
-from pymmcore_gui._qt.QtWidgets import QDialog, QWidget
+from pymmcore_gui._qt.QtCore import QCoreApplication, QEvent
+from pymmcore_gui._qt.QtWidgets import QApplication, QDialog, QWidget
 from pymmcore_gui._stitching import _session as session_mod
 from pymmcore_gui._stitching._controller import JobState, StitchingController
 from pymmcore_gui._stitching._models import (
@@ -503,12 +505,22 @@ def test_status_button_and_popover(
 
 
 @pytest.fixture
+def stitching_window_lifetime(qapp: QApplication) -> Iterator[list[ref[QWidget]]]:
+    windows: list[ref[QWidget]] = []
+    yield windows
+    assert not any(
+        window() is widget for window in windows for widget in qapp.topLevelWidgets()
+    ), "The stitching window survived fixture teardown"
+
+
+@pytest.fixture
 def gui_with_stitching(
     qtbot: QtBot,
     mmcore: CMMCorePlus,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     available: None,
+    stitching_window_lifetime: list[ref[QWidget]],
 ) -> Iterator[Any]:
     import pymmcore_gui._stitching as stitching_pkg
     from pymmcore_gui import MicroManagerGUI
@@ -521,13 +533,20 @@ def gui_with_stitching(
         lambda parent: fake_controller(tmp_path, script, "hang"),
     )
     gui = MicroManagerGUI(mmcore=mmcore)
+    stitching_window_lifetime.append(ref(gui))
     qtbot.addWidget(gui)
     # closing with a job left running asks first: say "quit" unless a test
     # answers itself
     monkeypatch.setattr(gui, "_confirm", lambda *a, **k: True)
     yield gui
+    if all(widget is not gui for widget in QApplication.topLevelWidgets()):
+        return
     if gui.stitching is not None:
         gui.stitching.shutdown()
+    # PySide keeps the window alive until DeferredDelete is delivered;
+    # pytest-qt's processEvents() calls do not drain those events.
+    gui.deleteLater()
+    QCoreApplication.sendPostedEvents(gui, QEvent.Type.DeferredDelete)
 
 
 def test_window_has_no_stitching_without_the_package(
