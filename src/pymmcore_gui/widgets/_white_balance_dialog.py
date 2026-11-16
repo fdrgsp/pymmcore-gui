@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import weakref
 from contextlib import AbstractContextManager, nullcontext, suppress
 from typing import TYPE_CHECKING
 
@@ -56,6 +57,9 @@ def describe_result(result: WhiteBalanceResult) -> str:
     )
 
 
+_DIALOGS: weakref.WeakSet[WhiteBalanceDialog] = weakref.WeakSet()
+
+
 class WhiteBalanceDialog(QDialog):
     """Choose per-camera gains and balance them in a worker thread.
 
@@ -65,6 +69,11 @@ class WhiteBalanceDialog(QDialog):
 
     balanced = Signal(object)
     balanceFailed = Signal(str)
+
+    @staticmethod
+    def any_running() -> bool:
+        """Whether any white-balance dialog is balancing right now."""
+        return any(dialog._worker is not None for dialog in _DIALOGS)
 
     def __init__(
         self,
@@ -79,6 +88,7 @@ class WhiteBalanceDialog(QDialog):
         self._snap_context = snap_context
         self._props: dict[str, GainProperty] = {}
         self._worker: FunctionWorker[WhiteBalanceResult] | None = None
+        _DIALOGS.add(self)
 
         hint = QLabel(
             "Point the camera at an empty, evenly lit background, then click "

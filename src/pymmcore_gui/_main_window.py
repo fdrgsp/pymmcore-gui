@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import sys
+import weakref
 from contextlib import suppress
 from datetime import datetime
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar, TypeVar, cast
 
 from pymmcore_plus import CMMCorePlus, Keyword, find_micromanager
 from pymmcore_widgets._util import pixel_presets_hint, pixel_size_camera_warning
@@ -72,6 +73,7 @@ from pymmcore_gui._theme import (
 )
 from pymmcore_gui._theme._dark import DARK_THEME
 from pymmcore_gui._theme._light import LIGHT_THEME
+from pymmcore_gui._unicore import PyDeviceFolder, is_unicore
 from pymmcore_gui._utils import NO_PIXEL_SIZE
 from pymmcore_gui.widgets._acquire import AcquirePage
 from pymmcore_gui.widgets._configurations import ConfigurationsPage
@@ -81,6 +83,7 @@ from pymmcore_gui.widgets._mda_status import MDAStatusWidget
 from pymmcore_gui.widgets._panels import PanelKey
 from pymmcore_gui.widgets._startup import StartupChoice, StartupDialog
 from pymmcore_gui.widgets._toolbars import toolbar_icon_size
+from pymmcore_gui.widgets._white_balance_dialog import WhiteBalanceDialog
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -91,6 +94,7 @@ if TYPE_CHECKING:
 
 
 RESOURCES = Path(__file__).parent / "resources"
+_T = TypeVar("_T")
 ICON = RESOURCES / ("icon.ico" if sys.platform.startswith("win") else "logo.png")
 
 
@@ -107,6 +111,15 @@ def _write_config(
         mark_saved()
         return True
     return False
+
+
+def _weak(method: Callable[[], _T], default: _T) -> Callable[[], _T]:
+    """Call a bound method without keeping its object alive.
+
+    For hooks a page holds on its window, which would otherwise form a cycle.
+    """
+    ref = weakref.WeakMethod(method)
+    return lambda: m() if (m := ref()) is not None else default
 
 
 def apply_saved_appearance() -> bool:
@@ -452,7 +465,13 @@ class MicroManagerGUI(QMainWindow):
         self._stack = QStackedWidget()
         self._installation = InstallationPage()
         self._installation.aboutToUninstall.connect(self._prepare_uninstall)
-        self._hardware = HardwareSetupPage(self._mmc)
+        self._py_folder = PyDeviceFolder()
+        self._hardware = HardwareSetupPage(self._mmc, py_folder=self._py_folder)
+        self._hardware.busy_reason = _weak(self._hardware_busy_reason, "")
+        self._hardware.confirm_other_edits = _weak(
+            self._confirm_discard_configuration_edits, True
+        )
+        self._pixel_calibration_running = False
         self._configurations = ConfigurationsPage(self._mmc)
         self._acquire = AcquirePage(self._mmc)
         # A background open (see dropEvent) has no caller to raise into.
@@ -523,6 +542,11 @@ class MicroManagerGUI(QMainWindow):
             row.addWidget(self._status_message, 1)
             status_bar.messageChanged.connect(self._status_message.setText)
             status_bar.addPermanentWidget(content, 1)
+            if is_unicore(self._mmc):
+                self._py_chip = QLabel("Python devices", status_bar)
+                self._hardware.pyDevicesFolderChanged.connect(self._update_py_chip)
+                self._update_py_chip()
+                status_bar.addPermanentWidget(self._py_chip)
             status_bar.addPermanentWidget(self._bell_button)
             self._stack.currentChanged.connect(self._update_mda_status_visibility)
             self._update_mda_status_visibility()
@@ -558,7 +582,7 @@ class MicroManagerGUI(QMainWindow):
         if self._about is None:
             from pymmcore_gui.widgets._about_widget import AboutWidget
 
-            self._about = AboutWidget(parent=self)
+            self._about = AboutWidget(parent=self, core_class=type(self._mmc).__name__)
         self._about.show()
         self._about.raise_()
         self._about.activateWindow()
@@ -865,8 +889,45 @@ class MicroManagerGUI(QMainWindow):
             return "discard"
         return "cancel"
 
+    def load_configuration(self, path: str | Path, *, interactive: bool = True) -> bool:
+        """Load a .cfg through the Hardware page (see `HardwareSetupPage`)."""
+        return self._hardware.load_configuration(path, interactive=interactive)
+
+    def _hardware_busy_reason(self) -> str:
+        """Name the operation driving the hardware, or "" if none is."""
+        if self._mmc.mda.is_running():
+            return "an acquisition"
+        if self._pixel_calibration_running:
+            return "pixel calibration"
+        if self._acquire.viewers.autofocus_test_running:
+            return "autofocus"
+        if WhiteBalanceDialog.any_running():
+            return "white balance"
+        return ""
+
+    def _confirm_discard_configuration_edits(self) -> bool:
+        """Before a load replaces them, ask about unsaved group/pixel edits."""
+        if not self._configurations.is_dirty():
+            return True
+        reply = QMessageBox.question(
+            self,
+            "Unsaved changes",
+            f"There are unsaved changes in "
+            f"{' and '.join(self._configurations.dirty_parts())}.\n\n"
+            "Load a different configuration and discard them?",
+            QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+        )
+        return reply == QMessageBox.StandardButton.Discard
+
+    def _update_py_chip(self) -> None:
+        folder = self._py_folder.path
+        self._py_chip.setToolTip(
+            f"Running on UniMMCore. Python devices folder: {folder or 'none'}"
+        )
+
     def _on_pixel_calibration_running(self, running: bool) -> None:
         """Keep other microscope workflows unavailable during stage calibration."""
+        self._pixel_calibration_running = running
         configuration_index = self._stack.indexOf(self._configurations)
         for page in (self._installation, self._hardware, self._acquire):
             self._mode_tabs.setTabEnabled(self._stack.indexOf(page), not running)

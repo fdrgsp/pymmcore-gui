@@ -8,7 +8,11 @@ configuration wizard.
 from __future__ import annotations
 
 import logging
+import shlex
+import subprocess
+import sys
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -23,7 +27,7 @@ from pymmcore_gui._light_sources import (
     parse_channel_comments,
     write_channel_comments,
 )
-from pymmcore_gui._qt.QtCore import QEvent, QSize, Qt
+from pymmcore_gui._qt.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from pymmcore_gui._qt.QtWidgets import (
     QFileDialog,
     QMessageBox,
@@ -32,7 +36,15 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 from pymmcore_gui._theme import qcolor, theme
-from pymmcore_gui._unicore import config_needs_unicore, is_unicore
+from pymmcore_gui._unicore import (
+    ConfigInfo,
+    PyDeviceFolder,
+    PyDeviceProblem,
+    is_unicore,
+    read_config,
+    unicore_supported,
+    write_devices_path,
+)
 from pymmcore_gui.widgets._hardware._panes import (
     CORE_ROLES,
     AvailableDevicesPane,
@@ -40,12 +52,14 @@ from pymmcore_gui.widgets._hardware._panes import (
     InstalledDevicesPane,
 )
 from pymmcore_gui.widgets._hardware._peripherals import PeripheralsDialog
+from pymmcore_gui.widgets._hardware._py_devices import PyDevicesRow
 from pymmcore_gui.widgets._hardware._setup_pane import DeviceSetupPane
 from pymmcore_gui.widgets._tab_page import TabPage
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator, Sequence
 
+    from pymmcore_plus.experimental.unicore import PyDeviceLoadError, UniMMCore
     from pymmcore_plus.model import AvailableDevice, Property
 
     from pymmcore_gui._qt.QtGui import QResizeEvent, QShowEvent
@@ -54,6 +68,29 @@ if TYPE_CHECKING:
 CFG_FILTER = "Micro-Manager config (*.cfg);;All files (*)"
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _LoadReport:
+    """What a configuration load couldn't do, for its summary."""
+
+    problems: list[PyDeviceProblem] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+    locate_folder: bool = False  # the .cfg's device folder is gone
+
+
+@dataclass
+class _LoadLosses:
+    """What saving over the loaded `.cfg` would drop from it."""
+
+    path: Path
+    skipped: list[str]  # Python devices declared in the file that didn't load
+    failed_settings: list[PyDeviceProblem]  # on devices that did
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    """Whether `a` and `b` name one existing file, whatever their spelling."""
+    return a.exists() and b.exists() and a.samefile(b)
 
 
 @contextmanager
@@ -68,12 +105,25 @@ def _carry_on(action: str) -> Iterator[None]:
 class HardwareSetupPage(TabPage):
     """Three-pane hardware configuration editor."""
 
+    pyDevicesFolderChanged = Signal()
+
     def __init__(
-        self, mmcore: CMMCorePlus | None = None, parent: QWidget | None = None
+        self,
+        mmcore: CMMCorePlus | None = None,
+        parent: QWidget | None = None,
+        *,
+        py_folder: PyDeviceFolder | None = None,
     ) -> None:
         super().__init__(parent)
         self._core = mmcore or CMMCorePlus.instance()
         self._model = Microscope()
+        self._py_folder = py_folder or PyDeviceFolder()
+        self._py_available: list[AvailableDevice] = []
+        self._py_problems: list[PyDeviceProblem] = []
+        self._losses: _LoadLosses | None = None
+        # The window supplies checks for workflows and editors on other pages.
+        self.busy_reason: Callable[[], str] = self._default_busy_reason
+        self.confirm_other_edits: Callable[[], bool] = lambda: True
         # device loaded into core but not yet initialized/committed to the model
         self._pending: Device | None = None
         # serial device loaded on behalf of a pending device's "Port"
@@ -97,6 +147,18 @@ class HardwareSetupPage(TabPage):
         # available devices | (installed devices over device settings)
         #                   | default devices
         self.left.add_widget(self._available, 1)
+        self._py_row = PyDevicesRow()
+        self._py_row.loadRequested.connect(self._load_py_folder)
+        self._py_row.detailsRequested.connect(self._show_scan_problems)
+        if not unicore_supported():
+            self._py_row.set_unavailable(
+                "Python devices need pyMM run from source (`pip install pymmcore-gui`)."
+            )
+        elif not is_unicore(self._core):
+            self._py_row.set_unavailable(
+                "Start pyMM with `pymm -u` to use Python devices."
+            )
+        self.left.add_widget(self._py_row)
         self._detail_split = QSplitter(Qt.Orientation.Vertical)
         self._detail_split.addWidget(self._installed)
         self._detail_split.addWidget(self._setup)
@@ -284,33 +346,237 @@ class HardwareSetupPage(TabPage):
         self._core._mm_path = path
 
     def load_config(self) -> None:
-        """Load a .cfg file into the model and into the core."""
-        if not self._confirm_discard("Load a different configuration?"):
-            return
+        """Ask for a .cfg file and load it."""
         path, _ = QFileDialog.getOpenFileName(
             self, "Load hardware configuration", "", CFG_FILTER
         )
-        if not path or not self._confirm_python_devices_dropped(path):
-            return
+        if path:
+            try:
+                self.load_configuration(path)
+            except Exception as e:
+                self._warn(f"Failed to load {path}:\n\n{e}")
 
-        self._cancel_add()
+    def load_configuration(
+        self,
+        path: str | Path,
+        *,
+        interactive: bool = True,
+        py_devices_path: Path | None = None,
+    ) -> bool:
+        """Load a .cfg into the core, then mirror it into the model.
+
+        Check hardware activity before unloading anything. Interactive loads also
+        confirm unsaved edits and skipped Python devices. `py_devices_path`
+        repairs a moved folder, applied only after the old devices are unloaded.
+        Return False if refused or cancelled; raise if loading fails.
+        """
+        info = read_config(self._resolve_config(path))
+        if py_devices_path is not None:
+            info = replace(info, devices_path=py_devices_path.resolve())
+        if reason := self.busy_reason():
+            self._warn(f"Can't load a configuration while {reason} is running.")
+            return False
+        if interactive and not self._may_load(info):
+            return False
+
         self._loading = True
         try:
-            with busy(self._overlay, f"Loading {Path(path).name}…"):
-                # MMCore's native loader implements the complete .cfg
-                # semantics, including System/Startup, Core device roles,
-                # and commands newer than pymmcore-plus's editable model
-                # parser.  Once the live system is correct, mirror it into
-                # the model used by this page.
-                self._core.loadSystemConfiguration(path)
+            with busy(self._overlay, f"Loading {info.path.name}…"):
+                report = self._load_into_core(info)
                 self._model = Microscope.create_from_core(self._core)
-                self._model.config_file = path
+                self._model.config_file = str(info.path)
                 self._refresh_all()
             self._dirty = False
-        except Exception as e:
-            self._warn(f"Failed to load {path}:\n\n{e}")
         finally:
             self._loading = False
+
+        loaded = set(self._core.getLoadedDevices())
+        self._losses = _LoadLosses(
+            info.path,
+            [label for label in info.py_devices if label not in loaded],
+            [p for p in report.problems if p.device_kept],
+        )
+        if info.has_py_lines and not is_unicore(self._core) and not interactive:
+            report.notes.append(self._py_devices_unavailable(info))
+        if report.problems or report.notes:
+            # after the window appears, for a startup load
+            QTimer.singleShot(0, lambda: self._show_load_summary(info, report))
+        return True
+
+    def _resolve_config(self, path: str | Path) -> Path:
+        """Find `path` as the core would: relative names may be in the MM install."""
+        resolved = Path(path).expanduser()
+        if not resolved.exists() and not resolved.is_absolute():
+            if mm_path := getattr(self._core, "_mm_path", None):
+                resolved = Path(mm_path) / resolved
+        return resolved.absolute()
+
+    def _may_load(self, info: ConfigInfo) -> bool:
+        """Confirm edits can be discarded and Python devices can be skipped."""
+        if not self._confirm_discard("Load a different configuration?"):
+            return False
+        if not self.confirm_other_edits():
+            return False
+        if not info.has_py_lines or is_unicore(self._core):
+            return True
+        text = f"{self._py_devices_unavailable(info)}\n\nLoad it without them?"
+        choice = self._choose("Python devices", text, "Load without them")
+        return choice is not None
+
+    def _default_busy_reason(self) -> str:
+        return "an acquisition" if self._core.mda.is_running() else ""
+
+    def _py_devices_unavailable(self, info: ConfigInfo) -> str:
+        """Explain why this session can't load the `.cfg`'s Python devices."""
+        text = f"{info.path.name} declares Python devices, which "
+        if not unicore_supported():
+            return text + (
+                "need pyMM run from source (`pip install pymmcore-gui`). The "
+                "rest of the configuration can still be loaded."
+            )
+        args = ["pymm", "-c", str(info.path)]
+        command = (
+            subprocess.list2cmdline(args)
+            if sys.platform == "win32"
+            else shlex.join(args)
+        )
+        return text + (
+            "this session can't load. To use them, close pyMM and reopen it "
+            f"with `{command}` or `pymm --unicore` (`-u`)."
+        )
+
+    def _load_into_core(self, info: ConfigInfo) -> _LoadReport:
+        """Stop live mode and load; on UniMMCore, switch folders and tolerate."""
+        core = self._core
+        if core.isSequenceRunning():
+            core.stopSequenceAcquisition()
+        self._cancel_add()
+        report = _LoadReport()
+        if not is_unicore(core):
+            core.loadSystemConfiguration(str(info.path))
+            return report
+
+        # the old devices go first: only then may the folder's modules change
+        try:
+            core.unloadAllDevices()
+        except Exception as e:
+            report.notes.append(f"Shutting down the previous devices failed: {e}")
+        folder, note = self._py_folder.folder_for(info)
+        if note:
+            report.notes.append(note)
+        report.locate_folder = folder is None and info.devices_path is not None
+        self._activate_py_folder(folder)
+
+        def _on_error(err: PyDeviceLoadError) -> None:
+            report.problems.append(PyDeviceProblem.from_load_error(err))
+
+        cast("UniMMCore", core).loadSystemConfiguration(
+            info.path, on_device_error=_on_error
+        )
+        return report
+
+    def _show_load_summary(self, info: ConfigInfo, report: _LoadReport) -> None:
+        """List what didn't load, offering to locate a device folder that moved."""
+        skipped: dict[str, str] = {}
+        settings: list[str] = []
+        for p in report.problems:
+            if p.device_kept:
+                settings.append(f"  • {p.source}: {p.message()}")
+            elif p.source in skipped:  # its shutdown failed too
+                skipped[p.source] += f"; {p.message()}"
+            else:
+                skipped[p.source] = p.message()
+        sections = []
+        if skipped:
+            lines = "\n".join(f"  • {label}: {msg}" for label, msg in skipped.items())
+            sections.append(f"Python devices that were skipped:\n{lines}")
+        if settings:
+            sections.append(
+                "Settings that failed on devices that loaded:\n" + "\n".join(settings)
+            )
+        if report.notes:
+            sections.append("\n".join(f"  • {note}" for note in report.notes))
+
+        msg = self._message_box(
+            "Configuration loaded with problems",
+            f"{info.path.name} loaded, but:\n\n" + "\n\n".join(sections),
+            report.problems,
+        )
+        msg.addButton(QMessageBox.StandardButton.Ok)
+        if report.locate_folder:
+            locate = msg.addButton("Locate folder…", QMessageBox.ButtonRole.ActionRole)
+            if locate is not None:
+                locate.clicked.connect(lambda: self._locate_py_folder(info))
+        msg.open()
+
+    def _locate_py_folder(self, info: ConfigInfo) -> None:
+        """Browse to a moved device folder and retry through the load safeguards."""
+        folder = QFileDialog.getExistingDirectory(self, "Locate the Python devices")
+        if not folder:
+            return
+        try:
+            self.load_configuration(info.path, py_devices_path=Path(folder))
+        except Exception as e:
+            self._warn(f"Failed to load {info.path}:\n\n{e}")
+
+    # ── python devices folder ─────────────────────────────────────
+
+    def _activate_py_folder(self, folder: Path | None) -> None:
+        """Switch to `folder`: no device from the current one may be loaded."""
+        changed = folder != self._py_folder.path
+        self._py_folder.activate(folder)
+        if changed:
+            self._py_available = []
+            self._py_problems = []
+            self._py_row.set_problem_count(0)
+        self._py_row.set_path(self._py_folder.path)
+        self.pyDevicesFolderChanged.emit()
+
+    def _load_py_folder(self, text: str) -> None:
+        """Activate the typed folder and list its devices (empty: no folder)."""
+        folder = Path(text).expanduser().resolve() if text else None
+        if folder is not None and not folder.is_dir():
+            self._warn(f"{folder} is not a folder.")
+            return
+        in_use = self._py_folder.devices_in_use(self._core)
+        if folder != self._py_folder.path:
+            if in_use:
+                self._warn(
+                    f"Remove {', '.join(in_use)}, or start a New configuration, "
+                    "before switching folders."
+                )
+                return
+            self._activate_py_folder(folder)
+        # never mix old and new code in one device: reuse what loaded devices use
+        result = self._py_folder.scan(purge=not in_use)
+        self._py_available = result.devices
+        self._py_problems = result.problems
+        self._py_row.set_problem_count(len(result.problems))
+        self._refresh_available()
+        if result.problems or result.notes:
+            self._show_scan_problems(result.notes)
+
+    def _show_scan_problems(self, notes: Sequence[str] = ()) -> None:
+        """List the files that couldn't be used, with their tracebacks."""
+        text = "\n".join(f"  • {p.source}: {p.message()}" for p in self._py_problems)
+        if text:
+            text = f"Some files couldn't be used:\n\n{text}"
+        text = "\n\n".join([text, *notes]).strip()
+        self._message_box("Python devices", text, self._py_problems).open()
+
+    def _message_box(
+        self, title: str, text: str, problems: Sequence[PyDeviceProblem] = ()
+    ) -> QMessageBox:
+        """A warning box, with the problems' tracebacks under Details."""
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle(title)
+        msg.setTextFormat(Qt.TextFormat.PlainText)
+        msg.setText(text)
+        msg.finished.connect(msg.deleteLater)
+        if details := "\n".join(p.details() for p in problems):
+            msg.setDetailedText(details)
+        return msg
 
     def is_dirty(self) -> bool:
         """Whether the hardware configuration has unsaved edits."""
@@ -342,11 +608,18 @@ class HardwareSetupPage(TabPage):
             return False
         return self.save_to(path)
 
-    def save_to(self, path: str) -> bool:
-        """Write the full configuration to `path`, asking nothing about where."""
+    def save_to(self, path: str | Path) -> bool:
+        """Write the full configuration to `path`, asking nothing about where.
+
+        Only warns, offering Save As…, if that file has Python devices or
+        settings that didn't load, which the rewrite would drop.
+        """
+        if (target := self._confirm_overwrite(Path(path))) is None:
+            return False
+        path = target
         # Decided before the write, because model.save() regenerates the .cfg from
         # scratch and drops the per-channel settings comments it may hold.
-        channel_settings = self._channel_settings_to_preserve(Path(path))
+        channel_settings = self._channel_settings_to_preserve(path)
 
         # Config groups and pixel-size configs are edited on the Configurations
         # tab, which commits them to the live core. Pull those into the model so
@@ -362,11 +635,15 @@ class HardwareSetupPage(TabPage):
             self._model.save(path)
             if channel_settings:
                 write_channel_comments(
-                    Path(path), self._core.getChannelGroup(), channel_settings
+                    path, self._core.getChannelGroup(), channel_settings
                 )
+            if self._py_folder.path is not None:
+                write_devices_path(path, self._py_folder.path)
         except Exception as e:
             self._warn(f"Failed to save {path}:\n\n{e}")
             return False
+        if self._losses is not None and _same_file(path, self._losses.path):
+            self._losses = None
         self._model.config_file = str(path)
         self._dirty = False
         self._status(f"Saved {Path(path).name}")
@@ -398,21 +675,51 @@ class HardwareSetupPage(TabPage):
         )
         return kept if reply == QMessageBox.StandardButton.Yes else {}
 
-    def _confirm_python_devices_dropped(self, path: str) -> bool:
-        """Ask before loading a config whose Python devices this core ignores."""
-        if not config_needs_unicore(path) or is_unicore(self._core):
-            return True
-        reply = QMessageBox.warning(
-            self,
-            "Python devices need UniMMCore",
-            f"{Path(path).name} declares Python devices (`#py` lines), which the "
-            "standard core ignores.\n\nTo use them, restart pyMM and choose this "
-            "configuration at startup, or launch with `pymm --unicore`.\n\n"
-            "Load it anyway, without them?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
+    def _confirm_overwrite(self, path: Path) -> Path | None:
+        """Warn before a save drops what didn't load from the file it replaces.
+
+        Returns the path to save to (another one after Save As…), or None.
+        """
+        losses = self._losses
+        if losses is None or not _same_file(path, losses.path):
+            return path
+        installed = {d.name for d in self._model.devices}
+        skipped = [label for label in losses.skipped if label not in installed]
+        if not skipped and not losses.failed_settings:
+            return path
+
+        parts = []
+        if skipped:
+            n = len(skipped)
+            devices = "a Python device" if n == 1 else f"{n} Python devices"
+            parts.append(
+                f"Saving over {path.name} removes {devices} that didn't load "
+                f"({', '.join(skipped)})."
+            )
+        if failed := losses.failed_settings:
+            what = ", ".join(f"{p.setting} on {p.source}" for p in failed)
+            parts.append(
+                f"These settings failed to load: {what}. Saving over {path.name} "
+                "may replace or remove them."
+            )
+        text = "\n\n".join([*parts, "Save anyway, or Save As…?"])
+        choice = self._choose("Save configuration", text, "Save anyway", "Save As…")
+        if choice == "Save anyway":
+            return path
+        if choice == "Save As…" and (other := self.prompt_save_path()):
+            return Path(other)
+        return None
+
+    def _choose(self, title: str, text: str, *choices: str) -> str | None:
+        """Ask with a button per choice plus Cancel; return the choice or None."""
+        msg = self._message_box(title, text)
+        buttons = [msg.addButton(c, QMessageBox.ButtonRole.AcceptRole) for c in choices]
+        msg.setDefaultButton(msg.addButton(QMessageBox.StandardButton.Cancel))
+        msg.exec()
+        clicked = msg.clickedButton()
+        return next(
+            (c for b, c in zip(buttons, choices, strict=True) if b is clicked), None
         )
-        return reply == QMessageBox.StandardButton.Yes
 
     def _confirm_discard(self, question: str) -> bool:
         """Ask before throwing away unsaved edits."""
@@ -430,12 +737,18 @@ class HardwareSetupPage(TabPage):
 
     def _refresh_all(self) -> None:
         """Re-read available devices and repopulate every pane."""
-        with _carry_on("list the available devices"):
-            self._model.load_available_devices(self._core)
-        self._available.set_devices(self._model.available_devices)
+        self._refresh_available()
         self._installed.set_devices(self._model.devices)
         self._refresh_roles()
         self._setup.show_empty()
+
+    def _refresh_available(self) -> None:
+        """Re-list the adapters' devices (and loaded hubs'), plus Python ones."""
+        with _carry_on("list the available devices"):
+            self._model.load_available_devices(self._core)
+        self._available.set_devices(
+            [*self._model.available_devices, *self._py_available]
+        )
 
     # ── selection ─────────────────────────────────────────────────
 
@@ -588,7 +901,7 @@ class HardwareSetupPage(TabPage):
             # reload first: a previous failed attempt can leave the device
             # half-initialized in the core, so each try starts from a clean
             # load (this is what the Java DeviceSetupDlg does too).
-            dev.initialize(self._core, reload=True, apply_pre_init=True)
+            self._initialize(dev, reload=True)
         except Exception as e:
             self._warn(f"Failed to initialize {dev.name!r}:\n\n{e}")
             return
@@ -597,9 +910,7 @@ class HardwareSetupPage(TabPage):
         self._pending = None
         self._dirty = True
         # a new hub exposes child peripherals, so refresh availability first
-        with _carry_on("list the available devices"):
-            self._model.load_available_devices(self._core)
-        self._available.set_devices(self._model.available_devices)
+        self._refresh_available()
         self._installed.set_devices(self._model.devices)
         self._sync_roles()
         if dev.device_type is DeviceType.Hub:
@@ -621,7 +932,7 @@ class HardwareSetupPage(TabPage):
                 child.load(self._core)
                 # applies parent_label via core.setParentLabel
                 child.apply_to_core(self._core)
-                child.initialize(self._core, apply_pre_init=True)
+                self._initialize(child)
             except Exception as e:
                 failures[child.name] = str(e)
                 with _carry_on(f"unload {child.name!r}"):
@@ -630,14 +941,35 @@ class HardwareSetupPage(TabPage):
             self._model.devices.append(child)
             self._dirty = True
 
-        with _carry_on("list the available devices"):
-            self._model.load_available_devices(self._core)
-        self._available.set_devices(self._model.available_devices)
+        self._refresh_available()
         self._installed.set_devices(self._model.devices)
         self._sync_roles()
         if failures:
             listing = "\n".join(f"  • {n}: {m}" for n, m in failures.items())
             self._warn(f"Some peripherals could not be added:\n\n{listing}")
+
+    def _initialize(self, dev: Device, *, reload: bool = False) -> None:
+        """Initialize `dev` with its pre-init values, as `Device.initialize` does.
+
+        A Python device's `initialize()` doesn't raise through the core, so it is
+        checked here, and a failed device is unloaded before anything polls it.
+        """
+        core = self._core
+        if reload:
+            dev.load(core, reload=True)
+        if not (is_unicore(core) and cast("UniMMCore", core).isPyDevice(dev.name)):
+            dev.initialize(core, apply_pre_init=True)
+            return
+        for prop in dev.properties:
+            if prop.is_pre_init:
+                prop.apply_to_core(core, then_update=False)
+        core.initializeDevice(dev.name)
+        if error := cast("UniMMCore", core).getPyDeviceInitializationError(dev.name):
+            with _carry_on(f"unload {dev.name!r}"):
+                dev.unload(core)
+            raise error
+        dev.initialized = True
+        dev.apply_to_core(core)
 
     def _cancel_add(self) -> None:
         """Unload the pending device, if any."""
@@ -668,9 +1000,7 @@ class HardwareSetupPage(TabPage):
             with _carry_on(f"unload {victim.name!r}"):
                 victim.unload(self._core)
 
-        with _carry_on("list the available devices"):
-            self._model.load_available_devices(self._core)
-        self._available.set_devices(self._model.available_devices)
+        self._refresh_available()
         self._installed.set_devices(self._model.devices)
         self._sync_roles()
         self._setup.show_empty()
@@ -689,7 +1019,7 @@ class HardwareSetupPage(TabPage):
         try:
             if prop.is_pre_init and device is not None and device.initialized:
                 # pre-init values only take effect on a fresh init, so reload
-                device.initialize(self._core, reload=True, apply_pre_init=True)
+                self._initialize(device, reload=True)
             else:
                 prop.apply_to_core(self._core)
         except Exception as e:
@@ -722,7 +1052,7 @@ class HardwareSetupPage(TabPage):
             dev.load(self._core)
             if dev.parent_label:
                 self._core.setParentLabel(dev.name, dev.parent_label)
-            dev.initialize(self._core, apply_pre_init=True)
+            self._initialize(dev)
         except Exception as e:
             dev.name = old_name  # roll the model back to match the core
             self._warn(f"Failed to rename {old_name!r}:\n\n{e}")

@@ -143,3 +143,13 @@ def test_app(app_process: subprocess.Popen) -> None:
     # startup passes. That is exactly how a frozen build shipped that showed
     # the startup dialog and then silently exited.
     assert app_process.poll() is None, "app exited on its own shortly after startup"
+
+
+def test_unicore_flag_is_refused() -> None:
+    """The standalone app never runs Python devices: `-u` exits with a message."""
+    result = subprocess.run(
+        [str(APP), "-u"], capture_output=True, timeout=READY_TIMEOUT
+    )
+    assert result.returncode == 1
+    if os.name != "nt":  # the Windows build is windowed: no console to write to
+        assert b"pyMM run from source" in result.stderr

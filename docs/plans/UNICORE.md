@@ -1,6 +1,22 @@
 # Plan: Python device adapters (UniMMCore) in pyMM
 
-Status: proposal, not started. Written 2026-11-15 against `cite` and
+Status: implemented 2026-11-15 on gui `cite-unicore`, against plus `cite`
+`74bfcbc` (locked on gui `cite`). User guide: `docs/PYTHON_DEVICES.md`.
+Deviations from the plan below:
+
+- plus also gained `UniMMCore.getPyDeviceInitializationError(label)`, so the
+  Add flow (§4.4) can say *why* `initialize()` failed, and a fix to
+  `CMMCorePlus.iterProperties`, which called the C++ `getPropertyType` and so
+  raised for any Python device with a property (it broke the light-source
+  scan of the Channels and pixel-calibration panels).
+- `load_configuration` is `HardwareSetupPage.load_configuration`; the window
+  supplies the hardware-busy and Configurations-edits checks as hooks and
+  forwards startup loads to it. The startup folder is activated inside that
+  load, before anything runs, rather than before the window exists.
+- After a configuration load the folder is set but not scanned: its devices
+  join Available devices on the next **Load**, as for any folder.
+
+Written 2026-11-15 against `cite` and
 pymmcore-plus `cite` (`6e582a5`). **Revised the same day after an external
 review:** runtime core swapping is dropped. The core is chosen once, at
 startup, and the `--py-devices` flag is gone. §14 records why. A second

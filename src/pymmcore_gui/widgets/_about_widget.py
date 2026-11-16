@@ -25,7 +25,7 @@ RESOURCES = Path(__file__).parent.parent / "resources"
 class AboutWidget(QDialog):
     """Widget to display information about the application."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, core_class: str = "") -> None:
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.Sheet)
 
@@ -55,6 +55,8 @@ class AboutWidget(QDialog):
         sys_info = system_info()
         sys_info.pop("tifffile", None)
         sys_info.pop("zarr", None)
+        if core_class:
+            sys_info["core"] = core_class
         self._info = {"pymmcore-gui": __version__, **sys_info}
 
         form = QFormLayout()

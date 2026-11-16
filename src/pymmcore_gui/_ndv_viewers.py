@@ -186,6 +186,8 @@ class AcquireViewersManager(QObject):
         # _capture_unpreviewed_autofocus_image.  It lets us retain snaps made
         # before the GUI thread has had a chance to construct the lazy Preview.
         self._showing_autofocus_images = False
+        # True while the autofocus settings dialog's Test runs (on a worker).
+        self.autofocus_test_running = False
         # Set when a still-running run's viewer is closed: release_sink()
         # refuses to drop a sink while it's being written to, so the release
         # is retried once sequenceFinished confirms the run is done.
@@ -394,6 +396,7 @@ class AcquireViewersManager(QObject):
         preview = self.preview if show_images else None
         if preview is not None:
             preview.set_autofocus_running(True)
+        self.autofocus_test_running = True
         try:
             result = run_software_autofocus(
                 self._core, method, dict(settings), should_cancel=should_cancel
@@ -407,6 +410,7 @@ class AcquireViewersManager(QObject):
                 with capture_state(self._core, _final_focus_capture(method, settings)):
                     self._core.snapImage()
         finally:
+            self.autofocus_test_running = False
             if preview is not None:
                 preview.set_autofocus_running(False)
         return result

@@ -25,7 +25,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 from pymmcore_gui._settings import Settings
-from pymmcore_gui._unicore import config_needs_unicore, is_unicore, startup_core
+from pymmcore_gui._unicore import is_unicore, startup_core
 
 from . import _sentry
 
@@ -140,6 +140,8 @@ def create_mmgui(
         Even when False, a new `UniMMCore` is created if the startup config
         declares Python devices (`#py` lines) and neither `mmcore` nor a global
         instance exists yet, since the standard core would leave those out.
+        The core is chosen once: the window never swaps it. The standalone
+        (frozen) app always runs on the standard core.
     install_sys_excepthook : bool
         If True (the default), installs a custom excepthook that does not raise
         sys.exit(). This is necessary to prevent the application from closing when an
@@ -273,16 +275,15 @@ def _load_startup_config(win: WindowProtocol, config: Path | str) -> None:
     (the startup dialog, `-c`, or a stored auto-load preference), so a warning
     alone -- equally invisible when frozen -- would leave them staring at an
     app that silently didn't do what they asked. Show it instead.
+
+    A window with `load_configuration` (the application window) loads it like
+    any GUI load: skipped Python devices are summarized once the window shows.
     """
-    if config_needs_unicore(config) and not is_unicore(win.mmcore):
-        warnings.warn(
-            f"{config} declares Python devices (`#py` lines), which the standard "
-            "core ignores. Pass a UniMMCore as `mmcore`, or `unicore=True`.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
     try:
-        win.mmcore.loadSystemConfiguration(config)
+        if (load := getattr(win, "load_configuration", None)) is not None:
+            load(config, interactive=False)
+        else:
+            win.mmcore.loadSystemConfiguration(config)
     except Exception as e:
         warnings.warn(
             f"Failed to load system configuration: {e}",

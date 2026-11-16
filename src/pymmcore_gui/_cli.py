@@ -9,6 +9,12 @@ import typer
 import pymmcore_gui
 
 __all__ = ["app", "main"]
+UNICORE_HELP = (
+    "Run on pymmcore-plus's UniMMCore, which can also load Python device adapters "
+    "(.py files; set their folder in Hardware Setup). Their dependencies must be "
+    "installed in this Python environment. Chosen automatically when the startup "
+    "config declares Python devices. Not available in the standalone app."
+)
 app = typer.Typer(
     name="pymm",
     add_completion=False,
@@ -60,9 +66,7 @@ def _main(
     layout: str | None = typer.Option(
         None, "-l", "--layout", help="Name of the saved window layout to open with."
     ),
-    unicore: bool = typer.Option(
-        False, "-u", "--unicore", help="Run on UniMMCore (Python device adapters)."
-    ),
+    unicore: bool = typer.Option(False, "-u", "--unicore", help=UNICORE_HELP),
 ) -> None:
     """pymm: pymmcore-gui command line (v{version}).
 
@@ -121,19 +125,19 @@ def run(
         "--no-telemetry",
         help="Disable telemetry.",
     ),
-    unicore: bool = typer.Option(
-        False,
-        "-u",
-        "--unicore",
-        help=(
-            "Run on pymmcore-plus's experimental UniMMCore, which can also load "
-            "Python device adapters. Chosen automatically when the startup "
-            "config declares Python devices (lines starting with `#py`)."
-        ),
-    ),
+    unicore: bool = typer.Option(False, "-u", "--unicore", help=UNICORE_HELP),
 ) -> None:
     """Run the Micro-Manager GUI (this is the default command)."""
     from pymmcore_gui import create_mmgui
+    from pymmcore_gui._unicore import unicore_supported
+
+    if unicore and not unicore_supported():
+        typer.secho(
+            "Python devices need pyMM run from source (`pip install pymmcore-gui`).",
+            fg="red",
+            err=True,
+        )
+        raise typer.Exit(1)
 
     if layout is not None:
         layout = _resolve_layout(layout)

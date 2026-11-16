@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -14,6 +13,8 @@ from pymmcore_gui._qt.QtWidgets import QApplication, QMainWindow, QMessageBox
 from pymmcore_gui.widgets._startup import StartupChoice
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from pytestqt.qtbot import QtBot
 
     from pymmcore_gui._settings import Settings
@@ -37,7 +38,7 @@ def test_main_app(monkeypatch: MonkeyPatch) -> None:
 
 
 def test_failed_startup_config_load_shows_a_dialog(
-    settings: Settings, mmcore: CMMCorePlus
+    settings: Settings, mmcore: CMMCorePlus, tmp_path: Path
 ) -> None:
     """A failure loading the user's chosen/last-used config must be visible.
 
@@ -46,7 +47,8 @@ def test_failed_startup_config_load_shows_a_dialog(
     ``LoadConfigDialog`` (or relying on a stored auto-load preference) could
     silently fail with no feedback at all.
     """
-    settings.last_config = Path("this-config-does-not-exist.cfg")
+    settings.last_config = tmp_path / "broken.cfg"
+    settings.last_config.write_text("Property,Core,Initialize,0\n")
     settings.auto_load_last_config = True
 
     def _raise(*_a: object, **_k: object) -> None:
@@ -74,7 +76,7 @@ def test_failed_startup_config_load_shows_a_dialog(
         try:
             critical.assert_called_once()
             args = critical.call_args.args
-            assert "this-config-does-not-exist.cfg" in args[2]
+            assert "broken.cfg" in args[2]
             assert "boom" in args[2]
         finally:
             for wdg in QApplication.topLevelWidgets():

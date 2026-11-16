@@ -223,8 +223,9 @@ class AvailableDevicesPane(QWidget):
             adapter = dev.adapter_name
             if dev.library_hub is not None:
                 adapter = f"[{dev.library_hub.adapter_name}] {adapter}"
+            library = f"{dev.library} (Py)" if dev.is_py_device else dev.library
             self._table.add_row(
-                (dev.library, adapter, dev.device_type.name), dev, dev.description
+                (library, adapter, dev.device_type.name), dev, dev.description
             )
 
     # ── filtering ─────────────────────────────────────────────────

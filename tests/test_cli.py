@@ -92,6 +92,17 @@ def test_unicore_flag_is_forwarded() -> None:
     assert mock_create.call_args.kwargs["unicore"] is False
 
 
+def test_unicore_flag_is_refused_in_the_standalone_app() -> None:
+    with (
+        patch("sys.frozen", True, create=True),
+        patch("pymmcore_gui.create_mmgui") as mock_create,
+    ):
+        result = runner.invoke(app, ["run", "-u"])
+    assert result.exit_code == 1
+    assert "pyMM run from source" in result.output
+    mock_create.assert_not_called()
+
+
 def test_unicore_flag_works_without_the_run_command() -> None:
     """`pymm --unicore` is forwarded to `run`, like `-c` and `-l`."""
     argv = ["pymm", "--unicore"]
