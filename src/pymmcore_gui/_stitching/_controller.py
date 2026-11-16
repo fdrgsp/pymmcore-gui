@@ -468,9 +468,14 @@ class StitchingController(QObject):
     def _finish(self, handle: StitchJob, state: JobState) -> None:
         if handle.state.is_done:
             return
-        if handle.process is not None:
-            handle.process.deleteLater()
+        if (proc := handle.process) is not None:
             handle.process = None
+            # Its slots hold this controller: left connected until the deferred
+            # delete, they could make it the last owner, destroying the
+            # controller from inside its own child's destructor (a crash).
+            for signal in (proc.started, proc.finished, proc.errorOccurred):
+                signal.disconnect()
+            proc.deleteLater()
         self._set_state(handle, state)
         if state == JobState.FINISHED:
             self._delete_later(handle, keep_dir=False, outputs=False)

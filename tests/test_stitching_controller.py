@@ -6,10 +6,12 @@ multiview-stitcher nor real data -- except the last, which runs one real job.
 
 from __future__ import annotations
 
+import gc
 import os
 import sys
 import threading
 import time
+import weakref
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -18,6 +20,7 @@ import pytest
 import useq
 
 from _stitch_fakes import fake_controller, write_fake_worker
+from pymmcore_gui._qt.QtCore import QCoreApplication, QEvent
 from pymmcore_gui._stitching import _controller as ctrl_mod
 from pymmcore_gui._stitching import _paths, is_available
 from pymmcore_gui._stitching._controller import (
@@ -199,6 +202,30 @@ def test_failed_to_start(qtbot: QtBot, tmp_path: Path) -> None:
         handle = ctrl.submit(_job(tmp_path))
     assert handle.error is not None
     assert "Could not start" in handle.error.message
+
+
+def test_a_finished_process_does_not_keep_its_controller_alive(
+    qtbot: QtBot, tmp_path: Path
+) -> None:
+    """A dropped controller survives its finished process's deferred delete.
+
+    The process's slots held the controller, so deleting the process destroyed
+    the controller from inside its child's destructor: a PySide6 crash, seen on
+    Windows, where `FailedToStart` fires inside `start()` and left the delete
+    pending into the next test.
+    """
+    ctrl = StitchingController(
+        registry=tmp_path / "registry",
+        command=lambda d: (str(tmp_path / "no-such-program"), []),
+        cleanup_on_start=False,
+    )
+    with qtbot.waitSignal(ctrl.jobFailed, timeout=20_000):
+        ctrl.submit(_job(tmp_path))
+    ref = weakref.ref(ctrl)
+    del ctrl
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    gc.collect()
+    assert ref() is None
 
 
 def test_cancel_waits_for_exit_then_deletes_off_the_gui_thread(
