@@ -20,7 +20,6 @@ import pytest
 import useq
 
 from _stitch_fakes import fake_controller, write_fake_worker
-from pymmcore_gui._qt.QtCore import QCoreApplication, QEvent
 from pymmcore_gui._stitching import _controller as ctrl_mod
 from pymmcore_gui._stitching import _paths, is_available
 from pymmcore_gui._stitching._controller import (
@@ -223,7 +222,7 @@ def test_a_finished_process_does_not_keep_its_controller_alive(
         ctrl.submit(_job(tmp_path))
     ref = weakref.ref(ctrl)
     del ctrl
-    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    qtbot.wait(10)  # runs the process's deferred delete
     gc.collect()
     assert ref() is None
 
