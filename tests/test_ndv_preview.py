@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from importlib import import_module
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
@@ -12,6 +13,7 @@ from cmap import Colormap
 from ndv.models import ChannelMode, LUTModel, RingBuffer
 
 import pymmcore_gui.widgets.image_preview._ndv_preview as preview_module
+from pymmcore_gui._qt.QtWidgets import QApplication
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
 from pymmcore_gui.widgets.image_preview._preview_base import ImagePreviewBase
 
@@ -347,6 +349,32 @@ def test_rgb_then_mono_frames_leave_no_component_slider(
     preview.append(np.zeros((8, 12), dtype=np.uint16))
 
     assert set(preview.viewer.widget().dims_sliders._sliders) == {0, 1, 2}
+
+
+@pytest.mark.skipif(
+    not QApplication.__module__.startswith("PySide6"),
+    reason="PySide6 thread wrapper lifetime regression",
+)
+def test_rgb_preview_after_thread_wrapper_invalidation(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    # by name: mypy runs where only PyQt6 is installed
+    invalidate = import_module("shiboken6").invalidate
+
+    # Import before invalidation to expose ndv versions that cache the wrapper.
+    import_module("ndv.views._qt._main_thread")
+    preview = NDVPreview(mmcore)
+    qtbot.addWidget(preview)
+    app = QApplication.instance()
+    assert app is not None
+    invalidate(app.thread())
+
+    mmcore.setProperty("Camera", "PixelType", "32bitRGB")
+    mmcore.snapImage()
+
+    qtbot.waitUntil(lambda: "RGB" in preview.viewer._lut_controllers)
+    assert preview.viewer._lut_controllers["RGB"].handles
+    assert preview._white_balance_btn is not None
 
 
 def test_preview_records_only_ordinary_snaps(
