@@ -220,6 +220,14 @@ def test_standard_launch_keeps_the_standard_core(
     assert not isinstance(win.mmcore, UniMMCore)
 
 
+def test_a_config_with_groups_loads_into_a_unicore_window(qtbot: QtBot) -> None:
+    """Widgets reacting to config events never query a half-loaded UniMMCore."""
+    win = _launch(mm_config=str(TEST_CONFIG), unicore=True)
+    qtbot.addWidget(win)
+    assert isinstance(win.mmcore, UniMMCore)
+    assert "Channel" in win.mmcore.getAvailableConfigGroups()
+
+
 def test_standalone_app_never_starts_unicore(
     py_cfg: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
