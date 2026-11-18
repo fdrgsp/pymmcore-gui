@@ -73,7 +73,7 @@ from pymmcore_gui._theme import (
 )
 from pymmcore_gui._theme._dark import DARK_THEME
 from pymmcore_gui._theme._light import LIGHT_THEME
-from pymmcore_gui._unicore import PyDeviceFolder, is_unicore
+from pymmcore_gui._unicore import PyDeviceFolder
 from pymmcore_gui._utils import NO_PIXEL_SIZE
 from pymmcore_gui.widgets._acquire import AcquirePage
 from pymmcore_gui.widgets._configurations import ConfigurationsPage
@@ -542,11 +542,6 @@ class MicroManagerGUI(QMainWindow):
             row.addWidget(self._status_message, 1)
             status_bar.messageChanged.connect(self._status_message.setText)
             status_bar.addPermanentWidget(content, 1)
-            if is_unicore(self._mmc):
-                self._py_chip = QLabel("Python devices", status_bar)
-                self._hardware.pyDevicesFolderChanged.connect(self._update_py_chip)
-                self._update_py_chip()
-                status_bar.addPermanentWidget(self._py_chip)
             status_bar.addPermanentWidget(self._bell_button)
             self._stack.currentChanged.connect(self._update_mda_status_visibility)
             self._update_mda_status_visibility()
@@ -918,12 +913,6 @@ class MicroManagerGUI(QMainWindow):
             QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
         )
         return reply == QMessageBox.StandardButton.Discard
-
-    def _update_py_chip(self) -> None:
-        folder = self._py_folder.path
-        self._py_chip.setToolTip(
-            f"Running on UniMMCore. Python devices folder: {folder or 'none'}"
-        )
 
     def _on_pixel_calibration_running(self, running: bool) -> None:
         """Keep other microscope workflows unavailable during stage calibration."""

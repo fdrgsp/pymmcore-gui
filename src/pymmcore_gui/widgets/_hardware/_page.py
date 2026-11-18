@@ -27,7 +27,7 @@ from pymmcore_gui._light_sources import (
     parse_channel_comments,
     write_channel_comments,
 )
-from pymmcore_gui._qt.QtCore import QEvent, QSize, Qt, QTimer, Signal
+from pymmcore_gui._qt.QtCore import QEvent, QSize, Qt, QTimer
 from pymmcore_gui._qt.QtWidgets import (
     QFileDialog,
     QMessageBox,
@@ -104,8 +104,6 @@ def _carry_on(action: str) -> Iterator[None]:
 
 class HardwareSetupPage(TabPage):
     """Three-pane hardware configuration editor."""
-
-    pyDevicesFolderChanged = Signal()
 
     def __init__(
         self,
@@ -530,7 +528,6 @@ class HardwareSetupPage(TabPage):
             self._py_problems = []
             self._py_row.set_problem_count(0)
         self._py_row.set_path(self._py_folder.path)
-        self.pyDevicesFolderChanged.emit()
 
     def _load_py_folder(self, text: str) -> None:
         """Activate the typed folder and list its devices (empty: no folder)."""

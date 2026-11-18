@@ -49,8 +49,10 @@ class PyDevicesRow(QWidget):
         self._path.setPlaceholderText("Folder of .py device files")
         self._path.returnPressed.connect(self._emit_load)
         self._browse = QPushButton("Browse…")
+        self._browse.setProperty("variant", "subtle")
         self._browse.clicked.connect(self._browse_folder)
         self._load = QPushButton("Load")
+        self._load.setProperty("variant", "primary")
         self._load.clicked.connect(self._emit_load)
 
         self._help = QLabel(HELP)

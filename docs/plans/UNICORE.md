@@ -15,6 +15,10 @@ Deviations from the plan below:
   load, before anything runs, rather than before the window exists.
 - After a configuration load the folder is set but not scanned: its devices
   join Available devices on the next **Load**, as for any folder.
+- plus `67dd9ce` holds core events while UniMMCore loads a config, as MMCore's
+  loader does: listeners reacting to each line queried a half-loaded system.
+- No status-bar chip (§6): the Python devices row, enabled only on UniMMCore,
+  and the About dialog already show which core runs.
 
 Written 2026-11-15 against `cite` and
 pymmcore-plus `cite` (`6e582a5`). **Revised the same day after an external

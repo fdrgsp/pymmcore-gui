@@ -757,14 +757,13 @@ def test_saving_over_a_file_warns_about_what_did_not_load(
 # ── the window ────────────────────────────────────────────────────
 
 
-def test_window_shows_the_core_and_guards_loads(
+def test_window_guards_loads(
     py_cfg: Path, qtbot: QtBot, summaries: list, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(_mmcore_plus, "_instance", None)
     win = _launch(mm_config=str(py_cfg))
     qtbot.addWidget(win)
 
-    assert "py_devices" in win._py_chip.toolTip()
     assert win._hardware_busy_reason() == ""
     win._on_pixel_calibration_running(True)
     assert win._hardware_busy_reason() == "pixel calibration"
