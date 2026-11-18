@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from unittest.mock import Mock, patch
 from weakref import ref
 
 import numpy as np
@@ -19,7 +20,7 @@ import useq
 
 from _stitch_fakes import fake_controller, write_fake_worker
 from pymmcore_gui._qt.QtCore import QCoreApplication, QEvent
-from pymmcore_gui._qt.QtWidgets import QApplication, QDialog, QWidget
+from pymmcore_gui._qt.QtWidgets import QApplication, QDialog, QMessageBox, QWidget
 from pymmcore_gui._stitching import _session as session_mod
 from pymmcore_gui._stitching._controller import JobState, StitchingController
 from pymmcore_gui._stitching._models import (
@@ -43,6 +44,7 @@ if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
     from pytestqt.qtbot import QtBot
 
+    from pymmcore_gui._qt.QtWidgets import QMenu
     from pymmcore_gui._settings import Settings
 
 GRID = useq.GridRowsColumns(
@@ -784,6 +786,46 @@ def test_reopened_mosaic_offers_restitch(
         viewer._stitch_btn.click()
     assert blocker.args is not None
     assert blocker.args[0].path == mosaic
+
+
+def test_reopened_mosaic_offers_reuse_and_stage_moves(
+    qtbot: QtBot,
+    gui_with_stitching: Any,
+    mmcore: CMMCorePlus,
+    tmp_path: Path,
+    shown_menus: list[QMenu],
+) -> None:
+    gui = gui_with_stitching
+    seq = useq.MDASequence(grid_plan=GRID)
+    mosaic = _fake_mosaic(
+        qtbot,
+        mmcore,
+        tmp_path,
+        sequence=seq.model_dump(mode="json"),
+        origin_xy_um=[100.0, 200.0],
+    )
+    viewer = gui.acquire.viewers.open_acquisition(mosaic)
+    assert viewer.mda_sequence == seq
+
+    # (row 3, column 5) is under the mouse
+    viewer._highlight_pos = viewer._data_point_to_world(5.5, 3.5)
+    assert viewer._show_context_menu(Mock())
+    actions = {a.text(): a for a in shown_menus[0].actions()}
+    assert list(actions) == ["Re-use MDA…", "Move Stage Here", "Re-stitch…"]
+
+    # the page asks before replacing the MDA settings
+    no = QMessageBox.StandardButton.No
+    with (
+        patch.object(QMessageBox, "question", return_value=no) as question,
+        qtbot.waitSignal(gui.acquire.viewers.reuseMDARequested) as blocker,
+    ):
+        actions["Re-use MDA…"].trigger()
+    question.assert_called_once()
+    assert blocker.args == [seq, viewer.source_title]
+
+    actions["Move Stage Here"].trigger()
+    mmcore.waitForSystem()
+    assert mmcore.getXYPosition() == pytest.approx((105.0, 203.0), abs=0.01)
 
 
 def _restitch_request(mosaic: Path) -> Any:

@@ -24,7 +24,7 @@ from pymmcore_plus.autofocus import (
 )
 from pymmcore_plus.mda import OmeWritersSink, frame_meta_to_ome
 from superqt import QIconifyIcon
-from useq import SoftwareAutofocus
+from useq import MDASequence, SoftwareAutofocus
 
 from pymmcore_gui import _stitching
 from pymmcore_gui._acquisition_loader import open_acquisition as _open_acquisition
@@ -47,6 +47,7 @@ from pymmcore_gui._qt.QtCore import (
 )
 from pymmcore_gui._qt.QtWidgets import QMenu, QPushButton, QSplitter
 from pymmcore_gui._stitching import can_stitch
+from pymmcore_gui._stitching._models import ProvenanceError, read_provenance
 from pymmcore_gui._utils import autofocus_kind, connect_direct
 from pymmcore_gui.widgets.image_preview._ndv_preview import NDVPreview
 from pymmcore_gui.widgets.image_preview._snap_album import (
@@ -64,7 +65,7 @@ if TYPE_CHECKING:
     from pymmcore_plus.autofocus import AutofocusResult
     from pymmcore_plus.mda import SinkProtocol
     from pymmcore_plus.metadata import FrameMetaV1, SummaryMetaV1
-    from useq import MDAEvent, MDASequence
+    from useq import MDAEvent
 
     from pymmcore_gui._acquisition_loader import LoadedAcquisition
     from pymmcore_gui._qt.QtAds import CDockAreaWidget, CDockManager
@@ -651,17 +652,8 @@ class AcquireViewersManager(QObject):
                 title=loaded.title,
             )
             viewer.set_stitch_callback(lambda: self.stitchRequested.emit(saved))
-        elif loaded.stitching is not None and _stitching.is_available():
-            mosaic = StitchedMosaic(
-                path=loaded.source_path,
-                metadata=dict(loaded.stitching),
-                title=loaded.title,
-            )
-            viewer.set_stitch_callback(
-                lambda: self.restitchRequested.emit(mosaic),
-                tooltip="Stitch again with other settings…",
-                menu_text="Re-stitch…",
-            )
+        elif loaded.stitching is not None:
+            self._offer_mosaic_actions(viewer, loaded)
         # So the Save button re-exports this acquisition's *real* recovered
         # metadata (dimensions, physical scale, channel names, summary
         # metadata) instead of falling back to stamping the microscope's
@@ -678,6 +670,39 @@ class AcquireViewersManager(QObject):
 
         self._records[dw] = record
         return viewer
+
+    def _offer_mosaic_actions(
+        self, viewer: MMArrayViewer, loaded: LoadedAcquisition
+    ) -> None:
+        """Re-use its acquisition's MDA, move the stage over it, or re-stitch it."""
+        metadata = dict(loaded.stitching or {})
+        with suppress(ProvenanceError):
+            provenance = read_provenance(metadata)
+            if provenance.sequence is not None:
+                sequence = MDASequence.model_validate(provenance.sequence)
+                title = loaded.title
+                viewer.mda_sequence = sequence
+                viewer._reuse_mda_callback = lambda: self.reuseMDARequested.emit(
+                    sequence, title
+                )
+            if provenance.origin_xy_um is not None:
+                (x0, y0), p = provenance.origin_xy_um, provenance.pixel_size_um
+                viewer._move_stage_callback = lambda row, col: self._move_stage(
+                    x0 + col * p, y0 + row * p
+                )
+        if _stitching.is_available():
+            mosaic = StitchedMosaic(
+                path=loaded.source_path, metadata=metadata, title=loaded.title
+            )
+            viewer.set_stitch_callback(
+                lambda: self.restitchRequested.emit(mosaic),
+                tooltip="Stitch again with other settings…",
+                menu_text="Re-stitch…",
+            )
+
+    def _move_stage(self, x: float, y: float) -> None:
+        if self._core.getXYStageDevice():
+            self._core.setXYPosition(x, y)
 
     def _on_sequence_started(self, sequence: MDASequence, meta: SummaryMetaV1) -> None:
         """Create a viewer backed by the acquisition's live sink view."""

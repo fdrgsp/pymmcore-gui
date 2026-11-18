@@ -590,6 +590,7 @@ def _provenance(
     transforms: dict[Any, list[np.ndarray]] | None,
     info: dict[str, Any],
     fingerprint: dict[str, Any],
+    origin_xy_um: tuple[float, float] | None,
 ) -> dict[str, Any]:
     """How the mosaic was made, as JSON-ready data."""
 
@@ -606,6 +607,8 @@ def _provenance(
         linear_part=job.linear_part,
         z_step_um=job.z_step_um,
         channel_names=job.channel_names,
+        sequence=job.sequence,
+        origin_xy_um=origin_xy_um,
         transforms=None
         if transforms is None
         else {_t_key(t): [m.tolist() for m in corr] for t, corr in transforms.items()},
@@ -613,6 +616,20 @@ def _provenance(
         groups=info.get("components"),
         multiview_stitcher_version=_mvs_version(),
     ).model_dump(mode="json")
+
+
+def _origin_xy(url: Path) -> tuple[float, float] | None:
+    """Stage (x, y) of an OME-Zarr mosaic's first pixel, from its translation."""
+    import zarr
+
+    root: Any = zarr.open_group(str(url), mode="r")
+    ms = root.attrs["multiscales"][0]
+    axes = [str(a["name"]).lower() for a in ms["axes"]]
+    for transform in ms["datasets"][0].get("coordinateTransformations", []):
+        if transform.get("type") == "translation":
+            origin = dict(zip(axes, transform["translation"], strict=True))
+            return float(origin["x"]), float(origin["y"])
+    return None
 
 
 def _write_provenance(url: Path, record: dict[str, Any]) -> None:
@@ -683,7 +700,7 @@ def _stitch_group(
         remove_path(path)
     _fuse(images, job, REG_KEY if register else STAGE_KEY, fused, progress)
 
-    record = _provenance(job, group, transforms, info, fingerprint)
+    record = _provenance(job, group, transforms, info, fingerprint, _origin_xy(fused))
     if is_tiff_output(group.output):
         _convert_to_tiff(fused, group.tmp_output, group, record, progress)
         progress.set(Phase.FINISHING)

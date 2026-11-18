@@ -19,7 +19,6 @@ from ome_writers import (
 )
 from pymmcore_widgets.useq_widgets import PYMMCW_METADATA_KEY
 
-import pymmcore_gui._array_viewer as array_viewer_module
 import pymmcore_gui._ndv_viewers as acquire_viewers_module
 from pymmcore_gui._main_window import MicroManagerGUI
 from pymmcore_gui._qt.QtCore import QThread
@@ -27,29 +26,10 @@ from pymmcore_gui._qt.QtWidgets import QFileDialog, QMenu, QMessageBox
 from pymmcore_gui.widgets._acquire import AcquirePage
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from pymmcore_plus import CMMCorePlus
     from pytestqt.qtbot import QtBot
 
     from pymmcore_gui._array_viewer import MMArrayViewer
-
-
-@pytest.fixture
-def shown_menus() -> Iterator[list[QMenu]]:
-    """Record the menus a viewer pops up, without blocking on a real popup.
-
-    Patching ``QMenu.exec`` itself does nothing on PySide6, where an instance
-    call doesn't go through the class attribute.
-    """
-    shown: list[QMenu] = []
-
-    class SpyMenu(QMenu):
-        def exec(self, *a: object) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
-            shown.append(self)
-
-    with patch.object(array_viewer_module, "QMenu", SpyMenu):
-        yield shown
 
 
 def _ch(*names: str) -> tuple[useq.Channel, ...]:

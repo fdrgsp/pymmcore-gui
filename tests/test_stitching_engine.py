@@ -181,6 +181,10 @@ def test_mosaic_matches_the_sample_whatever_the_camera_orientation(
     data, scale, origin = _level0(group.output)
     # output spacing is the pixel size, whatever the transform
     assert scale[-2:] == pytest.approx([P, P])
+    # the stage (x, y) of the first pixel, kept for moving the stage over it
+    prov = _provenance(group.output)
+    assert prov["origin_xy_um"] == pytest.approx([origin[-1], origin[-2]])
+    assert prov["sequence"] == seq.model_dump(mode="json")
     mosaic = data[0, 0].astype(float)
 
     # compare with the world image the tiles were cut from, sampled at the
@@ -384,6 +388,8 @@ def test_ome_tiff_mosaic_equals_the_ome_zarr_one(
     zprov, tprov = _provenance(zpath), _provenance(tpath)
     assert tprov["transforms"] == zprov["transforms"]
     assert tprov["tiles"] == zprov["tiles"]
+    # OME-TIFF has no translation: only the provenance keeps the origin
+    assert tprov["origin_xy_um"] == zprov["origin_xy_um"] is not None
 
     wrapper = OMETiffWrapper(tpath)
     try:
@@ -546,6 +552,9 @@ def test_restitch_into_the_other_format(
     (group,) = again.groups
     assert group.output.name == "run_stitched.ome.tiff"
     assert group.reused_registration
+    old, new = _provenance(first.groups[0].output), _provenance(group.output)
+    assert new["sequence"] == old["sequence"] == acq.sequence.model_dump(mode="json")
+    assert new["origin_xy_um"] == pytest.approx(old["origin_xy_um"])
 
 
 @pytest.mark.parametrize(

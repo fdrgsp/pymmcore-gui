@@ -243,6 +243,8 @@ class StitchJobV1(_Model):
     channel_names: list[str] = Field(default_factory=list)
     """The sequence's channels, used when the saved file doesn't name them
     (OME-TIFF drops a single channel's axis)."""
+    sequence: dict[str, Any] | None = None
+    """The acquisition's `MDASequence`, kept in the mosaic for "Re-use MDA…"."""
     settings: StitchSettingsV1 = Field(default_factory=StitchSettingsV1)
     threads: int = Field(default=1, ge=1)
     """Resolved worker thread budget."""
@@ -376,6 +378,10 @@ class ProvenanceV1(_Model):
     linear_part: tuple[tuple[float, float], tuple[float, float]]
     z_step_um: float | None = None
     channel_names: list[str] = Field(default_factory=list)
+    sequence: dict[str, Any] | None = None
+    origin_xy_um: tuple[float, float] | None = None
+    """Stage (x, y) of the mosaic's first pixel; rows and columns follow stage y
+    and x."""
     transforms: dict[str, list[list[list[float]]]] | None = None
     registration: dict[str, Any] = Field(default_factory=dict)
     groups: list[list[int]] | None = None

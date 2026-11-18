@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
     from pytest import FixtureRequest
 
-    from pymmcore_gui._qt.QtWidgets import QApplication
+    from pymmcore_gui._qt.QtWidgets import QApplication, QMenu
 
 TEST_CONFIG = str(Path(__file__).parent / "test_config.cfg")
 
@@ -207,3 +207,23 @@ def _mock_pyconify(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
 
     monkeypatch.setattr("superqt.iconify.svg_path", mock_svg_path)
     yield
+
+
+@pytest.fixture
+def shown_menus() -> Iterator[list[QMenu]]:
+    """Record the menus a viewer pops up, without blocking on a real popup.
+
+    Patching ``QMenu.exec`` itself does nothing on PySide6, where an instance
+    call doesn't go through the class attribute.
+    """
+    from pymmcore_gui import _array_viewer
+    from pymmcore_gui._qt.QtWidgets import QMenu
+
+    shown: list[QMenu] = []
+
+    class SpyMenu(QMenu):
+        def exec(self, *a: object) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
+            shown.append(self)
+
+    with patch.object(_array_viewer, "QMenu", SpyMenu):
+        yield shown

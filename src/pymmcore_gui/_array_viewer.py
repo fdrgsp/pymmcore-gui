@@ -137,6 +137,9 @@ class MMArrayViewer(ndv.ArrayViewer):
         self._stitch_callback: Callable[[], None] | None = None
         self._stitch_menu_text = "Stitch…"
         self._stitch_btn: QPushButton | None = None
+        # Set by the viewer manager for a mosaic: called with the (row, column)
+        # under the mouse when "Move Stage Here" is selected.
+        self._move_stage_callback: Callable[[int, int], None] | None = None
 
         self._key_filter = _KeyFilter(self)
         widget = self.widget()
@@ -258,24 +261,38 @@ class MMArrayViewer(ndv.ArrayViewer):
             idx = 0
         self.display_model.visible_axes = _ORTHO_VIEWS[(idx + 1) % len(_ORTHO_VIEWS)]
 
+    def _pixel_under_mouse(self) -> tuple[int, int] | None:
+        """The (row, column) under the mouse, while a 2D (y, x) view shows it."""
+        if self._highlight_pos is None or (wrapper := self.data_wrapper) is None:
+            return None
+        yx = tuple(wrapper.normalize_axis_key(ax) for ax in ("y", "x"))
+        if self._resolved.visible_axes != yx:
+            return None
+        return self._world_to_data(*self._highlight_pos)
+
     def _show_context_menu(self, global_pos: Any) -> bool:
-        """Offer sequence reuse and stitching, when they apply to this data."""
-        if self.mda_sequence is None and self._stitch_callback is None:
+        """Offer sequence reuse, stage moves and stitching, when they apply."""
+        pixel = None
+        if self._move_stage_callback is not None:
+            pixel = self._pixel_under_mouse()
+        if self.mda_sequence is None and self._stitch_callback is None and not pixel:
             return False
 
         menu = QMenu(self.widget())
+        # Disabled during a run, which they would disturb: reusing the sequence
+        # replaces the running acquisition's parameters, a move fights its stage.
+        idle = not CMMCorePlus.instance().mda.is_running()
         if self.mda_sequence is not None:
             action = menu.addAction("Re-use MDA…")
             if action is not None:
-                # Disabled during a run: the sequence just recovered/observed
-                # could otherwise replace the parameters for an acquisition
-                # already in progress out from under it.
-                action.setEnabled(
-                    self._reuse_mda_callback is not None
-                    and not CMMCorePlus.instance().mda.is_running()
-                )
+                action.setEnabled(self._reuse_mda_callback is not None and idle)
                 if callback := self._reuse_mda_callback:
                     action.triggered.connect(callback)
+        if pixel is not None and (move := self._move_stage_callback):
+            action = menu.addAction("Move Stage Here")
+            if action is not None:
+                action.setEnabled(idle)
+                action.triggered.connect(lambda: move(*pixel))
         if self._stitch_callback is not None:
             stitch = menu.addAction(self._stitch_menu_text)
             if stitch is not None:
