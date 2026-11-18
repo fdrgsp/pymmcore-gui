@@ -2650,8 +2650,8 @@ test = [
 
 [[package]]
 name = "pymmcore-plus"
-version = "0.17.3.dev117+g74bfcbc97"
-source = { git = "https://github.com/fdrgsp/pymmcore-plus?rev=cite#74bfcbc97d6d54019faca2b94777c75a4d7f1c62" }
+version = "0.17.3.dev118+g67dd9ce2b"
+source = { git = "https://github.com/fdrgsp/pymmcore-plus?rev=cite#67dd9ce2ba21dbdd98f35c011e85e5abb27445ee" }
 dependencies = [
     { name = "numpy" },
     { name = "ome-types" },
