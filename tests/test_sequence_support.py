@@ -113,7 +113,9 @@ def test_hardware_autofocus_needs_an_autofocus_device(mmcore: CMMCorePlus) -> No
     assert dropped == ["hardware autofocus (no autofocus device)"]
 
 
-MISSING = useq.MDASequence(channels=_channels(("Channel", "DAPI"), ("Channels", "Cy5")))
+MISSING = useq.MDASequence(
+    channels=_channels(("Channel", "DAPI"), ("Channels", "Cy5"), ("Channel", "Nope"))
+)
 
 
 @pytest.fixture(params=[MemoryMDAWidget, TopbarMemoryMDAWidget])
@@ -134,7 +136,11 @@ def test_loading_a_file_drops_what_cant_run(
         mda.load(path)
     assert [c.config for c in mda.value().channels] == ["DAPI"]
     assert blocker.args is not None
-    assert "channel Cy5 (no group 'Channels')" in blocker.args[0]
+    assert blocker.args[0] == (
+        "Cannot re-use the following MDA settings with the current "
+        "Micro-Manager configuration:"
+        "\n\n• channel Cy5 (no group 'Channels')\n• channel Nope (not in 'Channel')"
+    )
 
 
 def test_running_refuses_what_cant_run(

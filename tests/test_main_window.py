@@ -132,6 +132,48 @@ def test_main_window_notifications(gui: MicroManagerGUI) -> None:
         assert callable(mock_show_error.call_args.kwargs["on_action"])
 
 
+@pytest.mark.parametrize("source", ["file", "reuse"])
+@pytest.mark.parametrize("unsupported", [False, True])
+def test_loading_mda_shows_unsupported_settings_in_dialog(
+    gui: MicroManagerGUI, tmp_path: Path, source: str, unsupported: bool
+) -> None:
+    preset = "Missing" if unsupported else "FITC"
+    sequence = useq.MDASequence(
+        channels=(
+            useq.Channel(config="DAPI", exposure=None),
+            useq.Channel(config=preset, exposure=None),
+        )
+    )
+    path = tmp_path / "mda.json"
+    path.write_text(sequence.model_dump_json())
+    with (
+        patch.object(QMessageBox, "warning") as warning,
+        patch.object(
+            QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
+        ),
+        patch.object(gui.nm, "show_warning_message") as toast,
+    ):
+        if source == "file":
+            gui.acquire.mda_widget.load(path)
+        else:
+            gui.acquire._on_reuse_mda_requested(sequence, "acquisition.ome.tiff")
+
+        if unsupported:
+            warning.assert_called_once_with(
+                gui,
+                "Not Available in This Configuration",
+                "Cannot re-use the following MDA settings with the current "
+                "Micro-Manager configuration:\n\n• channel Missing (not in 'Channel')",
+            )
+        else:
+            warning.assert_not_called()
+        toast.assert_not_called()
+
+    assert [c.config for c in gui.acquire.mda_widget.value().channels] == (
+        ["DAPI"] if unsupported else ["DAPI", "FITC"]
+    )
+
+
 def test_main_window_warns_about_pixel_sizes_for_any_camera(
     gui: MicroManagerGUI, mmcore: CMMCorePlus, second_camera: str, qtbot: QtBot
 ) -> None:

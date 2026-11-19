@@ -496,9 +496,7 @@ class MicroManagerGUI(QMainWindow):
         self._stitching = self._create_stitching_session()
         self._acquire.viewers.stitchRequested.connect(self._stitch_saved)
         self._acquire.viewers.restitchRequested.connect(self._restitch)
-        self._acquire.mdaSettingsIgnored.connect(
-            self._notification_manager.show_warning_message
-        )
+        self._acquire.mdaSettingsIgnored.connect(self._show_ignored_mda_settings)
         self._acquire.layoutReset.connect(self._on_acquire_layout_reset)
         self._acquire.layoutNameChanged.connect(self._on_layout_name_changed)
         self._mmc.events.systemConfigurationLoaded.connect(self._on_config_loaded)
@@ -792,6 +790,9 @@ class MicroManagerGUI(QMainWindow):
         if show:
             self.show()
             self._notification_manager.reposition_notifications()
+
+    def _show_ignored_mda_settings(self, text: str) -> None:
+        QMessageBox.warning(self, "Not Available in This Configuration", text)
 
     def _on_acquire_layout_reset(self) -> None:
         """Snapshot the just-reset arrangement into "Last session" right away.

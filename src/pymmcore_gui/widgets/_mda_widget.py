@@ -483,8 +483,9 @@ class MemoryMDAWidgetBase(_MixinBase):
         self._flavor_refresh_summaries()
         if dropped:
             self.settingsIgnored.emit(
-                "Ignored MDA settings this configuration can't run: "
-                f"{'; '.join(dropped)}."
+                "Cannot re-use the following MDA settings with the current "
+                "Micro-Manager configuration:\n\n"
+                + "\n".join(f"• {item}" for item in dropped)
             )
 
     @contextmanager
