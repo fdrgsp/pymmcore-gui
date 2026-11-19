@@ -144,6 +144,14 @@ index must match how ome-writers flattens (stage position, grid point) into
 one axis, including grid-first axis orders. A test compares `plan_groups`
 with `ome_writers._useq._build_positions` to keep the two in step.
 
+A reader can still list positions in another order. A directory of
+independent per-position OME-TIFFs comes back in filename order
+(`_r000_c000`, `_r000_c001`, …), which reverses every other row of a snake
+grid. So when reading tiles, each one is matched to the saved position whose
+recorded stage position is nearest (`locate_tiles`, using
+`OMETiffWrapper.stage_positions`). The planned index is kept when positions
+aren't recorded or a match isn't unambiguous (within half the tile spacing).
+
 Several mosaics from one run are named `<stem>_stitched_<position>`.
 
 ## 4. Where each tile goes

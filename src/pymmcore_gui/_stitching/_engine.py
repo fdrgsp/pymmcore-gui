@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 import numpy as np
 
 from pymmcore_gui._stitching import _geometry
-from pymmcore_gui._stitching._inputs import OpenedTiles, open_tiles
+from pymmcore_gui._stitching._inputs import OpenedTiles, locate_tiles, open_tiles
 from pymmcore_gui._stitching._models import (
     METADATA_NAMESPACE,
     PROVENANCE_KEY,
@@ -257,8 +257,13 @@ class _GroupImages:
             self.spacing = {"z": self.z_step, **self.spacing}
         self.arrays = []
         self.affines = []
-        for tile in group.tiles:
-            arr = opened.tile(tile.position_index)
+        indices = locate_tiles(group.tiles, opened.stage_xy)
+        if moved := sum(
+            i != t.position_index for i, t in zip(indices, group.tiles, strict=False)
+        ):
+            logger.info("%d tiles found by stage position, not store order", moved)
+        for tile, index in zip(group.tiles, indices, strict=True):
+            arr = opened.tile(index)
             if "z" in self.dims and not self.has_z:
                 arr = arr[(slice(None),) * self.dims.index("z") + (0,)]
             self.arrays.append(arr)

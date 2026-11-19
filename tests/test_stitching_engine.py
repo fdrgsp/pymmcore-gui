@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import math
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import pytest
@@ -649,3 +649,52 @@ def test_fusion_memory_budget_ignores_camera_rotation(
     assert _workers(tmp_path, 10, _rot(deg), cap_gb=2) == _workers(
         tmp_path, 10, np.eye(2), cap_gb=2
     )
+
+
+@pytest.mark.parametrize("layout", ["self-contained", "master-tiff"])
+def test_snake_grid_in_per_position_tiffs(
+    tmp_path: Path, layout: Literal["self-contained", "master-tiff"]
+) -> None:
+    """Independent per-position files list in filename order, not snake order.
+
+    Every other row of a snake grid is then reversed in the store's position
+    order; tiles are matched to positions by their recorded stage positions.
+    """
+    import useq
+
+    from pymmcore_gui._stitching._inputs import locate_tiles, open_tiles
+
+    sub = useq.MDASequence(grid_plan=grid_sequence(3, 3, S, P).grid_plan)
+    seq = useq.MDASequence(
+        stage_positions=(useq.Position(x=0, y=0, name="ROI", sequence=sub),),
+        channels=(useq.Channel(config="A", exposure=1),),
+    )
+    acq = write_grid(
+        tmp_path / "run.ome.tiff",
+        seq,
+        shape=S,
+        pixel_size=P,
+        fmt="ome-tiff",
+        tiff_layout=layout,
+        record_positions=True,
+    )
+    job = _job(acq)
+    tiles = job.groups[0].tiles
+    opened = open_tiles(acq.path)
+    try:
+        found = locate_tiles(tiles, opened.stage_xy)
+        recorded = opened.stage_xy
+    finally:
+        opened.close()
+    assert recorded is not None
+    for tile, index in zip(tiles, found, strict=True):
+        xy = recorded[index]
+        assert xy is not None
+        assert abs(xy[0] - tile.stage_x_um) < 5
+        assert abs(xy[1] - tile.stage_y_um) < 5
+
+    result, _ = _run(job)
+    assert result.groups[0].n_pairs == 12
+    assert result.groups[0].rejected_pairs == 0
+    prov = _provenance(result.groups[0].output)
+    assert _shift_errors(acq, prov).max() < 0.5 * P

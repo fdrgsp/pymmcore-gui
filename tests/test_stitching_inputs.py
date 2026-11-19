@@ -491,3 +491,43 @@ def test_restitch_job_drops_the_registration_for_stage_only(tmp_path: Path) -> N
     stage = StitchSettingsV1(alignment=Alignment.STAGE)
     dropped = _inputs.build_restitch_job(settings=stage, **kw)
     assert dropped.groups[0].saved_registration is None
+
+
+# ------------------------------ locating tiles ------------------------------
+
+
+def _tiles(xy: list[tuple[float, float]]) -> list[Any]:
+    from pymmcore_gui._stitching._models import TileV1
+
+    return [
+        TileV1(position_index=i, stage_x_um=x, stage_y_um=y)
+        for i, (x, y) in enumerate(xy)
+    ]
+
+
+SNAKE = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]
+
+
+def test_locate_tiles_by_recorded_stage_position() -> None:
+    # stored row by row (filename order) while acquired as a snake
+    stored = [(0.3, -0.2), (100.1, 0.4), (-0.4, 100.2), (99.8, 99.9)]
+    assert _inputs.locate_tiles(_tiles(SNAKE), stored) == [0, 1, 3, 2]
+
+
+def test_locate_tiles_ignores_other_positions_far_away() -> None:
+    stored = [(5000.0, 5000.0), *SNAKE]
+    assert _inputs.locate_tiles(_tiles(SNAKE), stored) == [1, 2, 3, 4]
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        None,
+        [],
+        [(0.0, 0.0), (100.0, 0.0), None, (0.0, 100.0)],  # a position without one
+        [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (60.0, 60.0)],  # too far
+        [(0.0, 0.0), (0.0, 0.0), (100.0, 100.0), (0.0, 100.0)],  # ambiguous
+    ],
+)
+def test_locate_tiles_keeps_store_order_when_unsure(stored: Any) -> None:
+    assert _inputs.locate_tiles(_tiles(SNAKE), stored) == [0, 1, 2, 3]

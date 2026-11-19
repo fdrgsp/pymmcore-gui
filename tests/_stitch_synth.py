@@ -11,7 +11,7 @@ from __future__ import annotations
 import itertools
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import numpy as np
 import useq
@@ -87,11 +87,15 @@ def write_grid(
     fmt: str = "ome-zarr",
     seed: int = 0,
     blank: frozenset[int] = frozenset(),
+    tiff_layout: Literal["self-contained", "master-tiff"] | None = None,
+    record_positions: bool = False,
 ) -> SynthAcquisition:
     """Write `sequence` (a grid) with tiles cut from one world image.
 
     Tiles whose store index is in `blank` are flat, low-level noise: nothing
-    registration can match.
+    registration can match. `tiff_layout` picks ome-writers'
+    `multi_file_metadata`; with `record_positions` each frame records the
+    stage position it was taken at, as pymmcore-plus does.
     """
     linear = np.diag([pixel_size, pixel_size]) if linear is None else linear
     settings = useq_to_acquisition_settings(
@@ -131,7 +135,15 @@ def write_grid(
         dimensions=tuple(dims),
         dtype="uint16",
         root_path=str(root),
-        format=OmeTiffFormat() if fmt == "ome-tiff" else OmeZarrFormat(),
+        format=(
+            (
+                OmeTiffFormat(multi_file_metadata=tiff_layout)
+                if tiff_layout
+                else OmeTiffFormat()
+            )
+            if fmt == "ome-tiff"
+            else OmeZarrFormat()
+        ),
         plate=settings.get("plate"),
     )
     names = [d.name for d in dims[:-2]]
@@ -148,8 +160,15 @@ def write_grid(
         )
         for idx in itertools.product(*(range(d.count or 1) for d in dims[:-2])):
             ix = dict(zip(names, idx, strict=True))
+            p = ix.get("p", 0)
+            frame_meta = (
+                {"position_x": float(true[p][0]), "position_y": float(true[p][1])}
+                if record_positions
+                else None
+            )
             stream.append(
-                tile(ix.get("p", 0), ix.get("c", 0), ix.get("z", 0), ix.get("t", 0))
+                tile(p, ix.get("c", 0), ix.get("z", 0), ix.get("t", 0)),
+                frame_metadata=frame_meta,
             )
     return SynthAcquisition(
         path=Path(acq.output_path),

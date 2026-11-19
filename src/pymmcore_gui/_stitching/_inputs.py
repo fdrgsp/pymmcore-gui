@@ -33,6 +33,8 @@ from pymmcore_gui._stitching._models import (
 from pymmcore_gui._stitching._paths import acquisition_stem, unique_path
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     import dask.array
     import useq
 
@@ -455,6 +457,9 @@ class OpenedTiles:
     n_positions: int
     _p_axis: int | None
     _lock: threading.Lock | None
+    stage_xy: list[tuple[float, float] | None] | None = None
+    """Each position's recorded stage X/Y, where the store's position order
+    may differ from acquisition order (see `locate_tiles`); else None."""
 
     @property
     def shape_yx(self) -> tuple[int, int]:
@@ -530,6 +535,10 @@ def open_tiles(source: Path) -> OpenedTiles:
         wrapper.close()
         raise ValueError(f"Unexpected axis order {tuple(dims)} in {source}")
 
+    stage_xy = None
+    if isinstance(wrapper, OMETiffWrapper) and p_axis is not None:
+        # independent per-position files come back in filename order
+        stage_xy = wrapper.stage_positions()
     c_key = next((k for k in wrapper.dims if str(k).lower() == "c"), None)
     channels = [str(v) for v in coords[c_key]] if c_key is not None else ["0"]
     if len(set(channels)) != len(channels):
@@ -543,4 +552,34 @@ def open_tiles(source: Path) -> OpenedTiles:
         n_positions=n_positions,
         _p_axis=p_axis,
         _lock=lock,
+        stage_xy=stage_xy,
     )
+
+
+def locate_tiles(
+    tiles: Sequence[TileV1], stage_xy: Sequence[tuple[float, float] | None] | None
+) -> list[int]:
+    """The store position holding each tile: the one recorded nearest it.
+
+    A tile's `position_index` assumes the store lists positions in acquisition
+    order. A reader can list them otherwise: a directory of independent
+    per-position OME-TIFFs comes back in filename order, which reverses every
+    other row of a snake grid. The recorded stage positions settle it. If any
+    position records none, or a tile isn't within half the tile spacing of
+    exactly one recorded position, the planned indices are kept.
+    """
+    planned = [t.position_index for t in tiles]
+    if len(tiles) < 2 or not stage_xy or any(xy is None for xy in stage_xy):
+        return planned
+    centers = np.array([(t.stage_x_um, t.stage_y_um) for t in tiles])
+    recorded = np.array(stage_xy, dtype=float)
+    gaps = np.linalg.norm(centers[:, None] - centers[None], axis=-1)
+    np.fill_diagonal(gaps, np.inf)
+    tolerance = gaps.min() / 2
+    distance = np.linalg.norm(centers[:, None] - recorded[None], axis=-1)
+    if not tolerance > 0 or np.any((distance < tolerance).sum(axis=1) != 1):
+        return planned
+    found = distance.argmin(axis=1).tolist()
+    if len(set(found)) != len(found):
+        return planned
+    return [int(i) for i in found]

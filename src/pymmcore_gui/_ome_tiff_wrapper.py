@@ -84,6 +84,27 @@ def _ome_file_order(xml_str: str | None) -> list[str]:
     return []  # pragma: no cover
 
 
+def _image_stage_positions(xml_str: str | None) -> list[tuple[float, float] | None]:
+    """Per OME `Image`, the stage X/Y of its first `Plane`, or None."""
+    if not xml_str:
+        return []
+    try:
+        root = ET.fromstring(xml_str)
+    except ET.ParseError:
+        return []
+    out: list[tuple[float, float] | None] = []
+    for image in root.iter():
+        if not image.tag.endswith("}Image") and image.tag != "Image":
+            continue
+        plane = next((el for el in image.iter() if el.tag.endswith("Plane")), None)
+        xy = None
+        if plane is not None:
+            with contextlib.suppress(TypeError, ValueError):
+                xy = (float(plane.get("PositionX")), float(plane.get("PositionY")))  # type: ignore[arg-type]
+        out.append(xy)
+    return out
+
+
 def _open_tiff(path: Path) -> tifffile.TiffFile:
     """Open a TIFF, following a BinaryOnly reference to its metadata master."""
     file = tifffile.TiffFile(path)
@@ -278,6 +299,25 @@ class OMETiffWrapper(DataWrapper):
         """Close this wrapper's single `TiffFile` handle (all positions, if any)."""
         with contextlib.suppress(Exception):
             self._tf.close()
+
+    def stage_positions(self) -> list[tuple[float, float] | None]:
+        """Each position's recorded stage X/Y (µm), in this wrapper's `p` order.
+
+        Read from the first `Plane` of each OME `Image`. Independent per-position
+        files are listed in filename order, which is not acquisition order for a
+        snake grid, so callers that need to know which tile is which (stitching)
+        match tiles by these positions. None where a position records none.
+        """
+        if self._position_files:
+            out: list[tuple[float, float] | None] = []
+            for path in self._position_files:
+                with _open_tiff(path) as tf:
+                    images = _image_stage_positions(tf.ome_metadata)
+                out.append(images[0] if images else None)
+            return out
+        images = _image_stage_positions(self._tf.ome_metadata)
+        n = len(self._tf.series) if self._is_multiposition else 1
+        return [images[i] if i < len(images) else None for i in range(n)]
 
     def global_metadata(self, namespace: str) -> dict[str, Any] | None:
         """Return this file's OME `MapAnnotation` for `namespace`, if any.
