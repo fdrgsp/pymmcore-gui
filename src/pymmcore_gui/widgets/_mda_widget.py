@@ -185,14 +185,6 @@ def _section_metrics() -> SectionMetrics:
     )
 
 
-def _uses_grid(sequence: useq.MDASequence) -> bool:
-    """Whether `sequence` has a grid plan, global or per position."""
-    return sequence.grid_plan is not None or any(
-        pos.sequence is not None and pos.sequence.grid_plan is not None
-        for pos in sequence.stage_positions
-    )
-
-
 def _memory_output_settings() -> AcquisitionSettings:
     """Build the "no saving" scratch output from the user's Data & Memory prefs.
 
@@ -497,11 +489,12 @@ class MemoryMDAWidgetBase(_MixinBase):
 
     @contextmanager
     def _dropping_unsupported(self) -> Iterator[None]:
+        previous = self._drop_unsupported
         self._drop_unsupported = True
         try:
             yield
         finally:
-            self._drop_unsupported = False
+            self._drop_unsupported = previous
 
     def load(self, file: str | Path | None = None) -> None:
         """Load an MDA file, leaving out what this configuration can't run."""
@@ -509,7 +502,7 @@ class MemoryMDAWidgetBase(_MixinBase):
             super().load(file)
 
     def loadSequence(self, sequence: useq.MDASequence) -> None:
-        """Set `sequence` as `load` does, leaving out what can't run here."""
+        """Load a sequence, omitting unsupported settings and reporting them."""
         with self._dropping_unsupported():
             self.setValue(sequence)
 
@@ -1018,19 +1011,18 @@ class MemoryMDAWidgetBase(_MixinBase):
 
     def prepare_mda(self) -> bool | SingleOutput | None:
         """Return a disk path or a scratch sink that supports live viewing."""
-        # a value still being typed belongs to the sequence the checks read
         self._commit_editors()
         sequence = self.value()
         if dropped := drop_unsupported(sequence, self._mmc)[1]:
             QMessageBox.warning(
                 self,
                 "Not Available in This Configuration",
-                "This sequence uses what the loaded configuration doesn't have:\n\n"
+                "The loaded configuration cannot run these MDA settings:\n\n"
                 + "\n".join(f"• {item}" for item in dropped)
                 + "\n\nChange or remove them, then run again.",
             )
             return False
-        if _uses_grid(sequence) and (
+        if _grids(sequence) and (
             problem := fov_pixel_size_warning(self._mmc, NO_PIXEL_SIZE)
         ):
             QMessageBox.warning(
