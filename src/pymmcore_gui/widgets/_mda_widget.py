@@ -451,11 +451,12 @@ class MemoryMDAWidgetBase(_MixinBase):
 
     @contextmanager
     def _dropping_unsupported(self) -> Iterator[None]:
+        previous = self._drop_unsupported
         self._drop_unsupported = True
         try:
             yield
         finally:
-            self._drop_unsupported = False
+            self._drop_unsupported = previous
 
     def load(self, file: str | Path | None = None) -> None:
         """Load an MDA file, leaving out what this configuration can't run."""
@@ -463,7 +464,7 @@ class MemoryMDAWidgetBase(_MixinBase):
             super().load(file)
 
     def loadSequence(self, sequence: useq.MDASequence) -> None:
-        """Set `sequence` as `load` does, leaving out what can't run here."""
+        """Load a sequence, omitting unsupported settings and reporting them."""
         with self._dropping_unsupported():
             self.setValue(sequence)
 
@@ -858,14 +859,13 @@ class MemoryMDAWidgetBase(_MixinBase):
 
     def prepare_mda(self) -> bool | SingleOutput | None:
         """Return a disk path or a scratch sink that supports live viewing."""
-        # a value still being typed belongs to the sequence the checks read
         self._commit_editors()
         sequence = self.value()
         if dropped := drop_unsupported(sequence, self._mmc)[1]:
             QMessageBox.warning(
                 self,
                 "Not Available in This Configuration",
-                "This sequence uses what the loaded configuration doesn't have:\n\n"
+                "The loaded configuration cannot run these MDA settings:\n\n"
                 + "\n".join(f"• {item}" for item in dropped)
                 + "\n\nChange or remove them, then run again.",
             )
