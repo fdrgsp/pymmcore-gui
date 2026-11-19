@@ -259,7 +259,7 @@ class _GroupImages:
         self.affines = []
         indices = locate_tiles(group.tiles, opened.stage_xy)
         if moved := sum(
-            i != t.position_index for i, t in zip(indices, group.tiles, strict=False)
+            i != t.position_index for i, t in zip(indices, group.tiles, strict=True)
         ):
             logger.info("%d tiles found by stage position, not store order", moved)
         for tile, index in zip(group.tiles, indices, strict=True):

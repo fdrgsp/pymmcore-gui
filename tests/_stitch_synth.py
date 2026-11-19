@@ -87,7 +87,7 @@ def write_grid(
     fmt: str = "ome-zarr",
     seed: int = 0,
     blank: frozenset[int] = frozenset(),
-    tiff_layout: Literal["self-contained", "master-tiff"] | None = None,
+    tiff_layout: Literal["self-contained", "master-tiff", "redundant"] | None = None,
     record_positions: bool = False,
 ) -> SynthAcquisition:
     """Write `sequence` (a grid) with tiles cut from one world image.

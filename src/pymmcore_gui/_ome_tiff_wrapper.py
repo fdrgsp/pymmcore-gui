@@ -98,9 +98,13 @@ def _image_stage_positions(xml_str: str | None) -> list[tuple[float, float] | No
             continue
         plane = next((el for el in image.iter() if el.tag.endswith("Plane")), None)
         xy = None
-        if plane is not None:
-            with contextlib.suppress(TypeError, ValueError):
-                xy = (float(plane.get("PositionX")), float(plane.get("PositionY")))  # type: ignore[arg-type]
+        if (
+            plane is not None
+            and (x := plane.get("PositionX"))
+            and (y := plane.get("PositionY"))
+        ):
+            with contextlib.suppress(ValueError):
+                xy = (float(x), float(y))
         out.append(xy)
     return out
 

@@ -651,14 +651,25 @@ def test_fusion_memory_budget_ignores_camera_rotation(
     )
 
 
-@pytest.mark.parametrize("layout", ["self-contained", "master-tiff"])
-def test_snake_grid_in_per_position_tiffs(
-    tmp_path: Path, layout: Literal["self-contained", "master-tiff"]
+@pytest.mark.parametrize(
+    ("fmt", "layout"),
+    [
+        ("ome-zarr", None),
+        ("ome-tiff", "self-contained"),
+        ("ome-tiff", "master-tiff"),
+        ("ome-tiff", "redundant"),
+    ],
+)
+def test_snake_grid_at_a_position_in_every_layout(
+    tmp_path: Path,
+    fmt: str,
+    layout: Literal["self-contained", "master-tiff", "redundant"] | None,
 ) -> None:
-    """Independent per-position files list in filename order, not snake order.
+    """A snake sub-grid at a named position stitches right in every layout.
 
-    Every other row of a snake grid is then reversed in the store's position
-    order; tiles are matched to positions by their recorded stage positions.
+    Independent per-position OME-TIFFs come back in filename order, which
+    reverses every other snake row; tiles are found by their recorded stage
+    positions. The other layouts already list positions in acquisition order.
     """
     import useq
 
@@ -669,12 +680,13 @@ def test_snake_grid_in_per_position_tiffs(
         stage_positions=(useq.Position(x=0, y=0, name="ROI", sequence=sub),),
         channels=(useq.Channel(config="A", exposure=1),),
     )
+    ext = ".ome.zarr" if fmt == "ome-zarr" else ".ome.tiff"
     acq = write_grid(
-        tmp_path / "run.ome.tiff",
+        tmp_path / f"run{ext}",
         seq,
         shape=S,
         pixel_size=P,
-        fmt="ome-tiff",
+        fmt=fmt,
         tiff_layout=layout,
         record_positions=True,
     )
@@ -686,12 +698,12 @@ def test_snake_grid_in_per_position_tiffs(
         recorded = opened.stage_xy
     finally:
         opened.close()
-    assert recorded is not None
-    for tile, index in zip(tiles, found, strict=True):
-        xy = recorded[index]
-        assert xy is not None
-        assert abs(xy[0] - tile.stage_x_um) < 5
-        assert abs(xy[1] - tile.stage_y_um) < 5
+    if recorded is not None:
+        for tile, index in zip(tiles, found, strict=True):
+            xy = recorded[index]
+            assert xy is not None
+            assert abs(xy[0] - tile.stage_x_um) < 5
+            assert abs(xy[1] - tile.stage_y_um) < 5
 
     result, _ = _run(job)
     assert result.groups[0].n_pairs == 12
