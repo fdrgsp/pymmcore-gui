@@ -220,6 +220,9 @@ class AcquirePage(TabPage):
     layoutNameChanged = Signal(str)
     """Emitted with the new name whenever the selected layout changes."""
 
+    mdaSettingsIgnored = Signal(str)
+    """Relays ``MemoryMDAWidget.settingsIgnored`` from whichever editor is docked."""
+
     mdaRunningChanged = Signal(bool)
     """Emitted True while an acquisition owns the hardware, False once it's idle.
 
@@ -476,7 +479,7 @@ class AcquirePage(TabPage):
         # a sequence never changes where -- or whether -- the next run saves.
         had_save_info = bool(sequence.metadata.get(PYMMCW_METADATA_KEY))
         save_info = dict(self._mda.save_info.value())
-        self._mda.setValue(sequence)
+        self._mda.loadSequence(sequence)
         if not had_save_info:
             self._mda.save_info.setValue(save_info)
 
@@ -571,6 +574,7 @@ class AcquirePage(TabPage):
 
         widget.af_axis.setTestRunner(run_autofocus_test)
         widget.mdaLockChanged.connect(self.set_mda_lock)
+        widget.settingsIgnored.connect(self.mdaSettingsIgnored)
         self._snap_btn.snapRequested.connect(widget.apply_active_channel_for_capture)
         self._live_btn.liveStartedRequested.connect(
             widget.apply_active_channel_for_capture
@@ -583,6 +587,7 @@ class AcquirePage(TabPage):
         widget = self._mda
         with suppress(RuntimeError, TypeError):
             widget.mdaLockChanged.disconnect(self.set_mda_lock)
+            widget.settingsIgnored.disconnect(self.mdaSettingsIgnored)
             self._snap_btn.snapRequested.disconnect(
                 widget.apply_active_channel_for_capture
             )

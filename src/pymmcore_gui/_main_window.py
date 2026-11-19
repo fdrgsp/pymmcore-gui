@@ -488,6 +488,9 @@ class MicroManagerGUI(QMainWindow):
         )
 
         self._acquire.mdaRunningChanged.connect(self._on_mda_running)
+        self._acquire.mdaSettingsIgnored.connect(
+            self._notification_manager.show_warning_message
+        )
         self._acquire.layoutReset.connect(self._on_acquire_layout_reset)
         self._acquire.layoutNameChanged.connect(self._on_layout_name_changed)
         self._mmc.events.systemConfigurationLoaded.connect(self._on_config_loaded)
