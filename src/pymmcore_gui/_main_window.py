@@ -496,6 +496,9 @@ class MicroManagerGUI(QMainWindow):
         self._stitching = self._create_stitching_session()
         self._acquire.viewers.stitchRequested.connect(self._stitch_saved)
         self._acquire.viewers.restitchRequested.connect(self._restitch)
+        self._acquire.mdaSettingsIgnored.connect(
+            self._notification_manager.show_warning_message
+        )
         self._acquire.layoutReset.connect(self._on_acquire_layout_reset)
         self._acquire.layoutNameChanged.connect(self._on_layout_name_changed)
         self._mmc.events.systemConfigurationLoaded.connect(self._on_config_loaded)

@@ -1,12 +1,15 @@
-"""Filter MDA settings that the loaded hardware configuration cannot run."""
+"""The parts of an MDA sequence the loaded configuration can't run.
+
+pymmcore-plus doesn't stop a run for these: it logs a warning and acquires
+anyway, so the data would be labelled with a channel, position or Z plane the
+microscope never reached.
+"""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
 import useq
-from pymmcore_widgets.mda._channel_properties import CHANNEL_PROPERTIES_KEY
-from pymmcore_widgets.useq_widgets import PYMMCW_METADATA_KEY
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
@@ -29,83 +32,42 @@ def _needs_xy_stage(sequence: useq.MDASequence) -> bool:
 def drop_unsupported(
     sequence: useq.MDASequence, core: CMMCorePlus
 ) -> tuple[useq.MDASequence, list[str]]:
-    """Return a supported sequence and descriptions of the settings removed."""
+    """`sequence` without what `core`'s configuration can't run, and what that was.
+
+    Drops channels whose group or preset doesn't exist, stage positions and
+    grids without an XY stage, the Z plan without a focus stage, and an
+    autofocus plan without the device it needs.
+    """
+    update: dict[str, Any] = {}
+    dropped: list[str] = []
+
     groups = set(core.getAvailableConfigGroups())
-    presets: dict[str, set[str]] = {}
-    has_xy = bool(core.getXYStageDevice())
+    channels = []
+    for channel in sequence.channels:
+        if channel.group not in groups:
+            dropped.append(f"channel {channel.config} (no group '{channel.group}')")
+        elif channel.config not in core.getAvailableConfigs(channel.group):
+            dropped.append(f"channel {channel.config} (not in '{channel.group}')")
+        else:
+            channels.append(channel)
+    if len(channels) != len(sequence.channels):
+        update["channels"] = tuple(channels)
+
+    if not core.getXYStageDevice() and _needs_xy_stage(sequence):
+        update.update(stage_positions=(), grid_plan=None)
+        dropped.append("stage positions and grid (no XY stage)")
+
     has_focus = bool(core.getFocusDevice())
-    has_autofocus = bool(core.getAutoFocusDevice())
+    if sequence.z_plan is not None and not has_focus:
+        update["z_plan"] = None
+        dropped.append("Z plan (no focus stage)")
 
-    def filter_sequence(seq: useq.MDASequence) -> tuple[useq.MDASequence, list[str]]:
-        update: dict[str, Any] = {}
-        dropped: list[str] = []
-        channels: list[useq.Channel] = []
-        channel_indices: dict[int, int] = {}
-        for i, channel in enumerate(seq.channels):
-            group = channel.group
-            if group not in groups:
-                dropped.append(f"channel {channel.config} (no group '{group}')")
-                continue
-            if group not in presets:
-                presets[group] = set(core.getAvailableConfigs(group))
-            if channel.config not in presets[group]:
-                dropped.append(f"channel {channel.config} (not in '{group}')")
-            else:
-                channel_indices[i] = len(channels)
-                channels.append(channel)
-        if len(channels) != len(seq.channels):
-            update["channels"] = tuple(channels)
-            meta = seq.metadata.get(PYMMCW_METADATA_KEY, {})
-            if properties := meta.get(CHANNEL_PROPERTIES_KEY):
-                # Saved light-source settings refer to channel row indices.
-                properties = [
-                    {**entry, "channel_index": channel_indices[entry["channel_index"]]}
-                    for entry in properties
-                    if entry["channel_index"] in channel_indices
-                ]
-                update["metadata"] = {
-                    **seq.metadata,
-                    PYMMCW_METADATA_KEY: {**meta, CHANNEL_PROPERTIES_KEY: properties},
-                }
+    plan = sequence.autofocus_plan
+    if isinstance(plan, useq.AxesBasedAF) and not core.getAutoFocusDevice():
+        update["autofocus_plan"] = None
+        dropped.append("hardware autofocus (no autofocus device)")
+    elif isinstance(plan, useq.SoftwareAxesBasedAF) and not has_focus:
+        update["autofocus_plan"] = None
+        dropped.append("software autofocus (no focus stage)")
 
-        if not has_xy and _needs_xy_stage(seq):
-            update.update(stage_positions=(), grid_plan=None)
-            dropped.append("stage positions and grid (no XY stage)")
-        elif not isinstance(seq.stage_positions, useq.WellPlatePlan):
-            positions = []
-            positions_changed = False
-            for i, pos in enumerate(seq.stage_positions):
-                pos_update: dict[str, Any] = {}
-                if not has_focus and pos.z is not None:
-                    pos_update["z"] = None
-                    dropped.append(f"position {i + 1}: Z coordinate (no focus stage)")
-                if pos.sequence is not None:
-                    sub_sequence, sub_dropped = filter_sequence(pos.sequence)
-                    if sub_sequence is not pos.sequence:
-                        pos_update["sequence"] = sub_sequence
-                    dropped.extend(f"position {i + 1}: {item}" for item in sub_dropped)
-                positions.append(pos.replace(**pos_update) if pos_update else pos)
-                positions_changed |= bool(pos_update)
-            if positions_changed:
-                update["stage_positions"] = tuple(positions)
-
-        if not has_focus:
-            for field, label in (
-                ("z_plan", "Z plan"),
-                ("focus_surface", "focus surface"),
-            ):
-                if getattr(seq, field) is not None:
-                    update[field] = None
-                    dropped.append(f"{label} (no focus stage)")
-
-        plan = seq.autofocus_plan
-        if isinstance(plan, useq.AxesBasedAF) and not has_autofocus:
-            update["autofocus_plan"] = None
-            dropped.append("hardware autofocus (no autofocus device)")
-        elif isinstance(plan, useq.SoftwareAxesBasedAF) and not has_focus:
-            update["autofocus_plan"] = None
-            dropped.append("software autofocus (no focus stage)")
-
-        return (seq.replace(**update) if update else seq), dropped
-
-    return filter_sequence(sequence)
+    return (sequence.replace(**update) if update else sequence), dropped

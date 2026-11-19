@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -56,6 +56,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QToolButton,
     QWidget,
 )
+from pymmcore_gui._sequence_support import drop_unsupported
 from pymmcore_gui._settings import Settings
 from pymmcore_gui._stitching import has_mosaic
 from pymmcore_gui._stitching import is_available as stitching_available
@@ -75,7 +76,7 @@ from ._mda_tabs import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Iterator
 
     import useq
     from pymmcore_plus import CMMCorePlus
@@ -184,6 +185,14 @@ def _section_metrics() -> SectionMetrics:
     )
 
 
+def _uses_grid(sequence: useq.MDASequence) -> bool:
+    """Whether `sequence` has a grid plan, global or per position."""
+    return sequence.grid_plan is not None or any(
+        pos.sequence is not None and pos.sequence.grid_plan is not None
+        for pos in sequence.stage_positions
+    )
+
+
 def _memory_output_settings() -> AcquisitionSettings:
     """Build the "no saving" scratch output from the user's Data & Memory prefs.
 
@@ -236,6 +245,7 @@ class MemoryMDAWidgetBase(_MixinBase):
         _sequenceStartedInGui: Any
         _sequenceFinishedInGui: Any
         mdaLockChanged: Any
+        settingsIgnored: Any
 
     # ----------- Override type hints in superclass -----------
     # _create_tab_widget above always installs an MDAChannelTable, which adds
@@ -248,6 +258,7 @@ class MemoryMDAWidgetBase(_MixinBase):
 
     def __init__(self, mmcore: CMMCorePlus, parent: QWidget | None = None) -> None:
         self._restoring_sequence = False
+        self._drop_unsupported = False
         self._cancel_requested = False
         self._mda_locked = False
         super().__init__(parent=parent, mmcore=mmcore)
@@ -468,6 +479,9 @@ class MemoryMDAWidgetBase(_MixinBase):
 
     def setValue(self, value: useq.MDASequence) -> None:
         """Restore an MDA sequence, keeping its own channel settings."""
+        dropped: list[str] = []
+        if self._drop_unsupported:
+            value, dropped = drop_unsupported(value, self._mmc)
         self._restoring_sequence = True
         try:
             super().setValue(value)
@@ -475,6 +489,29 @@ class MemoryMDAWidgetBase(_MixinBase):
             self._restoring_sequence = False
         self._restore_stitching_request(value)
         self._flavor_refresh_summaries()
+        if dropped:
+            self.settingsIgnored.emit(
+                "Ignored MDA settings this configuration can't run: "
+                f"{'; '.join(dropped)}."
+            )
+
+    @contextmanager
+    def _dropping_unsupported(self) -> Iterator[None]:
+        self._drop_unsupported = True
+        try:
+            yield
+        finally:
+            self._drop_unsupported = False
+
+    def load(self, file: str | Path | None = None) -> None:
+        """Load an MDA file, leaving out what this configuration can't run."""
+        with self._dropping_unsupported():
+            super().load(file)
+
+    def loadSequence(self, sequence: useq.MDASequence) -> None:
+        """Set `sequence` as `load` does, leaving out what can't run here."""
+        with self._dropping_unsupported():
+            self.setValue(sequence)
 
     def refresh_channel_table(self) -> None:
         """Refresh core-backed channel choices, keeping the rows."""
@@ -979,19 +1016,21 @@ class MemoryMDAWidgetBase(_MixinBase):
             val.metadata[METADATA_NAMESPACE] = meta[METADATA_NAMESPACE]
         return val
 
-    def _sequence_uses_grid(self) -> bool:
-        """Whether the sequence to run has a grid plan, global or per position."""
-        sequence = self.value()
-        return sequence.grid_plan is not None or any(
-            pos.sequence is not None and pos.sequence.grid_plan is not None
-            for pos in sequence.stage_positions
-        )
-
     def prepare_mda(self) -> bool | SingleOutput | None:
         """Return a disk path or a scratch sink that supports live viewing."""
-        # the check below already reads the sequence
+        # a value still being typed belongs to the sequence the checks read
         self._commit_editors()
-        if self._sequence_uses_grid() and (
+        sequence = self.value()
+        if dropped := drop_unsupported(sequence, self._mmc)[1]:
+            QMessageBox.warning(
+                self,
+                "Not Available in This Configuration",
+                "This sequence uses what the loaded configuration doesn't have:\n\n"
+                + "\n".join(f"• {item}" for item in dropped)
+                + "\n\nChange or remove them, then run again.",
+            )
+            return False
+        if _uses_grid(sequence) and (
             problem := fov_pixel_size_warning(self._mmc, NO_PIXEL_SIZE)
         ):
             QMessageBox.warning(
@@ -1041,6 +1080,9 @@ class MemoryMDAWidget(MemoryMDAWidgetBase, MDAWidgetCollapsible):
     can never outlive the acquisition.
     """
 
+    settingsIgnored = Signal(str)
+    """Emitted with a message when `load`/`loadSequence` left settings out."""
+
     def _create_tab_widget(self) -> CollapsibleCoreMDATabs:
         return GuiCollapsibleCoreMDATabs(None, self._mmc)
 
@@ -1083,6 +1125,9 @@ class TopbarMemoryMDAWidget(MemoryMDAWidgetBase, MDAWidget):
     missed ``sequenceFinished`` also releases the rest of the GUI -- the lock
     can never outlive the acquisition.
     """
+
+    settingsIgnored = Signal(str)
+    """Emitted with a message when `load`/`loadSequence` left settings out."""
 
     def _create_tab_widget(self) -> CoreMDATabs:
         return GuiCoreMDATabs(None, self._mmc)
