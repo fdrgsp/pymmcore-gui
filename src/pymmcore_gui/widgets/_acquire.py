@@ -701,8 +701,9 @@ class AcquirePage(TabPage):
         """Swap the stage panel's content while keeping cached widgets and dock state.
 
         If the panel has not been opened, remember the choice for its next opening.
+        Refused during an acquisition: the swapped-in widget wouldn't be locked.
         """
-        if kind == self._stage_kind:
+        if kind == self._stage_kind or self._mda_locked:
             return
         self._stage_kind = kind
         panel = self._panels[PanelKey.STAGES]
@@ -727,8 +728,7 @@ class AcquirePage(TabPage):
         if locked:
             self._pre_lock_enabled = {}
             for widget in self._mda_locked_widgets():
-                self._pre_lock_enabled[widget] = widget.isEnabled()
-                widget.setEnabled(False)
+                self._disable_for_mda(widget)
         else:
             for widget, enabled in self._pre_lock_enabled.items():
                 with suppress(RuntimeError):  # deleted while locked
@@ -744,13 +744,20 @@ class AcquirePage(TabPage):
         """Ask the running acquisition to stop, without waiting for it."""
         self._mda.cancel_acquisition()
 
+    def _disable_for_mda(self, widget: QWidget) -> None:
+        self._pre_lock_enabled[widget] = widget.isEnabled()
+        widget.setEnabled(False)
+
     def _mda_locked_widgets(self) -> list[QWidget]:
-        """Return the widgets an acquisition takes away, toolbar first."""
+        """Return the widgets an acquisition takes away, toolbar first.
+
+        Panel buttons stay enabled: any panel can be opened mid-run, and is
+        locked as it is built (see `_create_panel`).
+        """
         widgets: list[QWidget] = [
             self._snap_btn,
             self._live_btn,
             self._shutters,
-            self._panel_bar,
             self._preferences_btn,
         ]
         widgets += [
@@ -778,18 +785,8 @@ class AcquirePage(TabPage):
         return self._panels[key].widget
 
     def open_panel(self, key: str) -> QWidget:
-        """Open *key*'s panel, as clicking its toolbar button would; return its widget.
-
-        A panel not built yet can't be opened while an acquisition runs:
-        building it queries the core, which is why the toolbar's panel
-        buttons are disabled for the run too.
-        """
+        """Open *key*'s panel as its toolbar button would, and return its widget."""
         panel = self._panels[key]
-        if panel.widget is None and self._mda_locked:
-            raise RuntimeError(
-                f"The {panel.info.title} panel can't be opened for the first time "
-                "while an acquisition is running."
-            )
         panel.button.setChecked(True)
         assert panel.widget is not None
         return panel.widget
@@ -991,6 +988,9 @@ class AcquirePage(TabPage):
             explorer = cast("ThemedStageExplorer", widget)
             explorer.sendToMDARequested.connect(self._on_stage_explorer_send_to_mda)
             self._sync_explorer_positions()
+            explorer.setMdaLocked(self._mda_locked)
+        if self._mda_locked and panel.info.key not in _MDA_UNLOCKED_PANELS:
+            self._disable_for_mda(widget)
         # Connects viewToggled (not toggleViewAction().toggled): pinning a
         # dock to an auto-hide side bar transiently unchecks and re-checks
         # that action without ever emitting viewToggled, so binding the

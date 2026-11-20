@@ -1222,24 +1222,6 @@ def test_panels_accessor_opens_a_panel_and_returns_its_widget(
         _ = panels.not_a_panel
 
 
-def test_panels_accessor_builds_no_new_panel_during_an_acquisition(
-    mmcore: CMMCorePlus, qtbot: QtBot
-) -> None:
-    page = AcquirePage(mmcore)
-    qtbot.addWidget(page)
-    explorer = page.panels.stage_explorer
-
-    page.set_mda_lock(True)
-    try:
-        with pytest.raises(RuntimeError, match="while an acquisition is running"):
-            _ = page.panels.camera_roi
-        assert page.panel_widget(PanelKey.CAMERA_ROI) is None
-        # Panels that already exist are still reachable.
-        assert page.panels.stage_explorer is explorer
-    finally:
-        page.set_mda_lock(False)
-
-
 def test_acquire_stage_explorer_is_a_lazy_toolbar_dock(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
@@ -1801,7 +1783,7 @@ def test_mda_lock_restricts_acquire_page_to_watching(
     assert not page._snap_btn.isEnabled()
     assert not page._live_btn.isEnabled()
     assert not page._shutters.isEnabled()
-    assert not page._panel_bar.isEnabled()
+    assert page._panel_bar.isEnabled()
     assert not page._preferences_btn.isEnabled()
     assert not presets.isEnabled()
     # The escape hatches stay usable, as does the MDA panel itself (which
@@ -1824,11 +1806,35 @@ def test_mda_lock_restricts_acquire_page_to_watching(
     page.set_mda_lock(False)
 
     assert page._snap_btn.isEnabled()
-    assert page._panel_bar.isEnabled()
     assert page._preferences_btn.isEnabled()
     assert presets.isEnabled()
     assert toolbar.snap_action.isEnabled()
     assert toolbar.send_to_mda_action.isEnabled()
+
+
+def test_mda_lock_keeps_panels_openable(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    """Any panel can be closed and opened mid-run, locked like those already open."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    roi = page.panels.camera_roi
+
+    page.set_mda_lock(True)
+    page.panel_button(PanelKey.CAMERA_ROI).click()
+    assert PanelKey.CAMERA_ROI not in page.open_panels()
+    page.panel_button(PanelKey.CAMERA_ROI).click()
+    assert PanelKey.CAMERA_ROI in page.open_panels()
+    properties = page.panels.properties
+    explorer = page.panels.stage_explorer
+    assert isinstance(explorer, ThemedStageExplorer)
+    assert not roi.isEnabled()
+    assert not properties.isEnabled()
+    assert explorer.isEnabled()
+    assert not explorer.toolBar().snap_action.isEnabled()
+
+    page.set_mda_lock(False)
+    assert roi.isEnabled()
+    assert properties.isEnabled()
+    assert explorer.toolBar().snap_action.isEnabled()
 
 
 def test_mda_lock_preserves_already_disabled_state(
