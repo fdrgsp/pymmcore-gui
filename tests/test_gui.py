@@ -20,6 +20,7 @@ from pymmcore_widgets import CameraRoiWidget, StageWidget, XYZStageWidget
 from pymmcore_widgets import MDAWidget as UpstreamMDAWidget
 from pymmcore_widgets._light_sources import PROPERTY_SEPARATOR, find_light_sources
 from pymmcore_widgets._util import combo_box_height
+from pymmcore_widgets.useq_widgets._autofocus_settings import AutofocusSettingsDialog
 from pymmcore_widgets.useq_widgets._positions import MDAButton, _MDAPopup
 from superqt.iconify import QIconifyIcon
 
@@ -5898,7 +5899,8 @@ def test_third_party_windows_theme_widgets_built_after_opening(
 
     Regression test: the HCS wizard's per-well Manual panel is built when its
     well is first selected, after the wizard's own sweep, so its Set/Clear
-    buttons stayed borderless; and the Surface Focus dialog was never themed.
+    buttons stayed borderless; and the Surface Focus and software autofocus
+    settings dialogs were never themed.
     """
     set_theme(DARK_THEME)
     widget = MemoryMDAWidget(mmcore)
@@ -5922,6 +5924,15 @@ def test_third_party_windows_theme_widgets_built_after_opening(
     qtbot.waitUntil(
         lambda: all(b.property("variant") for b in dialog._buttons.buttons())
     )
+
+    # opened modally: show it instead, to look at it
+    with patch.object(AutofocusSettingsDialog, "exec", lambda self: self.show()):
+        widget.af_axis._edit_settings()
+    (af_dialog,) = widget.findChildren(AutofocusSettingsDialog)
+    qtbot.waitUntil(
+        lambda: all(b.property("variant") for b in af_dialog.findChildren(QPushButton))
+    )
+    af_dialog.close()
 
 
 def test_position_subsequence_popup_opens_without_a_focused_control(
