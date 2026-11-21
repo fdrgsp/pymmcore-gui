@@ -17,7 +17,7 @@ from ome_writers import AcquisitionSettings, Channel, Dimension, Position, creat
 from pymmcore_plus.mda._sink import _serialize_summary_meta
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
     from pathlib import Path
 
     from ndv.models import DataWrapper
@@ -62,17 +62,29 @@ class AcquisitionRecord:
         The sink's live view (`MDARunner.get_view()` /
         `OmeWritersSink.get_view()`), indexable in acquisition order --
         i.e. in the same dimension order as `settings.dimensions`.
-    frame_meta : list[dict[str, Any]]
-        Per-frame metadata dicts, in acquisition order, already converted via
-        `pymmcore_plus.mda.frame_meta_to_ome` (e.g. from `frameReady`). May be
-        shorter than the number of frames actually written (a frame with no
-        captured metadata is simply written with none).
+    frame_meta : list[dict[str, Any] | None]
+        Per-frame `ome_writers` metadata dicts, where entry *n* belongs to
+        ordinal *n* over `settings.dimensions` (see `frame_ordinal`), e.g.
+        `OmeWritersSink.frame_metadata`. `None`, or a missing trailing entry,
+        means a frame without metadata.
     """
 
     settings: AcquisitionSettings
     summary_meta: SummaryMetaV1 | None
     view: Any
-    frame_meta: list[dict[str, Any]] = field(default_factory=list)
+    frame_meta: list[dict[str, Any] | None] = field(default_factory=list)
+
+
+def frame_ordinal(dims: Sequence[Dimension], index: Sequence[int]) -> int:
+    """Return the acquisition-order position of `index` over `dims` (no y/x).
+
+    Only the inner dimension counts are used, so an unbounded outer dimension
+    (`count=None`) needs no special case.
+    """
+    ordinal = 0
+    for dim, i in zip(dims, index, strict=True):
+        ordinal = ordinal * (dim.count or 1) + i
+    return ordinal
 
 
 def export_acquisition(
@@ -145,6 +157,9 @@ def export_acquisition(
     for dim in index_dims:
         total *= dim.count or 1
     ranges = [range(dim.count or 1) for dim in index_dims]
+    # frame_meta follows the original dimensions, whose strides differ from
+    # the clamped ones once an inner dimension is clamped.
+    meta_dims = record.settings.dimensions[:-2]
     n_frame_meta = len(record.frame_meta)
 
     cancelled = False
@@ -161,7 +176,8 @@ def export_acquisition(
 
         for n, idx in enumerate(product(*ranges)):
             frame = np.asarray(record.view[idx])
-            meta = record.frame_meta[n] if n < n_frame_meta else None
+            ordinal = frame_ordinal(meta_dims, idx)
+            meta = record.frame_meta[ordinal] if ordinal < n_frame_meta else None
             stream.append(frame, frame_metadata=meta)
             if progress is not None and not progress(n + 1, total):
                 cancelled = True

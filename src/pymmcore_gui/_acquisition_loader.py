@@ -15,12 +15,19 @@ from typing import TYPE_CHECKING, Any, cast
 
 from useq import MDASequence
 
-from pymmcore_gui._mda_export import AcquisitionRecord, record_from_wrapper
+from pymmcore_gui._mda_export import (
+    AcquisitionRecord,
+    frame_ordinal,
+    record_from_wrapper,
+)
 from pymmcore_gui._ome_tiff_wrapper import OMETiffWrapper
 from pymmcore_gui._ome_zarr_wrapper import OMEZarrWrapper
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from ndv.models import DataWrapper
+    from ome_writers import Dimension
     from pymmcore_plus.metadata import SummaryMetaV1
 
 logger = logging.getLogger(__name__)
@@ -58,7 +65,7 @@ class LoadedAcquisition:
     record : AcquisitionRecord | None
         Everything `MMArrayViewer`'s Save button needs to re-export this
         acquisition faithfully (real dimensions/scale/channel names, and the
-        original summary metadata when recoverable) -- attach this to the
+        original summary and per-frame metadata when recoverable) -- attach this to the
         viewer as `_acquisition_record` so re-saving a reopened file (e.g. as
         a different format) doesn't fall back to stamping the *current*
         microscope state. `None` only when the wrapper's own dims are too
@@ -116,6 +123,10 @@ def open_acquisition(path: str | Path) -> LoadedAcquisition:
     record = record_from_wrapper(
         wrapper, _WrapperView(wrapper), summary_meta=summary_meta
     )
+    if record is not None:
+        record.frame_meta = _recover_frame_metadata(
+            wrapper, record.settings.dimensions[:-2]
+        )
     return LoadedAcquisition(
         wrapper=wrapper,
         sequence=sequence,
@@ -172,3 +183,33 @@ def _recover_summary_metadata(
     except Exception as e:
         logger.warning("Could not recover metadata from %s: %s", wrapper, e)
         return None, None
+
+
+def _recover_frame_metadata(
+    wrapper: OMETiffWrapper | OMEZarrWrapper, dims: Sequence[Dimension]
+) -> list[dict[str, Any] | None]:
+    """Place the file's per-frame metadata at each frame's ordinal over `dims`.
+
+    The list only reaches the last frame with metadata: a partial Zarr array's
+    declared shape can be far larger than what was acquired.
+    """
+    try:
+        entries = wrapper.frame_metadata()
+    except Exception as e:
+        logger.warning("Could not recover frame metadata from %s: %s", wrapper, e)
+        return []
+
+    shape = [dim.count or 0 for dim in dims]
+    by_ordinal: dict[int, dict[str, Any]] = {}
+    for index, meta in entries.items():
+        if len(index) == len(shape) and all(
+            isinstance(i, int) and 0 <= i < n for i, n in zip(index, shape, strict=True)
+        ):
+            by_ordinal[frame_ordinal(dims, index)] = meta
+    if ignored := len(entries) - len(by_ordinal):
+        logger.warning("Ignored %d malformed frame metadata entries", ignored)
+
+    frame_meta: list[dict[str, Any] | None] = [None] * (max(by_ordinal, default=-1) + 1)
+    for ordinal, meta in by_ordinal.items():
+        frame_meta[ordinal] = meta
+    return frame_meta
