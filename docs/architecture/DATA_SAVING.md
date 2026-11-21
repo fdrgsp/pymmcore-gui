@@ -104,11 +104,18 @@ maintains an `AcquisitionRecord`:
   `AcquisitionSettings` and `SummaryMetaV1` (`core.mda.get_sink()`),
   and keeps a reference to the live view (`core.mda.get_view()`) — a
   `StreamView` indexable in acquisition order.
-- **On every `frameReady`**: appends that frame's metadata
-  (`frame_meta_to_ome(meta)`) to the record — this happens
-  *unconditionally*, even if the viewer's follow/lock button is
-  toggled off, so locking the slider mid-run never truncates what
-  gets exported later.
+- **Per-frame metadata** is the sink's own list
+  (`OmeWritersSink.frame_metadata`), shared by reference: entry *n* is
+  the dict written with acquisition-order frame slot *n*, or `None` for
+  a slot the runner skipped. It grows as frames are written, and the
+  next run's sink starts a new list, so an open viewer keeps its own.
+
+A reopened OME-TIFF/OME-Zarr (`_acquisition_loader.open_acquisition`)
+gets a record too: real dimensions from the file, the summary metadata
+from its `pymmcore_plus` annotation/attribute, and per-frame metadata
+read back by the wrapper's `frame_metadata()` (OME-XML `Plane`s, or
+each image group's `ome_writers.frame_metadata`). Re-saving a reopened
+file therefore keeps its timestamps, exposures and stage positions.
 
 If no record was captured (e.g. the snap/live Preview, which isn't
 backed by an MDA at all), `_synthesize_record()` builds a minimal one
@@ -132,6 +139,10 @@ multi-camera system (`pymmcore_plus.metadata.image_infos`).
 - **Clamps to what was actually acquired** — a cancelled run or an
   unbounded (`GeneratorMDASequence`) acquisition only exports the
   frames that exist, not the originally-planned count.
+- **Looks metadata up by the original ordinal** (`frame_ordinal` over
+  `record.settings.dimensions`), not by write order: clamping an inner
+  axis changes the strides, and the metadata list follows the original
+  ones.
 - **Multi-position OME-TIFF** → directory of per-position files, same
   as a live acquisition.
 - **Overwrite handling**: the first attempt always runs with
@@ -162,6 +173,30 @@ via `tifffile` (no OME metadata, no format choice).
 | `src/pymmcore_gui/_mda_export.py` | `AcquisitionRecord`, `export_acquisition()` — the actual replay-to-new-stream logic |
 | `src/pymmcore_gui/_ndv_viewers.py` | `AcquireViewersManager` — captures/updates the live `AcquisitionRecord` per MDA viewer |
 <!-- markdownlint-enable MD013 -->
+
+---
+
+## 3. Inspecting metadata
+
+Press **I** over an MDA viewer, or choose **Show Metadata…** in its
+context menu, to open a non-modal dialog
+(`widgets/_metadata_dialog.py`). It reads the viewer's
+`AcquisitionRecord`, so it shows exactly what Save would write:
+
+- **MDA Sequence**: the sequence as YAML (the MDA widget's own
+  serialization), with Copy, Save and Re-use MDA.
+- **Timestamps**: one row per frame (or per position and timepoint,
+  compared with the time plan's schedule), sortable, with CSV export.
+  *Follow viewer* selects the frames on screen, matched the way ndv
+  slices its data (`MMArrayViewer.displayed_ranges`).
+- **Frame**: the metadata of the frame(s) on screen.
+- **Acquisition**: the summary metadata as a filterable tree.
+- **Raw**: the original OME-XML or `zarr.json` of a reopened file.
+
+The per-frame model lives in `_image_metadata.py` (no Qt). The dialog
+checks once a second whether the record grew, so a running acquisition's
+new frames appear by themselves. The Preview and snaps have no
+`data_origin` and no dialog.
 
 ---
 
