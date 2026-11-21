@@ -264,6 +264,8 @@ class MMArrayViewer(ndv.ArrayViewer):
 
     def _show_context_menu(self, global_pos: Any) -> bool:
         """Offer the metadata dialog and sequence reuse, where they apply."""
+        if self.data_origin is None and self.mda_sequence is None:
+            return False
         menu = QMenu(self.widget())
         if self.data_origin is not None:
             # the tab-separated "I" is only a hint; the shortcut is the viewer's
@@ -272,8 +274,6 @@ class MMArrayViewer(ndv.ArrayViewer):
         if self.mda_sequence is not None and (action := menu.addAction("Re-use MDA…")):
             action.setEnabled(self.can_reuse_mda())
             action.triggered.connect(self.reuse_mda)
-        if menu.isEmpty():
-            return False
         menu.exec(global_pos)
         return True
 
