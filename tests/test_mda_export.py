@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import numpy as np
 import pytest
 import tensorstore as ts
 import tifffile
+from ome_types import from_tiff
 from ome_writers import (
     AcquisitionSettings,
     ScratchFormat,
@@ -23,7 +24,11 @@ from ome_writers import (
     dims_from_standard_axes,
 )
 
-from pymmcore_gui._mda_export import AcquisitionRecord, export_acquisition
+from pymmcore_gui._mda_export import (
+    AcquisitionRecord,
+    export_acquisition,
+    frame_ordinal,
+)
 
 if TYPE_CHECKING:
     from pymmcore_plus.metadata import SummaryMetaV1
@@ -54,7 +59,7 @@ def test_export_ome_tiff_roundtrip(tmp_path: Path) -> None:
         format=ScratchFormat(),
     )
     with create_stream(settings) as stream:
-        frame_meta = []
+        frame_meta: list[dict[str, Any] | None] = []
         for t in range(2):
             for c in range(2):
                 stream.append(
@@ -180,6 +185,52 @@ def test_export_clamps_partial_unbounded_acquisition(tmp_path: Path) -> None:
     assert arr.shape == (3, 1, 8, 8)
 
 
+def test_frame_ordinal_uses_inner_counts_only() -> None:
+    dims = dims_from_standard_axes({"t": None, "c": ["A", "B"], "z": 3})
+    assert frame_ordinal(dims, (0, 0, 0)) == 0
+    assert frame_ordinal(dims, (0, 1, 2)) == 5
+    assert frame_ordinal(dims, (2, 1, 0)) == 15
+
+
+class _ClampedView:
+    """A live view whose z axis has only reached 5 of its 11 planes."""
+
+    coords: ClassVar = {"c": ["DAPI", "FITC"], "z": range(5)}
+
+    def __getitem__(self, idx: tuple[int, int]) -> np.ndarray:
+        c, z = idx
+        return np.full((8, 8), c * 100 + z, dtype="uint16")
+
+
+def test_export_matches_metadata_by_original_ordinal(tmp_path: Path) -> None:
+    """Clamping an inner axis changes its strides, but not the metadata's."""
+    settings = AcquisitionSettings(
+        dimensions=tuple(
+            dims_from_standard_axes({"c": ["DAPI", "FITC"], "z": 11, "y": 8, "x": 8})
+        ),
+        dtype="uint16",
+    )
+    # (c1, z0) is ordinal 11 here, but 5 once z is clamped to 5 planes
+    acquired = [c * 11 + z for c in range(2) for z in range(5)]
+    frame_meta: list[dict[str, Any] | None] = [None] * 22
+    for ordinal in acquired:
+        frame_meta[ordinal] = {"delta_t": float(ordinal)}
+    record = AcquisitionRecord(
+        settings=settings,
+        summary_meta=None,
+        view=_ClampedView(),
+        frame_meta=frame_meta,
+    )
+
+    out = export_acquisition(record, tmp_path / "clamped.ome.tiff", "ome-tiff")
+
+    assert out is not None
+    planes = from_tiff(out).images[0].pixels.planes
+    assert {(p.the_c, p.the_z): p.delta_t for p in planes} == {
+        (c, z): float(c * 11 + z) for c in range(2) for z in range(5)
+    }
+
+
 @pytest.mark.parametrize("count", [None, 3])
 def test_export_nothing_acquired_raises(tmp_path: Path, count: int | None) -> None:
     settings = AcquisitionSettings(
@@ -257,8 +308,6 @@ def test_export_tiff_layout_option(
     external_refs: int,
 ) -> None:
     """`tiff_layout` decides how the exported files relate to each other."""
-    from ome_types import from_tiff
-
     settings = AcquisitionSettings(
         dimensions=tuple(
             dims_from_standard_axes({"p": ["A1", "B2"], "c": ["DAPI"], "y": 8, "x": 8})

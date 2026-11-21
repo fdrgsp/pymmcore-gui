@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 import pytest
@@ -27,6 +27,8 @@ from pymmcore_gui._ome_tiff_wrapper import OMETiffWrapper
 
 if TYPE_CHECKING:
     from ome_writers import Channel, Dimension
+
+    from pymmcore_gui._mda_export import AcquisitionRecord
 
 FORMATS = ("ome-tiff", "ome-zarr")
 
@@ -46,7 +48,10 @@ def _fmt(name: str) -> OmeTiffFormat | OmeZarrFormat:
 def _write_with_sequence(
     seq: useq.MDASequence, fmt: str, root: Path, n_frames: int
 ) -> str:
-    """Write `seq`'s acquisition, embedding it as real acquisition metadata."""
+    """Write `seq`'s acquisition, embedding it as real acquisition metadata.
+
+    Frame `i` has pixels equal to `i` and the per-frame metadata from `_frame_meta`.
+    """
     dims = useq_to_acquisition_settings(seq, 8, 8, pixel_size_um=0.325)["dimensions"]
     settings = AcquisitionSettings(
         dimensions=tuple(dims), dtype="uint16", root_path=str(root), format=_fmt(fmt)
@@ -59,8 +64,24 @@ def _write_with_sequence(
     with create_stream(settings) as stream:
         stream.set_global_metadata("pymmcore_plus", {"summary_metadata": summary})
         for i in range(n_frames):
-            stream.append(np.full((8, 8), i, dtype="uint16"))
+            stream.append(
+                np.full((8, 8), i, dtype="uint16"), frame_metadata=_frame_meta(i)
+            )
     return settings.output_path
+
+
+def _frame_meta(i: int) -> dict[str, float]:
+    return {"delta_t": i * 0.5, "exposure_time": 0.01, "position_x": float(i)}
+
+
+def _frame_meta_by_pixel(record: AcquisitionRecord) -> dict[int, dict[str, Any]]:
+    """Each recovered entry, keyed by the pixel value (write number) at its index."""
+    counts = [dim.count or 0 for dim in record.settings.dimensions[:-2]]
+    return {
+        int(record.view[tuple(map(int, np.unravel_index(n, counts)))].flat[0]): meta
+        for n, meta in enumerate(record.frame_meta)
+        if meta is not None
+    }
 
 
 def _write_bare(dims: list[Dimension], fmt: str, root: Path, n_frames: int) -> str:
@@ -200,6 +221,52 @@ def test_cancelled_partial_ome_zarr_reports_declared_shape(tmp_path: Path) -> No
         loaded.close()
 
 
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_record_frame_meta_sits_at_each_frames_ordinal(
+    tmp_path: Path, fmt: str
+) -> None:
+    """Positions are interleaved within each timepoint, and OME-Zarr stores
+    each position's channels and z planes in a different order than acquired."""
+    seq = useq.MDASequence(
+        channels=_ch("DAPI", "FITC"),
+        stage_positions=(useq.Position(x=0, y=0), useq.Position(x=10, y=10)),
+        time_plan=useq.TIntervalLoops(interval=timedelta(seconds=1), loops=2),
+        z_plan=useq.ZRangeAround(range=1, step=1),
+        axis_order=tuple("tpzc"),
+    )
+    ext = "ome.tiff" if fmt == "ome-tiff" else "ome.zarr"
+    out = _write_with_sequence(seq, fmt, tmp_path / f"a.{ext}", n_frames=16)
+
+    loaded = open_acquisition(out)
+    try:
+        assert loaded.record is not None
+        assert _frame_meta_by_pixel(loaded.record) == {
+            i: _frame_meta(i) for i in range(16)
+        }
+    finally:
+        loaded.close()
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_partial_acquisition_frame_meta_stops_at_the_last_entry(
+    tmp_path: Path, fmt: str
+) -> None:
+    """A partial OME-Zarr declares all 10 timepoints but only 3 have metadata."""
+    seq = useq.MDASequence(
+        channels=_ch("DAPI"),
+        time_plan=useq.TIntervalLoops(interval=timedelta(seconds=1), loops=10),
+    )
+    ext = "ome.tiff" if fmt == "ome-tiff" else "ome.zarr"
+    out = _write_with_sequence(seq, fmt, tmp_path / f"partial.{ext}", n_frames=3)
+
+    loaded = open_acquisition(out)
+    try:
+        assert loaded.record is not None
+        assert loaded.record.frame_meta == [_frame_meta(i) for i in range(3)]
+    finally:
+        loaded.close()
+
+
 def test_supports_path_rejects_unsupported(tmp_path: Path) -> None:
     not_a_dataset = tmp_path / "random_dir"
     not_a_dataset.mkdir()
@@ -323,6 +390,10 @@ def test_record_roundtrips_through_export_acquisition(tmp_path: Path, fmt: str) 
                 1: "FITC",
             }
             assert reloaded.wrapper.axis_scales()["x"] == pytest.approx(0.325)
+            assert reloaded.record is not None
+            assert _frame_meta_by_pixel(reloaded.record) == {
+                i: _frame_meta(i) for i in range(6)
+            }
         finally:
             reloaded.close()
     finally:
