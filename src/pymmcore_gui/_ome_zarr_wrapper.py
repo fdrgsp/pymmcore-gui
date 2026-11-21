@@ -123,6 +123,33 @@ class OMEZarrWrapper(DataWrapper):
         """
         return self._group.attrs.get(namespace)
 
+    def frame_metadata(self) -> dict[tuple[int, ...], dict[str, Any]]:
+        """Per-frame ome-writers metadata, from each image group's attributes.
+
+        Keys index the non-spatial `dims` (`p` first for multi-position data).
+        Frames written without metadata have no entry.
+        """
+        groups = (
+            [
+                ((p,), cast("ZarrGroup", self._group[path]))
+                for p, path in enumerate(self._positions)
+            ]
+            if self._positions
+            else [((), self._group)]
+        )
+        result: dict[tuple[int, ...], dict[str, Any]] = {}
+        for prefix, group in groups:
+            entries = group.attrs.get("ome_writers", {}).get("frame_metadata", [])
+            for entry in entries:
+                if not isinstance(entry, Mapping):
+                    continue
+                meta = dict(entry)
+                # this entry's index within its own group's array
+                storage_index = meta.pop("storage_index", None)
+                if isinstance(storage_index, list):
+                    result[(*prefix, *storage_index)] = meta
+        return result
+
     # ----------------------- Structure Detection -----------------------
 
     def _detect_structure(

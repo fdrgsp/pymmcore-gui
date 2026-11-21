@@ -15,7 +15,7 @@ import useq
 from cmap import Colormap
 from pymmcore_plus import CMMCorePlus, FocusDirection, PropertyType
 from pymmcore_plus.autofocus import AutofocusResult, CaptureSettings, capture_state
-from pymmcore_plus.mda import MDARunner
+from pymmcore_plus.mda import MDARunner, OmeWritersSink
 from pymmcore_widgets import CameraRoiWidget, StageWidget, XYZStageWidget
 from pymmcore_widgets import MDAWidget as UpstreamMDAWidget
 from pymmcore_widgets._light_sources import PROPERTY_SEPARATOR, find_light_sources
@@ -127,6 +127,7 @@ if TYPE_CHECKING:
     from vispy.app.canvas import MouseEvent
 
     from pymmcore_gui._app import WindowProtocol
+    from pymmcore_gui._mda_export import AcquisitionRecord
     from pymmcore_gui._qt.QtAds import CDockAreaWidget
     from pymmcore_gui._settings import Settings
     from pymmcore_gui._theme import Color
@@ -4732,20 +4733,16 @@ def test_acquire_new_viewer_split_is_equal(mmcore: CMMCorePlus, qtbot: QtBot) ->
     assert abs(first_size - second_size) <= 1
 
 
-def test_acquire_viewer_records_frame_metadata_regardless_of_follow_lock(
+def test_acquire_viewer_record_shares_the_sink_frame_metadata(
     mmcore: CMMCorePlus,
     qtbot: QtBot,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Per-frame metadata capture must not be gated by the follow/lock toggle.
+    """A live record exports the sink's own per-frame metadata.
 
-    ``AcquireViewersManager._on_frame_ready`` used to check ``_follow_acquisition``
-    before doing anything at all; the metadata now appended to the viewer's
-    ``AcquisitionRecord`` must happen regardless, or locking the slider (e.g. to
-    inspect an earlier timepoint mid-run) would silently truncate whatever gets
-    exported later from the viewer's Save button.
+    The sink records exactly what it writes, skipped frames included, and a
+    later run starts a new list instead of clearing the one an open viewer holds.
     """
-    from pymmcore_plus.metadata import frame_metadata
 
     class Emitter:
         def emit(self) -> None:
@@ -4773,30 +4770,32 @@ def test_acquire_viewer_records_frame_metadata_regardless_of_follow_lock(
     page = AcquirePage(mmcore)
     qtbot.addWidget(page)
 
-    sequence = useq.MDASequence(channels=(useq.Channel(config="DAPI", exposure=10),))
-    mmcore.mda.run(sequence, output="memory")
-    qtbot.wait(20)
-
+    sequence = useq.MDASequence(
+        channels=(useq.Channel(config="DAPI", exposure=10),),
+        time_plan=useq.TIntervalLoops(interval=timedelta(0), loops=2),
+    )
     manager = page._viewers
-    dock = manager._active_dock
-    assert dock is not None
-    record = manager._records[dock]
-    assert record.acquisition is not None
-    assert record.acquisition.settings.dtype
-    assert record.acquisition.summary_meta is not None
-    n_before = len(record.acquisition.frame_meta)
-    assert n_before >= 1  # the one real frame from the run above
 
-    event = next(iter(sequence))
-    meta = frame_metadata(mmcore, runner_time_ms=1.0)
+    def _run() -> AcquisitionRecord:
+        mmcore.mda.run(sequence, output="memory")
+        qtbot.wait(20)
+        dock = manager._active_dock
+        assert dock is not None
+        record = manager._records[dock].acquisition
+        assert record is not None
+        sink = mmcore.mda.get_sink()
+        assert isinstance(sink, OmeWritersSink)
+        assert record.frame_meta is sink.frame_metadata
+        return record
 
-    manager._follow_acquisition = False
-    manager._on_frame_ready(event, meta)
-    assert len(record.acquisition.frame_meta) == n_before + 1
+    first = _run()
+    assert first.summary_meta is not None
+    assert len(first.frame_meta) == 2
+    assert all(m is not None for m in first.frame_meta)
 
-    manager._follow_acquisition = True
-    manager._on_frame_ready(event, meta)
-    assert len(record.acquisition.frame_meta) == n_before + 2
+    second = _run()
+    assert second.frame_meta is not first.frame_meta
+    assert len(first.frame_meta) == 2
 
 
 class _FakeViewer:

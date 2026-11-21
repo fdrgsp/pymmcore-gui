@@ -84,6 +84,74 @@ def _ome_file_order(xml_str: str | None) -> list[str]:
     return []  # pragma: no cover
 
 
+_TIME_UNITS = {"s": 1.0, "ms": 1e-3, "µs": 1e-6, "ns": 1e-9, "min": 60.0, "h": 3600.0}
+# ome-writers writes stage positions in µm without a unit, i.e. OME's default
+# "reference frame", so that is read as µm too.
+_LENGTH_UNITS = {"reference frame": 1.0, "µm": 1.0, "nm": 1e-3, "mm": 1e3, "m": 1e6}
+# OME Plane attribute -> (ome-writers frame-metadata key, units, OME default unit)
+_PLANE_FIELDS = {
+    "DeltaT": ("delta_t", _TIME_UNITS, "s"),
+    "ExposureTime": ("exposure_time", _TIME_UNITS, "s"),
+    "PositionX": ("position_x", _LENGTH_UNITS, "reference frame"),
+    "PositionY": ("position_y", _LENGTH_UNITS, "reference frame"),
+    "PositionZ": ("position_z", _LENGTH_UNITS, "reference frame"),
+}
+
+
+def _local_name(tag: str) -> str:
+    return tag.rpartition("}")[2]
+
+
+def _image_planes(
+    xml_str: str | None,
+) -> list[list[tuple[dict[str, int], dict[str, Any]]]]:
+    """Each OME `Image`'s planes as (TheT/TheC/TheZ by axis, frame metadata).
+
+    Frame metadata uses ome-writers' keys and units (seconds, µm). A value in
+    an unknown unit is left out rather than mislabeled. Map annotations a
+    plane references are added as their (string) values.
+    """
+    if not xml_str:
+        return []
+    root = ET.fromstring(xml_str)
+    annotations = {
+        element.get("ID"): {
+            key: entry.text or ""
+            for entry in element.iter()
+            if _local_name(entry.tag) == "M" and (key := entry.get("K"))
+        }
+        for element in root.iter()
+        if _local_name(element.tag) == "MapAnnotation"
+    }
+    images = []
+    for image in root:
+        if _local_name(image.tag) != "Image":
+            continue
+        planes = []
+        for plane in image.iter():
+            if _local_name(plane.tag) != "Plane":
+                continue
+            try:
+                index = {
+                    axis: int(plane.get(f"The{axis.upper()}", 0)) for axis in "tcz"
+                }
+            except ValueError:
+                continue
+            meta: dict[str, Any] = {}
+            for attr, (key, units, default_unit) in _PLANE_FIELDS.items():
+                value = plane.get(attr)
+                scale = units.get(plane.get(f"{attr}Unit", default_unit))
+                if value is not None and scale is not None:
+                    with contextlib.suppress(ValueError):
+                        meta[key] = float(value) * scale
+            for ref in plane:
+                if _local_name(ref.tag) == "AnnotationRef":
+                    meta.update(annotations.get(ref.get("ID"), {}))
+            planes.append((index, meta))
+        images.append(planes)
+    return images
+
+
 def _open_tiff(path: Path) -> tifffile.TiffFile:
     """Open a TIFF, following a BinaryOnly reference to its metadata master."""
     file = tifffile.TiffFile(path)
@@ -305,6 +373,35 @@ class OMETiffWrapper(DataWrapper):
                                 result[key] = json.loads(entry.text)
                 return result or None
         return None
+
+    def frame_metadata(self) -> dict[tuple[int, ...], dict[str, Any]]:
+        """Per-frame ome-writers metadata, from the OME-XML `Plane` elements.
+
+        Keys index the non-spatial `dims` (`p` first for multi-position data).
+        Frames written without metadata have no entry.
+        """
+        if self._position_files:
+            # independent files: each describes only its own position
+            images = []
+            for path in self._position_files:
+                if path == self._position_files[0]:
+                    xml_str = self._tf.ome_metadata
+                else:
+                    with tifffile.TiffFile(path) as file:
+                        xml_str = file.ome_metadata
+                images.extend(_image_planes(xml_str)[:1])
+        else:
+            images = _image_planes(self._tf.ome_metadata)
+
+        frame_axes = self._dims[1:-2] if self._is_multiposition else self._dims[:-2]
+        result: dict[tuple[int, ...], dict[str, Any]] = {}
+        for position, planes in enumerate(images):
+            prefix = (position,) if self._is_multiposition else ()
+            for the, meta in planes:
+                # tifffile drops singleton axes, so their The* values are unused
+                index = (*prefix, *(the[str(axis)] for axis in frame_axes))
+                result[index] = meta
+        return result
 
     # ----------------------- internals -----------------------
 

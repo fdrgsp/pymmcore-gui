@@ -22,7 +22,7 @@ from pymmcore_plus.autofocus import (
     capture_state,
     run_software_autofocus,
 )
-from pymmcore_plus.mda import OmeWritersSink, frame_meta_to_ome
+from pymmcore_plus.mda import OmeWritersSink
 from superqt import QIconifyIcon
 from useq import SoftwareAutofocus
 
@@ -142,9 +142,10 @@ class AcquireViewersManager(QObject):
     """
 
     _sequenceStarted = Signal(object, object)
-    # the frame itself is not needed on the GUI thread, and queueing it would
-    # keep a whole frame alive until the GUI thread drains the queue
-    _frameReady = Signal(object, object)
+    # only the event is needed on the GUI thread: queueing the frame would keep
+    # it alive until the GUI thread drains the queue, and the sink already
+    # keeps the per-frame metadata
+    _frameReady = Signal(object)
     _sequenceFinished = Signal(object)
     _eventStarted = Signal(object)
     _autofocusImageSnapped = Signal(object)
@@ -671,14 +672,18 @@ class AcquireViewersManager(QObject):
         # Snapshot the sink's resolved settings + summary metadata now: the
         # sink is replaced wholesale on the *next* run, so a viewer left open
         # across two acquisitions must hold its own copy to export correctly
-        # later. Per-frame metadata is appended live, in _on_frame_ready.
+        # later. The sink's per-frame metadata list grows as frames are written
+        # and is left intact when a later run starts a new one.
         # The sink object itself is also kept (record.sink), so this specific
         # run's data can be released later by identity, even after the
         # runner's own `get_sink()` has moved on to a newer run.
         record.sink = sink
         if isinstance(sink, OmeWritersSink):
             acquisition = AcquisitionRecord(
-                settings=sink.settings, summary_meta=sink.summary_meta, view=view
+                settings=sink.settings,
+                summary_meta=sink.summary_meta,
+                view=view,
+                frame_meta=sink.frame_metadata,
             )
             record.acquisition = acquisition
             viewer._acquisition_record = acquisition  # read by MMArrayViewer._save_data
@@ -708,23 +713,12 @@ class AcquireViewersManager(QObject):
         self.mdaViewerCreated.emit(viewer)
 
     def _relay_frame_ready(
-        self, _frame: np.ndarray, event: MDAEvent, meta: FrameMetaV1
+        self, _frame: np.ndarray, event: MDAEvent, _meta: FrameMetaV1
     ) -> None:
-        self._frameReady.emit(event, meta)
+        self._frameReady.emit(event)
 
-    def _on_frame_ready(self, event: MDAEvent, meta: FrameMetaV1) -> None:
-        """Record frame metadata for export, then follow the latest acquired index.
-
-        Metadata capture happens unconditionally, *before* the follow-lock
-        check below: the lock only controls whether the displayed slider
-        position tracks new frames, and must not also silently truncate the
-        metadata used later by the viewer's Save button.
-        """
-        if (dw := self._active_dock) is not None:
-            record = self._records.get(dw)
-            if record is not None and record.acquisition is not None:
-                record.acquisition.frame_meta.append(frame_meta_to_ome(meta))
-
+    def _on_frame_ready(self, event: MDAEvent) -> None:
+        """Follow the latest acquired index, unless the viewer is locked."""
         viewer = self._active_viewer
         if viewer is None or not self._follow_acquisition:
             return

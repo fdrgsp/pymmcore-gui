@@ -10,7 +10,7 @@ from __future__ import annotations
 import warnings
 from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import pytest
@@ -27,11 +27,11 @@ from ome_writers import (
 
 import pymmcore_gui._ome_tiff_wrapper
 import pymmcore_gui._ome_zarr_wrapper  # noqa: F401 -- registers OMEZarrWrapper
-from pymmcore_gui._ome_tiff_wrapper import OMETiffWrapper
+from pymmcore_gui._ome_tiff_wrapper import OMETiffWrapper, _image_planes
 from pymmcore_gui._ome_zarr_wrapper import OMEZarrWrapper
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Container, Sequence
 
     from ome_writers import Dimension
 
@@ -95,9 +95,135 @@ def _write(
     return settings.output_path
 
 
+def _write_with_frame_metadata(
+    dims: Sequence[Dimension],
+    fmt: str | OmeTiffFormat,
+    root: Path,
+    n_frames: int,
+    skip: Container[int] = (),
+) -> str:
+    """Write frames whose pixels and `delta_t` both equal their write number.
+
+    Frames in `skip` are written without metadata.
+    """
+    settings = AcquisitionSettings(
+        dimensions=tuple(dims),
+        dtype="uint16",
+        root_path=str(root),
+        format=_fmt(fmt) if isinstance(fmt, str) else fmt,
+    )
+    with create_stream(settings) as stream:
+        for i in range(n_frames):
+            meta = {
+                "delta_t": float(i),
+                "exposure_time": 0.01,
+                "position_x": 1.5,
+                "mda_event": f'{{"index": {{"t": {i}}}}}',
+            }
+            stream.append(
+                np.full((8, 8), i, dtype="uint16"),
+                frame_metadata=None if i in skip else meta,
+            )
+    return settings.output_path
+
+
+def _assert_frame_metadata_matches_pixels(
+    wrapper: OMETiffWrapper | OMEZarrWrapper, expected: set[int]
+) -> None:
+    """Each entry sits at the index whose pixels were written with it."""
+    entries = wrapper.frame_metadata()
+    assert {meta["delta_t"] for meta in entries.values()} == expected
+    for index, meta in entries.items():
+        assert wrapper.isel(dict(enumerate(index)))[0, 0] == meta["delta_t"]
+        assert meta["exposure_time"] == pytest.approx(0.01)
+        assert meta["position_x"] == pytest.approx(1.5)
+        assert meta["mda_event"] == f'{{"index": {{"t": {int(meta["delta_t"])}}}}}'
+
+
 @pytest.fixture
 def tmp(tmp_path: Path) -> Path:
     return tmp_path
+
+
+_FRAME_METADATA_LAYOUTS: dict[str, tuple[dict[str, Any], int]] = {
+    "z_stack": ({"t": 2, "c": ["DAPI", "FITC"], "z": 3}, 12),
+    "singleton_channel": ({"t": 2, "c": ["DAPI"], "z": 2}, 4),
+    # acquired p-z-c within t, but OME-Zarr stores each position as t, c, z
+    "interleaved_positions": (
+        {"t": 2, "p": ["A", "B"], "z": 2, "c": ["DAPI", "FITC"]},
+        16,
+    ),
+}
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+@pytest.mark.parametrize("layout", _FRAME_METADATA_LAYOUTS)
+def test_frame_metadata_matches_pixels(tmp: Path, fmt: str, layout: str) -> None:
+    from ome_writers import dims_from_standard_axes
+
+    axes, n_frames = _FRAME_METADATA_LAYOUTS[layout]
+    dims = dims_from_standard_axes({**axes, "y": 8, "x": 8})
+    ext = "ome.tiff" if fmt == "ome-tiff" else "ome.zarr"
+    out = _write_with_frame_metadata(dims, fmt, tmp / f"meta.{ext}", n_frames, {3})
+    wrapper = WRAPPER_TYPE[fmt](out)
+    try:
+        _assert_frame_metadata_matches_pixels(wrapper, set(range(n_frames)) - {3})
+    finally:
+        wrapper.close()
+
+
+@pytest.mark.parametrize("fmt", FORMATS)
+def test_frame_metadata_of_a_snake_grid(tmp: Path, fmt: str) -> None:
+    seq = useq.MDASequence(
+        grid_plan=useq.GridRowsColumns(
+            rows=2, columns=3, mode=useq.OrderMode.row_wise_snake
+        ),
+        stage_positions=(useq.Position(x=0, y=0), useq.Position(x=0, y=9000)),
+    )
+    dims = useq_to_acquisition_settings(seq, 8, 8, pixel_size_um=0.325)["dimensions"]
+    ext = "ome.tiff" if fmt == "ome-tiff" else "ome.zarr"
+    out = _write_with_frame_metadata(dims, fmt, tmp / f"grid.{ext}", 12)
+    wrapper = _create(out)
+    try:
+        _assert_frame_metadata_matches_pixels(wrapper, set(range(12)))
+    finally:
+        wrapper.close()
+
+
+@pytest.mark.parametrize("layout", ["self-contained", "master-tiff", "redundant"])
+def test_frame_metadata_in_every_tiff_layout(tmp: Path, layout: str) -> None:
+    from ome_writers import dims_from_standard_axes
+
+    dims = dims_from_standard_axes({"p": ["A", "B"], "t": 2, "y": 8, "x": 8})
+    fmt = OmeTiffFormat.model_validate({"multi_file_metadata": layout})
+    out = _write_with_frame_metadata(dims, fmt, tmp / "positions.ome.tiff", 4)
+    for path in (out, sorted(Path(out).glob("*.tiff"))[-1]):
+        wrapper = OMETiffWrapper(path)
+        try:
+            # an independent file only describes its own position
+            expected = {2, 3} if wrapper.dims[0] != "p" else {0, 1, 2, 3}
+            _assert_frame_metadata_matches_pixels(wrapper, expected)
+        finally:
+            wrapper.close()
+
+
+def test_tiff_plane_units_are_converted() -> None:
+    xml = """<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">
+      <Image ID="Image:0"><Pixels ID="Pixels:0">
+        <Plane TheT="1" DeltaT="500" DeltaTUnit="ms" ExposureTime="10"
+               ExposureTimeUnit="ms" PositionX="2" PositionXUnit="mm"
+               PositionY="3" PositionYUnit="ly" PositionZ="4"/>
+      </Pixels></Image>
+    </OME>"""
+    [[(index, meta)]] = _image_planes(xml)
+    assert index == {"t": 1, "c": 0, "z": 0}
+    # an unknown unit (light years) is left out, not labeled as µm
+    assert meta == {
+        "delta_t": 0.5,
+        "exposure_time": 0.01,
+        "position_x": 2000.0,
+        "position_z": 4.0,
+    }
 
 
 @pytest.mark.parametrize("fmt", FORMATS)
