@@ -207,6 +207,44 @@ def test_frame_metadata_in_every_tiff_layout(tmp: Path, layout: str) -> None:
             wrapper.close()
 
 
+@pytest.mark.parametrize(
+    ("fmt", "layout"),
+    [("ome-tiff", "self-contained"), ("ome-tiff", "redundant"), ("ome-zarr", None)],
+)
+def test_raw_metadata_returns_the_original_documents(
+    tmp: Path, fmt: str, layout: str | None
+) -> None:
+    from ome_writers import dims_from_standard_axes
+
+    dims = dims_from_standard_axes({"p": ["A", "B"], "t": 2, "y": 8, "x": 8})
+    if layout is None:
+        out = _write_with_frame_metadata(dims, fmt, tmp / "raw.ome.zarr", 4)
+    else:
+        tiff = OmeTiffFormat.model_validate({"multi_file_metadata": layout})
+        out = _write_with_frame_metadata(dims, tiff, tmp / "raw.ome.tiff", 4)
+    wrapper = WRAPPER_TYPE[fmt](out)
+    try:
+        documents = {name: load() for name, load in wrapper.raw_metadata().items()}
+    finally:
+        wrapper.close()
+
+    root = Path(out)
+    if fmt == "ome-zarr":
+        expected = {
+            name: (root / name).read_text()
+            for name in ("zarr.json", "A/zarr.json", "B/zarr.json")
+        }
+    elif layout == "self-contained":
+        expected = {}
+        for path in sorted(root.glob("*.tiff")):
+            with tifffile.TiffFile(path) as file:
+                expected[path.name] = file.ome_metadata or ""
+    else:
+        with tifffile.TiffFile(sorted(root.glob("*.tiff"))[0]) as file:
+            expected = {"OME-XML": file.ome_metadata or ""}
+    assert documents == expected
+
+
 def test_tiff_plane_units_are_converted() -> None:
     xml = """<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">
       <Image ID="Image:0"><Pixels ID="Pixels:0">

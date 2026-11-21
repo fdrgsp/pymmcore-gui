@@ -811,7 +811,12 @@ def test_reopened_mosaic_offers_reuse_and_stage_moves(
     viewer._highlight_pos = viewer._data_point_to_world(5.5, 3.5)
     assert viewer._show_context_menu(Mock())
     actions = {a.text(): a for a in shown_menus[0].actions()}
-    assert list(actions) == ["Re-use MDA…", "Move Stage Here", "Re-stitch…"]
+    assert list(actions) == [
+        "Show Metadata…\tI",
+        "Re-use MDA…",
+        "Move Stage Here",
+        "Re-stitch…",
+    ]
 
     # the page asks before replacing the MDA settings
     no = QMessageBox.StandardButton.No

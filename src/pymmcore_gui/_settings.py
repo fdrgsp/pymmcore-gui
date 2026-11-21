@@ -261,6 +261,10 @@ class ModernWindowSettingsV1(BaseMMSettings):
     reserved names. Used only to preselect the combo; a name that no longer
     exists is ignored.
     """
+    metadata_dialog_geometry: Base64Bytes | None = None
+    """Position and size of the image metadata dialog (``restoreGeometry``)."""
+    metadata_dialog_tab: str | None = None
+    """Title of the image metadata dialog's last selected tab."""
 
     @property
     def has_last_session_layout(self) -> bool:

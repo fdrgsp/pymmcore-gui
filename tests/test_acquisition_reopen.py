@@ -212,7 +212,8 @@ def test_open_acquisition_no_sequence_metadata_has_no_reuse_callback(
 
     viewer = _open(page, Path(settings.output_path))
     assert viewer.mda_sequence is None
-    assert viewer._show_context_menu(Mock()) is False
+    assert viewer._reuse_mda_callback is None
+    assert not viewer.can_reuse_mda()
 
 
 def test_open_acquisition_raises_for_unsupported_path(
@@ -246,7 +247,7 @@ def test_open_acquisition_close_releases_file_handle(
 # --------------------------- "Re-use MDA…" context menu ---------------------
 
 
-def test_context_menu_absent_without_sequence(
+def test_context_menu_offers_only_metadata_without_sequence(
     mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path, shown_menus: list[QMenu]
 ) -> None:
     page = AcquirePage(mmcore)
@@ -265,9 +266,12 @@ def test_context_menu_absent_without_sequence(
         stream.append(np.zeros((8, 8), dtype="uint16"))
     viewer = _open(page, Path(settings.output_path))
 
-    shown = viewer._show_context_menu(Mock())
-    assert shown is False
-    assert not shown_menus
+    assert viewer._show_context_menu(Mock()) is True
+    assert [a.text() for a in shown_menus[0].actions()] == ["Show Metadata…\tI"]
+
+    viewer.data_origin = None  # e.g. a snap: nothing to offer
+    assert viewer._show_context_menu(Mock()) is False
+    assert len(shown_menus) == 1
 
 
 def test_context_menu_present_and_enabled_when_idle(
@@ -283,6 +287,9 @@ def test_context_menu_present_and_enabled_when_idle(
     shown = viewer._show_context_menu(Mock())
     assert shown is True
     assert len(shown_menus) == 1
+    actions = shown_menus[0].actions()
+    assert [a.text() for a in actions] == ["Show Metadata…\tI", "Re-use MDA…"]
+    assert all(a.isEnabled() for a in actions)
 
 
 def test_context_menu_disabled_while_mda_running(
@@ -299,9 +306,8 @@ def test_context_menu_disabled_while_mda_running(
         viewer._show_context_menu(Mock())
 
     assert shown_menus
-    actions = shown_menus[0].actions()
-    assert actions and actions[0].text() == "Re-use MDA…"
-    assert actions[0].isEnabled() is False
+    reuse = {a.text(): a for a in shown_menus[0].actions()}["Re-use MDA…"]
+    assert reuse.isEnabled() is False
 
 
 def test_reuse_mda_emits_sequence_from_the_correct_viewer(
