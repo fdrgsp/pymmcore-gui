@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from pymmcore_plus import find_micromanager
-from pymmcore_widgets._busy import BusyOverlay, busy
+from pymmcore_widgets._busy import BusyOverlay, busy, progress
 from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import set_source_icon, unstyle_widgets
@@ -392,11 +392,12 @@ class InstallationPage(TabPage):
         failures: dict[str, str] = {}
         with busy(self._overlay, f"Removing {len(paths)} installation{plural}…"):
             self.aboutToUninstall.emit(paths)
-            for path in sorted(paths):
+            for done, path in enumerate(sorted(paths), 1):
                 try:
                     shutil.rmtree(path)
                 except Exception as e:
                     failures[path] = str(e)
+                progress(done, len(paths))
             table.refresh()
 
         if failures:

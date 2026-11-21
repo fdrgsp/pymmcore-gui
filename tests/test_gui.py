@@ -18,6 +18,7 @@ from pymmcore_plus.autofocus import AutofocusResult, CaptureSettings, capture_st
 from pymmcore_plus.mda import MDARunner, OmeWritersSink
 from pymmcore_widgets import CameraRoiWidget, StageWidget, XYZStageWidget
 from pymmcore_widgets import MDAWidget as UpstreamMDAWidget
+from pymmcore_widgets._busy import BusyOverlay
 from pymmcore_widgets._light_sources import PROPERTY_SEPARATOR, find_light_sources
 from pymmcore_widgets._util import combo_box_height
 from pymmcore_widgets.useq_widgets._autofocus_settings import AutofocusSettingsDialog
@@ -456,6 +457,33 @@ def test_an_uninstall_that_fails_says_so(qtbot: QtBot, tmp_path: Path) -> None:
     assert install.is_dir()
     warning.assert_called_once()
     assert "Operation not permitted" in warning.call_args[0][2]
+
+
+def test_uninstalling_reports_progress(qtbot: QtBot, tmp_path: Path) -> None:
+    page = InstallationPage()
+    qtbot.addWidget(page)
+    page.show()
+    installs = [
+        _fake_install_dir(tmp_path, f"Micro-Manager-75.2024010{day}") for day in (1, 2)
+    ]
+    reported: list[tuple[int, int]] = []
+
+    with _fake_installs(installs):
+        widget = page.ensure_loaded()
+        assert widget is not None
+        widget.table.selectAll()
+        with (
+            patch.object(
+                BusyOverlay, "setProgress", lambda _, *step: reported.append(step)
+            ),
+            patch.object(
+                QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
+            ),
+        ):
+            page._buttons["Uninstall"].click()
+
+    assert reported == [(1, 2), (2, 2)]
+    assert not any(install.exists() for install in installs)
 
 
 def test_uninstall_emits_about_to_uninstall_before_deleting(
