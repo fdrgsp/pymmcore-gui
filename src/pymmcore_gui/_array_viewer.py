@@ -307,6 +307,15 @@ class MMArrayViewer(ndv.ArrayViewer):
 
     def _show_context_menu(self, global_pos: Any) -> bool:
         """Offer metadata, MDA reuse, stage moves and stitching, where they apply."""
+        move = self._move_stage_callback
+        pixel = self._pixel_under_mouse() if move is not None else None
+        if (
+            self.data_origin is None
+            and self.mda_sequence is None
+            and pixel is None
+            and self._stitch_callback is None
+        ):
+            return False
         menu = QMenu(self.widget())
         if self.data_origin is not None:
             # the tab-separated "I" is only a hint; the shortcut is the viewer's
@@ -315,20 +324,15 @@ class MMArrayViewer(ndv.ArrayViewer):
         if self.mda_sequence is not None and (action := menu.addAction("Re-use MDA…")):
             action.setEnabled(self.can_reuse_mda())
             action.triggered.connect(self.reuse_mda)
-        if (
-            (move := self._move_stage_callback) is not None
-            and (pixel := self._pixel_under_mouse()) is not None
-            and (action := menu.addAction("Move Stage Here"))
-        ):
-            # not during a run, whose own stage moves it would fight
-            action.setEnabled(not CMMCorePlus.instance().mda.is_running())
-            action.triggered.connect(lambda: move(*pixel))
+        if move is not None and pixel is not None:
+            if action := menu.addAction("Move Stage Here"):
+                # not during a run, whose own stage moves it would fight
+                action.setEnabled(not CMMCorePlus.instance().mda.is_running())
+                action.triggered.connect(lambda: move(*pixel))
         if self._stitch_callback is not None and (
             stitch := menu.addAction(self._stitch_menu_text)
         ):
             stitch.triggered.connect(self._request_stitch)
-        if menu.isEmpty():
-            return False
         menu.exec(global_pos)
         return True
 
