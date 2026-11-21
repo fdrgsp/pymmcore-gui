@@ -5,6 +5,7 @@ from __future__ import annotations
 from pymmcore_widgets import HCSWizard
 from pymmcore_widgets.mda import CollapsibleCoreMDATabs, CoreMDATabs
 from pymmcore_widgets.useq_widgets import CustomPlateWidget
+from pymmcore_widgets.useq_widgets._autofocus_settings import AutofocusSettingsDialog
 from pymmcore_widgets.useq_widgets._z_surface_dialog import ZSurfaceDialog
 
 from pymmcore_gui._array_viewer import (
@@ -70,7 +71,8 @@ def _theme_third_party_window(widget: QWidget, _event: QEvent) -> bool:
     """Apply the app's styling to windows pymmcore-widgets opens itself.
 
     The position sub-sequence popup, the HCS wizard, the wizard's "New
-    Plate" dialog and the Surface Focus dialog are all constructed on demand,
+    Plate" dialog, the Surface Focus dialog and the software autofocus settings
+    dialog are all constructed on demand,
     deep inside pymmcore-widgets, with no app-side subclass to hook
     construction-time theming into -- the popup is private (``_MDAPopup``,
     matched by class name for want of a public hook). Watch every Show event
@@ -85,9 +87,10 @@ def _theme_third_party_window(widget: QWidget, _event: QEvent) -> bool:
         return False
     if type(widget).__name__ == "_MDAPopup":
         _theme_subsequence_popup(widget)
-    elif isinstance(widget, (HCSWizard, CustomPlateWidget, ZSurfaceDialog)) or (
-        (window := widget.window()) is not None and window.property(_THEMED)
-    ):
+    elif isinstance(
+        widget,
+        (HCSWizard, CustomPlateWidget, ZSurfaceDialog, AutofocusSettingsDialog),
+    ) or ((window := widget.window()) is not None and window.property(_THEMED)):
         _theme(widget)
     return False
 

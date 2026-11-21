@@ -55,6 +55,28 @@ def test_channels_of_a_missing_group_or_preset_are_dropped(
     ]
 
 
+def test_channels_are_reset_to_every_z_plane_and_timepoint(
+    mmcore: CMMCorePlus,
+) -> None:
+    """OME data is a regular array: a channel can't skip Z planes or timepoints."""
+    seq = useq.MDASequence(
+        channels=(
+            useq.Channel(config="DAPI", exposure=10, do_stack=False, acquire_every=3),
+            useq.Channel(config="FITC", exposure=10),
+        ),
+        z_plan=useq.ZRangeAround(range=4, step=1),
+    )
+    out, dropped = drop_unsupported(seq, mmcore)
+    assert [(c.do_stack, c.acquire_every) for c in out.channels] == [(True, 1)] * 2
+    assert dropped == ["channel DAPI: Do Stack off", "channel DAPI: Acquire Every 3"]
+    # without a Z plan, Do Stack does nothing
+    no_z = seq.replace(
+        z_plan=None,
+        channels=(useq.Channel(config="DAPI", exposure=10, do_stack=False),),
+    )
+    assert drop_unsupported(no_z, mmcore) == (no_z, [])
+
+
 @pytest.mark.parametrize(
     "fields",
     [
