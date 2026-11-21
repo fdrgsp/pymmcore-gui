@@ -87,6 +87,18 @@ def frame_ordinal(dims: Sequence[Dimension], index: Sequence[int]) -> int:
     return ordinal
 
 
+def frame_index(dims: Sequence[Dimension], ordinal: int) -> tuple[int, ...]:
+    """Return the index over `dims` of acquisition-order position `ordinal`.
+
+    The inverse of `frame_ordinal`.
+    """
+    inner: list[int] = []
+    for dim in reversed(dims[1:]):
+        ordinal, i = divmod(ordinal, dim.count or 1)
+        inner.append(i)
+    return (ordinal, *reversed(inner)) if dims else ()
+
+
 def export_acquisition(
     record: AcquisitionRecord,
     path: str | Path,

@@ -8,6 +8,7 @@ exposes every position through its series and opens companion files as needed.
 from __future__ import annotations
 
 import contextlib
+import functools
 import itertools
 import json
 import os
@@ -24,7 +25,7 @@ from ndv.models import DataWrapper
 from pymmcore_gui._utils import indexed_shape, isel_positions
 
 if TYPE_CHECKING:
-    from collections.abc import Hashable, Mapping, Sequence
+    from collections.abc import Callable, Hashable, Mapping, Sequence
 
     from tifffile import TiffPageSeries
 
@@ -384,12 +385,7 @@ class OMETiffWrapper(DataWrapper):
             # independent files: each describes only its own position
             images = []
             for path in self._position_files:
-                if path == self._position_files[0]:
-                    xml_str = self._tf.ome_metadata
-                else:
-                    with tifffile.TiffFile(path) as file:
-                        xml_str = file.ome_metadata
-                images.extend(_image_planes(xml_str)[:1])
+                images.extend(_image_planes(self._read_ome_xml(path))[:1])
         else:
             images = _image_planes(self._tf.ome_metadata)
 
@@ -403,7 +399,25 @@ class OMETiffWrapper(DataWrapper):
                 result[index] = meta
         return result
 
+    def raw_metadata(self) -> dict[str, Callable[[], str]]:
+        """The OME-XML of this dataset, read when its loader is called.
+
+        Independent position files each hold their own, named after the file.
+        """
+        if not self._position_files:
+            return {"OME-XML": lambda: self._tf.ome_metadata or ""}
+        return {
+            path.name: functools.partial(self._read_ome_xml, path)
+            for path in self._position_files
+        }
+
     # ----------------------- internals -----------------------
+
+    def _read_ome_xml(self, path: Path) -> str:
+        if path == self._position_files[0]:
+            return self._tf.ome_metadata or ""
+        with tifffile.TiffFile(path) as file:
+            return file.ome_metadata or ""
 
     def _isel_multiposition(self, indexers: Mapping[int, int | slice]) -> np.ndarray:
         return isel_positions(

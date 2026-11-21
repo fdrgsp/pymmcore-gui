@@ -33,7 +33,9 @@ from pymmcore_gui._array_viewer import (
     set_source_icon,
 )
 from pymmcore_gui._channel_luts import ChannelLUTMemory
+from pymmcore_gui._image_metadata import FORMAT_LABELS, DataOrigin
 from pymmcore_gui._mda_export import AcquisitionRecord, record_from_wrapper
+from pymmcore_gui._ome_tiff_wrapper import OMETiffWrapper
 from pymmcore_gui._qt.QtAds import CDockWidget, DockWidgetArea
 from pymmcore_gui._qt.QtCore import (
     QObject,
@@ -622,6 +624,10 @@ class AcquireViewersManager(QObject):
         # metadata) instead of falling back to stamping the microscope's
         # current state -- see MMArrayViewer._save_data.
         viewer._acquisition_record = loaded.record
+        fmt = "ome-tiff" if isinstance(loaded.wrapper, OMETiffWrapper) else "ome-zarr"
+        viewer.data_origin = DataOrigin(
+            FORMAT_LABELS[fmt], str(loaded.source_path), loaded.wrapper.raw_metadata
+        )
 
         record = _ViewerRecord(viewer, loader_cleanup=loaded.close)
 
@@ -687,6 +693,11 @@ class AcquireViewersManager(QObject):
             )
             record.acquisition = acquisition
             viewer._acquisition_record = acquisition  # read by MMArrayViewer._save_data
+            fmt = sink.settings.format.name
+            viewer.data_origin = DataOrigin(
+                FORMAT_LABELS.get(fmt, fmt),
+                "" if fmt == "scratch" else sink.settings.output_path,
+            )
         wrapper = viewer.data_wrapper
         coords_signal = getattr(view, "coords_changed", None)
         if coords_signal is not None and wrapper is not None:

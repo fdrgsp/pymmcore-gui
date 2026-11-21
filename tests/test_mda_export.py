@@ -27,6 +27,7 @@ from ome_writers import (
 from pymmcore_gui._mda_export import (
     AcquisitionRecord,
     export_acquisition,
+    frame_index,
     frame_ordinal,
 )
 
@@ -185,11 +186,15 @@ def test_export_clamps_partial_unbounded_acquisition(tmp_path: Path) -> None:
     assert arr.shape == (3, 1, 8, 8)
 
 
-def test_frame_ordinal_uses_inner_counts_only() -> None:
+@pytest.mark.parametrize(
+    ("index", "ordinal"), [((0, 0, 0), 0), ((0, 1, 2), 5), ((2, 1, 0), 15)]
+)
+def test_frame_ordinal_and_index_use_inner_counts_only(
+    index: tuple[int, ...], ordinal: int
+) -> None:
     dims = dims_from_standard_axes({"t": None, "c": ["A", "B"], "z": 3})
-    assert frame_ordinal(dims, (0, 0, 0)) == 0
-    assert frame_ordinal(dims, (0, 1, 2)) == 5
-    assert frame_ordinal(dims, (2, 1, 0)) == 15
+    assert frame_ordinal(dims, index) == ordinal
+    assert frame_index(dims, ordinal) == index
 
 
 class _ClampedView:

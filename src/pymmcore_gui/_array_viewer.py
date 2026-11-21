@@ -25,7 +25,15 @@ from pymmcore_gui._mda_export import (
     record_from_wrapper,
 )
 from pymmcore_gui._qt.QtCore import QEvent, QObject, QSize, Qt
-from pymmcore_gui._qt.QtGui import QColor, QIcon, QImage, QPainter, QPalette
+from pymmcore_gui._qt.QtGui import (
+    QColor,
+    QIcon,
+    QImage,
+    QKeySequence,
+    QPainter,
+    QPalette,
+    QShortcut,
+)
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractButton,
     QAbstractSlider,
@@ -42,11 +50,13 @@ from pymmcore_gui._qt.QtWidgets import (
 from pymmcore_gui._stream_view_wrapper import StreamViewWrapper  # noqa: F401
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Hashable, Mapping
 
     from useq import MDASequence
 
+    from pymmcore_gui._image_metadata import DataOrigin
     from pymmcore_gui._mda_export import ExportFormat
+    from pymmcore_gui.widgets._metadata_dialog import MetadataDialog
 
 # icons this dark (or darker) are effectively invisible against a dark
 # theme's background and get recolored; see `ensure_visible_icon`.
@@ -132,12 +142,21 @@ class MMArrayViewer(ndv.ArrayViewer):
         # save (see _save_data). The manager that created this viewer uses
         # it to rename this viewer's dock/tab to the saved filename.
         self._on_saved: Callable[[str], None] | None = None
+        # Set by the viewer manager for MDA-backed viewers (live runs and
+        # reopened files); enables the metadata dialog. None for the Preview
+        # and snaps, which have no acquisition metadata to show.
+        self.data_origin: DataOrigin | None = None
+        self._metadata_dialog: MetadataDialog | None = None
 
         self._key_filter = _KeyFilter(self)
         widget = self.widget()
         widget.installEventFilter(self._key_filter)
         if canvas := getattr(widget, "_canvas_widget", None):
             canvas.installEventFilter(self._key_filter)
+        metadata_shortcut = QShortcut(QKeySequence(Qt.Key.Key_I), widget)
+        # only the focused viewer: several are open side by side in dock tabs
+        metadata_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        metadata_shortcut.activated.connect(self.show_metadata)
 
         self._save_btn: QPushButton | None = None
         if show_save_button:
@@ -227,26 +246,114 @@ class MMArrayViewer(ndv.ArrayViewer):
             idx = 0
         self.display_model.visible_axes = _ORTHO_VIEWS[(idx + 1) % len(_ORTHO_VIEWS)]
 
-    def _show_context_menu(self, global_pos: Any) -> bool:
-        """Offer sequence reuse when the viewer has an associated acquisition."""
-        if self.mda_sequence is None:
-            return False
+    def can_reuse_mda(self) -> bool:
+        """Whether "Re-use MDA…" can load this viewer's sequence right now.
 
-        menu = QMenu(self.widget())
-        action = menu.addAction("Re-use MDA…")
-        if action is None:
-            return False
-        # Disabled during a run: the sequence just recovered/observed could
-        # otherwise replace the parameters for an acquisition already in
-        # progress out from under it.
-        action.setEnabled(
-            self._reuse_mda_callback is not None
+        Not during a run: the sequence could otherwise replace the parameters
+        of an acquisition already in progress.
+        """
+        return (
+            self.mda_sequence is not None
+            and self._reuse_mda_callback is not None
             and not CMMCorePlus.instance().mda.is_running()
         )
-        if callback := self._reuse_mda_callback:
-            action.triggered.connect(callback)
+
+    def reuse_mda(self) -> None:
+        if self.can_reuse_mda() and (callback := self._reuse_mda_callback):
+            callback()
+
+    def _show_context_menu(self, global_pos: Any) -> bool:
+        """Offer the metadata dialog and sequence reuse, where they apply."""
+        menu = QMenu(self.widget())
+        if self.data_origin is not None:
+            # the tab-separated "I" is only a hint; the shortcut is the viewer's
+            if action := menu.addAction("Show Metadata…\tI"):
+                action.triggered.connect(self.show_metadata)
+        if self.mda_sequence is not None and (action := menu.addAction("Re-use MDA…")):
+            action.setEnabled(self.can_reuse_mda())
+            action.triggered.connect(self.reuse_mda)
+        if menu.isEmpty():
+            return False
         menu.exec(global_pos)
         return True
+
+    def show_metadata(self) -> None:
+        """Open this viewer's metadata dialog, or raise the one already open."""
+        if self.data_origin is None:
+            return
+        if (dialog := self._metadata_dialog) is None:
+            from pymmcore_gui.widgets._metadata_dialog import MetadataDialog
+
+            dialog = self._metadata_dialog = MetadataDialog(self, self.widget())
+            dialog.destroyed.connect(self._forget_metadata_dialog)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _forget_metadata_dialog(self) -> None:
+        self._metadata_dialog = None
+
+    def close(self) -> None:
+        # before the data goes: the dialog follows this viewer's display
+        if (dialog := self._metadata_dialog) is not None:
+            dialog.close()
+        super().close()
+
+    def _axes_shown_whole(self) -> set[int]:
+        """The visible axes, plus the channel axis in a multichannel mode.
+
+        Mirrors how ndv slices its data (`ndv.models._resolve`).
+        """
+        resolved = self._resolved
+        axes = set(resolved.visible_axes)
+        if (
+            resolved.channel_mode.is_multichannel()
+            and resolved.channel_axis is not None
+        ):
+            axes.add(resolved.channel_axis)
+        return axes
+
+    def displayed_ranges(self) -> dict[str, range]:
+        """The index range of each axis in what is on screen, by axis name.
+
+        An axis shown whole covers every value; any other shows its
+        `current_index`, as ndv resolved it (filled in with 0 and clamped).
+        """
+        if (wrapper := self.data_wrapper) is None:
+            return {}
+        resolved = self._resolved
+        shown_whole = self._axes_shown_whole()
+        ranges: dict[str, range] = {}
+        for axis, coords in resolved.data_coords.items():
+            value = resolved.current_index.get(axis, 0)
+            if axis in shown_whole:
+                value = slice(None)
+            if isinstance(value, slice):
+                ranges[str(wrapper.dims[axis])] = range(*value.indices(len(coords)))
+            else:
+                ranges[str(wrapper.dims[axis])] = range(value, value + 1)
+        return ranges
+
+    def show_frame(self, index: Mapping[str, int]) -> None:
+        """Move the sliders to `index`; axes shown whole are left as they are."""
+        if (wrapper := self.data_wrapper) is None:
+            return
+        shown_whole = self._axes_shown_whole()
+        current = self.display_model.current_index
+        # keep whichever key (name or number) the mapping already uses for an axis
+        keys: dict[int, Hashable] = {}
+        for key in current:
+            with suppress(IndexError, KeyError):
+                keys[wrapper.normalize_axis_key(key)] = key
+        update: dict[Hashable, int] = {}
+        for name, value in index.items():
+            try:
+                axis = wrapper.normalize_axis_key(name)
+            except (IndexError, KeyError):
+                continue
+            if axis not in shown_whole:
+                update[keys.get(axis, name)] = value
+        current.update(update)
 
     def _save_data(self) -> None:
         """Export the viewer's data as a metadata-complete OME-TIFF or OME-Zarr.

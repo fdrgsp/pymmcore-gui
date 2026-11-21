@@ -217,12 +217,13 @@ dimension `coords`.
 Also in this module:
 
 - `format_elapsed(seconds)`, giving `HH:MM:SS.mmm`.
-- `timepoint_stats(frames, sequence)`: for each position, the start of each
-  timepoint, the actual intervals (mean, population std, min, max), and the
-  requested interval when `sequence.time_plan` has a single comparable one.
-  For multiphase, zero-interval, or otherwise incomparable plans the drift is
-  omitted. Compare gaps between observed timepoints with the corresponding
-  scheduled gap, not a single interval. Exclude non-finite timestamps.
+- `timepoints(frames, sequence)`: for each position, the start of each
+  timepoint, the interval since the previous observed one, and the gap the
+  time plan scheduled between those two timepoints (from
+  `time_plan.deltas()`, so multiphase plans and skipped timepoints compare
+  correctly). The drift is omitted for a zero or missing requested gap.
+  `mean_interval(rows)` averages the observed intervals for the header.
+  Non-finite timestamps are excluded.
 - `frames_to_csv(frames, labels, path)`, using `csv` with UTF-8,
   `newline=""` and units in the headers.
 
@@ -232,7 +233,7 @@ Also in this module:
   converts each frame's metadata once, and the record only holds a reference
   to its list.
 - Opening or refreshing captures `len(frame_meta)` and processes only that
-  prefix; later appends show up on the next Refresh. Nothing copies or locks
+  prefix; later appends show up on the next update. Nothing copies or locks
   the list.
 - Build each tab on the GUI thread the first time it is shown. Add a worker
   only if a real large acquisition turns out to be slow.
@@ -283,8 +284,8 @@ document may get a truncated preview, but Copy and Save keep the full text.
 
 ### Dialog: `src/pymmcore_gui/widgets/_metadata_dialog.py` (new)
 
-- Title `Metadata: <viewer.source_title>`, read on open and on Refresh,
-  because Save renames the tab.
+- Title `Metadata: <viewer.source_title>`, kept up to date because Save
+  renames the tab.
 - Header: the source path (selectable) and a format label (`OME-TIFF`,
   `OME-Zarr`, `In memory`). Take these from `LoadedAcquisition` or the live
   sink when wiring the viewer, because a reopened record's settings don't
@@ -293,8 +294,12 @@ document may get a truncated preview, but Copy and Save keep the full text.
 - `QTabWidget`. Each tab is built the first time it is shown. A tab with no
   data is disabled, with a tooltip saying why. A tab that fails to build
   shows the error instead of breaking the dialog.
-- Footer: **Refresh** (captures a new prefix and rebuilds the current tab;
-  other tabs rebuild when next shown) and **Close**.
+- Footer: **Close**. There is no Refresh button: once a second the dialog
+  checks whether the record has grown (a running acquisition) or the title
+  changed, and then takes a new snapshot and rebuilds the current tab
+  (other tabs rebuild when next shown). The check backs off to ten times the
+  last rebuild's duration, so a huge acquisition doesn't keep the GUI busy.
+- Buttons use the GUI's `primary` variant, and are not auto-default.
 - Geometry and the last tab are saved through the existing `Settings`
   model. If the saved tab is disabled, the first available tab is used.
 - Palette, style and the system fixed font only: no stylesheets.
@@ -310,21 +315,17 @@ time_plan:
   interval: 0:00:05
   loops: 50
 …
-────────────────────────────────────────────────────────────
-Planned: 3 positions · 50 timepoints · 2 channels · 11 z
                          [Copy] [Save as YAML…] [Re-use MDA…]
 ```
 
 - `sequence.yaml(exclude_unset=True, exclude_defaults=True)`, the same
   serialization as the MDA widget's Save.
-- The sizes are labelled as planned, not acquired.
 - **Re-use MDA…** has the same enablement as the context-menu action.
 
 #### Timestamps
 
 ```text
-Started 2026-11-20 14:03:12 · 3300 frames with metadata · last at 00:04:12.381
-Interval: requested 5.000 s · actual 5.012 s ± 0.008 (min 5.001, max 5.044)
+Started 2026-11-20 14:03:12 · Lasted 00:04:12.381 · Interval 5.012 s
 
 Show: (•) Frames ( ) Timepoints    Position: [All ▾]    [✓] Follow viewer
 p │t │c    │z │Elapsed      │Δt s  │Δprev ms │Exp ms │X µm  │Y µm  │Z µm
@@ -336,6 +337,8 @@ p │t │c    │z │Elapsed      │Δt s  │Δprev ms │Exp ms │X µm  �
 - Built from `QTableView`, `QAbstractTableModel` and `QSortFilterProxyModel`,
   because there can be 10⁵ or more frames. Sorting uses the numeric values.
   A column whose values are all missing is hidden.
+  Columns are resizable, start at their content width and span the table
+  (pymmcore-widgets' `ColumnFitter`, as in the MDA widget's tables).
 - **Δprev** is the time since the previous timestamped frame **at the same
   position**, in timestamp order. It is computed once, so sorting doesn't
   change it.
@@ -352,7 +355,8 @@ p │t │c    │z │Elapsed      │Δt s  │Δprev ms │Exp ms │X µm  �
     `channel_mode.is_multichannel()` (composite/color), even if
     `current_index` still holds a channel;
   - a visible axis (e.g. z in an orthogonal view) matches all values;
-  - a slice value matches its range;
+  - a slice value matches its range (ndv's Qt sliders reject slices in
+    `current_index`, so this only applies to other front ends);
   - any other axis missing from `current_index` is 0, as ndv fills it, and
     an integer is clamped to the axis range.
 
@@ -400,7 +404,9 @@ shown in a read-only fixed-font `QPlainTextEdit`, with a `Ctrl+F` find bar,
   - `I` opens one dialog, and pressing it again raises the same one;
   - reopening after a close works;
   - nothing happens for snaps or the Preview;
-  - typing "i" in an ndv line edit doesn't open it.
+  - the shortcut is scoped to the viewer (`WidgetWithChildrenShortcut`).
+    The tests trigger it through `QShortcut.activated`: a key press needs
+    focus inside the viewer, which the test process cannot get reliably.
 - `tests/test_acquisition_reopen.py` (with the `shown_menus` fixture): the
   menu lists only the actions that apply, including metadata for raw-only
   files. Don't patch `QMenu.exec`, which doesn't work on PySide6.
@@ -412,10 +418,10 @@ shown in a read-only fixed-font `QPlainTextEdit`, with a `Ctrl+F` find bar,
   - Follow viewer selects the displayed rows: all channels in composite
     mode even when `current_index` keeps a `c` value, one channel in
     grayscale mode, row 0 for an axis missing from `current_index`, all
-    values for a visible axis, and a slice's range;
+    values for a visible axis;
   - double-clicking a row moves the viewer;
   - the Frame tab shows one item per channel in composite mode;
-  - Refresh picks up newly appended entries;
+  - entries appended while the dialog is open show up without any action;
   - raw documents load lazily, and Copy/Save keep the original text;
   - closing the viewer or pressing Escape disconnects signals and stops the
     timer.

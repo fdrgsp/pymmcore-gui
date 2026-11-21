@@ -12,6 +12,7 @@ Requires the `yaozarrs` package (already a pymmcore-gui dependency via
 from __future__ import annotations
 
 import contextlib
+import functools
 import os
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeGuard, cast
@@ -22,7 +23,7 @@ from ndv.models import DataWrapper
 from pymmcore_gui._utils import indexed_shape, isel_positions
 
 if TYPE_CHECKING:
-    from collections.abc import Hashable, Sequence
+    from collections.abc import Callable, Hashable, Sequence
 
     from yaozarrs import ZarrGroup
     from yaozarrs._zarr import ZarrArray
@@ -149,6 +150,15 @@ class OMEZarrWrapper(DataWrapper):
                 if isinstance(storage_index, list):
                     result[(*prefix, *storage_index)] = meta
         return result
+
+    def raw_metadata(self) -> dict[str, Callable[[], str]]:
+        """The root and image-group `zarr.json` documents, read when called."""
+        keys = ["zarr.json", *(f"{path}/zarr.json" for path in self._positions)]
+        return {key: functools.partial(self._read_document, key) for key in keys}
+
+    def _read_document(self, key: str) -> str:
+        raw = self._group.store.get(key)
+        return raw.decode() if isinstance(raw, bytes) else ""
 
     # ----------------------- Structure Detection -----------------------
 
