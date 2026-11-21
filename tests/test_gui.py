@@ -5915,8 +5915,8 @@ def test_third_party_windows_theme_widgets_built_after_opening(
     calibration._plate_view.setSelectedIndices([(1, 0)])
     well = calibration._current_calibration_widget()
     assert well is not None
-    qtbot.waitUntil(lambda: well._set_button.property("variant") == "subtle")
-    assert well._clear_button.property("variant") == "subtle"
+    qtbot.waitUntil(lambda: well._set_button.property("variant") == "primary")
+    assert well._clear_button.property("variant") == "primary"
 
     positions._edit_surface()
     dialog = positions._surface_dialog
