@@ -29,6 +29,7 @@ import pymmcore_gui.widgets._toolbars as acquire_toolbar_module
 from pymmcore_gui._app import create_mmgui
 from pymmcore_gui._array_viewer import _icon_avg_rgb
 from pymmcore_gui._channel_settings_store import channel_settings_store
+from pymmcore_gui._image_metadata import DataOrigin
 from pymmcore_gui._layouts import (
     DEFAULT_LAYOUT_NAME,
     LAST_SESSION_LAYOUT_NAME,
@@ -4786,6 +4787,9 @@ def test_acquire_viewer_record_shares_the_sink_frame_metadata(
         sink = mmcore.mda.get_sink()
         assert isinstance(sink, OmeWritersSink)
         assert record.frame_meta is sink.frame_metadata
+        # enables the viewer's metadata dialog
+        viewer = cast("Any", manager._records[dock].viewer)
+        assert viewer.data_origin == DataOrigin("In memory")
         return record
 
     first = _run()

@@ -34,9 +34,17 @@ from pymmcore_gui._array_viewer import (
     _prompt_save_path,
     _synthesize_record,
 )
+from pymmcore_gui._image_metadata import DataOrigin
 from pymmcore_gui._mda_export import AcquisitionRecord
 from pymmcore_gui._ome_tiff_wrapper import OMETiffWrapper
-from pymmcore_gui._qt.QtWidgets import QFileDialog, QMessageBox, QWidget
+from pymmcore_gui._qt.QtCore import QEvent, Qt
+from pymmcore_gui._qt.QtGui import QKeySequence, QShortcut
+from pymmcore_gui._qt.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QMessageBox,
+    QWidget,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -100,6 +108,52 @@ def test_center_cross_control_comes_from_ndv(qtbot: QtBot) -> None:
 
     button.setChecked(True)
     assert viewer.center_cross_active()
+
+
+def _metadata_shortcut(qtbot: QtBot, origin: DataOrigin | None) -> MMArrayViewer:
+    viewer = MMArrayViewer(np.zeros((2, 8, 8), dtype="uint16"))
+    viewer.data_origin = origin
+    qtbot.addWidget(viewer.widget())
+    return viewer
+
+
+def _press_i(viewer: MMArrayViewer) -> None:
+    """Trigger the viewer's `I` shortcut.
+
+    A key press only reaches it with focus inside the viewer (clicking the
+    canvas gives it focus), which the test process cannot get reliably.
+    """
+    [shortcut] = [
+        s
+        for s in viewer.widget().findChildren(QShortcut)
+        if s.key() == QKeySequence(Qt.Key.Key_I)
+    ]
+    # only the focused viewer: many are open side by side
+    assert shortcut.context() == Qt.ShortcutContext.WidgetWithChildrenShortcut
+    shortcut.activated.emit()
+
+
+def test_i_opens_the_viewers_metadata_dialog(qtbot: QtBot) -> None:
+    viewer = _metadata_shortcut(qtbot, DataOrigin("In memory"))
+
+    _press_i(viewer)
+    dialog = viewer._metadata_dialog
+    assert dialog is not None and dialog.isVisible()
+    _press_i(viewer)  # raises the open one
+    assert viewer._metadata_dialog is dialog
+
+    dialog.close()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert viewer._metadata_dialog is None
+    _press_i(viewer)
+    assert viewer._metadata_dialog not in (None, dialog)
+
+
+def test_i_does_nothing_without_acquisition_metadata(qtbot: QtBot) -> None:
+    """Like the Preview and snaps, which have no data origin."""
+    viewer = _metadata_shortcut(qtbot, None)
+    _press_i(viewer)
+    assert viewer._metadata_dialog is None
 
 
 @pytest.mark.parametrize("channels", [1, 2])
