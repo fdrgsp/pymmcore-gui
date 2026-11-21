@@ -230,8 +230,9 @@ def test_raw_metadata_returns_the_original_documents(
 
     root = Path(out)
     if fmt == "ome-zarr":
+        # bytes as written, whatever the platform's line endings
         expected = {
-            name: (root / name).read_text()
+            name: (root / name).read_bytes().decode()
             for name in ("zarr.json", "A/zarr.json", "B/zarr.json")
         }
     elif layout == "self-contained":
