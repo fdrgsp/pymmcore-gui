@@ -1,4 +1,4 @@
-"""Position import, local icon updates and icon contrast analysis."""
+"""Position import, themed grid icons and icon contrast analysis."""
 
 from __future__ import annotations
 
@@ -8,10 +8,9 @@ import numpy as np
 import pytest
 import useq
 from pymmcore_widgets.mda._core_positions import CoreConnectedPositionTable
-from pymmcore_widgets.useq_widgets._positions import MDAButton
 
 from pymmcore_gui._array_viewer import _icon_avg_rgb
-from pymmcore_gui._qt.QtCore import QSize
+from pymmcore_gui._qt.QtCore import QSize, Qt
 from pymmcore_gui._qt.QtGui import QColor, QIcon, QImage, QPixmap
 from pymmcore_gui._qt.QtWidgets import QApplication, QWidget
 from pymmcore_gui._theme import DARK_THEME, LIGHT_THEME, qcolor, set_theme, theme
@@ -62,8 +61,15 @@ def test_icon_average_updates_when_icon_pixels_change(qtbot: QtBot) -> None:
     assert _icon_avg_rgb(QIcon(), QSize(8, 8)) is None
 
 
+def _grid_icon(editor: CoreConnectedPositionTable, row: int) -> QIcon:
+    """Return the icon of the grid plan button painted in `row`."""
+    table = editor.table()
+    index = table.model().index(row, table.indexOf(editor.SEQ))
+    return editor.delegate().buttons(index, table.visualRect(index))[0][1]
+
+
 @pytest.mark.parametrize("widget_cls", [MemoryMDAWidget, TopbarMemoryMDAWidget])
-def test_position_insertion_and_grid_edits_only_theme_affected_cells(
+def test_position_grid_icons_follow_theme_and_plans(
     mmcore: CMMCorePlus,
     qtbot: QtBot,
     widget_cls: type[MemoryMDAWidget | TopbarMemoryMDAWidget],
@@ -74,35 +80,24 @@ def test_position_insertion_and_grid_edits_only_theme_affected_cells(
     sentinel.setStyleSheet("background: magenta")
     editor = widget.stage_positions
     editor.setValue([useq.Position(x=1, y=2)])
-    first = editor.table().cellWidget(0, editor.table().indexOf(editor.SEQ))
-    assert isinstance(first, MDAButton)
-    first_icon = first.seq_btn.icon().cacheKey()
 
-    # Inserting one row must preserve existing icons and unrelated styling.
+    # Inserting a row creates no cell widgets, nor restyles unrelated ones.
     editor.table().insertRow(1)
     assert sentinel.styleSheet() == "background: magenta"
-    assert first.seq_btn.icon().cacheKey() == first_icon
-    second = editor.table().cellWidget(1, editor.table().indexOf(editor.SEQ))
-    assert isinstance(second, MDAButton)
-    second_icon = second.seq_btn.icon().cacheKey()
-    for row in range(2):
-        for col in range(editor.table().columnCount()):
-            if cell := editor.table().cellWidget(row, col):
-                assert not cell.styleSheet()
-                for child in cell.findChildren(QWidget):
-                    assert not child.styleSheet()
-    assert first.seq_btn.property("variant") == "subtle"
+    assert (viewport := editor.table().viewport()) is not None
+    assert not viewport.findChildren(QWidget)
+    assert editor.table().buttonTemplate().property("variant") == "primary"
 
-    first.setValue(useq.MDASequence(grid_plan=useq.GridRowsColumns(rows=1, columns=2)))
-    assert second.seq_btn.icon().cacheKey() == second_icon
-    assert _icon_avg_rgb(first.seq_btn.icon(), QSize(24, 24)) == pytest.approx(
+    plan = useq.MDASequence(grid_plan=useq.GridRowsColumns(rows=1, columns=2))
+    editor.table().setRowData(0, {editor.SEQ.key: plan})
+    assert _icon_avg_rgb(_grid_icon(editor, 0), QSize(24, 24)) == pytest.approx(
         qcolor(theme().status_green).getRgb()[:3], abs=2
     )
-    first.setValue(None)
-    assert second.seq_btn.icon().cacheKey() == second_icon
-    assert _icon_avg_rgb(first.seq_btn.icon(), QSize(24, 24)) == pytest.approx(
-        qcolor(theme().text_primary).getRgb()[:3], abs=2
-    )
+    for row in range(2):
+        editor.table().setRowData(row, {editor.SEQ.key: None})
+        assert _icon_avg_rgb(_grid_icon(editor, row), QSize(24, 24)) == pytest.approx(
+            qcolor(theme().text_primary).getRgb()[:3], abs=2
+        )
 
 
 @pytest.mark.parametrize("widget_cls", [MemoryMDAWidget, TopbarMemoryMDAWidget])
@@ -151,18 +146,16 @@ def test_hcs_import_preserves_plan_cells_visibility_and_theme(
     assert table.isVisible()
     assert editor.value() == plan
     assert table.rowCount() == 6
+    x_col = table.indexOf(editor.X)
     for row, pos in enumerate(plan):
         record = table.rowData(row)
         assert (record["name"], record["x"], record["y"]) == (pos.name, pos.x, pos.y)
-        x_cell = table.cellWidget(row, table.indexOf(editor.X))
-        assert x_cell is not None and not x_cell.isEnabled()
+        assert not table.model().index(row, x_col).flags() & Qt.ItemFlag.ItemIsEditable
 
-    button = table.cellWidget(0, table.indexOf(editor.SEQ))
-    assert isinstance(button, MDAButton)
     for app_theme in (LIGHT_THEME, DARK_THEME):
         set_theme(app_theme)
         QApplication.processEvents()
-        assert _icon_avg_rgb(button.seq_btn.icon(), QSize(24, 24)) == pytest.approx(
+        assert _icon_avg_rgb(_grid_icon(editor, 0), QSize(24, 24)) == pytest.approx(
             qcolor(theme().text_primary).getRgb()[:3], abs=2
         )
 

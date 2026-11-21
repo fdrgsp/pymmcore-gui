@@ -22,7 +22,7 @@ from pymmcore_widgets._busy import BusyOverlay
 from pymmcore_widgets._light_sources import PROPERTY_SEPARATOR, find_light_sources
 from pymmcore_widgets._util import combo_box_height
 from pymmcore_widgets.useq_widgets._autofocus_settings import AutofocusSettingsDialog
-from pymmcore_widgets.useq_widgets._positions import MDAButton, _MDAPopup
+from pymmcore_widgets.useq_widgets._positions import _MDAPopup
 from superqt.iconify import QIconifyIcon
 
 import pymmcore_gui._ndv_viewers as acquire_viewers_module
@@ -5779,15 +5779,16 @@ def test_mda_action_icons_use_theme_status_colors(
     assert widget.control_btns.pause_btn.text() == "Resume"
     assert_icon_color(widget.control_btns.pause_btn.icon(), green)
 
-    # the position table starts empty: add the row holding the button
-    widget.stage_positions.setValue([useq.Position(x=0, y=0)])
-    position_btn = widget.stage_positions.findChild(MDAButton)
-    assert position_btn is not None
-    position_btn.setValue(
-        useq.MDASequence(channels=(useq.Channel(config="DAPI", exposure=10),))
+    positions = widget.stage_positions
+    sub_sequence = useq.MDASequence(
+        channels=(useq.Channel(config="DAPI", exposure=10),)
     )
-    assert_icon_color(position_btn.seq_btn.icon(), green)
-    assert_icon_color(position_btn.clear_btn.icon(), red)
+    positions.setValue([useq.Position(x=0, y=0, sequence=sub_sequence)])
+    table = positions.table()
+    index = table.model().index(0, table.indexOf(positions.SEQ))
+    (_, grid), (_, clear) = positions.delegate().buttons(index, table.visualRect(index))
+    assert_icon_color(grid, green)
+    assert_icon_color(clear, red)
 
     set_theme(LIGHT_THEME)
     QApplication.processEvents()
@@ -5871,12 +5872,7 @@ def test_position_subsequence_popup_is_collapsed_and_themed(
     set_theme(DARK_THEME)
     widget = MemoryMDAWidget(mmcore)
     qtbot.addWidget(widget)
-    # the position table starts empty: add the row holding the button
-    widget.stage_positions.setValue([useq.Position(x=0, y=0)])
-    position_btn = widget.stage_positions.findChild(MDAButton)
-    assert position_btn is not None
-
-    popup = _MDAPopup(parent=position_btn)
+    popup = _MDAPopup(parent=widget.stage_positions.table())
     qtbot.addWidget(popup)
     popup.show()
     QApplication.processEvents()
@@ -5974,12 +5970,7 @@ def test_position_subsequence_popup_opens_without_a_focused_control(
     set_theme(DARK_THEME)
     widget = MemoryMDAWidget(mmcore)
     qtbot.addWidget(widget)
-    # the position table starts empty: add the row holding the button
-    widget.stage_positions.setValue([useq.Position(x=0, y=0)])
-    position_btn = widget.stage_positions.findChild(MDAButton)
-    assert position_btn is not None
-
-    popup = _MDAPopup(parent=position_btn)
+    popup = _MDAPopup(parent=widget.stage_positions.table())
     qtbot.addWidget(popup)
     popup.show()
     QApplication.processEvents()
