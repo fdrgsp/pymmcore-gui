@@ -12,7 +12,6 @@ from pymmcore_gui._qt.QtWidgets import (
     QStyle,
     QToolBar,
 )
-from pymmcore_gui._theme._buttons import install_primary_buttons, keep_subtle_buttons
 from pymmcore_gui._theme._dark import DARK_THEME
 from pymmcore_gui._theme._fonts import (
     UI_FONT_SIZE_PT,
@@ -45,7 +44,6 @@ __all__ = [
     "ScaledThemeView",
     "Theme",
     "dock_chrome_stylesheet",
-    "keep_subtle_buttons",
     "qcolor",
     "raw_theme",
     "reset_zoom",
@@ -140,7 +138,6 @@ def set_style(style: MicroscopeStyle) -> None:
     _view = ScaledThemeView(_current_theme, style)
     install_icon_contrast()
     install_tooltips()
-    install_primary_buttons()
     set_zoom(_DEFAULT_ZOOM)
 
 

@@ -143,10 +143,10 @@ def _is_icon_only(opt: QStyleOption | None, widget: QWidget | None) -> bool:
 
 
 def _button_colors(
-    opt: QStyleOption,
+    opt: QStyleOptionButton,
     widget: QWidget | None,
 ) -> tuple[QColor, QColor, QColor]:
-    """Resolve (background, border, text) for a QPushButton or QToolButton.
+    """Resolve (background, border, text) for a QPushButton.
 
     Uses the widget's palette + variant property. Returns colors that
     work for both light and dark themes because they're derived from
@@ -764,8 +764,7 @@ class MicroscopeStyle(QProxyStyle):
         An auto-raise tool button (the default inside a QToolBar) reads as a
         "ghost" button — transparent at rest, filling on hover. A non
         auto-raise tool button reads as a "subtle" button — a resting fill and
-        border. A checked button gets the accent tint in both cases. An explicit
-        "primary" or "danger" variant is drawn as on a QPushButton.
+        border. A checked button gets the accent tint in both cases.
         """
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         pal = opt.palette
@@ -780,9 +779,7 @@ class MicroscopeStyle(QProxyStyle):
 
         transparent = QColor(0, 0, 0, 0)
         bg = border = transparent
-        if _get_variant(widget) in ("primary", "danger"):
-            bg, border, _ = _button_colors(opt, widget)
-        elif not enabled:
+        if not enabled:
             pass  # flat/transparent — the label is dimmed by the base style
         elif checked:
             bg, border = _with_alpha(accent, 38), _with_alpha(accent, 76)

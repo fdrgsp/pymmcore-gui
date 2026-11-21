@@ -113,20 +113,13 @@ def _create_presets(_parent: QWidget, core: CMMCorePlus) -> QWidget:
 def _create_property_browser(parent: QWidget, core: CMMCorePlus) -> QWidget:
     from pymmcore_widgets import PropertyBrowser
 
-    from pymmcore_gui._theme import keep_subtle_buttons
-
-    widget = PropertyBrowser(parent=parent, mmcore=core)
-    keep_subtle_buttons(widget)
-    return widget
+    return PropertyBrowser(parent=parent, mmcore=core)
 
 
 def _create_stage_explorer(parent: QWidget, core: CMMCorePlus) -> QWidget:
-    from pymmcore_gui._theme import keep_subtle_buttons
     from pymmcore_gui.widgets._stage_explorer import ThemedStageExplorer
 
-    widget = ThemedStageExplorer(parent=parent, mmcore=core)
-    keep_subtle_buttons(widget)
-    return widget
+    return ThemedStageExplorer(parent=parent, mmcore=core)
 
 
 def create_device_stage_widget(
@@ -182,12 +175,9 @@ STAGE_KIND_FACTORIES: Final[Mapping[str, tuple[PanelFactory, bool]]] = {
 def _create_console(parent: QWidget, core: CMMCorePlus) -> QWidget:
     # local import: keeps IPython/qtconsole out of startup for users who
     # never open the console panel.
-    from pymmcore_gui._theme import keep_subtle_buttons
     from pymmcore_gui.widgets._mm_console import MMConsole
 
-    widget = MMConsole(parent=parent, mmcore=core)
-    keep_subtle_buttons(widget)
-    return widget
+    return MMConsole(parent=parent, mmcore=core)
 
 
 def _create_exception_log(parent: QWidget, _core: CMMCorePlus) -> QWidget:
