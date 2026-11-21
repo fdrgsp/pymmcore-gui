@@ -1,4 +1,8 @@
-"""Filter MDA settings that the loaded hardware configuration cannot run."""
+"""Filter MDA settings that the loaded hardware configuration cannot run.
+
+Or that the data store cannot hold: OME-TIFF and OME-Zarr data is a regular
+array, with every channel at every Z plane and timepoint.
+"""
 
 from __future__ import annotations
 
@@ -50,11 +54,20 @@ def drop_unsupported(
                 presets[group] = set(core.getAvailableConfigs(group))
             if channel.config not in presets[group]:
                 dropped.append(f"channel {channel.config} (not in '{group}')")
-            else:
-                channel_indices[i] = len(channels)
-                channels.append(channel)
-        if len(channels) != len(seq.channels):
+                continue
+            if seq.z_plan is not None and not channel.do_stack:
+                channel = channel.replace(do_stack=True)
+                dropped.append(f"channel {channel.config}: Do Stack off")
+            if channel.acquire_every != 1:
+                dropped.append(
+                    f"channel {channel.config}: Acquire Every {channel.acquire_every}"
+                )
+                channel = channel.replace(acquire_every=1)
+            channel_indices[i] = len(channels)
+            channels.append(channel)
+        if tuple(channels) != seq.channels:
             update["channels"] = tuple(channels)
+        if len(channels) != len(seq.channels):
             meta = seq.metadata.get(PYMMCW_METADATA_KEY, {})
             if properties := meta.get(CHANNEL_PROPERTIES_KEY):
                 # Saved light-source settings refer to channel row indices.

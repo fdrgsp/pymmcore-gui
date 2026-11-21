@@ -3911,20 +3911,15 @@ def test_collapsible_mda_round_trips_all_original_widgets(
     assert tabs.saving_section is tabs.sections[-1]
     assert mda.save_info.save_name.text() == "roundtrip.ome.tif"
 
-    # Acquire Every and Do Stack are both gated behind the upstream "advanced"
-    # toggle *and* their own axis, which the round-tripped sequence above
-    # already activates.
+    # Advanced shows Z Offset; never Acquire Every and Do Stack, which OME data
+    # can't hold, even with their axes active as in the sequence above.
     channel_table = mda.channels.table()
-    assert channel_table.isColumnHidden(
-        channel_table.indexOf(mda.channels.ACQUIRE_EVERY)
-    )
     mda.channels.advanced.setChecked(True)
     assert not channel_table.isColumnHidden(
-        channel_table.indexOf(mda.channels.ACQUIRE_EVERY)
+        channel_table.indexOf(mda.channels.Z_OFFSET)
     )
-    assert not channel_table.isColumnHidden(
-        channel_table.indexOf(mda.channels.DO_STACK)
-    )
+    for column in (mda.channels.ACQUIRE_EVERY, mda.channels.DO_STACK):
+        assert channel_table.isColumnHidden(channel_table.indexOf(column))
 
     source_group = "_slider_test"
     source_device, source_property = "Camera", "TestProperty1"
