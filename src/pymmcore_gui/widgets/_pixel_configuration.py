@@ -78,10 +78,10 @@ class PixelConfigurationWidget(_UpstreamPixelConfiguration):
         self._calibration_panel.calibrationRunningChanged.connect(
             self._on_calibration_running_changed
         )
-        self._px_table._table.itemSelectionChanged.connect(
+        self._px_table.table().itemSelectionChanged.connect(
             self._sync_calibration_target
         )
-        self._px_table._table.itemChanged.connect(self._sync_calibration_target)
+        self._px_table.table().itemChanged.connect(self._sync_calibration_target)
         self._px_table.valueChanged.connect(self._sync_calibration_target)
         # Property values now live in the selected resolution preset itself.
         # Keep the calibration target current after value edits and after the
@@ -169,7 +169,7 @@ class PixelConfigurationWidget(_UpstreamPixelConfiguration):
             return False
 
     def _selected_preset(self) -> tuple[int, PixelSizePreset] | None:
-        items = self._px_table._table.selectedItems()
+        items = self._px_table.table().selectedItems()
         if len(items) != 1:
             return None
         row = items[0].row()

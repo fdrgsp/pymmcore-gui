@@ -23,6 +23,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from pymmcore_gui._theme import keep_subtle_buttons
 from pymmcore_gui._utils import current_channel
 from pymmcore_gui.widgets._white_balance_dialog import WhiteBalanceDialog
 from pymmcore_gui.widgets.image_preview._preview_base import ImagePreviewBase
@@ -243,7 +244,9 @@ class NDVPreview(ImagePreviewBase):
         index = layout.indexOf(lut_row.auto_clim) + 1  # type: ignore[attr-defined]
         btn = QPushButton(lut_row)
         btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        # subtle, as the viewer's other (checkable) buttons stay
         btn.setProperty("variant", "subtle")
+        keep_subtle_buttons(btn)
         set_source_icon(btn, QIconifyIcon("mdi:cog-outline"))
         ensure_visible_icon(btn)
         btn.setToolTip("White balance…")
