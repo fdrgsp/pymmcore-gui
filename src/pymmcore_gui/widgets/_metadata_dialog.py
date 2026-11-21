@@ -179,13 +179,49 @@ def _value_text(value: Any) -> str:
     return str(value)
 
 
+# keys that name an entry of a list (devices, properties, presets, ...)
+_NAME_KEYS = ("label", "name", "camera_label")
+# keys holding an entry's value, shown on the entry's own row
+_VALUE_KEYS = ("value", "val")
+
+
+def _list_entry(i: int, entry: Any) -> tuple[str, Any]:
+    """Key a list entry by its own name (a preset setting by device-property)."""
+    if isinstance(entry, Mapping):
+        for key in _NAME_KEYS:
+            if isinstance(name := entry.get(key), str):
+                return name, {k: v for k, v in entry.items() if k != key}
+        if {"dev", "prop"} <= entry.keys():
+            rest = {k: v for k, v in entry.items() if k not in ("dev", "prop")}
+            return f"{entry['dev']}-{entry['prop']}", rest
+    return str(i), entry
+
+
 def _fill_tree(parent: QTreeWidgetItem, value: Mapping | Sequence) -> None:
-    """Add a (key, value) item per entry of `value`, nesting containers."""
-    entries = value.items() if isinstance(value, Mapping) else enumerate(value)
+    """Add a (key, value) item per entry of `value`, nesting containers.
+
+    List entries are keyed by their name, and an entry's own value shows on its
+    row, so a device property reads `Exposure | 10`. Lists of plain values
+    (allowed values, child names) show on one row.
+    """
+    if isinstance(value, Mapping):
+        entries = list(value.items())
+    else:
+        entries = [_list_entry(i, entry) for i, entry in enumerate(value)]
     for key, child in entries:
         item = QTreeWidgetItem(parent, [str(key)])
-        if isinstance(child, (Mapping, list, tuple)) and child:
-            _fill_tree(item, child)
+        if isinstance(child, Mapping) and (
+            shown := next((k for k in _VALUE_KEYS if k in child), None)
+        ):
+            item.setText(1, _value_text(child[shown]))
+            child = {k: v for k, v in child.items() if k != shown}
+        if isinstance(child, (list, tuple)) and not any(
+            isinstance(c, (Mapping, list, tuple)) for c in child
+        ):
+            item.setText(1, ", ".join(_value_text(c) for c in child))
+        elif isinstance(child, (Mapping, list, tuple)):
+            if child:
+                _fill_tree(item, child)
         else:
             item.setText(1, _value_text(child))
 
@@ -219,6 +255,9 @@ def _tree() -> QTreeWidget:
     tree.setHeaderLabels(["Key", "Value"])
     tree.setAlternatingRowColors(True)
     tree.setUniformRowHeights(True)
+    # keys nested deeper only show once expanded: keep them readable
+    for signal in (tree.itemExpanded, tree.itemCollapsed):
+        signal.connect(lambda _: tree.resizeColumnToContents(0))
     return tree
 
 
@@ -741,7 +780,7 @@ class _AcquisitionPage(_Page):
         layout.addWidget(self._tree)
         layout.addLayout(
             _button_row(
-                _button("Expand All", self._tree.expandAll),
+                _button("Expand All", self._expand_all),
                 _button("Collapse All", self._tree.collapseAll),
                 _button("Copy as JSON", self._copy_json),
             )
@@ -765,6 +804,10 @@ class _AcquisitionPage(_Page):
         for i in range(root.childCount()):
             if item := root.child(i):
                 _filter_tree(item, text.lower())
+
+    def _expand_all(self) -> None:
+        self._tree.expandAll()
+        self._tree.resizeColumnToContents(0)
 
     def _copy_json(self) -> None:
         _copy(json.dumps(self._summary, indent=2, default=str))

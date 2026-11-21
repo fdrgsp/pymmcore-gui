@@ -16,6 +16,7 @@ from ome_writers import (
     create_stream,
     useq_to_acquisition_settings,
 )
+from pymmcore_plus.metadata import summary_metadata
 
 from pymmcore_gui._image_metadata import DataOrigin
 from pymmcore_gui._qt.QtCore import QEvent, Qt
@@ -24,11 +25,13 @@ from pymmcore_gui._settings import Settings
 from pymmcore_gui.widgets._acquire import AcquirePage
 from pymmcore_gui.widgets._metadata_dialog import (
     MetadataDialog,
+    _AcquisitionPage,
     _FramePage,
     _Page,
     _RawPage,
     _SequencePage,
     _TimestampsPage,
+    _tree_root,
 )
 
 if TYPE_CHECKING:
@@ -324,3 +327,32 @@ def test_closing_disconnects_from_the_viewer(
     viewer.close()
     assert len(signal) == n_connections
     assert not dialog.isVisible()
+
+
+def test_summary_lists_are_keyed_by_name(
+    page: AcquirePage, tmp_path: Path, mmcore: CMMCorePlus
+) -> None:
+    """Devices, properties and presets read as `name | value`, not by index."""
+    viewer, dialog = _open(page, _write(tmp_path / "a.ome.tiff"))
+    record = viewer._acquisition_record
+    assert record is not None
+    record.summary_meta = summary_metadata(mmcore)
+    dialog.refresh()
+    acquisition = _select(dialog, _AcquisitionPage)
+
+    def child(item: QTreeWidgetItem, key: str) -> QTreeWidgetItem:
+        return next(c for c in _children(item) if c.text(0) == key)
+
+    root = _tree_root(acquisition._tree)
+    camera = child(child(root, "devices"), "Camera")
+    exposure = child(child(camera, "properties"), "Exposure")
+    assert exposure.text(1) == mmcore.getProperty("Camera", "Exposure")
+    assert child(exposure, "data_type").text(1) == "float"
+    binning = child(child(camera, "properties"), "Binning")
+    assert child(binning, "allowed_values").text(1) == ", ".join(
+        mmcore.getAllowedPropertyValues("Camera", "Binning")
+    )
+
+    dapi = child(child(child(root, "config_groups"), "Channel"), "presets")
+    setting = child(child(child(dapi, "DAPI"), "settings"), "Dichroic-Label")
+    assert setting.text(1) == "400DCLP"
