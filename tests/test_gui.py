@@ -18,8 +18,10 @@ from pymmcore_plus.autofocus import AutofocusResult, CaptureSettings, capture_st
 from pymmcore_plus.mda import MDARunner, OmeWritersSink
 from pymmcore_widgets import CameraRoiWidget, StageWidget, XYZStageWidget
 from pymmcore_widgets import MDAWidget as UpstreamMDAWidget
+from pymmcore_widgets._busy import BusyOverlay
 from pymmcore_widgets._light_sources import PROPERTY_SEPARATOR, find_light_sources
 from pymmcore_widgets._util import combo_box_height
+from pymmcore_widgets.useq_widgets._autofocus_settings import AutofocusSettingsDialog
 from pymmcore_widgets.useq_widgets._positions import MDAButton, _MDAPopup
 from superqt.iconify import QIconifyIcon
 
@@ -455,6 +457,33 @@ def test_an_uninstall_that_fails_says_so(qtbot: QtBot, tmp_path: Path) -> None:
     assert install.is_dir()
     warning.assert_called_once()
     assert "Operation not permitted" in warning.call_args[0][2]
+
+
+def test_uninstalling_reports_progress(qtbot: QtBot, tmp_path: Path) -> None:
+    page = InstallationPage()
+    qtbot.addWidget(page)
+    page.show()
+    installs = [
+        _fake_install_dir(tmp_path, f"Micro-Manager-75.2024010{day}") for day in (1, 2)
+    ]
+    reported: list[tuple[int, int]] = []
+
+    with _fake_installs(installs):
+        widget = page.ensure_loaded()
+        assert widget is not None
+        widget.table.selectAll()
+        with (
+            patch.object(
+                BusyOverlay, "setProgress", lambda _, *step: reported.append(step)
+            ),
+            patch.object(
+                QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
+            ),
+        ):
+            page._buttons["Uninstall"].click()
+
+    assert reported == [(1, 2), (2, 2)]
+    assert not any(install.exists() for install in installs)
 
 
 def test_uninstall_emits_about_to_uninstall_before_deleting(
@@ -3911,20 +3940,15 @@ def test_collapsible_mda_round_trips_all_original_widgets(
     assert tabs.saving_section is tabs.sections[-1]
     assert mda.save_info.save_name.text() == "roundtrip.ome.tif"
 
-    # Acquire Every and Do Stack are both gated behind the upstream "advanced"
-    # toggle *and* their own axis, which the round-tripped sequence above
-    # already activates.
+    # Advanced shows Z Offset; never Acquire Every and Do Stack, which OME data
+    # can't hold, even with their axes active as in the sequence above.
     channel_table = mda.channels.table()
-    assert channel_table.isColumnHidden(
-        channel_table.indexOf(mda.channels.ACQUIRE_EVERY)
-    )
     mda.channels.advanced.setChecked(True)
     assert not channel_table.isColumnHidden(
-        channel_table.indexOf(mda.channels.ACQUIRE_EVERY)
+        channel_table.indexOf(mda.channels.Z_OFFSET)
     )
-    assert not channel_table.isColumnHidden(
-        channel_table.indexOf(mda.channels.DO_STACK)
-    )
+    for column in (mda.channels.ACQUIRE_EVERY, mda.channels.DO_STACK):
+        assert channel_table.isColumnHidden(channel_table.indexOf(column))
 
     source_group = "_slider_test"
     source_device, source_property = "Camera", "TestProperty1"
@@ -5903,7 +5927,8 @@ def test_third_party_windows_theme_widgets_built_after_opening(
 
     Regression test: the HCS wizard's per-well Manual panel is built when its
     well is first selected, after the wizard's own sweep, so its Set/Clear
-    buttons stayed borderless; and the Surface Focus dialog was never themed.
+    buttons stayed borderless; and the Surface Focus and software autofocus
+    settings dialogs were never themed.
     """
     set_theme(DARK_THEME)
     widget = MemoryMDAWidget(mmcore)
@@ -5918,8 +5943,8 @@ def test_third_party_windows_theme_widgets_built_after_opening(
     calibration._plate_view.setSelectedIndices([(1, 0)])
     well = calibration._current_calibration_widget()
     assert well is not None
-    qtbot.waitUntil(lambda: well._set_button.property("variant") == "subtle")
-    assert well._clear_button.property("variant") == "subtle"
+    qtbot.waitUntil(lambda: well._set_button.property("variant") == "primary")
+    assert well._clear_button.property("variant") == "primary"
 
     positions._edit_surface()
     dialog = positions._surface_dialog
@@ -5927,6 +5952,15 @@ def test_third_party_windows_theme_widgets_built_after_opening(
     qtbot.waitUntil(
         lambda: all(b.property("variant") for b in dialog._buttons.buttons())
     )
+
+    # opened modally: show it instead, to look at it
+    with patch.object(AutofocusSettingsDialog, "exec", lambda self: self.show()):
+        widget.af_axis._edit_settings()
+    (af_dialog,) = widget.findChildren(AutofocusSettingsDialog)
+    qtbot.waitUntil(
+        lambda: all(b.property("variant") for b in af_dialog.findChildren(QPushButton))
+    )
+    af_dialog.close()
 
 
 def test_position_subsequence_popup_opens_without_a_focused_control(

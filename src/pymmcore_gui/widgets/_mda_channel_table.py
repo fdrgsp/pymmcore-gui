@@ -99,6 +99,10 @@ class MDAChannelTable(CoreConnectedChannelTable):
         )
         self.channel_control.setChecked(True)
         self.channel_control.toggled.connect(self.setChannelControlEnabled)
+        self.advanced.setToolTip(
+            "Show the advanced per-channel column, Z Offset.\n"
+            "While unchecked it is hidden, but still applies."
+        )
         self._btn_row.insertWidget(0, self.channel_control)
         # Light Source goes last, with its save button next to it
         self._btn_row.removeWidget(self.show_light_source)
@@ -116,6 +120,14 @@ class MDAChannelTable(CoreConnectedChannelTable):
         self._mmc.events.channelGroupChanged.connect(self._forget_channel_settings)
         self.destroyed.connect(self._disconnect_store)
         self._update_active_row()
+
+    def _apply_advanced_visibility(self) -> None:
+        # Never offered: OME data has every channel at every Z plane and timepoint
+        # (see drop_unsupported).
+        super()._apply_advanced_visibility()
+        table = self.table()
+        for column in (self.DO_STACK, self.ACQUIRE_EVERY):
+            table.setColumnHidden(table.indexOf(column), True)
 
     def _on_save_clicked(self) -> None:
         save_channel_settings(self, self._mmc)
