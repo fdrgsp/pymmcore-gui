@@ -20,7 +20,6 @@ from pymmcore_widgets.mda import (
 )
 from pymmcore_widgets.mda._collapsible_mda import _ClickableLabel
 from pymmcore_widgets.useq_widgets import MDASequenceWidget
-from pymmcore_widgets.useq_widgets._positions import MDAButton
 from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import (
@@ -291,9 +290,12 @@ class MemoryMDAWidgetBase(_MixinBase):
         # hides the embedded QGroupBox's native header and indicator.
         self._collapsible_tabs().apply_save_body_style()
         self._apply_table_toolbar_icon_size()
+        # the position table paints its buttons as this hidden one, never shown
+        # to become primary as the other action buttons do
+        self.stage_positions.table().buttonTemplate().setProperty("variant", "primary")
 
         # Theme cell widgets created by later row insertions too.
-        for table_widget in (self.channels, self.stage_positions, self.time_plan):
+        for table_widget in (self.channels, self.time_plan):
             model = table_widget.table().model()
             if model is not None:
                 model.rowsInserted.connect(self._on_table_rows_inserted)
@@ -302,7 +304,6 @@ class MemoryMDAWidgetBase(_MixinBase):
         # changes. Re-apply our semantic colors after those runtime swaps.
         self._mmc.mda.events.sequencePauseToggled.connect(self._apply_themed_icons)
         self._mmc.mda.events.sequenceFinished.connect(self._apply_themed_icons)
-        self._connect_position_icon_updates()
         self._apply_themed_icons()
 
         # Link the channel rows to the per-preset settings the Channels panel
@@ -448,21 +449,14 @@ class MemoryMDAWidgetBase(_MixinBase):
     ) -> None:
         """Theme new cells and give new channel rows their presets' settings."""
         sender = self.sender()
-        for editor in (self.channels, self.stage_positions, self.time_plan):
+        for editor in (self.channels, self.time_plan):
             table = editor.table()
             if sender is not table.model():
                 continue
-            position_buttons = []
             for row in range(first, last + 1):
                 for col in range(table.columnCount()):
                     if (cell := table.cellWidget(row, col)) is not None:
-                        is_position_button = isinstance(cell, MDAButton)
-                        unstyle_widgets(cell, theme_icons=not is_position_button)
-                        if isinstance(cell, MDAButton):
-                            position_buttons.append(cell)
-            if position_buttons:
-                self._connect_position_icon_updates(position_buttons)
-                self._apply_position_icons(position_buttons)
+                        unstyle_widgets(cell)
             if editor is self.channels:
                 self._install_channel_editor_filters()
                 if not self._restoring_sequence:
@@ -731,33 +725,6 @@ class MemoryMDAWidgetBase(_MixinBase):
         """Feed the app's zoom-scaled spacing into the upstream presentation."""
         self._flavor_apply_theme_metrics()
 
-    def _connect_position_icon_updates(
-        self, buttons: Iterable[MDAButton] | None = None
-    ) -> None:
-        """Keep per-position sub-sequence icons themed after value changes."""
-        targets = self.findChildren(MDAButton) if buttons is None else buttons
-        for btn in targets:
-            if btn.property("_pymmcore_gui_icon_colors_connected"):
-                continue
-            btn.setProperty("_pymmcore_gui_icon_colors_connected", True)
-            btn.valueChanged.connect(self._on_position_sequence_changed)
-
-    def _on_position_sequence_changed(self) -> None:
-        """Update only the position whose grid plan changed."""
-        if isinstance(btn := self.sender(), MDAButton):
-            self._apply_position_icons((btn,))
-
-    def _apply_position_icons(self, buttons: Iterable[MDAButton]) -> None:
-        """Share explicitly themed icons across the given position buttons."""
-        t = theme()
-        configured_icon = QIconifyIcon("mdi:grid", color=qcolor(t.status_green).name())
-        empty_icon = QIconifyIcon("mdi:grid", color=qcolor(t.text_primary).name())
-        clear_icon = QIconifyIcon("mdi:close-circle", color=qcolor(t.status_red).name())
-        for btn in buttons:
-            configured = not btn.clear_btn.isHidden()
-            set_source_icon(btn.seq_btn, configured_icon if configured else empty_icon)
-            set_source_icon(btn.clear_btn, clear_icon)
-
     def _apply_themed_section_icons(self) -> None:
         """Tint the collapsible section header icons to the app's icon color.
 
@@ -842,7 +809,11 @@ class MemoryMDAWidgetBase(_MixinBase):
             table.act_remove_row.setIcon(StandardIcon.DELETE.icon(red))
             table.act_clear.setIcon(StandardIcon.DELETE_ALL.icon(red))
 
-        self._apply_position_icons(self.findChildren(MDAButton))
+        self.stage_positions.delegate().setIcons(
+            QIconifyIcon("mdi:grid", color=qcolor(theme().text_primary).name()),
+            QIconifyIcon("mdi:grid", color=green),
+            QIconifyIcon("mdi:close-circle", color=red),
+        )
 
     def changeEvent(self, a0: QEvent | None) -> None:
         """Re-theme icons and rescale section spacing after a style/zoom change."""
