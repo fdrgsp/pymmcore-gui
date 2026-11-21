@@ -2673,8 +2673,8 @@ cli = [
 
 [[package]]
 name = "pymmcore-widgets"
-version = "0.1.dev746+g1a6635da2"
-source = { git = "https://github.com/fdrgsp/pymmcore-widgets?rev=cite#1a6635da2c4dac2337e65d218c272f4da9fc0a5d" }
+version = "0.1.dev747+g5566c5e9c"
+source = { git = "https://github.com/fdrgsp/pymmcore-widgets?rev=cite#5566c5e9c6d3fa9591952c5d9502487db71e0aae" }
 dependencies = [
     { name = "psutil" },
     { name = "pymmcore-plus", extra = ["cli"] },
