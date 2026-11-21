@@ -3648,8 +3648,8 @@ wheels = [
 
 [[package]]
 name = "useq-schema"
-version = "0.9.3.dev26+g6975368b2"
-source = { git = "https://github.com/fdrgsp/useq-schema?rev=cite#6975368b2511256047d5bc8b2e40798789c4e87f" }
+version = "0.9.3.dev35+g7f9e03a22"
+source = { git = "https://github.com/fdrgsp/useq-schema?rev=cite#7f9e03a2229228f4fb1c4776e54effb3df0a9d2a" }
 dependencies = [
     { name = "numpy" },
     { name = "pydantic" },
