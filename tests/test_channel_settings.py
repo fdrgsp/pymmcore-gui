@@ -926,35 +926,7 @@ def test_save_button_looks_like_the_preferences_gear(
         assert color() == qcolor(theme().text_primary).name()
 
 
-def test_run_takes_what_is_being_typed(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
-    """Without Enter: on macOS, clicking Run leaves the editor its focus."""
-    mda = _mda(mmcore, qtbot, "DAPI")
-    mda.show()
-    mda.activateWindow()
-    qtbot.waitExposed(mda)
-    mda.revealAxis("c")
-    qtbot.wait(100)
-    if not mda.isActiveWindow():  # pragma: no cover
-        pytest.skip("focus needs the window to be active, which CI cannot always do")
-
-    spin = _mda_cell(mda, 0, mda.channels.EXPOSURE)
-    spin.setFocus()
-    edit = spin.lineEdit()
-    qtbot.keyClick(edit, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)  # type: ignore[no-untyped-call]
-    qtbot.keyClicks(edit, "77")  # type: ignore[no-untyped-call]
-    assert _mda_row_exposures(mda) == [("DAPI", 100)]
-
-    mda.prepare_mda()
-    assert _mda_row_exposures(mda) == [("DAPI", 77)]
-    # it counts as an edit, so the Channels panel's settings have it too
-    assert _stored(mmcore, "DAPI")["exposure"] == 77
-
-
-def _type_without_enter(qtbot: QtBot, spin: Any, text: str) -> None:
-    spin.setFocus()
-    edit = spin.lineEdit()
-    qtbot.keyClick(edit, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)  # type: ignore[no-untyped-call]
-    qtbot.keyClicks(edit, text)  # type: ignore[no-untyped-call]
+NO_FOCUS = "focus needs the window to be active, which CI cannot always do"
 
 
 def _activate(qtbot: QtBot, window: Any) -> None:
@@ -963,7 +935,32 @@ def _activate(qtbot: QtBot, window: Any) -> None:
     qtbot.waitExposed(window)
     qtbot.wait(100)
     if not window.isActiveWindow():  # pragma: no cover
-        pytest.skip("focus needs the window to be active, which CI cannot always do")
+        pytest.skip(NO_FOCUS)
+
+
+def _type_without_enter(qtbot: QtBot, spin: Any, text: str) -> None:
+    spin.setFocus()
+    edit = spin.lineEdit()
+    qtbot.keyClick(edit, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)  # type: ignore[no-untyped-call]
+    qtbot.keyClicks(edit, text)  # type: ignore[no-untyped-call]
+    # another window may have taken the focus since the window was activated
+    if not spin.hasFocus():  # pragma: no cover
+        pytest.skip(NO_FOCUS)
+
+
+def test_run_takes_what_is_being_typed(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
+    """Without Enter: on macOS, clicking Run leaves the editor its focus."""
+    mda = _mda(mmcore, qtbot, "DAPI")
+    _activate(qtbot, mda)
+    mda.revealAxis("c")
+
+    _type_without_enter(qtbot, _mda_cell(mda, 0, mda.channels.EXPOSURE), "77")
+    assert _mda_row_exposures(mda) == [("DAPI", 100)]
+
+    mda.prepare_mda()
+    assert _mda_row_exposures(mda) == [("DAPI", 77)]
+    # it counts as an edit, so the Channels panel's settings have it too
+    assert _stored(mmcore, "DAPI")["exposure"] == 77
 
 
 def test_capture_takes_what_is_being_typed_in_the_mda(
