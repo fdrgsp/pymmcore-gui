@@ -6066,18 +6066,25 @@ def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
 def test_mda_axis_table_toolbars_are_not_autoraise(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
-    """The Channels/Positions/Time Series toolbars read as boxed, not ghost.
+    """The Channels/Positions/Time Series/Surface Focus toolbars read as boxed.
 
     Same fix as Stage Explorer's own toolbar (test_stage_explorer_style):
     upstream `DataTableWidget` leaves its `QToolBar` buttons auto-raise, which
     only fills (no border) on hover -- easy to miss next to the rest of the
-    app's persistently boxed "subtle" buttons.
+    app's persistently boxed "subtle" buttons. The Surface Focus dialog is built
+    on demand, after the MDA widget's own pass, and must still match after a zoom.
     """
     set_theme(DARK_THEME)
     wdg = MemoryMDAWidget(mmcore)
     qtbot.addWidget(wdg)
-    for table in (wdg.channels, wdg.stage_positions, wdg.time_plan):
+    wdg.stage_positions._edit_surface()
+    surface = wdg.stage_positions._surface_dialog
+    assert surface is not None
+    qtbot.waitExposed(surface)
+    set_zoom(1.5)
+    for table in (wdg.channels, wdg.stage_positions, wdg.time_plan, surface.points):
         toolbar = table.toolBar()
+        assert toolbar.iconSize().width() == theme().scaled(16)
         tool_buttons = [
             button
             for action in toolbar.actions()
@@ -6085,7 +6092,11 @@ def test_mda_axis_table_toolbars_are_not_autoraise(
         ]
         assert tool_buttons
         assert all(not button.autoRaise() for button in tool_buttons)
-        assert all(button.property("variant") == "subtle" for button in tool_buttons)
+        # the shown dialog's buttons have already turned primary
+        assert all(
+            button.property("variant") in ("subtle", "primary")
+            for button in tool_buttons
+        )
 
 
 def test_slider_style_only_paints_requested_subcontrols(qapp: QApplication) -> None:
