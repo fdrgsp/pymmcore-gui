@@ -10,7 +10,6 @@ from ome_writers import AcquisitionSettings, OmeTiffFormat, ScratchFormat
 from ome_writers._schema import _ome_stem_suffix
 from pymmcore_widgets import MDAWidget, MDAWidgetCollapsible
 from pymmcore_widgets._busy import BusyOverlay
-from pymmcore_widgets._icons import StandardIcon
 from pymmcore_widgets._util import fov_pixel_size_warning
 from pymmcore_widgets.mda import (
     CollapsibleCoreMDATabs,
@@ -22,7 +21,6 @@ from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import (
     _recolor_icon,
-    ensure_visible_icon,
     set_icon_tint,
     set_source_icon,
     unstyle_widgets,
@@ -32,7 +30,6 @@ from pymmcore_gui._qt.QtCore import (
     QEvent,
     QModelIndex,
     QObject,
-    QSize,
     Qt,
     QTimer,
     Signal,
@@ -47,7 +44,6 @@ from pymmcore_gui._qt.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
-    QToolButton,
     QWidget,
 )
 from pymmcore_gui._sequence_support import drop_unsupported
@@ -59,6 +55,7 @@ from ._mda_tabs import (
     GuiCollapsibleCoreMDATabs,
     GuiCoreMDATabs,
     install_third_party_window_theming,
+    style_table_toolbar,
 )
 
 if TYPE_CHECKING:
@@ -654,33 +651,12 @@ class MemoryMDAWidgetBase(_MixinBase):
         self._flavor_reveal_axis(axis, self.axis_editor(axis))
 
     def _apply_table_toolbar_icon_size(self) -> None:
-        """Shrink the axis-table toolbars to the app's compact action-icon size.
-
-        Upstream ``DataTableWidget`` hardcodes a 22px toolbar icon size, and the
-        app's zoom pass makes every ``QToolBar`` even larger
-        (``PM_ToolBarIconSize``) — both bigger than the toolbar actions the user
-        sees elsewhere in Acquire. Match those instead (≈20px at the default
-        zoom), scaled with the theme. Re-applied on theme/zoom changes from
-        ``changeEvent`` because the app-wide pass would otherwise reset it.
-
-        Also turns off each button's auto-raise, matching every other action
-        button in Acquire (see Stage Explorer's own toolbar for the same
-        fix): a QToolBar's buttons default to auto-raise ("ghost" style,
-        fill-only, borderless hover), which reads as barely-there next to the
-        rest of the app's persistently boxed "subtle" buttons.
-        """
-        icon = theme().scaled(16)
-        size = QSize(icon, icon)
-        for table in (self.channels, self.stage_positions, self.time_plan):
-            toolbar = table.toolBar()
-            toolbar.setIconSize(size)
-            for action in toolbar.actions():
-                button = toolbar.widgetForAction(action)
-                if isinstance(button, QToolButton):
-                    button.setAutoRaise(False)
-                    if not button.property("variant"):
-                        button.setProperty("variant", "subtle")
-                    ensure_visible_icon(button)
+        """Restyle the axis-table toolbars, and Surface Focus's once opened."""
+        tables = [self.channels, self.stage_positions, self.time_plan]
+        if (surface := self.stage_positions._surface_dialog) is not None:
+            tables.append(surface.points)
+        for table in tables:
+            style_table_toolbar(table)
 
     def _apply_theme_metrics(self) -> None:
         """Feed the app's zoom-scaled spacing into the upstream presentation."""
@@ -757,11 +733,6 @@ class MemoryMDAWidgetBase(_MixinBase):
             controls.cancel_btn,
             QIconifyIcon("mdi:stop-circle-outline", color=red),
         )
-
-        for table in (self.channels, self.stage_positions, self.time_plan):
-            table.act_add_row.setIcon(QIconifyIcon("mdi:plus-thick", color=green))
-            table.act_remove_row.setIcon(StandardIcon.DELETE.icon(red))
-            table.act_clear.setIcon(StandardIcon.DELETE_ALL.icon(red))
 
         self.stage_positions.delegate().setIcons(
             QIconifyIcon("mdi:grid", color=qcolor(theme().text_primary).name()),

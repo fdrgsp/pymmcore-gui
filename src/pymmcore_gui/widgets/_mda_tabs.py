@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 from pymmcore_widgets import HCSWizard
+from pymmcore_widgets._icons import StandardIcon
 from pymmcore_widgets.mda import CollapsibleCoreMDATabs, CoreMDATabs
-from pymmcore_widgets.useq_widgets import CustomPlateWidget
+from pymmcore_widgets.useq_widgets import CustomPlateWidget, DataTableWidget
 from pymmcore_widgets.useq_widgets._autofocus_settings import AutofocusSettingsDialog
 from pymmcore_widgets.useq_widgets._z_surface_dialog import ZSurfaceDialog
+from superqt.iconify import QIconifyIcon
 
-from pymmcore_gui._array_viewer import (
-    unstyle_widgets,
-)
-from pymmcore_gui._qt.QtCore import QEvent, Qt
-from pymmcore_gui._qt.QtWidgets import QWidget
+from pymmcore_gui._array_viewer import ensure_visible_icon, unstyle_widgets
+from pymmcore_gui._qt.QtCore import QEvent, QSize, Qt
+from pymmcore_gui._qt.QtWidgets import QToolButton, QWidget
+from pymmcore_gui._theme import qcolor, theme
 from pymmcore_gui._theme._events import add_event_hook
 
 from ._mda_channel_table import MDAChannelTable
@@ -46,6 +47,40 @@ class GuiCoreMDATabs(CoreMDATabs):
     def create_subwidgets(self) -> None:
         super().create_subwidgets()
         _install_gui_tables(self)
+
+
+def style_table_toolbar(table: DataTableWidget) -> None:
+    """Match a table's toolbar to the app's compact, boxed action buttons.
+
+    Upstream ``DataTableWidget`` hardcodes a 22px toolbar icon size, and the
+    app's zoom pass makes every ``QToolBar`` even larger
+    (``PM_ToolBarIconSize``) -- both bigger than the toolbar actions the user
+    sees elsewhere in Acquire. Match those instead (≈20px at the default zoom),
+    scaled with the theme. Callers re-apply it on theme/zoom changes because the
+    app-wide pass would otherwise reset it.
+
+    Also turns off each button's auto-raise, matching every other action button
+    in Acquire (see Stage Explorer's own toolbar for the same fix): a QToolBar's
+    buttons default to auto-raise ("ghost" style, fill-only, borderless hover),
+    which reads as barely-there next to the app's persistently boxed "subtle"
+    buttons. The add/remove icons take the theme's semantic green/red.
+    """
+    green = qcolor(theme().status_green).name()
+    red = qcolor(theme().status_red).name()
+    table.act_add_row.setIcon(QIconifyIcon("mdi:plus-thick", color=green))
+    table.act_remove_row.setIcon(StandardIcon.DELETE.icon(red))
+    table.act_clear.setIcon(StandardIcon.DELETE_ALL.icon(red))
+
+    icon = theme().scaled(16)
+    toolbar = table.toolBar()
+    toolbar.setIconSize(QSize(icon, icon))
+    for action in toolbar.actions():
+        button = toolbar.widgetForAction(action)
+        if isinstance(button, QToolButton):
+            button.setAutoRaise(False)
+            if not button.property("variant"):
+                button.setProperty("variant", "subtle")
+            ensure_visible_icon(button)
 
 
 def _theme(widget: QWidget) -> None:
@@ -92,6 +127,8 @@ def _theme_third_party_window(widget: QWidget, _event: QEvent) -> bool:
         (HCSWizard, CustomPlateWidget, ZSurfaceDialog, AutofocusSettingsDialog),
     ) or ((window := widget.window()) is not None and window.property(_THEMED)):
         _theme(widget)
+        if isinstance(widget, ZSurfaceDialog):
+            style_table_toolbar(widget.points)
     return False
 
 
@@ -107,4 +144,5 @@ __all__ = [
     "GuiCollapsibleCoreMDATabs",
     "GuiCoreMDATabs",
     "install_third_party_window_theming",
+    "style_table_toolbar",
 ]
