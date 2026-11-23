@@ -2147,6 +2147,29 @@ def test_stage_explorer_marks_mda_positions(mmcore: CMMCorePlus, qtbot: QtBot) -
     assert explorer.toolBar().show_mda_positions_action.isEnabled()
 
 
+@pytest.mark.parametrize("kind", [MdaKind.COLLAPSIBLE, MdaKind.TOPBAR])
+def test_stage_explorer_hides_positions_of_unused_axis(
+    mmcore: CMMCorePlus, qtbot: QtBot, kind: str
+) -> None:
+    """Positions are only marked while the MDA's Positions axis is checked."""
+    page = AcquirePage(mmcore)
+    qtbot.addWidget(page)
+    page._set_mda_kind(kind)
+    page._mda.stage_positions.setValue([useq.Position(x=1, y=2)])
+    page._mda.revealAxis("p")
+    page.panel_button(PanelKey.STAGE_EXPLORER).click()
+    explorer = page.panel_widget(PanelKey.STAGE_EXPLORER)
+    assert isinstance(explorer, ThemedStageExplorer)
+    explorer.show_mda_positions = True
+    markers: Any = explorer._mda_pos_markers  # vispy internals, loosely typed
+    assert markers.parent is not None
+
+    page._mda.tab_wdg.setChecked(page._mda.stage_positions, False)
+    assert markers.parent is None
+    page._mda.tab_wdg.setChecked(page._mda.stage_positions, True)
+    assert markers.parent is not None
+
+
 def test_acquire_panel_buttons_match_registry(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:

@@ -580,6 +580,7 @@ class AcquirePage(TabPage):
             widget.apply_active_channel_for_capture
         )
         widget.stage_positions.valueChanged.connect(self._sync_explorer_positions)
+        widget.tab_wdg.tabChecked.connect(self._sync_explorer_positions)
         self._sync_explorer_positions()
 
     def _unbind_mda(self) -> None:
@@ -597,6 +598,7 @@ class AcquirePage(TabPage):
             widget.stage_positions.valueChanged.disconnect(
                 self._sync_explorer_positions
             )
+            widget.tab_wdg.tabChecked.disconnect(self._sync_explorer_positions)
 
     def _mda_widget_for(self, kind: str) -> QWidget:
         """Return the MDA editor for *kind*, building and caching it once."""
@@ -1065,12 +1067,17 @@ class AcquirePage(TabPage):
         self._mda.revealAxis("p")
         self.panel_button(PanelKey.MDA).setChecked(True)
 
-    def _sync_explorer_positions(self) -> None:
-        """Give an open Stage Explorer the MDA positions to mark on its map."""
+    def _sync_explorer_positions(self, *_: object) -> None:
+        """Give an open Stage Explorer the MDA positions to mark on its map.
+
+        None while the Positions axis is off: the acquisition will not use them.
+        """
         if (widget := self._panels[PanelKey.STAGE_EXPLORER].widget) is None:
             return
         explorer = cast("ThemedStageExplorer", widget)
-        explorer.set_mda_positions(self._mda.stage_positions.value())
+        mda = self._mda
+        used = mda.tab_wdg.isAxisUsed("p")
+        explorer.set_mda_positions(mda.stage_positions.value() if used else ())
 
     def refresh_stage_explorer_pixel_geometry(self) -> None:
         """Refresh an open Stage Explorer after pixel configs are committed."""
