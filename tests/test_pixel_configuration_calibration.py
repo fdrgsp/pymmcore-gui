@@ -764,6 +764,8 @@ def test_live_preview_applies_settings_restores_them_and_retains_fov(
         assert panel._live_button.isChecked()
         assert panel._live_button.toolTip() == "Stop"
         assert panel.isRunning()
+        # repaint after each frame, or large color frames only show once stopped
+        assert preview.process_events_on_update
         assert mmcore.getExposure() == pytest.approx(old_exposure + 13)
         assert not panel._exposure.isEnabled()
         assert panel._snap_button.isEnabled()
@@ -776,6 +778,7 @@ def test_live_preview_applies_settings_restores_them_and_retains_fov(
 
     assert not panel._live_button.isChecked()
     assert panel._live_button.toolTip() == "Live"
+    assert not preview.process_events_on_update
     assert not panel.isRunning()
     assert mmcore.getExposure() == pytest.approx(old_exposure)
     assert mmcore.getXYPosition(panel._xy_stage()) == pytest.approx(
