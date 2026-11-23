@@ -356,3 +356,22 @@ def test_summary_lists_are_keyed_by_name(
     dapi = child(child(child(root, "config_groups"), "Channel"), "presets")
     setting = child(child(child(dapi, "DAPI"), "settings"), "Dichroic-Label")
     assert setting.text(1) == "400DCLP"
+
+
+def test_expand_all_resizes_the_key_column_once(
+    page: AcquirePage, tmp_path: Path, mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """Expand/Collapse All emit per item: resizing for each one is quadratic."""
+    viewer, dialog = _open(page, _write(tmp_path / "a.ome.tiff"))
+    record = viewer._acquisition_record
+    assert record is not None
+    record.summary_meta = summary_metadata(mmcore)
+    dialog.refresh()
+    tree = _select(dialog, _AcquisitionPage)._tree
+    widths: list[int] = []
+    tree.resizeColumnToContents = widths.append
+
+    tree.expandAll()
+    qtbot.waitUntil(lambda: widths == [0])
+    tree.collapseAll()
+    qtbot.waitUntil(lambda: widths == [0, 0])

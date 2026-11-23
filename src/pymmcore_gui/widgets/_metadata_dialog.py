@@ -255,9 +255,14 @@ def _tree() -> QTreeWidget:
     tree.setHeaderLabels(["Key", "Value"])
     tree.setAlternatingRowColors(True)
     tree.setUniformRowHeights(True)
-    # keys nested deeper only show once expanded: keep them readable
+    # keys nested deeper only show once expanded: keep them readable. Expand
+    # All emits once per item, so resize once after the whole batch.
+    resize = QTimer(tree)
+    resize.setSingleShot(True)
+    resize.setInterval(0)
+    resize.timeout.connect(lambda: tree.resizeColumnToContents(0))
     for signal in (tree.itemExpanded, tree.itemCollapsed):
-        signal.connect(lambda _: tree.resizeColumnToContents(0))
+        signal.connect(resize.start)
     return tree
 
 
@@ -780,7 +785,7 @@ class _AcquisitionPage(_Page):
         layout.addWidget(self._tree)
         layout.addLayout(
             _button_row(
-                _button("Expand All", self._expand_all),
+                _button("Expand All", self._tree.expandAll),
                 _button("Collapse All", self._tree.collapseAll),
                 _button("Copy as JSON", self._copy_json),
             )
@@ -804,10 +809,6 @@ class _AcquisitionPage(_Page):
         for i in range(root.childCount()):
             if item := root.child(i):
                 _filter_tree(item, text.lower())
-
-    def _expand_all(self) -> None:
-        self._tree.expandAll()
-        self._tree.resizeColumnToContents(0)
 
     def _copy_json(self) -> None:
         _copy(json.dumps(self._summary, indent=2, default=str))
