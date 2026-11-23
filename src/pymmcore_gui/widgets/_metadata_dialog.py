@@ -743,7 +743,6 @@ class _FramePage(_Page):
         if len(rows) > _MAX_FRAME_ITEMS:
             QTreeWidgetItem(root, [f"… and {len(rows) - _MAX_FRAME_ITEMS} more"])
         self._tree.expandAll()
-        self._tree.resizeColumnToContents(0)
 
 
 def _frame_fields(frame: FrameInfo) -> dict[str, Any]:
