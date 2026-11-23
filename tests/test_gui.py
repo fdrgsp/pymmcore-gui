@@ -6242,6 +6242,29 @@ def test_unchanged_groups_are_not_rewritten(mmcore: CMMCorePlus, qtbot: QtBot) -
     assert len(mmcore.getAvailableConfigGroups()) > 1
 
 
+def test_showing_page_offers_devices_loaded_since(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """A shutter added on the Hardware tab is a choice in existing presets."""
+    mmcore.defineConfig("Channel", "Cy5", "Core", "Shutter", "Shutter")
+    page = ConfigurationsPage(mmcore)
+    qtbot.addWidget(page)
+
+    def core_shutter_choices() -> tuple[str, ...]:
+        group = next(g for g in page._group_editor.data() if g.name == "Channel")
+        shutter = next(
+            s for s in group.presets["Cy5"].settings if s.key() == ("Core", "Shutter")
+        )
+        return shutter.allowed_values
+
+    mmcore.loadDevice("Shutter2", "DemoCamera", "DShutter")
+    mmcore.initializeDevice("Shutter2")
+    page.show()
+
+    qtbot.waitUntil(lambda: "Shutter2" in core_shutter_choices())
+    assert not page.is_dirty()
+
+
 def test_embedded_pixel_apply_coalesces_pixel_size_events(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
