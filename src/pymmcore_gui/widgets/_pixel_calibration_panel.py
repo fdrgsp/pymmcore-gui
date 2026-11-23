@@ -1196,7 +1196,7 @@ class PixelCalibrationPanel(QWidget):
         try:
             transaction.apply()
             self._live_transaction = transaction
-            preview.attach(self._mmc)
+            self._attach_live_preview(preview)
             self._set_inputs_enabled(False)
             self._set_pending_rejected_result(None)
             self.calibrationRunningChanged.emit(True)
@@ -1213,8 +1213,7 @@ class PixelCalibrationPanel(QWidget):
             self._live_button.setChecked(False)
             if self._mmc.isSequenceRunning():
                 self._mmc.stopSequenceAcquisition()
-            if self._preview is not None:
-                self._preview.detach()
+            self._detach_live_preview()
             try:
                 transaction.restore()
             except BaseException as restore_exc:
@@ -1244,8 +1243,7 @@ class PixelCalibrationPanel(QWidget):
         if transaction is None:
             return
         self._live_transaction = None
-        if self._preview is not None:
-            self._preview.detach()
+        self._detach_live_preview()
         failure = ""
         try:
             transaction.restore()
@@ -1265,6 +1263,20 @@ class PixelCalibrationPanel(QWidget):
                 "Live preview stopped and optical settings restored. The selected "
                 "XY stage position is the calibration starting field of view."
             )
+
+    def _attach_live_preview(self, preview: NDVPreview) -> None:
+        """Show the core's live frames, processing events after each one.
+
+        As the Acquire tab's preview does: otherwise large color frames keep the
+        GUI thread busy enough that the image only updates once live stops.
+        """
+        preview.attach(self._mmc)
+        preview.process_events_on_update = True
+
+    def _detach_live_preview(self) -> None:
+        if self._preview is not None:
+            self._preview.detach()
+            self._preview.process_events_on_update = False
 
     def _on_live_started(self, *_: object) -> None:
         if self._live_transaction is None:
