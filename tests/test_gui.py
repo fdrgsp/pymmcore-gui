@@ -3827,17 +3827,19 @@ def test_zoom_skips_a_window_deleted_while_laying_out_another(qtbot: QtBot) -> N
     """Laying out one window can delete another, e.g. a menu with its parent."""
     set_theme(DARK_THEME)
     menu = QMenu()
+    to_delete = [menu]  # once: deleting it again crashes PySide
 
     class DeletingLayout(QVBoxLayout):
         def activate(self) -> bool:
-            if type(menu).__module__.startswith("PyQt6"):
-                from PyQt6 import sip
+            while to_delete:
+                if type(menu).__module__.startswith("PyQt6"):
+                    from PyQt6 import sip
 
-                sip.delete(menu)
-            else:
-                import shiboken6  # type: ignore [import-not-found]
+                    sip.delete(to_delete.pop())
+                else:
+                    import shiboken6  # type: ignore [import-not-found]
 
-                shiboken6.delete(menu)
+                    shiboken6.delete(to_delete.pop())
             return super().activate()
 
     first = QWidget()
