@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager, suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 
 from ome_writers import AcquisitionSettings, OmeTiffFormat, ScratchFormat
 from ome_writers._schema import _ome_stem_suffix
@@ -17,6 +17,7 @@ from pymmcore_widgets.mda import (
     SectionMetrics,
 )
 from pymmcore_widgets.mda._collapsible_mda import _ClickableLabel
+from pymmcore_widgets.useq_widgets import PYMMCW_METADATA_KEY
 from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import (
@@ -38,6 +39,7 @@ from pymmcore_gui._qt.QtGui import QPainter, QPixmap
 from pymmcore_gui._qt.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QGridLayout,
@@ -81,7 +83,7 @@ TiffLayout = Literal["self-contained", "master-tiff", "redundant"]
 # in the order they are offered. The first is the default.
 TIFF_LAYOUTS: tuple[tuple[str, TiffLayout, str], ...] = (
     (
-        "Independent file per position",
+        "Independent file per position (default)",
         "self-contained",
         "<b>Each file stands alone.</b><br><br>A file describes only its own "
         "position and refers to no other, so any file can be opened, moved, "
@@ -433,6 +435,12 @@ class MemoryMDAWidgetBase(_MixinBase):
             super().setValue(value)
         finally:
             self._restoring_sequence = False
+        # `value` saves the Tiff Mode with the save settings: older files have none
+        if meta := value.metadata.get(PYMMCW_METADATA_KEY):
+            layout = meta.get("tiff_layout")
+            self.setTiffLayout(
+                layout if layout in get_args(TiffLayout) else TIFF_LAYOUTS[0][1]
+            )
         self._flavor_refresh_summaries()
         if dropped:
             self.settingsIgnored.emit(
@@ -764,10 +772,18 @@ class MemoryMDAWidgetBase(_MixinBase):
             self._tiff_layout_combo.setItemData(idx, tip, Qt.ItemDataRole.ToolTipRole)
         # TIFF_LAYOUTS is ordered, and its first entry is the default.
         self._tiff_layout_combo.setCurrentIndex(0)
+        self._tiff_layout_combo.setEnabled(False)
+        self._tiff_advanced = QCheckBox("Advanced")
+        self._tiff_advanced.setToolTip(
+            "Choose another Tiff Mode. Unchecked, each position is written to an "
+            "independent file."
+        )
+        self._tiff_advanced.toggled.connect(self._on_tiff_advanced_toggled)
 
         layout = cast("QGridLayout", self.save_info.layout())
         layout.addWidget(self._tiff_layout_label, 2, 0)
-        layout.addWidget(self._tiff_layout_combo, 2, 1, 1, 3)
+        layout.addWidget(self._tiff_layout_combo, 2, 1, 1, 2)
+        layout.addWidget(self._tiff_advanced, 2, 3)
         self.save_info._writer_combo.currentTextChanged.connect(
             self._sync_ome_tiff_options
         )
@@ -778,14 +794,28 @@ class MemoryMDAWidgetBase(_MixinBase):
         visible = self._is_ome_tiff_selected()
         self._tiff_layout_label.setVisible(visible)
         self._tiff_layout_combo.setVisible(visible)
+        self._tiff_advanced.setVisible(visible)
         # SaveGroupBox pins its own height to avoid jiggling when toggled, so the
         # pin has to be recomputed whenever a row appears or disappears.
         self.save_info.setMinimumHeight(0)
         self.save_info.setMaximumHeight(QWIDGETSIZE_MAX)
         self.save_info.setFixedHeight(self.save_info.minimumSizeHint().height())
 
+    def _on_tiff_advanced_toggled(self, checked: bool) -> None:
+        """Only advanced users pick a mode: the rest write independent files."""
+        self._tiff_layout_combo.setEnabled(checked)
+        if not checked:
+            self._tiff_layout_combo.setCurrentIndex(0)
+
     def _is_ome_tiff_selected(self) -> bool:
         return self.save_info._writer_combo.currentText() == "ome-tiff"
+
+    def value(self) -> useq.MDASequence:
+        """The sequence, with the Tiff Mode next to the save settings."""
+        value = super().value()
+        if self.save_info.isChecked() and self._is_ome_tiff_selected():
+            value.metadata[PYMMCW_METADATA_KEY]["tiff_layout"] = self.tiffLayout()
+        return value
 
     def tiffLayout(self) -> TiffLayout:
         """The selected `OmeTiffFormat.multi_file_metadata` mode."""
@@ -797,6 +827,8 @@ class MemoryMDAWidgetBase(_MixinBase):
         idx = self._tiff_layout_combo.findData(mode)
         if idx < 0:  # pragma: no cover
             raise ValueError(f"Unknown OME-TIFF layout {mode!r}")
+        # only Advanced offers the other modes
+        self._tiff_advanced.setChecked(bool(idx))
         self._tiff_layout_combo.setCurrentIndex(idx)
 
     def prepare_mda(self) -> bool | SingleOutput | None:
