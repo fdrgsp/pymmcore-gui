@@ -19,9 +19,16 @@ if TYPE_CHECKING:
 
 @pytest.fixture
 def app_log(tmp_path: Path) -> Iterator[Path]:
+    # logging is process-wide: earlier tests may leave an app logger's level set
+    loggers = [logging.getLogger(name) for name in _logging.VERBOSE_LOGGERS]
+    levels = [logger.level for logger in loggers]
+    for logger in loggers:
+        logger.setLevel(logging.NOTSET)
     path = tmp_path / "app.log"
     assert _logging.setup_logging(path) == path
     yield path
+    for logger, level in zip(loggers, levels, strict=True):
+        logger.setLevel(level)
     root = logging.getLogger()
     while _logging._root_handlers:
         root.removeHandler(_logging._root_handlers.pop())
