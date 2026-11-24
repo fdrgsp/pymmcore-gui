@@ -6009,6 +6009,19 @@ def test_position_subsequence_popup_opens_without_a_focused_control(
     assert popup.focusWidget() is not popup
 
 
+def test_stage_explorer_opens_on_the_stage_position(
+    mmcore: CMMCorePlus, qtbot: QtBot
+) -> None:
+    """The first fit shows the marker where the stage is, not at the origin."""
+    mmcore.setXYPosition(5000, -3000)
+    mmcore.waitForSystem()
+    explorer = ThemedStageExplorer(mmcore=mmcore)
+    qtbot.addWidget(explorer)
+
+    assert explorer._is_visual_within_view(5000, -3000)
+    assert not explorer._is_visual_within_view(0, 0)
+
+
 def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     """The Stage Explorer follows the application's style and font."""
     set_theme(DARK_THEME)
