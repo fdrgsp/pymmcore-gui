@@ -86,7 +86,7 @@ def test_user_settings(tmp_path: Path) -> None:
         assert obj.auto_load_last_config is None
         obj.auto_load_last_config = True
         with patch("pymmcore_gui._settings.TESTING", False):
-            obj.flush(timeout=0.2)
+            obj.flush(timeout=5)  # returns once written; slow on CI
 
         txt = fake_settings.read_text()
         obj2 = SettingsV1.model_validate_json(txt)
