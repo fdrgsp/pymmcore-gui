@@ -6044,14 +6044,12 @@ def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     expected = qcolor(theme().text_secondary)
     expected_rgb = expected.red(), expected.green(), expected.blue()
     neutral_actions = (
-        toolbar.clear_action,
         toolbar.zoom_to_fit_action,
         toolbar.snap_action,
         toolbar.poll_stage_action,
         toolbar.show_mda_positions_action,
         toolbar.show_grid_action,
         toolbar.map_memory_action,
-        toolbar.delete_rois_action,
         *cast("QActionGroup", toolbar.marker_mode_action_group).actions(),
         *explorer.roi_manager.mode_actions.actions(),
     )
@@ -6075,14 +6073,20 @@ def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     )
 
     # Semantic (state) icons stay off the neutral token.
-    green = qcolor(theme().status_green)
-    green_rgb = green.red(), green.green(), green.blue()
-    for action in (toolbar.send_to_mda_action, toolbar.scan_action):
+    green, red = qcolor(theme().status_green), qcolor(theme().status_red)
+    for action, color in (
+        (toolbar.send_to_mda_action, green),
+        (toolbar.scan_action, green),
+        (toolbar.clear_action, red),
+        (toolbar.delete_rois_action, red),
+    ):
         rgb = _icon_avg_rgb(action.icon(), QSize(24, 24))
         assert rgb is not None
         assert all(
             abs(actual - wanted) < 2
-            for actual, wanted in zip(rgb, green_rgb, strict=True)
+            for actual, wanted in zip(
+                rgb, (color.red(), color.green(), color.blue()), strict=True
+            )
         ), action.text()
 
 
