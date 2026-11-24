@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 import urllib.error
 import urllib.request
 from functools import cache
@@ -12,6 +15,7 @@ from pymmcore_gui._qt.QtCore import Qt
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
+    from pathlib import Path
 
     from pymmcore_plus import CMMCorePlus
     from useq import MDAEvent
@@ -21,6 +25,17 @@ NO_PIXEL_SIZE = (
     "No pixel size configuration matches the current settings. Add one in the "
     "Pixel Configuration Editor (Configurations tab)."
 )
+
+
+def reveal_in_file_manager(path: Path) -> None:  # pragma: no cover
+    """Show `path` selected in Finder or Explorer (elsewhere, open its folder)."""
+    path = path.resolve()
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", "-R", str(path)])
+    elif os.name == "nt":
+        subprocess.Popen(["explorer", "/select,", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path.parent)])
 
 
 def connect_direct(signal: Any, callback: Callable[..., Any]) -> None:

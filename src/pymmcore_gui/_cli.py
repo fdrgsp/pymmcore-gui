@@ -195,21 +195,16 @@ def layouts() -> None:
 
 def _open_path(path: Path, just_reveal: bool = False) -> None:  # pragma: no cover
     path_ = str(path.resolve())
-    if sys.platform.startswith("darwin"):
-        if just_reveal:
-            subprocess.run(["open", "-R", path_])
-        else:
-            subprocess.run(["open", path_])
+    if just_reveal:
+        from pymmcore_gui._utils import reveal_in_file_manager
+
+        reveal_in_file_manager(path)
+    elif sys.platform.startswith("darwin"):
+        subprocess.run(["open", path_])
     elif os.name == "nt":
-        if just_reveal:
-            subprocess.run(["explorer", "/select,", path_])
-        else:
-            subprocess.run(["explorer", path_])
+        subprocess.run(["explorer", path_])
     elif os.name == "posix":
-        if just_reveal:
-            subprocess.run(["xdg-open", str(path.parent)])
-        else:
-            subprocess.run(["xdg-open", path_])
+        subprocess.run(["xdg-open", path_])
     else:
         raise RuntimeError(f"Unsupported platform: {sys.platform}")
     typer.secho(

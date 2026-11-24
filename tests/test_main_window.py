@@ -58,8 +58,30 @@ def _file_menu_actions(gui: MicroManagerGUI) -> dict[str, QAction]:
 
 def test_file_menu_has_about(gui: MicroManagerGUI) -> None:
     actions = _file_menu_actions(gui)
-    assert list(actions) == ["About pymmcore-gui…"]
+    assert list(actions) == ["About pymmcore-gui…", "Show Log File"]
     assert actions["About pymmcore-gui…"].menuRole() == QAction.MenuRole.AboutRole
+    # in the application (pyMM) menu on macOS
+    role = QAction.MenuRole.ApplicationSpecificRole
+    assert actions["Show Log File"].menuRole() == role
+
+
+def test_show_log_file_reveals_it(gui: MicroManagerGUI, tmp_path: Path) -> None:
+    log = tmp_path / "pymmcore-plus.log"
+    with (
+        patch("pymmcore_gui._main_window.log_file", return_value=log),
+        patch("pymmcore_gui._main_window.reveal_in_file_manager") as reveal,
+    ):
+        _file_menu_actions(gui)["Show Log File"].trigger()
+    reveal.assert_called_once_with(log)
+
+
+def test_show_log_file_is_off_without_a_log_file(
+    qtbot: QtBot, mmcore: CMMCorePlus
+) -> None:
+    with patch("pymmcore_gui._main_window.log_file", return_value=None):
+        gui = MicroManagerGUI(mmcore=mmcore)
+    qtbot.addWidget(gui)
+    assert not _file_menu_actions(gui)["Show Log File"].isEnabled()
 
 
 def test_file_menu_about_shows_one_dialog(gui: MicroManagerGUI, qtbot: QtBot) -> None:

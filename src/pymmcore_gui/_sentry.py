@@ -190,6 +190,11 @@ def install_error_reporter() -> None:  # pragma: no cover
         release=get_release(),
         environment=platform.system(),
     )
+    from sentry_sdk.integrations.logging import ignore_logger
+
+    from ._logging import UNCAUGHT_LOGGER
+
+    ignore_logger(UNCAUGHT_LOGGER)
 
     for k, v in get_tags().items():
         sentry_sdk.set_tag(k, v)
