@@ -388,14 +388,12 @@ class ThemedStageExplorer(StageExplorer):
             if isinstance(button, QToolButton):
                 set_source_icon(button, icon)
 
-        _recolor(toolbar.clear_action, "mdi:close")
         _recolor(toolbar.zoom_to_fit_action, "mdi:fullscreen")
         _recolor(toolbar.snap_action, "mdi:camera-outline")
         _recolor(toolbar.poll_stage_action, "mdi:map-marker-outline")
         _recolor(toolbar.show_mda_positions_action, "mdi:map-marker-multiple-outline")
         _recolor(toolbar.show_grid_action, "mdi:grid")
         _recolor(toolbar.map_memory_action, "mdi:memory")
-        _recolor(toolbar.delete_rois_action, "mdi:vector-square-remove")
 
         # Auto Zoom to Fit's icon is a static SVG with a baked-in fill, not a
         # QIconifyIcon glyph, so it's tinted after the fact instead.
@@ -428,6 +426,8 @@ class ThemedStageExplorer(StageExplorer):
             (toolbar.send_to_mda_action, "mdi:send", green),
             (toolbar.scan_action, "ph:path-duotone", green),
             (toolbar.stop_scan_action, "bi:sign-stop", red),
+            (toolbar.clear_action, "mdi:close", red),
+            (toolbar.delete_rois_action, "mdi:vector-square-remove", red),
         ):
             icon = QIconifyIcon(glyph, color=color)
             action.setIcon(icon)
