@@ -1833,6 +1833,8 @@ def test_mda_lock_restricts_acquire_page_to_watching(
     assert not toolbar.snap_action.isEnabled()
     assert not toolbar.scan_action.isEnabled()
     assert not toolbar.send_to_mda_action.isEnabled()
+    assert not toolbar.delete_roi_action.isEnabled()
+    assert not toolbar.roi_settings_action.isEnabled()
 
     page.set_mda_lock(False)
 
@@ -6050,6 +6052,7 @@ def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
         toolbar.show_mda_positions_action,
         toolbar.show_grid_action,
         toolbar.map_memory_action,
+        toolbar.roi_settings_action,
         *cast("QActionGroup", toolbar.marker_mode_action_group).actions(),
         *explorer.roi_manager.mode_actions.actions(),
     )
@@ -6079,6 +6082,7 @@ def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
         (toolbar.scan_action, green),
         (toolbar.clear_action, red),
         (toolbar.delete_rois_action, red),
+        (toolbar.delete_roi_action, red),
     ):
         rgb = _icon_avg_rgb(action.icon(), QSize(24, 24))
         assert rgb is not None
