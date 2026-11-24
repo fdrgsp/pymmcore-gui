@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import threading
 from contextlib import contextmanager
@@ -21,6 +22,7 @@ from pymmcore_widgets import MDAWidget as UpstreamMDAWidget
 from pymmcore_widgets._busy import BusyOverlay
 from pymmcore_widgets._light_sources import PROPERTY_SEPARATOR, find_light_sources
 from pymmcore_widgets._util import combo_box_height
+from pymmcore_widgets.useq_widgets import PYMMCW_METADATA_KEY
 from pymmcore_widgets.useq_widgets._autofocus_settings import AutofocusSettingsDialog
 from pymmcore_widgets.useq_widgets._positions import _MDAPopup
 from superqt.iconify import QIconifyIcon
@@ -77,6 +79,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QTableWidget,
     QToolBar,
     QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 from pymmcore_gui._settings import Settings
@@ -3820,6 +3823,33 @@ def test_window_toolbar_keeps_its_right_inset_across_zoom(
         set_theme(DARK_THEME)  # restores the default zoom too
 
 
+def test_zoom_skips_a_window_deleted_while_laying_out_another(qtbot: QtBot) -> None:
+    """Laying out one window can delete another, e.g. a menu with its parent."""
+    set_theme(DARK_THEME)
+    menu = QMenu()
+
+    class DeletingLayout(QVBoxLayout):
+        def activate(self) -> bool:
+            if type(menu).__module__.startswith("PyQt6"):
+                from PyQt6 import sip
+
+                sip.delete(menu)
+            else:
+                import shiboken6  # type: ignore [import-not-found]
+
+                shiboken6.delete(menu)
+            return super().activate()
+
+    first = QWidget()
+    qtbot.addWidget(first)
+    DeletingLayout(first).addWidget(QLabel())  # an empty layout is falsy
+    try:
+        with patch.object(QApplication, "topLevelWidgets", return_value=[first, menu]):
+            set_zoom(1.25)
+    finally:
+        set_theme(DARK_THEME)  # restores the default zoom too
+
+
 def test_theme_toggle_stays_square_across_zoom(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
@@ -7269,9 +7299,69 @@ def test_tiff_layout_option_only_shown_for_ome_tiff(
     wdg.save_info._writer_combo.setCurrentText("ome-zarr")
     assert not combo.isVisibleTo(wdg.save_info)
     assert not wdg._tiff_layout_label.isVisibleTo(wdg.save_info)
+    assert not wdg._tiff_advanced.isVisibleTo(wdg.save_info)
 
     wdg.save_info._writer_combo.setCurrentText("ome-tiff")
     assert combo.isVisibleTo(wdg.save_info)
+    assert wdg._tiff_advanced.isVisibleTo(wdg.save_info)
+
+
+def test_tiff_layout_is_chosen_only_in_advanced_mode(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    """Independent files are the norm: another mode needs "Advanced" checked."""
+    wdg = _ome_tiff_mda(mmcore, qtbot, tmp_path)
+    combo, advanced = wdg._tiff_layout_combo, wdg._tiff_advanced
+    assert not advanced.isChecked()
+    assert not combo.isEnabled()
+    assert combo.currentText() == "Independent file per position (default)"
+    # an acquisition locks and then unlocks the settings: the mode stays locked
+    wdg._enable_widgets(False)
+    wdg._enable_widgets(True)
+    assert not combo.isEnabled()
+
+    advanced.setChecked(True)
+    assert combo.isEnabled()
+    combo.setCurrentIndex(combo.findData("redundant"))
+    assert wdg.tiffLayout() == "redundant"
+
+    # leaving advanced mode goes back to independent files
+    advanced.setChecked(False)
+    assert not combo.isEnabled()
+    assert wdg.tiffLayout() == "self-contained"
+
+    # a mode set in code (e.g. carried to a swapped MDA widget) turns it on
+    wdg.setTiffLayout("master-tiff")
+    assert advanced.isChecked()
+    assert combo.isEnabled()
+
+
+def test_tiff_layout_is_saved_with_the_mda(
+    mmcore: CMMCorePlus, qtbot: QtBot, tmp_path: Path
+) -> None:
+    """Save and Load keep the Tiff Mode; files without one load the default."""
+    wdg = _ome_tiff_mda(mmcore, qtbot, tmp_path)
+    wdg.setTiffLayout("master-tiff")
+    file = tmp_path / "mda.json"
+    wdg.save(file)
+
+    loaded = _ome_tiff_mda(mmcore, qtbot, tmp_path)
+    loaded.load(file)
+    assert loaded.tiffLayout() == "master-tiff"
+    assert loaded._tiff_advanced.isChecked()
+
+    # a file saved before the Tiff Mode was recorded
+    data = json.loads(file.read_text())
+    del data["metadata"][PYMMCW_METADATA_KEY]["tiff_layout"]
+    file.write_text(json.dumps(data))
+    loaded.load(file)
+    assert loaded.tiffLayout() == "self-contained"
+    assert not loaded._tiff_advanced.isChecked()
+
+    # a sequence without save settings leaves the mode as it is
+    loaded.setTiffLayout("redundant")
+    loaded.setValue(useq.MDASequence())
+    assert loaded.tiffLayout() == "redundant"
 
 
 @pytest.mark.parametrize("layout", ["self-contained", "master-tiff", "redundant"])
