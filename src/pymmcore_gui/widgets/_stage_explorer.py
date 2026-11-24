@@ -394,6 +394,7 @@ class ThemedStageExplorer(StageExplorer):
         _recolor(toolbar.show_mda_positions_action, "mdi:map-marker-multiple-outline")
         _recolor(toolbar.show_grid_action, "mdi:grid")
         _recolor(toolbar.map_memory_action, "mdi:memory")
+        _recolor(toolbar.roi_settings_action, "mdi:cog-outline")
 
         # Auto Zoom to Fit's icon is a static SVG with a baked-in fill, not a
         # QIconifyIcon glyph, so it's tinted after the fact instead.
@@ -424,10 +425,11 @@ class ThemedStageExplorer(StageExplorer):
         red = qcolor(theme().status_red).name()
         for action, glyph, color in (
             (toolbar.send_to_mda_action, "mdi:send", green),
-            (toolbar.scan_action, "ph:path-duotone", green),
+            (toolbar.scan_action, "mdi:play-circle-outline", green),
             (toolbar.stop_scan_action, "bi:sign-stop", red),
             (toolbar.clear_action, "mdi:close", red),
             (toolbar.delete_rois_action, "mdi:vector-square-remove", red),
+            (toolbar.delete_roi_action, "mdi:vector-square-minus", red),
         ):
             icon = QIconifyIcon(glyph, color=color)
             action.setIcon(icon)
