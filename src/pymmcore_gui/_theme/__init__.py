@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from pymmcore_gui._array_viewer import ensure_visible_icon
@@ -188,8 +189,10 @@ def set_zoom(factor: float) -> None:
         QCoreApplication.sendEvent(w, QEvent(QEvent.Type.StyleChange))
         w.updateGeometry()
     for win in app.topLevelWidgets():
-        if layout := win.layout():
-            layout.activate()
+        # laying one out can delete another, e.g. a menu whose parent goes with it
+        with suppress(RuntimeError):
+            if layout := win.layout():
+                layout.activate()
 
     # zoom is persisted by MicroManagerGUI._save_state(), not here -- this is
     # called on every set_theme()/set_style(), which is the wrong hook.
