@@ -163,6 +163,12 @@ class ThemedStageExplorer(StageExplorer):
 
         self._normalize_style()
         self._update_calibration_state()
+        if self._pixel_calibrated:
+            # StageExplorer.__init__ fits the view while _pixel_calibrated is
+            # still False, so around the marker left unplaced at the origin:
+            # the first stage poll then moves it out of view.
+            self._sync_stage_pos_marker()
+            self.zoom_to_fit()
         # ``pixelSizeChanged`` is emitted from a core callback thread and can
         # arrive late or out of order, so also re-check once ``configSet`` --
         # emitted with the settled state -- reports a calibration change.
