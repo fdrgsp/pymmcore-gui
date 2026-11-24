@@ -126,6 +126,7 @@ def _describe_error(exc: BaseException) -> str:
     return message or type(exc).__name__
 
 
+_LIVE_ACTIVE = "Live preview active - Choose the starting field of view"
 PHASE_LABELS = {
     "reference": "Acquiring the reference image",
     "probe-x": "Finding a useful X-stage displacement",
@@ -1100,9 +1101,7 @@ class PixelCalibrationPanel(QWidget):
         self._live_button.setEnabled(action_enabled)
         if idle:
             if self._live_transaction is not None:
-                self._phase_label.setText(
-                    "Live preview active; choose the starting field of view"
-                )
+                self._phase_label.setText(_LIVE_ACTIVE)
             else:
                 self._phase_label.setText(reason or "Ready to preview or calibrate")
 
@@ -1257,7 +1256,7 @@ class PixelCalibrationPanel(QWidget):
             self._on_failure(f"Capture-state restoration failed: {failure}")
         else:
             self._phase_label.setText(
-                "Live preview stopped; starting field of view retained"
+                "Live preview stopped - Starting field of view retained"
             )
             self._set_result_message(
                 "Live preview stopped and optical settings restored. The selected "
@@ -1282,9 +1281,7 @@ class PixelCalibrationPanel(QWidget):
         if self._live_transaction is None:
             self._update_availability()
             return
-        self._phase_label.setText(
-            "Live preview active; choose the starting field of view"
-        )
+        self._phase_label.setText(_LIVE_ACTIVE)
         try:
             x, y = self._mmc.getXYPosition(self._xy_stage())
             self._frame_label.setText(f"Live · XY {x:.3f}, {y:.3f} µm")
@@ -1443,7 +1440,7 @@ class PixelCalibrationPanel(QWidget):
         self._diagnostics.setFit(fit)
 
     def _on_preview_ready(self) -> None:
-        self._phase_label.setText("Frame snapped; hardware state restored")
+        self._phase_label.setText("Frame snapped - Hardware state restored")
         self._set_result_message(
             "Inspect image texture, focus, exposure, and saturation before starting."
         )
@@ -1483,7 +1480,7 @@ class PixelCalibrationPanel(QWidget):
             preserve_newlines=True,
             icon="warning" if result.warnings else "success",
         )
-        self._phase_label.setText("Result applied; configuration is dirty")
+        self._phase_label.setText("Result applied - Configuration is dirty")
         self._progress.setValue(1000)
         self.resultReady.emit(result, self._target.resolution_id)
 
@@ -1534,7 +1531,7 @@ class PixelCalibrationPanel(QWidget):
         ]
         self._set_result_message("\n".join(lines), preserve_newlines=True, icon="error")
         self._phase_label.setText(
-            "Rejected result applied manually; configuration is dirty"
+            "Rejected result applied manually - Configuration is dirty"
         )
 
     def _on_failure(
@@ -1591,7 +1588,7 @@ class PixelCalibrationPanel(QWidget):
     ) -> None:
         """Report a user-requested cancellation distinctly from a failure."""
         self._set_pending_rejected_result(None)
-        self._phase_label.setText("Calibration cancelled; hardware restored")
+        self._phase_label.setText("Calibration cancelled - Hardware restored")
         self._set_result_message(message or "Calibration cancelled")
         if diagnostics is not _DIAGNOSTICS_UNCHANGED:
             self._diagnostics.setResult(
