@@ -16,6 +16,7 @@ from superqt.iconify import QIconifyIcon
 from pymmcore_gui._acquisition_loader import supports_path
 from pymmcore_gui._array_viewer import set_source_icon
 from pymmcore_gui._layouts import LAST_SESSION_LAYOUT_NAME, store_session_layout
+from pymmcore_gui._logging import log_file
 from pymmcore_gui._notification_manager import NotificationManager
 from pymmcore_gui._qt.QtCore import (
     QEvent,
@@ -72,7 +73,7 @@ from pymmcore_gui._theme import (
 )
 from pymmcore_gui._theme._dark import DARK_THEME
 from pymmcore_gui._theme._light import LIGHT_THEME
-from pymmcore_gui._utils import NO_PIXEL_SIZE
+from pymmcore_gui._utils import NO_PIXEL_SIZE, reveal_in_file_manager
 from pymmcore_gui.widgets._acquire import AcquirePage
 from pymmcore_gui.widgets._configurations import ConfigurationsPage
 from pymmcore_gui.widgets._hardware import HardwareSetupPage
@@ -545,9 +546,9 @@ class MicroManagerGUI(QMainWindow):
     def _add_menu_bar(self) -> None:
         """Build the application menu bar.
 
-        About carries ``AboutRole``, so on macOS Qt moves it into the
-        application menu (next to the system Quit item) and hides the then
-        empty File menu; elsewhere it stays under File.
+        About and Show Log File carry menu roles, so on macOS Qt moves them into
+        the application menu (next to the system Quit item) and hides the then
+        empty File menu; elsewhere they stay under File.
         """
         file_menu = cast("QMenu", cast("QMenuBar", self.menuBar()).addMenu("&File"))
 
@@ -555,6 +556,17 @@ class MicroManagerGUI(QMainWindow):
         about.setMenuRole(QAction.MenuRole.AboutRole)
         about.triggered.connect(self._show_about)
         file_menu.addAction(about)
+
+        show_log = QAction("Show Log File", self)
+        show_log.setMenuRole(QAction.MenuRole.ApplicationSpecificRole)
+        show_log.setEnabled(log_file() is not None)
+        show_log.triggered.connect(self._show_log_file)
+        file_menu.addAction(show_log)
+
+    def _show_log_file(self) -> None:
+        """Show the log file in Finder or Explorer."""
+        if path := log_file():
+            reveal_in_file_manager(path)
 
     def _show_about(self) -> None:
         """Show the About dialog, creating it on first use."""
