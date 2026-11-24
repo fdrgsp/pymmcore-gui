@@ -27,7 +27,7 @@ from pymmcore_gui._qt.QtWidgets import (
 from pymmcore_gui._settings import Settings
 from pymmcore_gui._unicore import config_needs_unicore, is_unicore, startup_core
 
-from . import _sentry
+from . import _logging, _sentry
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -176,6 +176,10 @@ def create_mmgui(
             RuntimeWarning,
             stacklevel=2,
         )
+
+    # before anything else logs; tests keep their own logging
+    if not TESTING:
+        _logging.setup_logging()
 
     # Initialize the style before constructing themed widgets, including those
     # hosted by caller-supplied windows. The application window applies its saved
@@ -435,6 +439,7 @@ def ndv_excepthook(
     exc_type: type[BaseException], exc_value: BaseException, tb: TracebackType | None
 ) -> None:
     EXCEPTION_LOG.append((exc_type, exc_value, tb))
+    _logging.log_uncaught(exc_type, exc_value, tb)
     _print_exception(exc_type, exc_value, tb)
     if sig := getattr(QApplication.instance(), "exceptionRaised", None):
         sig.emit(exc_value)
