@@ -79,6 +79,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QTableWidget,
     QToolBar,
     QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 from pymmcore_gui._settings import Settings
@@ -3818,6 +3819,33 @@ def test_window_toolbar_keeps_its_right_inset_across_zoom(
         for zoom in (1.25, 1.5, 0.8):
             set_zoom(zoom)
             qtbot.waitUntil(lambda: right_inset() == theme().sp_sm)
+    finally:
+        set_theme(DARK_THEME)  # restores the default zoom too
+
+
+def test_zoom_skips_a_window_deleted_while_laying_out_another(qtbot: QtBot) -> None:
+    """Laying out one window can delete another, e.g. a menu with its parent."""
+    set_theme(DARK_THEME)
+    menu = QMenu()
+
+    class DeletingLayout(QVBoxLayout):
+        def activate(self) -> bool:
+            if type(menu).__module__.startswith("PyQt6"):
+                from PyQt6 import sip
+
+                sip.delete(menu)
+            else:
+                import shiboken6  # type: ignore [import-not-found]
+
+                shiboken6.delete(menu)
+            return super().activate()
+
+    first = QWidget()
+    qtbot.addWidget(first)
+    DeletingLayout(first).addWidget(QLabel())  # an empty layout is falsy
+    try:
+        with patch.object(QApplication, "topLevelWidgets", return_value=[first, menu]):
+            set_zoom(1.25)
     finally:
         set_theme(DARK_THEME)  # restores the default zoom too
 
