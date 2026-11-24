@@ -431,7 +431,7 @@ class ThemedStageExplorer(StageExplorer):
         red = qcolor(theme().status_red).name()
         for action, glyph, color in (
             (toolbar.send_to_mda_action, "mdi:send", green),
-            (toolbar.scan_action, "mdi:play-circle-outline", green),
+            (toolbar.scan_action, "mdi:selection-search", green),
             (toolbar.stop_scan_action, "bi:sign-stop", red),
             (toolbar.clear_action, "mdi:close", red),
             (toolbar.delete_rois_action, "mdi:vector-square-remove", red),
