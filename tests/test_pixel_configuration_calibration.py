@@ -721,7 +721,7 @@ def test_snap_frame_worker_restores_and_finishes_cleanly(
         qtbot.waitUntil(lambda: panel._thread is None, timeout=5000)
 
     assert not panel.isRunning()
-    assert panel._phase_label.text() == "Frame snapped; hardware state restored"
+    assert panel._phase_label.text() == "Frame snapped - Hardware state restored"
 
 
 def test_unsaved_resolution_row_can_preview_before_first_core_save(
@@ -743,7 +743,7 @@ def test_unsaved_resolution_row_can_preview_before_first_core_save(
         panel.snapFrame()
         qtbot.waitUntil(lambda: panel._thread is None, timeout=5000)
 
-    assert panel._phase_label.text() == "Frame snapped; hardware state restored"
+    assert panel._phase_label.text() == "Frame snapped - Hardware state restored"
 
 
 def test_live_preview_applies_settings_restores_them_and_retains_fov(
@@ -785,7 +785,7 @@ def test_live_preview_applies_settings_restores_them_and_retains_fov(
         (start_x + 2, start_y + 3), abs=0.01
     )
     assert panel._exposure.isEnabled()
-    assert "starting field of view retained" in panel._phase_label.text()
+    assert "Starting field of view retained" in panel._phase_label.text()
 
 
 def test_capture_transaction_applies_target_and_restores_exact_state(
