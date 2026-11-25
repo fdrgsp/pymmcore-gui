@@ -155,6 +155,8 @@ dependencies. Just download and extract the archive, then run the application.
 | :--: | :--- |
 | Windows | [pymmgui-Windows.zip](https://nightly.link/fdrgsp/pymmcore-gui/workflows/bundle/cite/pymmgui-Windows.zip) |
 | macOS | [pymmgui-macOS.zip](https://nightly.link/fdrgsp/pymmcore-gui/workflows/bundle/cite/pymmgui-macOS.zip) |
+| Windows (with stitching) | [pymmgui-stitching-Windows.zip](https://nightly.link/fdrgsp/pymmcore-gui/workflows/bundle/cite-stitching/pymmgui-stitching-Windows.zip) |
+| macOS (with stitching) | [pymmgui-stitching-macOS.zip](https://nightly.link/fdrgsp/pymmcore-gui/workflows/bundle/cite-stitching/pymmgui-stitching-macOS.zip) |
 
 > [!IMPORTANT]
 > The bundled application does *not* include Micro-Manager device adapters,
