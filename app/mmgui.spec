@@ -107,14 +107,10 @@ a = Analysis(
         "tkinter",
         "Tkinter",
         "matplotlib",
-        # Stitching is not offered in the bundle (docs/architecture/STITCHING.md §10).
-        # Excluded even when the build environment has the optional extra:
-        # without the package the GUI hides every stitching control, and the
-        # engine (the only module importing it) must not drag in its
-        # dependencies through its function-level imports.
-        "multiview_stitcher",
-        "pymmcore_gui._stitching._engine",
     ],
+    # ngff_zarr (through multiview-stitcher) reads this module's source at import,
+    # with inspect.getsource, to tell how dask writes zarr: ship the .py too
+    module_collection_mode={"dask.array.core": "pyz+py"},
     # If True, do not place source files in a archive, but keep them as individual files
     noarchive=False,
     optimize=0,

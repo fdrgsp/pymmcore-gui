@@ -29,9 +29,7 @@ jobs:
           enable-cache: true
 
       - name: Install the project
-        # Stitching stays out of the bundle for now (+~325 MB, unverified
-        # PyInstaller hooks): see docs/architecture/STITCHING.md §10.
-        run: uv sync --all-extras --no-extra stitching --dev
+        run: uv sync --all-extras --dev
         env:
           UV_LOCKED: ${{ github.ref_name == 'main' && 1 || 0 }}
 
@@ -85,6 +83,6 @@ jobs:
         # https://github.com/actions/upload-artifact/compare/main...eXhumer:0b7d5f5684d3f642f978d2faad9ade64f5b4dd57
         uses: eXhumer/upload-artifact@0b7d5f5684d3f642f978d2faad9ade64f5b4dd57
         with:
-          name: pymmgui-${{ runner.os }}
+          name: pymmgui-stitching-${{ runner.os }}
           path: ${{ runner.os == 'macos' && 'dist' || runner.os == 'windows' && 'dist/pymmgui' }}
           follow-symlinks: false

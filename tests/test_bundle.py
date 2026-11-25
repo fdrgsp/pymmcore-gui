@@ -143,3 +143,42 @@ def test_app(app_process: subprocess.Popen) -> None:
     # startup passes. That is exactly how a frozen build shipped that showed
     # the startup dialog and then silently exited.
     assert app_process.poll() is None, "app exited on its own shortly after startup"
+
+
+@pytest.mark.parametrize("fmt", ["ome-zarr", "ome-tiff"])
+def test_bundled_app_stitches(tmp_path: Path, fmt: str) -> None:
+    """The app's own executable runs the stitch worker, as the GUI starts it."""
+    import numpy as np
+
+    from _stitch_synth import grid_sequence, write_grid
+    from pymmcore_gui.__main__ import STITCH_WORKER_ARG
+    from pymmcore_gui._stitching._inputs import build_job
+    from pymmcore_gui._stitching._protocol import JobDir, write_model
+
+    seq = grid_sequence(2, 2, shape=64, pixel_size=0.5)
+    acq = write_grid(tmp_path / "run", seq, shape=64, pixel_size=0.5, fmt=fmt)
+    job = build_job(
+        job_id="job",
+        sequence=seq,
+        source=acq.path,
+        pixel_size_um=0.5,
+        linear_part=np.diag([0.5, 0.5]),
+    )
+    assert job is not None
+    jobdir = JobDir(tmp_path / "job")
+    jobdir.path.mkdir()
+    write_model(jobdir.job_file, job)
+
+    env = {**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"}
+    proc = subprocess.run(
+        [str(APP), STITCH_WORKER_ARG, str(jobdir.path)],
+        env=env,
+        capture_output=True,
+        timeout=300,
+        check=False,
+    )
+    log = jobdir.log_file.read_text() if jobdir.log_file.exists() else ""
+    assert proc.returncode == 0, log
+    result = jobdir.read_result()
+    assert result is not None, log
+    assert all(group.output.exists() for group in result.groups)

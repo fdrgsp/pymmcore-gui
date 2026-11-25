@@ -396,10 +396,13 @@ Measured on an M2 Pro, 6 threads, uncompressed data read from disk:
 
 **Packaging.** The extra adds 34 packages, about 325 MB. CI installs it in
 the lint job and on the macOS Python 3.13 leg; elsewhere the tests that need
-it are skipped. **The bundled app does not include stitching**: the bundle
-workflow installs `--all-extras --no-extra stitching`, and `app/mmgui.spec`
-excludes `multiview_stitcher` and `_stitching._engine`, so a local build
-from an environment with the extra doesn't ship it either.
+it are skipped. **The bundled app built from this branch includes stitching**
+(`pymmgui-stitching-<OS>`): the bundle workflow installs every extra,
+`app/hooks/hook-wasmtime.py` collects the native library wasmtime loads with
+ctypes (itkwasm imports it through ngff_zarr), and `app/mmgui.spec` ships the
+source of `dask.array.core`, which ngff_zarr reads at import.
+`tests/test_bundle.py` stitches an OME-Zarr and an OME-TIFF acquisition with
+the bundled executable, as the GUI starts its worker.
 
 ## 11. Limits and what is not done
 
