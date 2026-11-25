@@ -24,6 +24,7 @@ from pymmcore_gui._qt.QtWidgets import QApplication, QDialog, QMessageBox, QWidg
 from pymmcore_gui._stitching import _session as session_mod
 from pymmcore_gui._stitching._controller import JobState, StitchingController
 from pymmcore_gui._stitching._models import (
+    DEFAULT_MAX_OPEN,
     Alignment,
     Blending,
     OutputFormat,
@@ -242,6 +243,7 @@ def test_dialog_round_trip(qtbot: QtBot) -> None:
         blending=Blending.MAX,
         blend_width_um=12.5,
         open_when_done=False,
+        max_open=7,
         output_format=OutputFormat.OME_TIFF,
         worker_threads=3,
         low_priority=False,
@@ -251,6 +253,24 @@ def test_dialog_round_trip(qtbot: QtBot) -> None:
     assert dialog.value() == settings
     dialog.setValue(StitchSettingsV1())
     assert dialog.value() == StitchSettingsV1()
+
+
+def test_dialog_max_open_is_the_default_until_checked(qtbot: QtBot) -> None:
+    dialog = StitchingSettingsDialog(StitchSettingsV1(), [], max_threads=8)
+    qtbot.addWidget(dialog)
+    assert not dialog.max_open_check.isChecked()
+    assert not dialog.max_open_spin.isEnabled()
+    assert dialog.max_open_spin.value() == DEFAULT_MAX_OPEN
+
+    dialog.max_open_check.setChecked(True)
+    assert dialog.max_open_spin.isEnabled()
+    dialog.max_open_spin.setValue(12)
+    assert dialog.value().max_open == 12
+
+    # unchecking goes back to the default
+    dialog.max_open_check.setChecked(False)
+    assert dialog.max_open_spin.value() == DEFAULT_MAX_OPEN
+    assert dialog.value().max_open is None
 
 
 def test_dialog_keeps_a_missing_channel(qtbot: QtBot) -> None:
@@ -377,6 +397,43 @@ def test_not_opened_when_asked_not_to(
     assert callback is not None
     callback(session_mod.OPEN)
     assert opened == [handle.job.groups[0].output]
+
+
+@pytest.mark.parametrize(("max_open", "n_opened"), [(None, 3), (5, 5)])
+def test_finished_job_opens_up_to_max_open(
+    qtbot: QtBot,
+    make_session: Callable[[str], StitchingSession],
+    toasts: Toasts,
+    opened: list[Path],
+    tmp_path: Path,
+    max_open: int | None,
+    n_opened: int,
+) -> None:
+    """A run with several mosaics opens the first `max_open` (3 by default)."""
+    session = make_session("ok")
+    request = SequenceStitchingV1(
+        enabled=True, settings=StitchSettingsV1(max_open=max_open)
+    )
+    seq = useq.MDASequence(
+        stage_positions=tuple(useq.Position(x=i * 5000, y=0) for i in range(5)),
+        grid_plan=GRID,
+        metadata=with_request({}, request),
+    )
+    run = FinishedRun(
+        sequence=seq,
+        finish_reason="completed",
+        source=tmp_path / "run.ome.zarr",
+        tile_shape_yx=(256, 256),
+        calibration=(1.0, np.eye(2)),
+    )
+    with qtbot.waitSignal(session.controller.jobFinished, timeout=20_000):
+        handle = session._submit(run)
+    assert handle is not None
+    outputs = [g.output for g in handle.job.groups]
+    assert len(outputs) == 5
+    assert opened == outputs[:n_opened]
+    _, message, _ = toasts.shown[-1]
+    assert ("not opened" in message) == (n_opened < 5)
 
 
 def test_failed_job_warns_with_log(

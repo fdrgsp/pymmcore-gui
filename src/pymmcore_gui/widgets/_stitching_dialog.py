@@ -21,6 +21,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QWidget,
 )
 from pymmcore_gui._stitching._models import (
+    DEFAULT_MAX_OPEN,
     Alignment,
     Blending,
     OutputFormat,
@@ -170,6 +171,17 @@ class StitchingSettingsDialog(QDialog):
             "takes a little longer and briefly needs twice the disk space."
         )
         self.open_check = QCheckBox("Open the mosaic in a viewer when done")
+        self.max_open_check = QCheckBox("Maximum mosaics to open:")
+        self.max_open_check.setToolTip(
+            f"A run with several mosaics (e.g. one per well) opens the first "
+            f"{DEFAULT_MAX_OPEN} in viewers and lists the rest. Check to change it."
+        )
+        self.max_open_spin = QSpinBox()
+        self.max_open_spin.setRange(1, 999)
+        max_open_row = QHBoxLayout()
+        max_open_row.addWidget(self.max_open_check)
+        max_open_row.addWidget(self.max_open_spin)
+        max_open_row.addStretch()
         output_note = QLabel(
             "Mosaics are saved next to the acquisition, as "
             "<i>&lt;name&gt;_stitched</i>. Existing files are never overwritten."
@@ -181,6 +193,7 @@ class StitchingSettingsDialog(QDialog):
         output_layout = QVBoxLayout()
         output_layout.addLayout(format_form)
         output_layout.addWidget(self.open_check)
+        output_layout.addLayout(max_open_row)
         output_layout.addWidget(output_note)
         output_box = QGroupBox("Output")
         output_box.setLayout(output_layout)
@@ -223,6 +236,7 @@ class StitchingSettingsDialog(QDialog):
 
         self.register_radio.toggled.connect(self._sync_enabled)
         self.reject_check.toggled.connect(self._sync_enabled)
+        self.max_open_check.toggled.connect(self._on_max_open_toggled)
         self.defaults_btn.clicked.connect(self._restore_defaults)
         self.cancel_btn.clicked.connect(self.reject)
         self.ok_btn.clicked.connect(self.accept)
@@ -260,6 +274,8 @@ class StitchingSettingsDialog(QDialog):
         )
         self.blend_width_spin.setValue(settings.blend_width_um or 0.0)
         self.open_check.setChecked(settings.open_when_done)
+        self.max_open_check.setChecked(settings.max_open is not None)
+        self.max_open_spin.setValue(settings.max_open or DEFAULT_MAX_OPEN)
         self.format_combo.setCurrentIndex(
             self.format_combo.findData(settings.output_format)
         )
@@ -288,11 +304,22 @@ class StitchingSettingsDialog(QDialog):
                 "blending": Blending(self.blending_combo.currentData()),
                 "blend_width_um": width if width > 0 else None,
                 "open_when_done": self.open_check.isChecked(),
+                "max_open": (
+                    self.max_open_spin.value()
+                    if self.max_open_check.isChecked()
+                    else None
+                ),
                 "output_format": OutputFormat(self.format_combo.currentData()),
                 "worker_threads": threads if threads > 0 else None,
                 "low_priority": self.low_priority_check.isChecked(),
             }
         )
+
+    def _on_max_open_toggled(self, checked: bool) -> None:
+        """Unchecked, the default limit applies."""
+        if not checked:
+            self.max_open_spin.setValue(DEFAULT_MAX_OPEN)
+        self._sync_enabled()
 
     def _restore_defaults(self) -> None:
         self.setValue(StitchSettingsV1())
@@ -302,3 +329,4 @@ class StitchingSettingsDialog(QDialog):
         for widget in self._registration_widgets:
             widget.setEnabled(register)
         self.threshold_spin.setEnabled(register and self.reject_check.isChecked())
+        self.max_open_spin.setEnabled(self.max_open_check.isChecked())

@@ -58,6 +58,10 @@ def is_tiff_output(path: Path) -> bool:
     return path.name.lower().endswith((".tif", ".tiff"))
 
 
+DEFAULT_MAX_OPEN = 3
+"""Mosaics a finished stitch opens in viewers, unless the user sets another limit."""
+
+
 class StitchSettingsV1(_Model):
     """What the user can choose in the stitching settings dialog."""
 
@@ -77,6 +81,8 @@ class StitchSettingsV1(_Model):
     blend_width_um: float | None = Field(default=None, gt=0)
     """Width of the blended band at tile edges. None uses the default."""
     open_when_done: bool = True
+    max_open: int | None = Field(default=None, ge=1)
+    """Most mosaics opened in viewers; the rest are only listed. None is 3."""
     output_format: OutputFormat = OutputFormat.SAME
     worker_threads: int | None = Field(default=None, ge=1)
     """One thread budget for the worker. None means half the CPU cores."""

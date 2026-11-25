@@ -25,6 +25,7 @@ from pymmcore_gui._stitching._inputs import (
     calibration_from_summary,
 )
 from pymmcore_gui._stitching._models import (
+    DEFAULT_MAX_OPEN,
     ProvenanceV1,
     StitchSettingsV1,
     request_from,
@@ -39,9 +40,6 @@ if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
 
 logger = logging.getLogger(__name__)
-
-MAX_AUTO_OPEN = 3
-"""Mosaics opened in viewers by themselves; the toast lists the rest."""
 
 OPEN = "Open"
 SHOW_IN_FOLDER = "Show in Folder"
@@ -311,17 +309,19 @@ class StitchingSession(QObject):
         if result is None:  # pragma: no cover - FINISHED always has one
             return
         outputs = [g.output for g in result.groups]
-        auto_open = handle.job.settings.open_when_done
+        settings = handle.job.settings
+        auto_open = settings.open_when_done
+        max_open = settings.max_open or DEFAULT_MAX_OPEN
         if auto_open:
-            for path in outputs[:MAX_AUTO_OPEN]:
+            for path in outputs[:max_open]:
                 self._open(path)
 
         if len(outputs) == 1:
             message = f"Stitched mosaic saved: {outputs[0].name}"
         else:
             message = f"{len(outputs)} stitched mosaics saved in {outputs[0].parent}"
-            if auto_open and len(outputs) > MAX_AUTO_OPEN:
-                rest = ", ".join(p.name for p in outputs[MAX_AUTO_OPEN:])
+            if auto_open and len(outputs) > max_open:
+                rest = ", ".join(p.name for p in outputs[max_open:])
                 message += f" (not opened: {rest})"
         notes = [
             f"{g.name}: {s}" if g.name else s
@@ -337,7 +337,7 @@ class StitchingSession(QObject):
 
         def on_action(choice: str | None) -> None:
             if choice == OPEN:
-                for path in outputs[:MAX_AUTO_OPEN]:
+                for path in outputs[:max_open]:
                     self._open(path)
             elif choice == SHOW_IN_FOLDER:
                 _reveal(outputs[0].parent)

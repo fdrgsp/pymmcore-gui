@@ -239,7 +239,8 @@ dialog also become the defaults of new sequences (`Settings.stitching`).
 | Blending | Smooth | Smooth, Maximum or Average (§2.2) |
 | Blend width | Auto | Width of the smooth ramp at tile edges, in µm |
 | Format | Same as the acquisition | Or OME-Zarr / OME-TIFF (§7) |
-| Open the mosaic when done | On | Opens up to 3 mosaics in viewers; the toast lists the rest |
+| Open the mosaic when done | On | Opens the mosaics in viewers, up to the maximum below |
+| Maximum mosaics to open | Off, 3 | Checked, sets how many mosaics open (above); the toast lists the rest |
 | Worker threads | Auto | Thread budget for everything the worker does; auto is half the CPU cores |
 | Low CPU priority | On | The worker runs at a lower priority than the acquisition |
 <!-- markdownlint-enable MD013 -->
