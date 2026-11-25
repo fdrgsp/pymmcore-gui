@@ -193,6 +193,53 @@ def layouts() -> None:
     )
 
 
+@app.command()
+def paths() -> None:
+    """Show where the app keeps its settings, restrictions, layouts and logs."""
+    from pymmcore_plus._logger import LOG_FILE, core_logfile
+
+    from pymmcore_gui._layouts import layouts_dir
+    from pymmcore_gui._settings import RESTRICTIONS_FILE, SETTINGS_FILE_NAME
+
+    rows = {
+        "Settings": SETTINGS_FILE_NAME,
+        "Restrictions": RESTRICTIONS_FILE,
+        "Layouts": layouts_dir(),
+        "Log": LOG_FILE,
+        "Core log": core_logfile(LOG_FILE) if LOG_FILE else None,
+    }
+    for name, path in rows.items():
+        typer.echo(f"{name + ':':<14}{path or 'off'}")
+
+
+@app.command()
+def restrictions(
+    edit: bool = typer.Option(
+        False,
+        "--edit",
+        help="Open the restrictions file in the default editor (creating it).",
+    ),
+) -> None:
+    """Show what a locked GUI can disable, and where that is set."""
+    from pymmcore_gui._restrictions import NAMES, Restrictions, write_template
+    from pymmcore_gui._settings import RESTRICTIONS_FILE
+
+    if edit:
+        if not RESTRICTIONS_FILE.exists():
+            write_template(RESTRICTIONS_FILE)
+        _open_path(RESTRICTIONS_FILE)
+        raise typer.Exit(0)
+
+    if not RESTRICTIONS_FILE.exists():
+        state = "not created yet"
+    else:
+        state = "locked" if Restrictions(RESTRICTIONS_FILE).locked else "unlocked"
+    typer.echo(f"{RESTRICTIONS_FILE} ({state})\n")
+    typer.echo("A lock can disable (a file without a list disables all of them):")
+    for name in NAMES:
+        typer.echo(f"  {name}")
+
+
 def _open_path(path: Path, just_reveal: bool = False) -> None:  # pragma: no cover
     path_ = str(path.resolve())
     if just_reveal:
@@ -208,7 +255,7 @@ def _open_path(path: Path, just_reveal: bool = False) -> None:  # pragma: no cov
     else:
         raise RuntimeError(f"Unsupported platform: {sys.platform}")
     typer.secho(
-        f"Opening settings file in default editor: {path_}",
+        f"Opening {path_}",
         fg=typer.colors.BRIGHT_GREEN,
     )
 

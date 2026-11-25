@@ -21,6 +21,7 @@ from pymmcore_gui._logging import log_file
 from pymmcore_gui._notification_manager import NotificationManager
 from pymmcore_gui._qt.QtCore import (
     QEvent,
+    QPoint,
     QRectF,
     QSignalBlocker,
     QSize,
@@ -60,6 +61,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QToolBar,
     QWidget,
 )
+from pymmcore_gui._restrictions import restrict, restrictions
 from pymmcore_gui._settings import Settings
 from pymmcore_gui._theme import (
     qcolor,
@@ -451,6 +453,10 @@ class MicroManagerGUI(QMainWindow):
 
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        # a hidden menu, to lock what users shouldn't change (see _restrictions)
+        spacer.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        spacer.customContextMenuRequested.connect(self._show_lock_menu)
+        self._toolbar_spacer = spacer
         self._toolbar.addWidget(spacer)
 
         self._theme_btn = ThemeToggleButton(is_dark=self._is_dark)
@@ -484,6 +490,10 @@ class MicroManagerGUI(QMainWindow):
         self._stack.addWidget(self._configurations)
         self._stack.addWidget(self._acquire)
         self.setCentralWidget(self._stack)
+        # a locked tab can still be opened, but its page doesn't respond
+        restrict("installation_tab", self._installation)
+        restrict("hardware_tab", self._hardware)
+        restrict("configurations_tab", self._configurations)
 
         # Adding a QOpenGLWidget (e.g. ndv canvas) to a window that uses raster
         # rendering forces Qt to destroy and recreate the native window with an
@@ -1172,6 +1182,23 @@ class MicroManagerGUI(QMainWindow):
         if a0 is not None and a0.type() == QEvent.Type.StyleChange:
             self._toolbar_metrics_timer.start()
         super().changeEvent(a0)
+
+    def _show_lock_menu(self, pos: QPoint) -> None:
+        """Lock or unlock the GUI, never while something drives the hardware."""
+        if self._busy():
+            return
+        locked = restrictions().locked
+        menu = QMenu(self)
+        action = menu.addAction("Unlock GUI" if locked else "Lock GUI")
+        chosen = menu.exec(self._toolbar_spacer.mapToGlobal(pos)) is action
+        if chosen and not self._busy():  # nothing started while the menu was open
+            restrictions().set_locked(not locked)
+
+    def _busy(self) -> bool:
+        """An acquisition, live mode or a pixel calibration is running."""
+        mmc = self._mmc
+        busy = mmc.mda.is_running() or mmc.isSequenceRunning()
+        return busy or self._pixel_calibration_running
 
     def _toggle_theme(self) -> None:
         self._is_dark = not self._is_dark

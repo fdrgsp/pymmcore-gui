@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from importlib.metadata import entry_points
@@ -9,11 +10,14 @@ from unittest.mock import patch
 from pymmcore_plus import __version__
 from typer.testing import CliRunner
 
-from pymmcore_gui import _settings
+from pymmcore_gui import _cli, _settings
 from pymmcore_gui._cli import app
+from pymmcore_gui._restrictions import NAMES
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    import pytest
 
 runner = CliRunner()
 subrun = subprocess.run
@@ -33,6 +37,35 @@ def test_settings(tmp_path: Path) -> None:
         result = runner.invoke(app, ["settings", "--reset"])
         assert result.exit_code == 0
         mock_reset.assert_called_once()
+
+
+def test_paths_shows_where_the_app_keeps_its_files() -> None:
+    from pymmcore_gui._settings import RESTRICTIONS_FILE, SETTINGS_FILE_NAME
+
+    result = runner.invoke(app, ["paths"])
+    assert result.exit_code == 0
+    assert str(SETTINGS_FILE_NAME) in result.output
+    assert str(RESTRICTIONS_FILE) in result.output
+    assert "Core log:" in result.output
+
+
+def test_restrictions_lists_the_names_and_edit_creates_the_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+
+    file = tmp_path / "restrictions.json"
+    monkeypatch.setattr(_settings, "RESTRICTIONS_FILE", file)
+    result = runner.invoke(app, ["restrictions"])
+    assert result.exit_code == 0
+    assert "not created yet" in result.output
+    assert all(name in result.output for name in NAMES)
+
+    with patch.object(_cli, "_open_path") as open_path:
+        result = runner.invoke(app, ["restrictions", "--edit"])
+    assert result.exit_code == 0
+    open_path.assert_called_once_with(file)
+    assert json.loads(file.read_text()) == {"locked": False, "disable": list(NAMES)}
+    assert "(unlocked)" in runner.invoke(app, ["restrictions"]).output
 
 
 def test_default_command_forwards_config_to_default_gui(tmp_path: Path) -> None:

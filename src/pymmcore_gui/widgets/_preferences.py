@@ -41,6 +41,7 @@ from pymmcore_gui._qt.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from pymmcore_gui._restrictions import restrict
 from pymmcore_gui._settings import Settings
 from pymmcore_gui._theme import qcolor, theme
 from pymmcore_gui._utils import system_memory_gb
@@ -155,6 +156,7 @@ class PreferencesDialog(QDialog):
         widgets_group = self._build_widgets_group(acquire_page)
         memory_group = self._build_memory_group()
         layout_group = self._build_layout_group()
+        restrict("preferences.data_and_memory", memory_group)
 
         self.setMinimumWidth(t.scaled(_MIN_WIDTH))
         outer = QVBoxLayout(self)

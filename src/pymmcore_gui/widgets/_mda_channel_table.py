@@ -17,7 +17,12 @@ from superqt.utils import signals_blocked
 from pymmcore_gui._qt.QtWidgets import QCheckBox
 from pymmcore_gui._theme import qcolor, theme
 
-from ._channel_settings import add_save_to_cfg_button, save_channel_settings
+from ._channel_settings import (
+    add_save_to_cfg_button,
+    restrict_light_sources,
+    save_channel_settings,
+    sync_save_button,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -113,6 +118,7 @@ class MDAChannelTable(CoreConnectedChannelTable):
             self._btn_row, self.show_light_source, self
         )
         self._save_btn.clicked.connect(self._on_save_clicked)
+        restrict_light_sources(self, self.show_light_source, self._save_btn)
 
         self._mmc.events.configSet.connect(self._on_config_set)
         self._mmc.events.propertyChanged.connect(self._on_property_changed)
@@ -134,7 +140,7 @@ class MDAChannelTable(CoreConnectedChannelTable):
 
     def setLightSourceVisible(self, visible: bool) -> None:
         super().setLightSourceVisible(visible)
-        self._save_btn.setEnabled(visible)
+        sync_save_button(self._save_btn, visible)
         # told here, as a loaded sequence turns it on without the checkbox's signal
         if self._store is not None:
             self._store.setLightSourcesVisible(visible)

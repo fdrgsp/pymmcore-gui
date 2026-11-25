@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pymmcore_widgets import ChannelSettingsTable
 from pymmcore_widgets._channel_settings import apply_channel_settings
-from pymmcore_widgets._light_sources import find_light_sources
+from pymmcore_widgets._light_sources import LIGHT_SOURCE_KEY, find_light_sources
 from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui._array_viewer import set_source_icon, unstyle_widgets
@@ -21,10 +21,12 @@ from pymmcore_gui._qt.QtWidgets import (
     QPushButton,
     QStyle,
 )
+from pymmcore_gui._restrictions import restrict, restrictions
 from pymmcore_gui._theme import qcolor, theme
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
+    from pymmcore_widgets.useq_widgets import DataTableWidget
 
     from pymmcore_gui._light_sources import ChannelDeclarations
     from pymmcore_gui._qt.QtWidgets import QBoxLayout, QCheckBox, QWidget
@@ -75,6 +77,30 @@ def add_save_to_cfg_button(
     pair.addWidget(button)
     row.insertLayout(index, pair)
     return button
+
+
+def restrict_light_sources(
+    owner: DataTableWidget, checkbox: QCheckBox, save_btn: QWidget
+) -> None:
+    """Lock choosing a light source (not its intensity), and saving them to a cfg."""
+    restrict(
+        "light_sources",
+        checkbox,
+        on_change=lambda enabled: owner.table().setColumnLocked(
+            LIGHT_SOURCE_KEY, not enabled
+        ),
+    )
+    restrict(
+        "save_channel_settings",
+        owner=owner,
+        on_change=lambda _: sync_save_button(save_btn, checkbox.isChecked()),
+    )
+
+
+def sync_save_button(button: QWidget, light_sources_visible: bool) -> None:
+    """Saving needs the light source columns shown, and saving not locked."""
+    locked = restrictions().is_disabled("save_channel_settings")
+    button.setEnabled(light_sources_visible and not locked)
 
 
 def save_channel_settings(parent: QWidget, core: CMMCorePlus) -> None:
@@ -159,6 +185,7 @@ class ChannelSettingsPanel(ChannelSettingsTable):
         self._store.settingsChanged.connect(self._on_store_changed)
         self._save_btn = add_save_to_cfg_button(self._btn_row, self.light_sources, self)
         self._save_btn.clicked.connect(self._on_save_clicked)
+        restrict_light_sources(self, self.light_sources, self._save_btn)
 
         # the checkbox is shared with the MDA's channel table
         self.setLightSourcesVisible(self._store.lightSourcesVisible())
@@ -189,7 +216,7 @@ class ChannelSettingsPanel(ChannelSettingsTable):
 
     def setLightSourcesVisible(self, visible: bool) -> None:
         super().setLightSourcesVisible(visible)
-        self._save_btn.setEnabled(visible)
+        sync_save_button(self._save_btn, visible)
 
     def _push_to_store(self) -> None:
         self._store.update(self.allChannelSettings(), source=self)
