@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 from pymmcore_plus import CMMCorePlus, configure_logging
+from pymmcore_plus import _logger as pymm_logging
+from pymmcore_plus._logger import core_logfile
 from pymmcore_plus._logger import logger as pymm_logger
 
 from pymmcore_gui import _logging
@@ -71,26 +73,18 @@ def test_log_drops_its_oldest_entries(app_log: Path) -> None:
     assert "entry 0\n" not in "".join(f.read_text() for f in files)
 
 
-def test_log_rotates_while_a_core_writes_to_it(
-    app_log: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """MMCore writes its CoreLog to the same file, from C++."""
+def test_core_log_sits_next_to_the_app_log(app_log: Path) -> None:
+    """MMCore writes, and rotates, its CoreLog in a file of its own."""
     core = CMMCorePlus()
-    handler = _logging._file_handler()
-    assert handler is not None
-    handler.maxBytes = 2000
-    for i in range(300):
-        core.logMessage(f"core entry {i}")
-        logging.getLogger("pymmcore_gui").info("gui entry %d", i)
-    # only Python records rotate the file: this one lands after the last rotation
-    core.logMessage("after rotating")
+    core.logMessage("core entry")
+    logging.getLogger("pymmcore_gui").info("gui entry")
     core.setPrimaryLogFile("")  # flushes MMCore's asynchronous log
 
-    assert len(list(app_log.parent.glob("app.log.*"))) == _logging.LOG_BACKUPS
-    text = app_log.read_text()
-    assert "gui entry 299" in text
-    assert "after rotating" in text
-    assert "Logging error" not in capsys.readouterr().err
+    assert "core entry" in core_logfile(app_log).read_text()
+    assert "core entry" not in app_log.read_text()
+    assert "gui entry" in app_log.read_text()
+    rotation = (_logging.LOG_FILE_MB * 1_000_000, _logging.LOG_BACKUPS)
+    assert pymm_logging._core_log == (str(core_logfile(app_log)), *rotation)
 
 
 def test_uncaught_exceptions_are_logged(

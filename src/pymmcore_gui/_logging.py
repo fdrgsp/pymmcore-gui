@@ -1,7 +1,7 @@
 """Write everything the app logs to pymmcore-plus's rotating log file.
 
-pymmcore-plus only writes its own logger there (and MMCore's CoreLog, which
-shares the file); records from the rest of the app would otherwise be lost.
+pymmcore-plus only writes its own logger there (MMCore's CoreLog goes to a file
+next to it); records from the rest of the app would otherwise be lost.
 """
 
 from __future__ import annotations
