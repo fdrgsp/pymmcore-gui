@@ -427,8 +427,6 @@ class MicroManagerGUI(QMainWindow):
         # Openable acquisitions carried by the drag currently over this
         # window -- resolved once in dragEnterEvent, see there.
         self._drag_paths: list[Path] = []
-        # see _on_pixel_calibration_running
-        self._calibrating = False
 
         self._notification_manager = NotificationManager(self)
         self._bell_button = NotificationBellButton(self._notification_manager, self)
@@ -467,6 +465,7 @@ class MicroManagerGUI(QMainWindow):
         self._installation = InstallationPage()
         self._installation.aboutToUninstall.connect(self._prepare_uninstall)
         self._hardware = HardwareSetupPage(self._mmc)
+        self._pixel_calibration_running = False
         self._configurations = ConfigurationsPage(self._mmc)
         self._acquire = AcquirePage(self._mmc)
         # A background open (see dropEvent) has no caller to raise into.
@@ -1071,7 +1070,7 @@ class MicroManagerGUI(QMainWindow):
 
     def _on_pixel_calibration_running(self, running: bool) -> None:
         """Keep other microscope workflows unavailable during stage calibration."""
-        self._calibrating = running
+        self._pixel_calibration_running = running
         configuration_index = self._stack.indexOf(self._configurations)
         for page in (self._installation, self._hardware, self._acquire):
             self._mode_tabs.setTabEnabled(self._stack.indexOf(page), not running)
@@ -1333,7 +1332,8 @@ class MicroManagerGUI(QMainWindow):
     def _busy(self) -> bool:
         """An acquisition, live mode or a pixel calibration is running."""
         mmc = self._mmc
-        return mmc.mda.is_running() or mmc.isSequenceRunning() or self._calibrating
+        busy = mmc.mda.is_running() or mmc.isSequenceRunning()
+        return busy or self._pixel_calibration_running
 
     def _toggle_theme(self) -> None:
         self._is_dark = not self._is_dark
