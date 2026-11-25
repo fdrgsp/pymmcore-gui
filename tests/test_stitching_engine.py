@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import pytest
+import useq
 
 pytest.importorskip("multiview_stitcher")
 
@@ -32,8 +33,6 @@ from pymmcore_gui._stitching._models import (
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import useq
 
     from _stitch_synth import SynthAcquisition
 
@@ -301,6 +300,68 @@ def test_one_mosaic_per_position(tmp_path: Path) -> None:
     ]
     assert all(g.output.exists() for g in result.groups)
     assert any(e.text.startswith("Mosaic 2/2") for e in events)
+
+
+@pytest.mark.parametrize(
+    ("fmt", "layout"),
+    [
+        ("ome-zarr", None),
+        ("ome-tiff", "self-contained"),
+        ("ome-tiff", "master-tiff"),
+        ("ome-tiff", "redundant"),
+    ],
+)
+def test_one_mosaic_per_well(
+    tmp_path: Path,
+    fmt: str,
+    layout: Literal["self-contained", "master-tiff", "redundant"] | None,
+) -> None:
+    """Each well of a plate, a grid of fields, gives a mosaic named after it."""
+    fov = S * P
+    seq = useq.MDASequence.model_validate(
+        {
+            "channels": ["A"],
+            "stage_positions": {
+                # two wells close enough for a small synthetic world image
+                "plate": {
+                    "name": "tiny",
+                    "rows": 1,
+                    "columns": 2,
+                    "well_spacing": 0.5,
+                    "well_size": 0.4,
+                },
+                "a1_center_xy": (0, 0),
+                "selected_wells": ([0, 0], [0, 1]),
+                "well_points_plan": {
+                    "rows": 3,
+                    "columns": 3,
+                    "overlap": 15,
+                    "fov_width": fov,
+                    "fov_height": fov,
+                },
+            },
+        }
+    )
+    acq = write_grid(
+        tmp_path / "run",
+        seq,
+        shape=S,
+        pixel_size=P,
+        fmt=fmt,
+        tiff_layout=layout,
+        record_positions=True,
+    )
+    result, _ = _run(_job(acq))
+
+    ext = ".ome.zarr" if fmt == "ome-zarr" else ".ome.tiff"
+    assert [g.output.name for g in result.groups] == [
+        f"run_stitched_A1{ext}",
+        f"run_stitched_A2{ext}",
+    ]
+    for group in result.groups:
+        assert group.registered
+        assert group.n_tiles == 9
+        assert _shift_errors(acq, _provenance(group.output)).max() < 0.5 * P
 
 
 def test_output_name_taken_meanwhile_gets_a_new_version(tmp_path: Path) -> None:

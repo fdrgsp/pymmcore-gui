@@ -40,6 +40,30 @@ def _seq(**kwargs: Any) -> useq.MDASequence:
     return useq.MDASequence.model_validate(kwargs)
 
 
+def _plate(points: Any) -> useq.WellPlatePlan:
+    """Wells A1 and B3 of a 96-well plate, each with `points`."""
+    return useq.WellPlatePlan.model_validate(
+        {
+            "plate": "96-well",
+            "a1_center_xy": (0, 0),
+            "selected_wells": ([0, 1], [0, 2]),
+            "well_points_plan": points,
+        }
+    )
+
+
+COVERAGE = useq.GridFromShape.model_validate(
+    {
+        "width": 250,
+        "height": 250,
+        "shape": "ellipse",
+        "overlap": 10,
+        "fov_width": FOV,
+        "fov_height": FOV,
+    }
+)
+
+
 SEQUENCES = {
     "global grid": _seq(grid_plan=GRID),
     "grid x 2 positions": _seq(
@@ -70,6 +94,8 @@ SEQUENCES = {
             top=200, left=0, bottom=0, right=300, fov_width=FOV, fov_height=FOV
         )
     ),
+    "plate grid": _seq(stage_positions=_plate(GRID)),
+    "plate coverage": _seq(stage_positions=_plate(COVERAGE)),
 }
 
 
@@ -102,6 +128,16 @@ def test_plan_groups_shapes() -> None:
     assert per[1].tiles[0].position_index == 7
 
 
+def test_plate_gives_one_mosaic_per_well() -> None:
+    groups = _inputs.plan_groups(SEQUENCES["plate grid"])
+    assert [(g.name, len(g.tiles)) for g in groups] == [("A1", 6), ("B3", 6)]
+    assert [t.name for t in groups[1].tiles][:2] == ["B3_0", "B3_1"]
+    assert groups[1].tiles[0].position_index == 6
+    # a coverage area is a grid too, whatever its outline
+    coverage = _inputs.plan_groups(SEQUENCES["plate coverage"])
+    assert [(g.name, len(g.tiles)) for g in coverage] == [("A1", 9), ("B3", 9)]
+
+
 @pytest.mark.parametrize(
     "seq",
     [
@@ -116,8 +152,20 @@ def test_plan_groups_shapes() -> None:
                 "selected_wells": ([0], [0]),
             }
         ),
+        _seq(
+            stage_positions=_plate(
+                useq.RandomPoints(num_points=5, max_width=500, max_height=500)
+            )
+        ),
     ],
-    ids=["no grid", "positions only", "random points", "one tile", "well plate"],
+    ids=[
+        "no grid",
+        "positions only",
+        "random points",
+        "one tile",
+        "well plate",
+        "plate random points",
+    ],
 )
 def test_plan_groups_nothing_to_stitch(seq: useq.MDASequence) -> None:
     assert _inputs.plan_groups(seq) == []

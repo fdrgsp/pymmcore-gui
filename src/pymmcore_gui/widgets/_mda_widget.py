@@ -156,8 +156,9 @@ def _grids(sequence: useq.MDASequence) -> list[Any]:
 
 
 def _grids_overlap(sequence: useq.MDASequence) -> bool:
-    """Whether any grid of `sequence` asks for overlapping tiles."""
-    for grid in _grids(sequence):
+    """Whether any grid of `sequence`, a plate's wells' too, overlaps its tiles."""
+    wells = getattr(sequence.stage_positions, "well_points_plan", None)
+    for grid in [*_grids(sequence), wells]:
         overlap = getattr(grid, "overlap", (0.0, 0.0))
         if max(overlap) > 0:
             return True

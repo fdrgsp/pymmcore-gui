@@ -137,7 +137,8 @@ which mosaic, from the `MDASequence` alone:
 | Global grid, no stage positions | 1 |
 | Global relative grid × N stage positions | 1 per position |
 | Per-position sub-sequence grids | 1 per position that has a grid |
-| Well plate, random points, a 1×1 grid | none |
+| Well plate whose wells have a grid or coverage | 1 per well, named after it |
+| Random points, a 1×1 grid, one field per well | none |
 
 Each tile records its index along the saved store's position axis. That
 index must match how ome-writers flattens (stage position, grid point) into
@@ -152,7 +153,8 @@ recorded stage position is nearest (`locate_tiles`, using
 `OMETiffWrapper.stage_positions`). The planned index is kept when positions
 aren't recorded or a match isn't unambiguous (within half the tile spacing).
 
-Several mosaics from one run are named `<stem>_stitched_<position>`.
+Several mosaics from one run are named `<stem>_stitched_<position>`, or
+`<stem>_stitched_<well>` for a plate.
 
 ## 4. Where each tile goes
 
@@ -404,8 +406,6 @@ from an environment with the extra doesn't ship it either.
 - **Not yet checked on a real microscope**: orientation with real mirrored
   and rotated cameras, real compressed data, acquisition timing and GUI
   responsiveness with a stitch running alongside.
-- **Well plates** give no mosaic yet (one per well would need its own
-  grouping).
 - **Corrections are translations.** Rotation comes only from the
   calibration; a stage whose axes aren't perpendicular is not corrected.
 - **Peak memory** can exceed the cap by the registration buffers and the

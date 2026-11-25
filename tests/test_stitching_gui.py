@@ -113,6 +113,29 @@ def test_row_for_per_position_grids(mda: MemoryMDAWidget) -> None:
     assert _row_shown(mda)
 
 
+def test_row_for_a_plate_whose_wells_have_a_grid(mda: MemoryMDAWidget) -> None:
+    def plate(points: Any) -> useq.MDASequence:
+        return useq.MDASequence.model_validate(
+            {
+                "stage_positions": {
+                    "plate": "96-well",
+                    "a1_center_xy": (0, 0),
+                    "selected_wells": ([0], [0]),
+                    "well_points_plan": points,
+                }
+            }
+        )
+
+    mda.setValue(plate(GRID))
+    assert _row_shown(mda)
+    # an overlapping well grid is registered, not placed by stage position only
+    assert (
+        _mda_widget.STITCHING_NO_OVERLAP_TOOLTIP not in mda._stitching_check.toolTip()
+    )
+    mda.setValue(plate(useq.RelativePosition()))  # one field per well
+    assert not _row_shown(mda)
+
+
 def test_no_row_without_the_package(
     qtbot: QtBot, mmcore: CMMCorePlus, monkeypatch: pytest.MonkeyPatch
 ) -> None:

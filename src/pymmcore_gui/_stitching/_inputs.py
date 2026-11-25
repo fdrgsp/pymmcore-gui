@@ -10,6 +10,7 @@ import os
 import re
 import threading
 from dataclasses import dataclass
+from itertools import batched
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -96,15 +97,13 @@ def plan_groups(sequence: useq.MDASequence) -> list[PlannedGroup]:
 
     - a global grid without stage positions: one mosaic;
     - a global relative grid x N stage positions: one mosaic per position;
-    - per-position sub-sequence grids: one per position that has a grid.
-
-    Well plates (and anything ome-writers would not save as a flat position
-    axis) give no group: they are a later phase.
+    - per-position sub-sequence grids: one per position that has a grid;
+    - a well plate whose wells have a grid or coverage: one per well.
     """
     import useq
 
-    if isinstance(sequence.stage_positions, useq.WellPlatePlan):
-        return []
+    if isinstance(plate := sequence.stage_positions, useq.WellPlatePlan):
+        return _plate_groups(sequence, plate)
 
     global_grid = list(sequence.grid_plan) if sequence.grid_plan else None
     positions = list(sequence.stage_positions)
@@ -189,6 +188,33 @@ def plan_groups(sequence: useq.MDASequence) -> list[PlannedGroup]:
             )
         )
     return groups
+
+
+def _plate_groups(
+    sequence: useq.MDASequence, plate: useq.WellPlatePlan
+) -> list[PlannedGroup]:
+    """One mosaic per well: ome-writers saves each well's fields in a row."""
+    if sequence.grid_plan is not None or not _is_stitchable_grid(
+        plate.well_points_plan
+    ):
+        return []
+    fields = batched(enumerate(plate), plate.num_points_per_well)
+    return [
+        PlannedGroup(
+            name=str(well),
+            tiles=tuple(
+                TileV1(
+                    position_index=index,
+                    name=f"{well}_{i}",
+                    stage_x_um=float(pos.x or 0.0),
+                    stage_y_um=float(pos.y or 0.0),
+                    stage_z_um=_z_origin(sequence, pos.z),
+                )
+                for i, (index, pos) in enumerate(well_fields)
+            ),
+        )
+        for well, well_fields in zip(plate.selected_well_names, fields, strict=True)
+    ]
 
 
 def _safe(name: str) -> str:
