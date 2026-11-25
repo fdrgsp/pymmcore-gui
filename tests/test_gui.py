@@ -6124,6 +6124,7 @@ def test_stage_explorer_style(mmcore: CMMCorePlus, qtbot: QtBot) -> None:
     green, red = qcolor(theme().status_green), qcolor(theme().status_red)
     for action, color in (
         (toolbar.send_to_mda_action, green),
+        (toolbar.scan_menu.send_roi_action, green),
         (toolbar.scan_action, green),
         (toolbar.clear_action, red),
         (toolbar.delete_rois_action, red),
