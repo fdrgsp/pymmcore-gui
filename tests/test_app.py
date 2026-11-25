@@ -159,6 +159,7 @@ def test_default_and_named_launch_use_the_same_window(
     assert isinstance(window, MicroManagerGUI)
     qtbot.addWidget(window)
     assert window.mmcore is mmcore
+    assert mmcore.debugLogEnabled()
     assert window.objectName() == "pyMMGUI"
     assert window.acquire.mda_widget is not None
     prompt.assert_not_called()

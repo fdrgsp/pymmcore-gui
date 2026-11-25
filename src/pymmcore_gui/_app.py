@@ -235,6 +235,8 @@ def create_mmgui(
         mmcore = startup_core(unicore, mm_config)
 
     win = window_cls(mmcore=mmcore)
+    # the CoreLog then records every device call: what the user did, in hardware terms
+    win.mmcore.enableDebugLog(True)
     if hasattr(win, "restore_state"):
         # Custom windows without the startup hook may accept only `show`.
         extra = {"layout": layout} if supports_layouts else {}
