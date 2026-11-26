@@ -264,12 +264,7 @@ class MemoryMDAWidgetBase(_MixinBase):
         self._mda_state_timer.timeout.connect(self._sync_mda_state)
         self.control_btns.cancel_btn.released.connect(self._on_cancel_requested)
         self._apply_theme_metrics()
-        combo = self.save_info._writer_combo
-        for idx in range(combo.count()):
-            if combo.itemText(idx) == "tiff-sequence":
-                combo.removeItem(idx)
-                break
-        combo.setCurrentText("ome-tiff")
+        self.save_info._writer_combo.setCurrentText("ome-tiff")
         self._install_ome_tiff_options()
         self._install_stitching_option()
 
