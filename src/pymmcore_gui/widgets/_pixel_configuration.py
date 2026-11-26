@@ -43,6 +43,7 @@ class PixelConfigurationWidget(_UpstreamPixelConfiguration):
         mmcore: CMMCorePlus | None = None,
     ) -> None:
         super().__init__(parent, mmcore=mmcore)
+        self._read_only = False
         self._calibration_panel = PixelCalibrationPanel(self._mmc, self)
 
         layout = cast("QVBoxLayout", self.layout())
@@ -176,21 +177,27 @@ class PixelConfigurationWidget(_UpstreamPixelConfiguration):
         preset = self._resID_map.get(row)
         return (row, preset) if preset is not None else None
 
+    def setReadOnly(self, read_only: bool) -> None:
+        """Let the user browse the resolutionIDs, but not change or calibrate them."""
+        super().setReadOnly(read_only)
+        self._read_only = read_only
+        self._sync_calibration_target()
+
     def _sync_calibration_target(self, *_: object) -> None:
         selected = self._selected_preset()
         if selected is None:
             self._calibration_panel.setTarget(None)
-            return
-        row, preset = selected
-        del row
-        settings = self._preset_settings(preset)
-        self._calibration_panel.setTarget(
-            CalibrationTarget(
-                resolution_id=str(preset.name),
-                settings=settings,
-                binding_is_saved=self._binding_is_saved(str(preset.name)),
+        else:
+            preset = selected[1]
+            self._calibration_panel.setTarget(
+                CalibrationTarget(
+                    resolution_id=str(preset.name),
+                    settings=self._preset_settings(preset),
+                    binding_is_saved=self._binding_is_saved(str(preset.name)),
+                )
             )
-        )
+        if self._read_only:  # `setTarget` enables the panel for a target
+            self._calibration_panel.setEnabled(False)
 
     def _apply_calibration_result(self, payload: object, resolution_id: str) -> None:
         """Populate the selected editor row and make the widget dirty."""

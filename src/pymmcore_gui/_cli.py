@@ -210,20 +210,35 @@ def paths() -> None:
 
 @app.command()
 def restrictions(
+    reset: bool = typer.Option(
+        False,
+        "--reset",
+        help="Reset the restrictions file: unlocked, listing every name.",
+    ),
     edit: bool = typer.Option(
         False,
         "--edit",
         help="Open the restrictions file in the default editor (creating it).",
+    ),
+    reveal: bool = typer.Option(
+        False,
+        "--reveal",
+        help="Reveal the restrictions file in file explorer (creating it).",
     ),
 ) -> None:
     """Show what a locked GUI can disable, and where that is set."""
     from pymmcore_gui._restrictions import NAMES, Restrictions, write_template
     from pymmcore_gui._settings import RESTRICTIONS_FILE
 
-    if edit:
+    if reset:
+        write_template(RESTRICTIONS_FILE)
+        typer.secho("Restrictions reset to defaults.", fg=typer.colors.BRIGHT_GREEN)
+        raise typer.Exit(0)
+
+    if edit or reveal:
         if not RESTRICTIONS_FILE.exists():
             write_template(RESTRICTIONS_FILE)
-        _open_path(RESTRICTIONS_FILE)
+        _open_path(RESTRICTIONS_FILE, just_reveal=reveal)
         raise typer.Exit(0)
 
     if not RESTRICTIONS_FILE.exists():
@@ -251,7 +266,7 @@ def _open_path(path: Path, just_reveal: bool = False) -> None:  # pragma: no cov
     else:
         raise RuntimeError(f"Unsupported platform: {sys.platform}")
     typer.secho(
-        f"Opening {path_}",
+        f"{'Revealing' if just_reveal else 'Opening'} {path_}",
         fg=typer.colors.BRIGHT_GREEN,
     )
 
