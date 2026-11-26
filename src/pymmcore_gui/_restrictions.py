@@ -71,10 +71,12 @@ class Restrictions(QObject):
     def locked(self) -> bool:
         return self._locked
 
+    def locks(self, name: str) -> bool:
+        """Whether a lock disables `name`."""
+        return name in (NAMES if self._disable is None else self._disable)
+
     def is_disabled(self, name: str) -> bool:
-        return self._locked and name in (
-            NAMES if self._disable is None else self._disable
-        )
+        return self._locked and self.locks(name)
 
     def set_locked(self, locked: bool) -> None:
         """Lock or unlock the GUI, and remember it in the file."""

@@ -490,10 +490,16 @@ class MicroManagerGUI(QMainWindow):
         self._stack.addWidget(self._configurations)
         self._stack.addWidget(self._acquire)
         self.setCentralWidget(self._stack)
-        # a locked tab can still be opened, but its page doesn't respond
+        # a locked tab can still be opened, but its page doesn't respond, except
+        # the configurations, which can still be browsed
         restrict("installation_tab", self._installation)
         restrict("hardware_tab", self._hardware)
-        restrict("configurations_tab", self._configurations)
+        configurations = self._configurations
+        restrict(
+            "configurations_tab",
+            owner=configurations,
+            on_change=lambda enabled: configurations.setReadOnly(not enabled),
+        )
 
         # Adding a QOpenGLWidget (e.g. ndv canvas) to a window that uses raster
         # rendering forces Qt to destroy and recreate the native window with an
@@ -1192,7 +1198,25 @@ class MicroManagerGUI(QMainWindow):
         action = menu.addAction("Unlock GUI" if locked else "Lock GUI")
         chosen = menu.exec(self._toolbar_spacer.mapToGlobal(pos)) is action
         if chosen and not self._busy():  # nothing started while the menu was open
-            restrictions().set_locked(not locked)
+            if locked or self._settle_configuration_edits():
+                restrictions().set_locked(not locked)
+
+    def _settle_configuration_edits(self) -> bool:
+        """Save or discard what a lock would leave unsaved on a read-only page.
+
+        Returns False if edits remain, e.g. the user cancelled.
+        """
+        configs = self._configurations
+        if not restrictions().locks("configurations_tab") or not configs.is_dirty():
+            return True
+        choice = self._prompt_unsaved_configuration_changes()
+        if choice == "save_core":
+            configs.commit_to_core()
+        elif choice == "save_file":
+            self._save_all()
+        elif choice == "discard":
+            configs.discard_changes()
+        return not configs.is_dirty()
 
     def _busy(self) -> bool:
         """An acquisition, live mode or a pixel calibration is running."""

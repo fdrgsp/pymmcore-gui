@@ -49,9 +49,7 @@ def test_paths_shows_where_the_app_keeps_its_files() -> None:
     assert "Core log:" in result.output
 
 
-def test_restrictions_lists_the_names_and_edit_creates_the_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_restrictions_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
     file = tmp_path / "restrictions.json"
     monkeypatch.setattr(_settings, "RESTRICTIONS_FILE", file)
@@ -60,12 +58,22 @@ def test_restrictions_lists_the_names_and_edit_creates_the_file(
     assert "not created yet" in result.output
     assert all(name in result.output for name in NAMES)
 
+    template = {"locked": False, "disable": list(NAMES)}
     with patch.object(_cli, "_open_path") as open_path:
         result = runner.invoke(app, ["restrictions", "--edit"])
+        assert result.exit_code == 0
+        open_path.assert_called_once_with(file, just_reveal=False)
+        assert json.loads(file.read_text()) == template
+        assert "(unlocked)" in runner.invoke(app, ["restrictions"]).output
+
+        assert runner.invoke(app, ["restrictions", "--reveal"]).exit_code == 0
+        open_path.assert_called_with(file, just_reveal=True)
+
+    file.write_text(json.dumps({"locked": True}))
+    assert "(locked)" in runner.invoke(app, ["restrictions"]).output
+    result = runner.invoke(app, ["restrictions", "--reset"])
     assert result.exit_code == 0
-    open_path.assert_called_once_with(file)
-    assert json.loads(file.read_text()) == {"locked": False, "disable": list(NAMES)}
-    assert "(unlocked)" in runner.invoke(app, ["restrictions"]).output
+    assert json.loads(file.read_text()) == template
 
 
 def test_default_command_forwards_config_to_default_gui(tmp_path: Path) -> None:
