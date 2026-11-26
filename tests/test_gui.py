@@ -95,7 +95,7 @@ from pymmcore_gui._theme import (
 from pymmcore_gui._theme._dark import DARK_THEME
 from pymmcore_gui._theme._light import LIGHT_THEME
 from pymmcore_gui._theme._pixel_sizes import is_self_sized
-from pymmcore_gui._utils import NO_PIXEL_SIZE
+from pymmcore_gui._utils import NO_PIXEL_SIZE, apply_camera_buffer
 from pymmcore_gui.widgets._acquire import (
     _MDA_DOCK_WIDTH,
     _TOOLS_DOCK_MAX_WIDTH,
@@ -3713,6 +3713,7 @@ def test_preferences_dialog_round_trips_scratch_settings(
     dlg = PreferencesDialog(page)
     qtbot.addWidget(dlg)
     dlg._max_memory.setValue(1.5)
+    dlg._camera_buffer.setValue(1.5)
     dlg._spill_to_disk.setChecked(False)
     assert not dlg._scratch_dir.isEnabled()
     assert not dlg._browse_btn.isEnabled()
@@ -3726,13 +3727,38 @@ def test_preferences_dialog_round_trips_scratch_settings(
     assert prefs.max_memory_gb == 1.5
     assert prefs.spill_to_disk is True
     assert prefs.scratch_dir == Path("/tmp/my-scratch")
+    assert prefs.camera_buffer_gb == 1.5
+    assert mmcore.getCircularBufferMemoryFootprint() == 1536
 
     # A freshly opened dialog reflects what was just saved.
     dlg2 = PreferencesDialog(page)
     qtbot.addWidget(dlg2)
     assert dlg2._max_memory.value() == 1.5
+    assert dlg2._camera_buffer.value() == 1.5
     assert dlg2._spill_to_disk.isChecked()
     assert Path(dlg2._scratch_dir.text()) == Path("/tmp/my-scratch")
+
+
+def test_camera_buffer_waits_for_the_running_sequence(
+    mmcore: CMMCorePlus, qtbot: QtBot, settings: Settings
+) -> None:
+    """Resizing frees the buffer a running camera writes into."""
+    window = MicroManagerGUI(mmcore=mmcore)
+    qtbot.addWidget(window)
+    size_mb = round(settings.scratch.camera_buffer_gb * 1024)
+    assert mmcore.getCircularBufferMemoryFootprint() == size_mb  # set at startup
+
+    settings.scratch.camera_buffer_gb = 0.5
+    mmcore.startContinuousSequenceAcquisition(0)
+    try:
+        apply_camera_buffer(mmcore)
+        assert mmcore.getCircularBufferMemoryFootprint() == size_mb
+    finally:
+        mmcore.stopSequenceAcquisition()
+    mda = window.acquire.mda_widget
+    with patch.object(mda, "execute_mda"):
+        mda.run_mda()  # the next run applies it
+    assert mmcore.getCircularBufferMemoryFootprint() == 512
 
 
 def test_preferences_dialog_apply_does_not_close(
