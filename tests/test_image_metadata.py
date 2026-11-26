@@ -9,7 +9,11 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 import useq
-from ome_writers import AcquisitionSettings, dims_from_standard_axes
+from ome_writers import (
+    AcquisitionSettings,
+    dims_from_standard_axes,
+    useq_to_acquisition_settings,
+)
 
 from pymmcore_gui._image_metadata import (
     FrameInfo,
@@ -70,6 +74,28 @@ def test_frame_infos_index_by_original_dims_and_stop_at_captured_length() -> Non
 def test_axis_labels_names_channels_and_positions() -> None:
     settings = _settings({"p": ["A1", "B2"], "c": ["DAPI"], "z": 2})
     assert axis_labels(settings) == {"p": ["A1", "B2"], "c": ["DAPI"]}
+
+
+def test_position_labels_tell_wells_and_grid_tiles_apart() -> None:
+    """Positions are named `fov0`... in every well, and alike in every grid tile."""
+    plate = useq.WellPlatePlan(
+        plate=useq.WellPlate.from_str("96-well"),
+        a1_center_xy=(0, 0),
+        selected_wells=((0, 0), (0, 1)),
+        well_points_plan=useq.RandomPoints(num_points=2),
+    )
+    grid = useq.Position(
+        name="cell",
+        sequence=useq.MDASequence(grid_plan=useq.GridRowsColumns(rows=1, columns=2)),
+    )
+    for plan, expected in (
+        (plate, ["A1 · fov0", "A1 · fov1", "A2 · fov0", "A2 · fov1"]),
+        ((grid,), ["cell · 0,0", "cell · 0,1"]),
+    ):
+        seq = useq.MDASequence(stage_positions=plan)
+        dims = useq_to_acquisition_settings(seq, 8, 8)["dimensions"]
+        settings = AcquisitionSettings(dimensions=tuple(dims), dtype="uint16")
+        assert axis_labels(settings)["p"] == expected
 
 
 @pytest.mark.parametrize(
