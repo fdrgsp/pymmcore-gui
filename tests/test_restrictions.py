@@ -7,12 +7,15 @@ from unittest.mock import patch
 
 import pytest
 from pymmcore_widgets._light_sources import INTENSITY_KEY, LIGHT_SOURCE_KEY
+from superqt.iconify import QIconifyIcon
 
 from pymmcore_gui import _main_window, _restrictions
+from pymmcore_gui._array_viewer import _icon_avg_rgb
 from pymmcore_gui._main_window import MicroManagerGUI
-from pymmcore_gui._qt.QtCore import QEvent, QPoint
+from pymmcore_gui._qt.QtCore import QEvent, QPoint, QSize
 from pymmcore_gui._qt.QtWidgets import QApplication, QGroupBox, QMenu, QWidget
 from pymmcore_gui._restrictions import NAMES, Restrictions, restrict, restrictions
+from pymmcore_gui._theme import DARK_THEME, LIGHT_THEME, qcolor, set_theme, theme
 from pymmcore_gui.widgets._channel_settings import ChannelSettingsPanel
 from pymmcore_gui.widgets._mda_channel_table import MDAChannelTable
 from pymmcore_gui.widgets._preferences import PreferencesDialog
@@ -173,6 +176,41 @@ def test_hidden_menu_locks_the_gui_but_not_while_acquiring(
     window._on_pixel_calibration_running(True)  # its Cancel is on a locked page
     window._show_lock_menu(QPoint())
     assert menu_labels == ["Lock GUI", "Unlock GUI"]  # no menu while busy
+
+
+@pytest.mark.parametrize("dark", [True, False])
+def test_lock_menu_icons(
+    restrictions_file: Path,
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+    dark: bool,
+) -> None:
+    window = MicroManagerGUI(mmcore=mmcore)
+    qtbot.addWidget(window)
+    set_theme(DARK_THEME if dark else LIGHT_THEME)
+
+    class IconMenu(QMenu):
+        def exec(self, *_: object) -> object:  # type: ignore[override]
+            action = self.actions()[0]
+            assert action.isIconVisibleInMenu()
+            icon = action.icon()
+            color = qcolor(theme().text_primary)
+            rgb = _icon_avg_rgb(icon, QSize(24, 24))
+            assert rgb is not None
+            assert rgb == pytest.approx(
+                (color.red(), color.green(), color.blue()), abs=2
+            )
+            return action
+
+    monkeypatch.setattr(_main_window, "QMenu", IconMenu)
+    with patch.object(_main_window, "QIconifyIcon", wraps=QIconifyIcon) as icon:
+        window._show_lock_menu(QPoint())
+        window._show_lock_menu(QPoint())
+    assert [call.args[0] for call in icon.call_args_list] == [
+        "mdi:lock-outline",
+        "mdi:lock-open-variant-outline",
+    ]
 
 
 @pytest.mark.parametrize(

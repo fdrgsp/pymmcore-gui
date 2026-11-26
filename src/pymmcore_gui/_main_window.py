@@ -1335,7 +1335,13 @@ class MicroManagerGUI(QMainWindow):
             return
         locked = restrictions().locked
         menu = QMenu(self)
-        action = menu.addAction("Unlock GUI" if locked else "Lock GUI")
+        icon = QIconifyIcon(
+            "mdi:lock-open-variant-outline" if locked else "mdi:lock-outline",
+            color=qcolor(theme().text_primary).name(),
+        )
+        action = QAction(icon, "Unlock GUI" if locked else "Lock GUI", menu)
+        action.setIconVisibleInMenu(True)
+        menu.addAction(action)
         chosen = menu.exec(self._toolbar_spacer.mapToGlobal(pos)) is action
         if chosen and not self._busy():  # nothing started while the menu was open
             if locked or self._settle_configuration_edits():
