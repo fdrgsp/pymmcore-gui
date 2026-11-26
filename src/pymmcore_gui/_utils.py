@@ -78,6 +78,22 @@ def current_channel(core: CMMCorePlus) -> str:
         return ""
 
 
+def apply_camera_buffer(core: CMMCorePlus) -> None:
+    """Size the core's circular buffer from the preferences, unless a sequence runs.
+
+    Resizing frees the buffer a running camera writes into, so while one runs this
+    does nothing: the next MDA run applies it.
+    """
+    from pymmcore_gui._settings import Settings
+
+    size_mb = round(Settings.instance().scratch.camera_buffer_gb * 1024)
+    if (
+        not core.isSequenceRunning()
+        and core.getCircularBufferMemoryFootprint() != size_mb
+    ):
+        core.setCircularBufferMemoryFootprint(size_mb)
+
+
 def system_memory_gb() -> tuple[float, float]:
     """Return (total, available) system RAM in GB.
 

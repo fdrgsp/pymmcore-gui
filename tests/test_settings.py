@@ -50,6 +50,14 @@ def test_default_scratch_memory_leaves_room_for_map() -> None:
         assert _settings._default_max_memory_gb() == 6.0
 
 
+@pytest.mark.parametrize(("total_gb", "expected"), [(32.0, 3.2), (2.0, 0.5)])
+def test_default_camera_buffer_is_a_tenth_of_the_ram(
+    total_gb: float, expected: float
+) -> None:
+    with patch("pymmcore_gui._utils.system_memory_gb", return_value=(total_gb, 1.0)):
+        assert _settings._default_camera_buffer_gb() == expected
+
+
 def test_user_settings(tmp_path: Path) -> None:
     fake_settings = tmp_path / "settings.json"
     with patch.object(_settings, "SETTINGS_FILE_NAME", fake_settings):

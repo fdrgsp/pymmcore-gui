@@ -44,7 +44,7 @@ from pymmcore_gui._qt.QtWidgets import (
 from pymmcore_gui._restrictions import restrict
 from pymmcore_gui._settings import Settings
 from pymmcore_gui._theme import qcolor, theme
-from pymmcore_gui._utils import system_memory_gb
+from pymmcore_gui._utils import apply_camera_buffer, system_memory_gb
 from pymmcore_gui.widgets._panels import PANELS
 from pymmcore_gui.widgets._toolbars import toolbar_icon_size
 
@@ -239,10 +239,6 @@ class PreferencesDialog(QDialog):
         prefs = Settings.instance().scratch
 
         group = QGroupBox("Data && Memory")
-        group.setToolTip(
-            "Controls where an acquisition's data lives when the Saving "
-            "section is unchecked."
-        )
         grid = QGridLayout()
         grid.setHorizontalSpacing(t.sp_sm)
         grid.setVerticalSpacing(t.sp_xs)
@@ -251,7 +247,7 @@ class PreferencesDialog(QDialog):
 
         # Left-align every row label and size them all to the widest one, so
         # the fields that follow start at a common x position.
-        row_labels = ("Max in-memory size:", "Spill folder:")
+        row_labels = ("Max in-memory size:", "Spill folder:", "Camera buffer:")
         label_width = max(
             self.fontMetrics().horizontalAdvance(text) for text in row_labels
         )
@@ -269,9 +265,10 @@ class PreferencesDialog(QDialog):
         self._max_memory.setSuffix(" GB")
         self._max_memory.setValue(prefs.max_memory_gb)
         self._max_memory.setToolTip(
-            "The largest run held entirely in RAM before spilling to disk\n"
-            "(or refusing to run, depending on the option below). Defaults\n"
-            "to 60% of the RAM free on this machine."
+            "When the Saving section is unchecked: the largest run held\n"
+            "entirely in RAM before spilling to disk (or refusing to run,\n"
+            "depending on the option below). Defaults to 60% of the RAM\n"
+            "free on this machine."
         )
         grid.addWidget(row_label("Max in-memory size:"), 0, 0)
         grid.addWidget(self._max_memory, 0, 1)
@@ -311,6 +308,22 @@ class PreferencesDialog(QDialog):
         grid.addLayout(dir_row, 2, 1)
         self._update_scratch_dir_enabled(self._spill_to_disk.isChecked())
 
+        self._camera_buffer = QDoubleSpinBox()
+        self._camera_buffer.setRange(0.1, _max_memory_gb_range()[1])
+        self._camera_buffer.setDecimals(1)
+        self._camera_buffer.setSingleStep(0.5)
+        self._camera_buffer.setSuffix(" GB")
+        self._camera_buffer.setValue(prefs.camera_buffer_gb)
+        self._camera_buffer.setToolTip(
+            "Holds the camera's frames until the acquisition reads them, for\n"
+            "every run, saved or not. A run that falls behind for longer than\n"
+            'this buffer lasts stops with "Circular buffer overflowed".\n'
+            "Defaults to 10% of this machine's RAM. Applies once no\n"
+            "acquisition or live mode is running."
+        )
+        grid.addWidget(row_label("Camera buffer:"), 3, 0)
+        grid.addWidget(self._camera_buffer, 3, 1)
+
         # Apply/Cancel live here, not as a dialog-wide footer: they only ever
         # apply to this group -- Show Widgets and Layout take effect the
         # moment you click them (see the class docstring). Not "primary" or the
@@ -331,7 +344,7 @@ class PreferencesDialog(QDialog):
         buttons.addStretch()
         buttons.addWidget(self._cancel_btn)
         buttons.addWidget(self._apply_btn)
-        grid.addLayout(buttons, 3, 0, 1, 2)
+        grid.addLayout(buttons, 4, 0, 1, 2)
 
         return group
 
@@ -355,7 +368,9 @@ class PreferencesDialog(QDialog):
         # Treat "still the system temp folder" as "no override", so it keeps
         # tracking the OS temp dir rather than pinning today's resolved path.
         prefs.scratch_dir = None if (not text or text == _system_tmp()) else Path(text)
+        prefs.camera_buffer_gb = self._camera_buffer.value()
         Settings.instance().flush()
+        apply_camera_buffer(self._acquire_page._core)
 
     # ── Layout ───────────────────────────────────────────────────
 

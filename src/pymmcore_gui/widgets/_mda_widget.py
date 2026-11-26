@@ -63,7 +63,7 @@ from pymmcore_gui._stitching._models import (
     with_request,
 )
 from pymmcore_gui._theme import qcolor, theme
-from pymmcore_gui._utils import NO_PIXEL_SIZE
+from pymmcore_gui._utils import NO_PIXEL_SIZE, apply_camera_buffer
 
 from ._mda_tabs import (
     GuiCollapsibleCoreMDATabs,
@@ -329,6 +329,7 @@ class MemoryMDAWidgetBase(_MixinBase):
         output = self.prepare_mda()
         if isinstance(output, bool):
             return
+        apply_camera_buffer(self._mmc)  # changed while a sequence was running
 
         show_store_progress = self.save_info.isChecked() and self.isVisible()
         if show_store_progress:
