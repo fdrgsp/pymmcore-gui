@@ -395,6 +395,9 @@ class ConfigurationsPage(TabPage):
         self._pixel_dirty = False
         # guards against a second commit starting while one is in flight
         self._commit_in_progress = False
+        # either one turns the save buttons off
+        self._read_only = False
+        self._calibrating = False
         self._group_editor.undoStack().cleanChanged.connect(
             self._on_group_clean_changed
         )
@@ -489,10 +492,22 @@ class ConfigurationsPage(TabPage):
             self._group_tab.save()
             self._pixel_config.apply()
 
+    def setReadOnly(self, read_only: bool) -> None:
+        """Let the user browse both editors, but not change or save them."""
+        self._group_editor.setReadOnly(read_only)
+        self._pixel_config.setReadOnly(read_only)
+        self._read_only = read_only
+        self._update_save_buttons()
+
+    def _update_save_buttons(self) -> None:
+        enabled = not self._read_only and not self._calibrating
+        self._save_core_btn.setEnabled(enabled)
+        self._save_file_btn.setEnabled(enabled)
+
     def _on_pixel_calibration_running(self, running: bool) -> None:
         """Prevent configuration rewrites or tab changes during stage motion."""
-        self._save_core_btn.setEnabled(not running)
-        self._save_file_btn.setEnabled(not running)
+        self._calibrating = running
+        self._update_save_buttons()
         self._tabs.setTabEnabled(self._tabs.indexOf(self._group_tab), not running)
         self.calibrationRunningChanged.emit(running)
 

@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 from pymmcore_widgets._light_sources import INTENSITY_KEY, LIGHT_SOURCE_KEY
 
-from pymmcore_gui import _restrictions
+from pymmcore_gui import _main_window, _restrictions
 from pymmcore_gui._main_window import MicroManagerGUI
 from pymmcore_gui._qt.QtCore import QEvent, QPoint
 from pymmcore_gui._qt.QtWidgets import QApplication, QGroupBox, QMenu, QWidget
@@ -93,51 +93,132 @@ def test_restrict_follows_the_lock_while_its_widget_lives(
     assert seen == [True, False]
 
 
-def test_locked_tabs_open_but_their_pages_do_not_respond(
+def test_locked_tabs_open_and_configurations_are_read_only(
     restrictions_file: Path, mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
     window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
-    locked_pages = (window._installation, window._hardware, window._configurations)
+    locked_pages = (window._installation, window._hardware)
+    configs = window._configurations
+    pixel = configs._pixel_config
+    px_table = pixel._px_table.table()
 
     restrictions().set_locked(True)
     assert not any(page.isEnabled() for page in locked_pages)
     assert window._acquire.isEnabled()
     assert all(tab.isEnabled() for tab in window._mode_tabs._tabs)
 
+    # the configurations can be browsed, but not changed, saved or calibrated
+    assert configs.isEnabled()
+    assert not configs._save_core_btn.isEnabled()
+    assert not configs._save_file_btn.isEnabled()
+    assert configs._group_editor._model.isReadOnly()
+    assert not configs._group_editor._tb.edit_actions.isEnabled()
+    configs._tabs.setCurrentWidget(pixel)
+    px_table.selectRow(1)  # a new target would enable the calibration panel
+    assert (selected := pixel._selected_preset()) is not None and selected[0] == 1
+    assert not pixel._px_table.toolBar().isEnabled()
+    assert not pixel._calibration_panel.isEnabled()
+
     restrictions().set_locked(False)
     assert all(page.isEnabled() for page in locked_pages)
+    assert configs._save_core_btn.isEnabled()
+    assert not configs._group_editor._model.isReadOnly()
+    assert pixel._px_table.toolBar().isEnabled()
+    assert pixel._calibration_panel.isEnabled()
+
+    # the save buttons stay off while either a lock or a calibration wants them off
+    restrictions().set_locked(True)
+    configs._on_pixel_calibration_running(True)
+    configs._on_pixel_calibration_running(False)
+    assert not configs._save_core_btn.isEnabled()
+    configs._on_pixel_calibration_running(True)
+    restrictions().set_locked(False)
+    assert not configs._save_core_btn.isEnabled()
+    configs._on_pixel_calibration_running(False)
+    assert configs._save_core_btn.isEnabled()
+
+
+@pytest.fixture
+def menu_labels(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The main window's menus pick their first action, whose text is listed."""
+    labels: list[str] = []
+
+    # PySide ignores `exec` patched on QMenu itself, so swap in a subclass
+    class FirstChoiceMenu(QMenu):
+        def exec(self, *_: object) -> object:  # type: ignore[override]
+            labels.append(self.actions()[0].text())
+            return self.actions()[0]
+
+    monkeypatch.setattr(_main_window, "QMenu", FirstChoiceMenu)
+    return labels
 
 
 def test_hidden_menu_locks_the_gui_but_not_while_acquiring(
-    restrictions_file: Path, mmcore: CMMCorePlus, qtbot: QtBot
+    restrictions_file: Path,
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    menu_labels: list[str],
 ) -> None:
     window = MicroManagerGUI(mmcore=mmcore)
     qtbot.addWidget(window)
-    labels: list[str] = []
-
-    def choose(menu: QMenu, *_: object) -> object:
-        labels.append(menu.actions()[0].text())
-        return menu.actions()[0]
-
-    with patch.object(QMenu, "exec", choose):
-        window._show_lock_menu(QPoint())
-        assert restrictions().locked
-        window._show_lock_menu(QPoint())
-    assert labels == ["Lock GUI", "Unlock GUI"]
+    window._show_lock_menu(QPoint())
+    assert restrictions().locked
+    window._show_lock_menu(QPoint())
     assert not restrictions().locked
     assert json.loads(restrictions_file.read_text())["locked"] is False
 
-    with (
-        patch.object(mmcore.mda, "is_running", return_value=True),
-        patch.object(QMenu, "exec") as exec_menu,
-    ):
+    with patch.object(mmcore.mda, "is_running", return_value=True):
         window._show_lock_menu(QPoint())
     window._on_pixel_calibration_running(True)  # its Cancel is on a locked page
-    with patch.object(QMenu, "exec") as exec_menu_calibrating:
+    window._show_lock_menu(QPoint())
+    assert menu_labels == ["Lock GUI", "Unlock GUI"]  # no menu while busy
+
+
+@pytest.mark.parametrize(
+    ("choice", "locks"), [("cancel", False), ("discard", True), ("save_core", True)]
+)
+def test_locking_asks_about_unsaved_configuration_edits(
+    restrictions_file: Path,
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    menu_labels: list[str],
+    choice: str,
+    locks: bool,
+) -> None:
+    window = MicroManagerGUI(mmcore=mmcore)
+    qtbot.addWidget(window)
+    configs = window._configurations
+    configs._group_editor._add_group()
+    assert configs.is_dirty()
+
+    with patch.object(
+        window, "_prompt_unsaved_configuration_changes", return_value=choice
+    ) as prompt:
         window._show_lock_menu(QPoint())
-    exec_menu.assert_not_called()
-    exec_menu_calibrating.assert_not_called()
+    prompt.assert_called_once()
+    assert restrictions().locked is locks
+    assert configs.is_dirty() is not locks
+    assert ("New Group" in mmcore.getAvailableConfigGroups()) is (choice == "save_core")
+
+
+def test_a_lock_that_leaves_the_configurations_alone_does_not_ask(
+    restrictions_file: Path,
+    mmcore: CMMCorePlus,
+    qtbot: QtBot,
+    menu_labels: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    restrictions_file.write_text(json.dumps({"disable": ["hardware_tab"]}))
+    monkeypatch.setattr(_restrictions, "_restrictions", Restrictions(restrictions_file))
+    window = MicroManagerGUI(mmcore=mmcore)
+    qtbot.addWidget(window)
+    window._configurations._group_editor._add_group()
+
+    with patch.object(window, "_prompt_unsaved_configuration_changes") as prompt:
+        window._show_lock_menu(QPoint())
+    prompt.assert_not_called()
+    assert restrictions().locked
 
 
 def _cells(table: MDAChannelTable | ChannelSettingsPanel, key: str) -> list[QWidget]:
