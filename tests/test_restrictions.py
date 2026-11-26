@@ -275,6 +275,7 @@ def test_locked_preferences(
     qtbot.addWidget(dialog)
     groups = {group.title(): group for group in dialog.findChildren(QGroupBox)}
     assert not groups["Data && Memory"].isEnabled()
+    assert not dialog._camera_buffer.isEnabled()
     # which widgets show is the user's view, also set by a layout: never locked
     assert groups["Show Widgets"].isEnabled()
     assert groups["Layout"].isEnabled()

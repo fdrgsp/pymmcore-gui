@@ -75,7 +75,11 @@ from pymmcore_gui._theme import (
 )
 from pymmcore_gui._theme._dark import DARK_THEME
 from pymmcore_gui._theme._light import LIGHT_THEME
-from pymmcore_gui._utils import NO_PIXEL_SIZE, reveal_in_file_manager
+from pymmcore_gui._utils import (
+    NO_PIXEL_SIZE,
+    apply_camera_buffer,
+    reveal_in_file_manager,
+)
 from pymmcore_gui.widgets._acquire import AcquirePage
 from pymmcore_gui.widgets._configurations import ConfigurationsPage
 from pymmcore_gui.widgets._hardware import HardwareSetupPage
@@ -409,6 +413,7 @@ class MicroManagerGUI(QMainWindow):
         self._apply_saved_appearance()
 
         self._mmc = mmcore or CMMCorePlus.instance()
+        apply_camera_buffer(self._mmc)
         self.setObjectName("pyMMGUI")
         self.setWindowTitle("pyMM")
         self.setWindowIcon(QIcon(str(ICON)))

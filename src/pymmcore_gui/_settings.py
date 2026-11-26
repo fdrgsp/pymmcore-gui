@@ -284,8 +284,19 @@ def _default_max_memory_gb() -> float:
     return round(available_gb * 0.6, 1)
 
 
+def _default_camera_buffer_gb() -> float:
+    """10% of the system's RAM, at least 0.5 GB, as a first-run default.
+
+    MMCore's own default (250 MB) holds about one second of a fast 4 MP camera.
+    """
+    from pymmcore_gui._utils import system_memory_gb
+
+    total_gb, _ = system_memory_gb()
+    return max(round(total_gb * 0.1, 1), 0.5)
+
+
 class ScratchSettingsV1(BaseMMSettings):
-    """Where acquisitions that are not saved to disk keep their data.
+    """The memory acquisitions use, and where unsaved ones keep their data.
 
     Used for the "memory" output of MDA runs with saving disabled (see
     ``ome_writers.ScratchFormat``).
@@ -297,6 +308,8 @@ class ScratchSettingsV1(BaseMMSettings):
     """Above ``max_memory_gb``: spill to ``scratch_dir`` (True) or refuse the run."""
     scratch_dir: Path | None = None
     """Parent folder for spilled data. None means the system temp folder."""
+    camera_buffer_gb: float = Field(default_factory=_default_camera_buffer_gb, gt=0)
+    """Size of MMCore's circular buffer, which holds frames until they are read."""
 
 
 class SettingsV1(BaseMMSettings):
