@@ -87,16 +87,28 @@ def frame_infos(
     ]
 
 
+def _coord_label(coord: object, index: int) -> str:
+    """A coord's name, with the well or grid tile that tells it apart.
+
+    Positions are only named uniquely within their well (`fov0` in every well) or
+    grid tile, see `ome_writers.Position`.
+    """
+    name = getattr(coord, "name", coord)
+    parts = [str(index if name is None else name)]
+    if (row := getattr(coord, "plate_row", None)) is not None:
+        parts.insert(0, f"{row}{getattr(coord, 'plate_column', '')}")
+    if (row := getattr(coord, "grid_row", None)) is not None:
+        parts.append(f"{row},{getattr(coord, 'grid_column', '')}")
+    return " · ".join(parts)
+
+
 def axis_labels(settings: AcquisitionSettings) -> dict[str, list[str]]:
     """Names of the frame axes' values, for axes with named coords (c, p)."""
-    labels: dict[str, list[str]] = {}
-    for dim in settings.dimensions[:-2]:
-        if dim.coords:
-            labels[dim.name] = [
-                str(name if (name := getattr(coord, "name", coord)) is not None else i)
-                for i, coord in enumerate(dim.coords)
-            ]
-    return labels
+    return {
+        dim.name: [_coord_label(coord, i) for i, coord in enumerate(dim.coords)]
+        for dim in settings.dimensions[:-2]
+        if dim.coords
+    }
 
 
 def format_elapsed(seconds: float | None) -> str:
