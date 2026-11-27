@@ -224,7 +224,7 @@ omit = ["src/pymmcore_gui/_sentry.py"]
 ignore = [".pre-commit-config.yaml", ".ruff_cache/**/*", "tests/**/*"]
 
 [tool.typos.default]
-extend-ignore-identifiers-re = ["(?i)nd2?.*", "(?i)ome"]
+extend-ignore-identifiers-re = ["(?i)nd2?.*", "(?i)ome", "FOVs"]
 # short git SHAs in backticks (e.g. `ba0f638`) in Markdown docs
 extend-ignore-re = ["`[0-9a-f]{7,40}`"]
 
