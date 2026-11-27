@@ -952,18 +952,19 @@ class MicroscopeStyle(QProxyStyle):
         hovered = bool(opt.state & QStyle.StateFlag.State_MouseOver)
 
         # ── Groove ──
+        groove_h = SLIDER_GROOVE_H * self._zoom
         if horiz:
-            gy = groove_rect.center().y() - SLIDER_GROOVE_H // 2
-            gr = QRectF(groove_rect.left(), gy, groove_rect.width(), SLIDER_GROOVE_H)
+            gy = groove_rect.center().y() - groove_h / 2
+            gr = QRectF(groove_rect.left(), gy, groove_rect.width(), groove_h)
         else:
-            gx = groove_rect.center().x() - SLIDER_GROOVE_H // 2
-            gr = QRectF(gx, groove_rect.top(), SLIDER_GROOVE_H, groove_rect.height())
+            gx = groove_rect.center().x() - groove_h / 2
+            gr = QRectF(gx, groove_rect.top(), groove_h, groove_rect.height())
 
         if draw_groove:
             # Background groove
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QBrush(groove_bg))
-            p.drawRoundedRect(gr, SLIDER_GROOVE_H / 2, SLIDER_GROOVE_H / 2)
+            p.drawRoundedRect(gr, groove_h / 2, groove_h / 2)
 
         if draw_groove and draw_handle:
             # Filled portion of a regular single-value slider. Range sliders
@@ -984,7 +985,7 @@ class MicroscopeStyle(QProxyStyle):
                 )
 
             p.setBrush(QBrush(accent))
-            p.drawRoundedRect(filled, SLIDER_GROOVE_H / 2, SLIDER_GROOVE_H / 2)
+            p.drawRoundedRect(filled, groove_h / 2, groove_h / 2)
 
         # ── Handle ──
         if not draw_handle:
@@ -992,12 +993,12 @@ class MicroscopeStyle(QProxyStyle):
         hx = handle_rect.center().x()
         # Force vertical center on the groove, not the handle_rect
         hy = gr.center().y()
-        hr = 8  # radius — bigger than SLIDER_HANDLE_SIZE/2
+        hr = 8 * self._zoom  # radius — bigger than SLIDER_HANDLE_SIZE/2
 
         # Shadow
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(QColor(0, 0, 0, 35)))
-        p.drawEllipse(QPointF(hx, hy + 1), hr, hr)
+        p.drawEllipse(QPointF(hx, hy + self._zoom), hr, hr)
 
         # Handle body
         if hovered:
@@ -1009,7 +1010,7 @@ class MicroscopeStyle(QProxyStyle):
                 0.4,
             )
 
-        p.setPen(QPen(pal.color(QPalette.ColorRole.Window), 2))
+        p.setPen(QPen(pal.color(QPalette.ColorRole.Window), 2 * self._zoom))
         p.setBrush(QBrush(handle_bg))
         p.drawEllipse(QPointF(hx, hy), hr, hr)
 

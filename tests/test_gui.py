@@ -6224,6 +6224,29 @@ def test_slider_style_only_paints_requested_subcontrols(qapp: QApplication) -> N
     assert painter.drawEllipse.call_count == 2
 
 
+@pytest.mark.parametrize("zoom", [0.5, 1.0, 2.0])
+def test_slider_style_scales_with_zoom(qapp: QApplication, zoom: float) -> None:
+    """The painted handle and groove follow the zoom, not just the metrics."""
+    from pymmcore_gui._theme import MicroscopeStyle
+
+    style = MicroscopeStyle()
+    style.zoom_factor = zoom
+    option = QStyleOptionSlider()
+    option.rect = QRect(0, 0, 100, 20)
+    option.orientation = Qt.Orientation.Horizontal
+    option.subControls = (
+        QStyle.SubControl.SC_SliderGroove | QStyle.SubControl.SC_SliderHandle
+    )
+    painter = Mock()
+
+    style._draw_slider(option, painter, None)
+
+    *_, radius_x, radius_y = painter.drawEllipse.call_args.args
+    assert radius_x == radius_y == 8 * zoom
+    groove = painter.drawRoundedRect.call_args_list[0].args[0]
+    assert groove.height() == 4 * zoom
+
+
 def test_stage_explorer_refreshes_all_pixel_dependent_geometry(
     mmcore: CMMCorePlus, qtbot: QtBot
 ) -> None:
