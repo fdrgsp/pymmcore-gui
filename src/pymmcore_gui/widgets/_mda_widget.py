@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 
 from ome_writers import AcquisitionSettings, OmeTiffFormat, ScratchFormat
 from ome_writers._schema import _ome_stem_suffix
-from pymmcore_widgets import MDAWidget, MDAWidgetCollapsible
+from pymmcore_widgets import CollapsibleMDAWidget, MDAWidget
 from pymmcore_widgets._busy import BusyOverlay
 from pymmcore_widgets._util import fov_pixel_size_warning
 from pymmcore_widgets.mda import (
@@ -873,7 +873,7 @@ class MemoryMDAWidgetBase(_MixinBase):
         return output
 
 
-class MemoryMDAWidget(MemoryMDAWidgetBase, MDAWidgetCollapsible):
+class MemoryMDAWidget(MemoryMDAWidgetBase, CollapsibleMDAWidget):
     """The app's MDA editor, presented as upstream's collapsible sections."""
 
     _sequenceStartedInGui = Signal()

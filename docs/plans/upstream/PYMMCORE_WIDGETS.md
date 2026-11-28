@@ -56,9 +56,9 @@ kinds of PR, both to `main`:
   which both classes would use. The fork already isolates the layout behind
   hooks: `MDASequenceWidget(tab_widget=...)`, `MDAWidget._create_tab_widget()`
   and `MDATabs._build_tabs()`. Another presentation is a subclass of the
-  container: that's how `MDAWidgetCollapsible` works.
+  container: that's how `CollapsibleMDAWidget` works.
 - **Use a new class** only when the API breaks (StageWidget), when a second
-  presentation should exist next to the default one (`MDAWidgetCollapsible`),
+  presentation should exist next to the default one (`CollapsibleMDAWidget`),
   or for genuinely new widgets.
 
 ### Per widget
@@ -67,7 +67,7 @@ kinds of PR, both to `main`:
 | Widget | What changed on `cite` | API | Plan |
 | --- | --- | --- | --- |
 | `MDAWidget`, `MDASequenceWidget`, `MDATabs` | Sub-editor features (below); new layout: icon-on-top tabs, a Settings card, Autofocus and Saving tabs, a footer with Save/Load/Run; axes start off and empty | Additive | Features in place. Layout in place, in four visible PRs (WDG-40a to WDG-40d). Defaults: WDG-42, an issue first |
-| `MDAWidgetCollapsible`, `CollapsibleCoreMDATabs` | New | New classes | WDG-41, after WDG-40a to WDG-40c |
+| `CollapsibleMDAWidget`, `CollapsibleCoreMDATabs` | New | New classes | WDG-41, after WDG-40a to WDG-40c |
 | `AutofocusAxis` | Checkable group box; hardware and software modes, every-N, Z search, keep locked | `value()` kept, `plan()` and `setPlan()` added | In place (WDG-36), following the useq and plus chain |
 | `ZPlanWidget`, `CoreConnectedZPlanWidget` | Stack graphic, mode radios, boxed controls; navigation and live Z | Additive | Layout in place on top of Talley's #542 (WDG-30). Navigation (WDG-31) |
 | `GridPlanWidget` | Mode radios and two columns; bounds fixes | Base class `QScrollArea` → `QWidget` | Fixes first (WDG-27), then the layout (WDG-28). The base class changes with the tab pages (WDG-40d) |
@@ -165,7 +165,7 @@ that changes what users see by default.
 | WDG-40b | feat | MDA Saving tab (*visible*) | S | WDG-40a | – |
 | WDG-40c | feat | MDA Autofocus tab (*visible*) | S | WDG-40a, WDG-36a | – |
 | WDG-40d | feat! | MDA icon-on-top axis tabs; `GridPlanWidget` becomes a QWidget (*visible*) | M | WDG-40c, WDG-28 | – |
-| WDG-41 | feat | `MDAWidgetCollapsible` | L | WDG-40a/b/c | – |
+| WDG-41 | feat | `CollapsibleMDAWidget` | L | WDG-40a/b/c | – |
 | WDG-42 | feat | MDA axes start off and empty (*visible*) | S | issue first | – |
 | **Stage Explorer** | | | | | |
 | WDG-43 | feat | Map memory cap | M | – | – |
@@ -880,7 +880,7 @@ WDG-40c, WDG-28*
   `QScrollArea` and becomes a `QWidget`: flag that in the title and the
   changelog, since code that used its scroll-area API breaks.
 
-### WDG-41: `MDAWidgetCollapsible`
+### WDG-41: `CollapsibleMDAWidget`
 
 *feat · L (~690 lines) · `f0637330`, `8247917d`, `085921f4`, `c52ddfd1`,
 `92970fe4`, `b17407fb`, `d7279d3c` · needs WDG-40a, WDG-40b, WDG-40c*
@@ -890,7 +890,7 @@ summary each (`CollapsibleCoreMDATabs`, `CollapsibleAcquisitionSection`,
 `SectionMetrics`). `examples/mda_widget_collapsible.py`.
 
 Split: (1) `CollapsibleAcquisitionSection` and `SectionMetrics`, a standalone
-widget (~240 lines); (2) `CollapsibleCoreMDATabs` and `MDAWidgetCollapsible`.
+widget (~240 lines); (2) `CollapsibleCoreMDATabs` and `CollapsibleMDAWidget`.
 
 ### WDG-42: MDA axes start off and empty (visible)
 
